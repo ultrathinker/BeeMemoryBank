@@ -1,3 +1,7 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
@@ -7,6 +11,7 @@ using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -191,22 +196,75 @@ public class CompactionServiceTests : IAsyncLifetime
             .WithMessage("*current min*");
     }
 
+    /// <summary>
+    /// The server's 410 branch, over HTTP (it used to be "tested" by two repository reads that asserted NotBeNull): a peer
+    /// asking a compacted host for events below the checkpoint gets 410 SEQUENCE_TOO_OLD with the checkpoint and head, and
+    /// a peer at the checkpoint gets its events. This 410 is what left a <c>bmb join</c>-ed node empty (BMB-81).
+    /// </summary>
     [Fact]
     public async Task Sync_Events_Returns410_WhenPositionTooOld()
     {
-        await InsertEventsAsync(5000);
-        await _compactionService.ExecuteAsync(explicitCp: 3000, reason: "compact");
+        const string password = "compaction410Password";
+        using var host = new BmbWebApplicationFactory();
+        await host.InitializeNodeAsync("Host", password);
+        using var admin = host.CreateClient();
+        (await admin.PostAsJsonAsync("/api/session/unlock", new { Password = password })).EnsureSuccessStatusCode();
+        for (var i = 0; i < 12; i++)
+            (await admin.PostAsJsonAsync("/api/articles", new { title = $"Note {i}", treePath = "/", content = "body" }))
+                .EnsureSuccessStatusCode();
 
-        var minSeq = await _eventLogRepo.GetMinSequenceAsync();
-        minSeq.Should().NotBeNull();
+        // A whitelisted peer that authenticates the way a node does: no internal key, its own Ed25519 key. (Written to the
+        // whitelist directly rather than through /api/join, whose rate limit is process-wide.)
+        using var peer = new HttpClient(host.Server.CreateHandler()) { BaseAddress = new Uri("http://localhost") };
+        var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
+        var peerId = Guid.NewGuid();
+        using (var scope = host.Services.CreateScope())
+            await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().CreateAsync(new WhitelistEntry
+            {
+                NodeId = peerId, DisplayName = "Peer", Ed25519PublicKey = publicKey, Status = "A",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+        var token = await AuthenticateAsync(peer, peerId, privateKey);
 
-        var tooOldPosition = minSeq!.Value - 2;
-        var events = await _eventLogRepo.GetAfterSequenceAsync(tooOldPosition, 100);
-        events.Should().NotBeNull();
+        using (var scope = host.Services.CreateScope())
+            await scope.ServiceProvider.GetRequiredService<CompactionService>()
+                .ExecuteAsync(explicitCp: 8, reason: "410 test", acceptCuttingOffPeers: true);
 
-        var okPosition = minSeq.Value - 1;
-        var okEvents = await _eventLogRepo.GetAfterSequenceAsync(okPosition, 100);
-        okEvents.Should().NotBeNull();
+        using var tooOld = await GetEventsAsync(peer, token, afterSequence: 0);
+        tooOld.StatusCode.Should().Be(HttpStatusCode.Gone);
+        var body = await tooOld.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("SEQUENCE_TOO_OLD");
+        body.GetProperty("last_compaction_cp").GetInt64().Should().Be(8);
+        body.GetProperty("current_head_seq").GetInt64().Should().BeGreaterThan(8);
+
+        using var atCheckpoint = await GetEventsAsync(peer, token, afterSequence: 8);
+        atCheckpoint.StatusCode.Should().Be(HttpStatusCode.OK, "a peer at the checkpoint continues from there");
+    }
+
+    private static async Task<HttpResponseMessage> GetEventsAsync(HttpClient http, string token, long afterSequence)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/sync/events?afterSequence={afterSequence}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await http.SendAsync(request);
+    }
+
+    private static async Task<string> AuthenticateAsync(HttpClient http, Guid nodeId, byte[] privateKey)
+    {
+        var challenge = await (await http.PostAsync("/api/sync/challenge", null)).Content.ReadFromJsonAsync<JsonElement>();
+        var challengeB64 = challenge.GetProperty("challenge").GetString()!;
+        var payload = "BMB-CHALLENGE-V2\0"u8.ToArray()
+            .Concat(challenge.GetProperty("serverNodeId").GetGuid().ToByteArray())
+            .Concat(Convert.FromBase64String(challengeB64))
+            .ToArray();
+        var auth = await http.PostAsJsonAsync("/api/sync/authenticate", new
+        {
+            NodeId = nodeId,
+            ChallengeB64 = challengeB64,
+            SignatureB64 = Convert.ToBase64String(Ed25519Signer.Sign(privateKey, payload)),
+            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
+        });
+        auth.EnsureSuccessStatusCode();
+        return (await auth.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("token").GetString()!;
     }
 
     [Fact]

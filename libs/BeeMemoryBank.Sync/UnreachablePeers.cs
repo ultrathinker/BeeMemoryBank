@@ -12,7 +12,14 @@ public sealed class UnreachablePeers
 {
     public static readonly TimeSpan MaxPause = TimeSpan.FromMinutes(15);
 
-    private readonly ConcurrentDictionary<Guid, (int Failures, DateTime NextAttemptUtc)> _peers = new();
+    /// <summary>
+    /// A gap this long between two failed attempts means this computer was asleep or off in between: awake, the next attempt
+    /// comes at most <see cref="MaxPause"/> plus one cycle later. The streak's start (<see cref="FailingSince"/>) then moves to the
+    /// new failure, so the hours a PC slept through are not counted as hours the peer was down (BMB-77).
+    /// </summary>
+    public static readonly TimeSpan StreakBreak = TimeSpan.FromHours(1);
+
+    private readonly ConcurrentDictionary<Guid, (int Failures, DateTime NextAttemptUtc, DateTime SinceUtc, DateTime LastUtc)> _peers = new();
 
     public bool ShouldSkip(Guid nodeId, DateTime nowUtc) =>
         _peers.TryGetValue(nodeId, out var state) && nowUtc < state.NextAttemptUtc;
@@ -20,11 +27,19 @@ public sealed class UnreachablePeers
     /// <summary>Records a failed attempt; returns how many in a row and the pause before the next.</summary>
     public (int Failures, TimeSpan Pause) NoteFailure(Guid nodeId, DateTime nowUtc, TimeSpan interval)
     {
-        var failures = _peers.TryGetValue(nodeId, out var previous) ? previous.Failures + 1 : 1;
+        var known = _peers.TryGetValue(nodeId, out var previous);
+        var failures = known ? previous.Failures + 1 : 1;
         var pause = TimeSpan.FromTicks(Math.Min(MaxPause.Ticks, interval.Ticks * (1L << Math.Min(failures - 1, 16))));
-        _peers[nodeId] = (failures, nowUtc + pause);
+        var since = known && nowUtc - previous.LastUtc < StreakBreak ? previous.SinceUtc : nowUtc;
+        _peers[nodeId] = (failures, nowUtc + pause, since, nowUtc);
         return (failures, pause);
     }
+
+    /// <summary>
+    /// Each peer that is failing now, with the time its streak of failures began while this computer was awake
+    /// (see <see cref="StreakBreak"/>). A snapshot; a peer that answered again is not in it.
+    /// </summary>
+    public IReadOnlyDictionary<Guid, DateTime> FailingSince() => _peers.ToDictionary(p => p.Key, p => p.Value.SinceUtc);
 
     /// <summary>Forgets the streak; returns how many attempts had failed before (0 if none).</summary>
     public int NoteSuccess(Guid nodeId) => _peers.TryRemove(nodeId, out var was) ? was.Failures : 0;

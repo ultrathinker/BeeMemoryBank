@@ -427,6 +427,18 @@ public static class Program
                 return new NodeLockControl(apiUrl, internalKey);
             }
 
+            // GET /node/alarms: the shell asks which blind nodes need attention (BMB-77); the front asks the Api, with the internal
+            // key, like the lock above. Null (the route stays a 501 stub) when there is no key.
+            NodeAlarmsControl? BuildAlarms()
+            {
+                var internalKey = ResolveInternalKey();
+                if (string.IsNullOrEmpty(internalKey)) return null;
+                if (!orchestrator.ReadyChildren.TryGetValue("BeeMemoryBank.Api", out var api)
+                    || api.Urls.FirstOrDefault() is not { } apiUrl)
+                    return null;
+                return new NodeAlarmsControl(apiUrl, internalKey);
+            }
+
             // Windows and macOS: the two systems with a place to keep the local CA's key (DPAPI, the Keychain), which the HTTPS
             // listeners need. The listeners themselves are plain Kestrel; only the firewall differs (see ILanFirewall).
             LanControl? BuildLan(bool permanent)
@@ -473,7 +485,8 @@ public static class Program
                     https,
                     resolvedDataDirectory,
                     BuildLan(https),
-                    BuildLock()),
+                    BuildLock(),
+                    BuildAlarms()),
                 front => front.StartAsync());
 
             try
@@ -604,10 +617,11 @@ public static class Program
         bool enableHttps = false,
         string? dataPath = null,
         LanControl? lan = null,
-        NodeLockControl? lockControl = null)
+        NodeLockControl? lockControl = null,
+        NodeAlarmsControl? alarmsControl = null)
     {
         var builder = WebApplication.CreateBuilder(webArgs);
-        var front = NodeFrontBuilder.Build(builder, readyChildren, enableHttps, dataPath, lan, lockControl);
+        var front = NodeFrontBuilder.Build(builder, readyChildren, enableHttps, dataPath, lan, lockControl, alarmsControl);
         var app = builder.Build();
         front.MapEndpoints(app);
         return app;

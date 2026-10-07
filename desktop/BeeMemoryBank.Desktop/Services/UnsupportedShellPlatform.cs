@@ -18,6 +18,8 @@ internal sealed class UnsupportedShellPlatform : IShellPlatform
 
     public IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode, Func<bool> lockOnSleepEnabled) => null;
 
+    public IUserNotifier? CreateNotifier() => null;
+
     public IFileManagerReveal FileManager { get; } = new NoFileManager();
 
     public string TrayIconAsset => "avares://BeeMemoryBank.Desktop/Assets/icon.png";

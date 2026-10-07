@@ -19,6 +19,9 @@ internal sealed class MacOsShellPlatform : IShellPlatform
 
     public IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode, Func<bool> lockOnSleepEnabled) => new MacOsSleepMonitor(lockNode, _notifier, lockOnSleepEnabled);
 
+    /// <summary>The same osascript banner the sleep monitor uses.</summary>
+    public IUserNotifier? CreateNotifier() => _notifier;
+
     public IFileManagerReveal FileManager { get; } = new MacOsFileManager();
 
     /// <summary>The menu-bar image: black with alpha, 36 px for an 18 pt menu bar at 2x (the 18 px 1x file sits beside it).</summary>

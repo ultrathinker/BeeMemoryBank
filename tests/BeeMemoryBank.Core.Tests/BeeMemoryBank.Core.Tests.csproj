@@ -46,4 +46,7 @@
     <Compile Include="..\shared\ThrowawayKeychain.cs" Link="Shared\ThrowawayKeychain.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\shared\WindowsAcl.cs" Link="Shared\WindowsAcl.cs" />
+  </ItemGroup>
 </Project>

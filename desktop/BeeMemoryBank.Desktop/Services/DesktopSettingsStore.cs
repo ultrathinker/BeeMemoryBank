@@ -29,12 +29,25 @@ public sealed class DesktopSettingsStore
         }
     }
 
-    public void SetBool(string key, bool value)
+    public void SetBool(string key, bool value) => SetNode(key, JsonValue.Create(value));
+
+    /// <summary>A copy of the value stored under <paramref name="key"/>, or null when there is none.</summary>
+    public JsonNode? GetNode(string key)
+    {
+        lock (FileLock)
+        {
+            return Load()[key]?.DeepClone();
+        }
+    }
+
+    /// <summary>Stores <paramref name="value"/> under <paramref name="key"/> (null removes the key), leaving every other key as it is.</summary>
+    public void SetNode(string key, JsonNode? value)
     {
         lock (FileLock)
         {
             var root = Load();
-            root[key] = value;
+            if (value is null) root.Remove(key);
+            else root[key] = value.DeepClone();
             var tempPath = _path + ".tmp";
             File.WriteAllText(tempPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
             File.Move(tempPath, _path, overwrite: true);

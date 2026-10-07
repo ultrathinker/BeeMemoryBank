@@ -101,6 +101,8 @@ BeeMemoryBank.Core BeeMemoryBank.Core.Exceptions.ConflictException
 BeeMemoryBank.Core BeeMemoryBank.Core.Exceptions.InsufficientDiskSpaceException
 BeeMemoryBank.Core BeeMemoryBank.Core.Exceptions.SessionLockedException
 BeeMemoryBank.Core BeeMemoryBank.Core.Exceptions.UsernameConflictException
+BeeMemoryBank.Core BeeMemoryBank.Core.IO.OwnerOnlyFile
+BeeMemoryBank.Core BeeMemoryBank.Core.IO.SnapshotStaging
 BeeMemoryBank.Core BeeMemoryBank.Core.Interfaces.AclSqlPredicate
 BeeMemoryBank.Core BeeMemoryBank.Core.Interfaces.DekRotationState
 BeeMemoryBank.Core BeeMemoryBank.Core.Interfaces.DekRotationStateRow
@@ -314,6 +316,7 @@ BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.FolderBootstrapper
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.FolderRepository
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.FtsQueryBuilder
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.KeySlotRepository
+BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.LamportFloor
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.MediaRepository
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.MigrationRunner
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.MigrationRunner+MigrationRow
@@ -431,6 +434,7 @@ BeeMemoryBank.Sync BeeMemoryBank.Sync.SealedSecretSetPayload
 BeeMemoryBank.Sync BeeMemoryBank.Sync.SnapshotCheckpointPayload
 BeeMemoryBank.Sync BeeMemoryBank.Sync.SnapshotRequiredException
 BeeMemoryBank.Sync BeeMemoryBank.Sync.SnapshotRequiredState
+BeeMemoryBank.Sync BeeMemoryBank.Sync.SnapshotRequiredState+Persisted
 BeeMemoryBank.Sync BeeMemoryBank.Sync.StateAnchorPayload
 BeeMemoryBank.Sync BeeMemoryBank.Sync.StoredEventRepair
 BeeMemoryBank.Sync BeeMemoryBank.Sync.SyncClient

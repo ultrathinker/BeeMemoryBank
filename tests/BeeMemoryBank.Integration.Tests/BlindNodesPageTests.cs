@@ -2,6 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.RegularExpressions;
+using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Sync;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -90,6 +93,29 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         admin.StatusCode.Should().NotBe(HttpStatusCode.OK);
         blind.StatusCode.Should().NotBe(HttpStatusCode.OK);
         (await admin.Content.ReadAsStringAsync()).Should().NotContain("href=\"/BlindNodes\"");
+    }
+
+    // ── the banners ──────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>BMB-77: the banners come from the Api's alarm list, the one the desktop app notifies from.</summary>
+    [Fact]
+    public async Task ABlindNodeOnANewerProtocol_ShowsTheUpdateThisPcBanner()
+    {
+        var id = BlindNodeId.NewId();
+        var whitelist = _api.Services.GetRequiredService<IWhitelistRepository>();
+        await whitelist.CreateAsync(new WhitelistEntry
+        {
+            NodeId = id, DisplayName = "Blind copy", Ed25519PublicKey = new byte[32], Status = "A",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await whitelist.RecordProtocolVersionAsync(id, SyncProtocolVersion.Current + 1, DateTime.UtcNow);
+        using (var api = _api.CreateClient())
+            await BlindNodeAlarmsTests.JudgedAlarmsAsync(api);
+
+        var page = WebUtility.HtmlDecode(await (await _admin.GetAsync("/BlindNodes")).Content.ReadAsStringAsync());
+
+        page.Should().Contain("This blind node runs a newer sync protocol than this PC. Update this PC");
+        page.Should().NotContain("runs an older sync protocol");
     }
 
     // ── what the page says when something fails ─────────────────────────────────────────────────

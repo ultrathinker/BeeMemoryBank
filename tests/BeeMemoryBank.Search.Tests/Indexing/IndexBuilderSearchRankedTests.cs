@@ -395,4 +395,44 @@ public class IndexBuilderSearchRankedTests
         act.Should().NotThrow();
         builder.SearchRanked([Stem("zzzanything")], topK: 10).Should().BeEmpty();
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SearchRanked_WhenASealHappensRightAfterTheHotSnapshot_ReturnsEachArticleOnce(bool reference)
+    {
+        // A writer that seals between the reader's hot-buffer copy and its read of the sealed list
+        // used to hand the reader the same documents twice: once from the old hot copy, once from
+        // the segment they were just sealed into. The test seam stands in for that writer thread,
+        // deterministically, at exactly that point.
+        var builder = new IndexBuilder(hotBufferSealThreshold: 4);
+        var twin = new IndexBuilder(hotBufferSealThreshold: 4);
+        string shared = Stem("zzzshared");
+        Guid[] matching = [Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid()];
+        foreach (Guid id in matching)
+        {
+            builder.AddOrUpdateDocument(id, Guid.NewGuid(), "zzzshared zzzfiller");
+            twin.AddOrUpdateDocument(id, Guid.NewGuid(), "zzzshared zzzfiller");
+        }
+
+        int sealsBefore = builder.SealCount;
+        builder.AfterHotSnapshotForTests = () =>
+        {
+            builder.AfterHotSnapshotForTests = null;
+            builder.AddOrUpdateDocument(Guid.NewGuid(), Guid.NewGuid(), "zzzunrelated");
+        };
+
+        var results = reference
+            ? builder.SearchRankedReference([shared], topK: 10)
+            : builder.SearchRanked([shared], topK: 10);
+
+        builder.SealCount.Should().Be(sealsBefore + 1, "the seam must really have sealed the hot buffer mid-search");
+        results.Select(r => r.ArticleId).Should().OnlyHaveUniqueItems();
+        results.Select(r => r.ArticleId).Should().BeEquivalentTo(matching);
+
+        // And scored as of one consistent moment: the index as it was when the search began, not a
+        // corpus that counts the sealed documents twice in N and df.
+        var expected = reference ? twin.SearchRankedReference([shared], topK: 10) : twin.SearchRanked([shared], topK: 10);
+        results.Should().BeEquivalentTo(expected);
+    }
 }

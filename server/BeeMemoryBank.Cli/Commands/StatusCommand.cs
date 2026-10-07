@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Sync;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Cli.Commands;
@@ -33,6 +34,12 @@ public static class StatusCommand
         await output.WriteLineAsync($"Path:      {dataPath}");
         await output.WriteLineAsync($"Articles:  {articles.Count}");
         await output.WriteLineAsync($"Created:   {identity.CreatedAt:yyyy-MM-dd HH:mm:ss} UTC");
+
+        // Recorded by the running node's sync scheduler (this is another process): a full peer compacted past us.
+        if (SnapshotRequiredState.Read(scope.ServiceProvider.GetRequiredService<IDbConnectionFactory>()) is { } required)
+            await output.WriteLineAsync(
+                $"Sync:      {SnapshotRequiredState.Describe(required.RemoteUrl, required.LastCompactionCp, required.CurrentHeadSeq)} " +
+                $"(since {required.SinceUtc:yyyy-MM-dd HH:mm} UTC)");
         return 0;
     }
 }

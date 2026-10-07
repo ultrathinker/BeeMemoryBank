@@ -34,6 +34,11 @@ public static class BlindNodeStartupTasks
         // like any other, no DEK involved.
         await BlindRoleStartup.RunAsync(app.Services, dataPath, logger);
 
+        // A blind package's working copy of the database that a kill or power cut left (SnapshotStaging).
+        var staleSnapshotCopies = BeeMemoryBank.Core.IO.SnapshotStaging.Sweep(dataPath);
+        if (staleSnapshotCopies > 0)
+            logger.LogInformation("Startup: removed {Count} working copy file(s) an interrupted snapshot left", staleSnapshotCopies);
+
         // Bootstrap tbl_folder from existing article tree_path values (one-time, idempotent)
         using (var scope = app.Services.CreateScope())
         {

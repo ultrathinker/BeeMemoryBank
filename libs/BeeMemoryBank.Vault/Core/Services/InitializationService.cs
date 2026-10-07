@@ -40,8 +40,8 @@ public class InitializationService(
     /// keys after it. A crash in between leaves a node that cannot be unlocked and must be restored
     /// again — so while that bootstrap is running, <see cref="RestoreBootstrapMarker"/> is up and
     /// this answers false, which is what lets the retry in (and the retry resumes rather than
-    /// repeats). The marker is lowered in the same transaction as the write that completes the
-    /// bootstrap.</para>
+    /// repeats). The marker is lowered with the last write of the restore (the transaction that
+    /// completes it), not with the bootstrap: the restore tail still writes after that.</para>
     ///
     /// <para>A setup path must not rely on this answer for anything: it is shape-reading, and the
     /// shapes are open-ended (a torn restore is "not initialized" on purpose, and its data must

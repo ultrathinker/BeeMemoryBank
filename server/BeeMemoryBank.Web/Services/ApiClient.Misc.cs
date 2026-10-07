@@ -36,18 +36,28 @@ public partial class ApiClient
 
     // ─── Sync Status ──────────────────────────────────────────────────────────
 
-    public async Task<bool> HasPeerNewerProtocolAsync()
+    public async Task<bool> HasPeerNewerProtocolAsync() => (await GetSyncAlertsAsync()).PeerNewerProtocol;
+
+    /// <summary>
+    /// The two sync states the layout warns about, from one <c>/api/sync/status</c> call: a peer on a newer protocol, and
+    /// "this node cannot catch up" (a full peer compacted past it; the sentence to show, or null).
+    /// </summary>
+    public async Task<(bool PeerNewerProtocol, string? SnapshotRequired)> GetSyncAlertsAsync()
     {
         try
         {
             var doc = await http.GetFromJsonAsync<JsonDocument>("/api/sync/status", JsonOpts);
-            if (doc != null && doc.RootElement.TryGetProperty("peerNewerProtocol", out var prop))
-            {
-                return prop.GetBoolean();
-            }
+            if (doc == null) return (false, null);
+            var root = doc.RootElement;
+            var newer = root.TryGetProperty("peerNewerProtocol", out var prop) && prop.ValueKind == JsonValueKind.True;
+            var required = root.TryGetProperty("snapshotRequired", out var req) && req.ValueKind == JsonValueKind.Object
+                && req.TryGetProperty("message", out var message)
+                ? message.GetString()
+                : null;
+            return (newer, required);
         }
         catch { }
-        return false;
+        return (false, null);
     }
 
     public async Task<JsonNode?> GetAsync(string path)

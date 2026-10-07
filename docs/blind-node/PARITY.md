@@ -10,7 +10,8 @@ gone on purpose and how each claim is checked. Anything not listed here is uncha
 | API program | `dotnet /app/api/BeeMemoryBank.Api.dll` with `BMB_ROLE=blind` | `dotnet /app/api/BeeMemoryBank.BlindNode.dll` (the role is the type of the host; `BMB_ROLE` is ignored) |
 | CLI | full `bmb` (every verb, ONNX/ImageSharp/Rekey/... behind it, 279 MB) | `bmb blind ...` only (the three blind command files of the full CLI, linked; 0.6 MB) |
 | console | `BeeMemoryBank.BlindConsole` | unchanged |
-| ports, volumes, env, healthcheck, restic | | unchanged (`BlindDockerPackagingTests`) |
+| ports, volumes, env, healthcheck, restic | | unchanged (`BlindDockerPackagingTests`); since 2.4 only 5610 is declared `EXPOSE` (5611 stays published on the host's loopback by the compose files) |
+| distribution | built from source | also the ready-made `ghcr.io/ultrathinker/beememorybank-blind` (amd64 + arm64), `docker/blind/compose.image.yaml` |
 | publish | one framework-dependent publish per program, native assets of every platform | `-r linux-x64|linux-arm64 --no-self-contained -p:UseAppHost=false` per `TARGETARCH` |
 
 Verified by `tools/blind-e2e/e2e_docker.py` (real full node, pair, seed, sync, restore package, restart; with

@@ -13,7 +13,7 @@ This folder contains technical documentation for the BeeMemoryBank project.
 | [mcp.md](mcp.md) | MCP server for AI agent integration: 33 tools in 7 groups, transport, truncation, configuration examples |
 | [compaction.md](compaction.md) | Event log compaction and snapshot lifecycle |
 | [snapshot-restore.md](snapshot-restore.md) | Restoring a snapshot: this node only (it becomes a new node) versus the whole network; what each does to identity, trusted nodes and blind copies, and what to do afterwards |
-| [deployment.md](deployment.md) | Deployment guide: environment variables, systemd, Docker, reverse proxy, maintenance page, new node setup, audit log retention |
+| [deployment.md](deployment.md) | Deployment guide: environment variables, systemd, Docker (the ready-made images on ghcr.io and building from source), reverse proxy, maintenance page, new node setup, audit log retention |
 | [internet-access.md](internet-access.md) | Opening your node to the internet yourself: ports, router forwarding, Caddy / nginx with automatic certificates, tunnels and VPNs, security warnings |
 
 ## Other Project Files
@@ -45,6 +45,6 @@ For someone new to the project:
 - "Deploy to a new server" → [deployment.md](deployment.md)
 - "Reach my node from outside my network" → [internet-access.md](internet-access.md)
 - "Restore a snapshot" → [snapshot-restore.md](snapshot-restore.md)
-- "Set up Docker" → [deployment.md](deployment.md) (Docker Deployment section)
+- "Set up Docker" → [../README.md](../README.md) ("Docker: ready-made image"), then [deployment.md](deployment.md) ("The ready-made image", "Example Node Setup (Docker)")
 - "Configure an AI agent" → [mcp.md](mcp.md) (Configuration Examples section)
 - "Write mobile UI tests" → [CONTRIBUTING.md](../CONTRIBUTING.md) (Mobile UI Tests section)

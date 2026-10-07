@@ -77,6 +77,12 @@ public class NodeFront
     public NodeLockControl? Lock { get; init; }
 
     /// <summary>
+    /// <c>GET /node/alarms</c>, the shell's "which blind nodes need attention" (BMB-77). Null when the node's internal key is not known to
+    /// the front: the route is then a 501 stub, which the shell reads as "this node does not report alarms".
+    /// </summary>
+    public NodeAlarmsControl? Alarms { get; init; }
+
+    /// <summary>
     /// Registers Kestrel body limits and YARP proxy services. When
     /// <paramref name="enableHttps"/> is true (and on Windows, with a usable
     /// <paramref name="dataPath"/>), additionally registers an ADDITIVE HTTPS listener on
@@ -322,6 +328,16 @@ public class NodeFront
             });
         }
 
+        if (Alarms != null)
+        {
+            // On the app like /node/lock: an off-machine caller gets 404.
+            Alarms.Map(endpoints);
+        }
+        else
+        {
+            nodeGroup.MapGet("/alarms", () => Results.StatusCode(StatusCodes.Status501NotImplemented));
+        }
+
         nodeGroup.MapPost("/sync-now", () =>
         {
             // Stays a stub on purpose. The shell does not call it, and the Api has no HTTP route that runs a sync cycle now: the
@@ -446,18 +462,20 @@ public static class NodeFrontBuilder
     /// <param name="dataPath">See <see cref="NodeFront.RegisterServices"/>.</param>
     /// <param name="lan">See <see cref="NodeFront.Lan"/>.</param>
     /// <param name="lockControl">See <see cref="NodeFront.Lock"/>.</param>
+    /// <param name="alarmsControl">See <see cref="NodeFront.Alarms"/>.</param>
     public static NodeFront Build(
         WebApplicationBuilder builder,
         IReadOnlyDictionary<string, ReadyFileInfo> children,
         bool enableHttps = false,
         string? dataPath = null,
         LanControl? lan = null,
-        NodeLockControl? lockControl = null)
+        NodeLockControl? lockControl = null,
+        NodeAlarmsControl? alarmsControl = null)
     {
         if (builder == null) throw new ArgumentNullException(nameof(builder));
         if (children == null) throw new ArgumentNullException(nameof(children));
 
-        var front = new NodeFront(children) { Lan = lan, Lock = lockControl };
+        var front = new NodeFront(children) { Lan = lan, Lock = lockControl, Alarms = alarmsControl };
         front.RegisterServices(builder.Services, enableHttps, dataPath);
         builder.Services.AddSingleton(front);
 
@@ -467,8 +485,8 @@ public static class NodeFrontBuilder
     /// <summary>
     /// The second front behind "Devices on my network" (<see cref="LanFrontListener"/>): the same routes as the loopback
     /// front, served over HTTPS at <paramref name="endpoint"/> only, with the certificate <paramref name="certificate"/> returns
-    /// (resolved on every handshake, so the leaf's rotation needs no restart). It has no <c>/node/lan</c> and no <c>/node/lock</c>
-    /// control: those are for the page and the shell on this computer, and the <c>/node</c> group refuses everything that is not
+    /// (resolved on every handshake, so the leaf's rotation needs no restart). It has no <c>/node/lan</c>, <c>/node/lock</c> or
+    /// <c>/node/alarms</c> control: those are for the page and the shell on this computer, and the <c>/node</c> group refuses everything that is not
     /// loopback anyway. Not started.
     /// </summary>
     public static WebApplication BuildNetworkFront(

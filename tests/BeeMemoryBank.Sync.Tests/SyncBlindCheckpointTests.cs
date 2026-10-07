@@ -445,6 +445,105 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
             Entries.Add((logLevel, formatter(state, exception) + (exception is null ? "" : " [" + exception + "]")));
     }
 
+    // ---------------------------------------------------------------------------- two syncs at once (Codex, fix 4)
+
+    /// <summary>
+    /// The scheduler's cycle and a reseed's pull from the Blind nodes page do not share a lock. Both read "no cursor" and,
+    /// with the old upsert, both adopted - the second one moving the cursor the first had just set, and the "adopted once
+    /// per pairing" promise broke. A gate holds both between the read and the write.
+    /// </summary>
+    [Fact]
+    public async Task TwoConcurrentSyncs_AdoptTheCheckpointOnce_AndTheCursorIsNotMovedAfterwards()
+    {
+        var gated = new GatedPositions(_positions, _peerId);
+        var log = new ListLogger<SyncClient>();
+        var client = new SyncClient(_node.NodeRepo, _node.EventLogRepo, gated, new SyncPushPositionRepository(_node.Factory),
+            _node.EventApplier, new SessionNodeAuthSigner(_node.Session), log, new PeerNewerProtocolState(),
+            _node.QuarantineRepo, new BlobRepository(_node.Factory), blindState: _blindState,
+            sentinelVerifier: new RemoteSentinelVerifier(_node.Session,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<RemoteSentinelVerifier>.Instance));
+        // Two answers from the same blind peer a moment apart: its checkpoint moved in between.
+        using var httpA = PeerAnswering(Checkpoint);
+        using var httpB = PeerAnswering(Checkpoint + 10);
+
+        async Task<Exception?> Sync(HttpClient http)
+        {
+            try { await client.SyncWithPeerAsync(http, "http://remote.local", _peerId); return null; }
+            catch (Exception ex) { return ex; }
+        }
+        var outcomes = await Task.WhenAll(Task.Run(() => Sync(httpA)), Task.Run(() => Sync(httpB)));
+
+        var adoptions = log.Lines.Where(l => l.Contains("starts its log at checkpoint")).ToList();
+        adoptions.Should().ContainSingle("the checkpoint is adopted once, whatever runs at the same time");
+        var adopted = adoptions[0].Contains($"checkpoint {Checkpoint + 10} ") ? Checkpoint + 10 : Checkpoint;
+        (await PositionAsync()).Should().Be(adopted, "the other sync found the cursor and did not move it");
+        outcomes.Where(e => e != null && e is not SnapshotRequiredException).Should().BeEmpty(
+            "the other sync either continued from the adopted cursor or was refused, as for any cursor that exists");
+    }
+
+    /// <summary>A peer answering like the class's mock, with its own checkpoint (each sync gets its own handler).</summary>
+    private HttpClient PeerAnswering(long checkpoint)
+    {
+        var handler = new MockHandler();
+        handler.MapRoute("/api/sync/sentinel", _ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        handler.MapRoute("/api/sync/challenge", _ => Json(new { challenge = Convert.ToBase64String(new byte[32]), serverNodeId = _peerId }));
+        handler.MapRoute("/api/sync/authenticate", _ => Json(new { token = "test-token" }));
+        handler.MapRoute("/api/sync/report-position", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        handler.MapRoute("/api/sync/blobs/check", req =>
+        {
+            var hashes = JsonDocument.Parse(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult())
+                .RootElement.GetProperty("hashes").EnumerateArray().Select(h => h.GetString()!).ToList();
+            return Json(new { missing = hashes });
+        });
+        handler.MapRoute("/api/sync/blobs", _ => Json(new { stored = 1, rejected = 0 }));
+        handler.MapRoute("/api/sync/identity", _ => Json(new
+        {
+            nodeId = _peerId, displayName = "Peer", ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
+            protocolVersion = SyncProtocolVersion.Current
+        }));
+        handler.MapRoute("/api/sync/events", req =>
+        {
+            if (req.Method == HttpMethod.Post)
+                return Json(new { applied = 1, skipped = 0, lastAppliedSequence = 1, dropped = 0 });
+            var after = long.Parse(System.Web.HttpUtility.ParseQueryString(req.RequestUri!.Query)["afterSequence"] ?? "0");
+            return after < checkpoint ? Json(GoneBody(checkpoint, head: 0), System.Net.HttpStatusCode.Gone) : Json(Array.Empty<object>());
+        });
+        return new HttpClient(handler) { BaseAddress = new Uri("http://remote.local") };
+    }
+
+    /// <summary>
+    /// The real repository, except that a read of the peer's cursor that finds none waits until the other sync has made
+    /// the same read: both pass the "no cursor yet" rule before either writes.
+    /// </summary>
+    private sealed class GatedPositions(ISyncPositionRepository inner, Guid peer) : ISyncPositionRepository
+    {
+        private readonly Barrier _bothRead = new(2);
+
+        public async Task<SyncPosition?> GetAsync(Guid remoteNodeId)
+        {
+            var position = await inner.GetAsync(remoteNodeId);
+            if (position == null && remoteNodeId == peer) _bothRead.SignalAndWait(TimeSpan.FromSeconds(10));
+            return position;
+        }
+
+        public Task UpsertAsync(SyncPosition position) => inner.UpsertAsync(position);
+        public Task<bool> TryAdoptAsync(Guid remoteNodeId, long lastSequenceNum) => inner.TryAdoptAsync(remoteNodeId, lastSequenceNum);
+        public Task<List<SyncPosition>> GetAllAsync() => inner.GetAllAsync();
+        public Task<List<(Guid NodeId, long LastSequenceNum, DateTime UpdatedAt)>> GetAllActivePositionsAsync() => inner.GetAllActivePositionsAsync();
+    }
+
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        private readonly List<string> _lines = new();
+        public List<string> Lines { get { lock (_lines) return _lines.ToList(); } }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (_lines) _lines.Add(formatter(state, exception));
+        }
+    }
+
     private sealed class MockHandler : HttpMessageHandler
     {
         private readonly Dictionary<string, Func<HttpRequestMessage, HttpResponseMessage>> _routes = new();

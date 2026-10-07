@@ -1,4 +1,6 @@
 using System.Text.Json;
+using BeeMemoryBank.AppPaths;
+using BeeMemoryBank.Core.IO;
 
 namespace BeeMemoryBank.Api.Services.BlindBackup;
 
@@ -16,6 +18,9 @@ public sealed class BlindBackupSettingsStore(string dataPath)
     /// <summary>The node's data path — what repository locations are checked against.</summary>
     public string DataPath => dataPath;
     private string FilePath => Path.Combine(_dir, "settings.json");
+
+    /// <summary>Where the settings (with the restic password and S3 keys in clear) are kept.</summary>
+    public static string SettingsFileIn(string dataPath) => Path.Combine(dataPath, "blind", "settings.json");
 
     // Unreadable settings fall back to defaults rather than crashing the node: an operator can then
     // repair the configuration through the console instead of losing the node.
@@ -82,12 +87,13 @@ public sealed class BlindBackupSettingsStore(string dataPath)
             settings.RemoteRepoSeen |= onDisk.RemoteRepoSeen || settings.RepoType != BlindRepoType.Folder;
             Directory.CreateDirectory(_dir);
             var tmp = FilePath + ".tmp";
-            // 0600 from creation, the temp file included: both carry the restic password in the
-            // clear (by design, plan §7), and a chmod after the write leaves a window.
-            var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write };
-            if (!OperatingSystem.IsWindows())
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            using (var w = new StreamWriter(tmp, System.Text.Encoding.UTF8, options))
+            // Owner-only from creation, the temp file included: both carry the restic password in the
+            // clear (by design, plan §7), and a chmod after the write leaves a window. 0600 on Unix, an
+            // owner-only ACL on Windows (OwnerOnlyFile), kept by the rename. A temp file a torn save left
+            // is ours and goes first: opened with Create it would keep whatever permissions it had (and
+            // follow a link left at that name).
+            File.Delete(tmp);
+            using (var w = new StreamWriter(OwnerOnlyFile.CreateNew(tmp), System.Text.Encoding.UTF8))
                 w.Write(JsonSerializer.Serialize(settings, BlindBackupSettings.JsonOpts));
             File.Move(tmp, FilePath, overwrite: true);
         }

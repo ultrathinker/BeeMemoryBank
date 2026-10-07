@@ -67,6 +67,25 @@ public class CliTests : IDisposable
         var result = await StatusCommand.HandleAsync(_tempDir, sw);
         result.Should().Be(0);
         sw.ToString().Should().Contain(NodeName);
+        sw.ToString().Should().NotContain("cannot catch up");
+    }
+
+    [Fact]
+    public async Task Status_ShowsANodeThatCannotCatchUp()
+    {
+        // What the running node's scheduler records when a full peer answers its pull with 410 (BMB-81); bmb status is
+        // another process and reads it from the database.
+        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await using (var services = await CliServiceProvider.CreateAsync(_tempDir))
+            services.GetRequiredService<BeeMemoryBank.Sync.SnapshotRequiredState>()
+                .Set(new BeeMemoryBank.Sync.SnapshotRequiredException("https://host.example", 8, 14, "410"));
+
+        var sw = new StringWriter();
+        var result = await StatusCommand.HandleAsync(_tempDir, sw);
+
+        result.Should().Be(0);
+        sw.ToString().Should().Contain("cannot catch up").And.Contain("https://host.example")
+            .And.Contain("checkpoint 8").And.Contain("Wipe this node and join again");
     }
 
     // ───────────────────── unlock ─────────────────────

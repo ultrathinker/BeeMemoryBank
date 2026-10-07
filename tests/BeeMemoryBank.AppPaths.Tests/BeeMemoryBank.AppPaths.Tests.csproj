@@ -19,4 +19,9 @@
     <Using Include="Xunit" />
     <Using Include="FluentAssertions" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Windows-ACL facts and helpers (review release-a #7): one source in tests/shared. -->
+    <Compile Include="..\shared\WindowsAcl.cs" Link="Shared\WindowsAcl.cs" />
+  </ItemGroup>
+
 </Project>

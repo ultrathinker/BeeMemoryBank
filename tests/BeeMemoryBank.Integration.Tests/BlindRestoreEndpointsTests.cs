@@ -155,6 +155,89 @@ public class BlindRestoreEndpointsTests : IAsyncLifetime
         (await PackageAsync(code)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    // ─── Review release-a #9: the claim is idempotent for the device that spent the code ───
+
+    [Fact]
+    public async Task Claim_WhoseTrustWriteFailed_IsRepeatedByTheSameDevice_AndCreatesOneRow()
+    {
+        var code = await IssueAsync();
+        var device = Guid.NewGuid();
+        var key = NewKey();
+        // The code is spent before the whitelist write, which is not in its transaction: make that write fail once.
+        Execute("CREATE TRIGGER test_fail_claim BEFORE INSERT ON tbl_whitelist BEGIN SELECT RAISE(ABORT, 'injected failure'); END;");
+        HttpStatusCode first;
+        try { first = (await ClaimAsync(code, device, key)).StatusCode; }
+        catch (Exception) { first = HttpStatusCode.InternalServerError; } // the test host may rethrow instead of answering 500
+        finally { Execute("DROP TRIGGER test_fail_claim;"); }
+        first.Should().NotBe(HttpStatusCode.OK, "precondition: the first claim failed after the code was spent");
+
+        var retry = await ClaimAsync(code, device, key);
+
+        retry.StatusCode.Should().Be(HttpStatusCode.OK, "the device's retry repeats its claim instead of finding the code burnt");
+        RowsFor(device).Should().Be(1);
+        using var scope = _blind.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(device))!.IsSuperadmin.Should().BeTrue();
+        (await ClaimAsync(code, Guid.NewGuid(), NewKey())).StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            "a second device can never use the same code");
+    }
+
+    [Fact]
+    public async Task Claim_RepeatedWithTheSameKey_IsIdempotent()
+    {
+        var code = await IssueAsync();
+        var device = Guid.NewGuid();
+        var key = NewKey();
+        (await ClaimAsync(code, device, key)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await ClaimAsync(code, device, key)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        RowsFor(device).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Claim_RepeatedWithAnotherKey_IsRefused_AndTheTrustedKeyStays()
+    {
+        var code = await IssueAsync();
+        var device = Guid.NewGuid();
+        var key = NewKey();
+        (await ClaimAsync(code, device, key)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await ClaimAsync(code, device, NewKey())).StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "a replayed code must never swap the key of a trusted device");
+
+        using var scope = _blind.Services.CreateScope();
+        var row = await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(device);
+        Convert.ToBase64String(row!.Ed25519PublicKey).Should().Be(key);
+    }
+
+    [Fact]
+    public async Task Claim_RepeatedAfterTheDeviceWasRevoked_DoesNotBringItBack()
+    {
+        var code = await IssueAsync();
+        var device = Guid.NewGuid();
+        var key = NewKey();
+        (await ClaimAsync(code, device, key)).StatusCode.Should().Be(HttpStatusCode.OK);
+        Execute($"UPDATE tbl_whitelist SET status = 'R', deleted_at = '{DateTime.UtcNow:O}' WHERE node_id = '{device}' COLLATE NOCASE;");
+
+        (await ClaimAsync(code, device, key)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        using var scope = _blind.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(device)).Should().BeNull(
+            "the revoked device stays revoked");
+    }
+
+    private void Execute(string sql)
+    {
+        using var conn = _blind.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        conn.Execute(sql);
+    }
+
+    private long RowsFor(Guid device)
+    {
+        using var conn = _blind.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        return conn.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_whitelist WHERE node_id = @Id COLLATE NOCASE", new { Id = device.ToString() });
+    }
+
     [Fact]
     public async Task Claim_WithABadKeyOrABlindId_IsRejected_AndKeepsTheCode()
     {

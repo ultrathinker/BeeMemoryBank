@@ -1,0 +1,223 @@
+name: Docker images (GHCR)
+
+# Builds the full-node image (ghcr.io/ultrathinker/beememorybank) and the blind-node image (ghcr.io/ultrathinker/beememorybank-blind)
+# for linux/amd64 and linux/arm64 on native runners, starts each one (scripts/smoke-docker.sh) BEFORE anything is tagged, and only
+# then writes the tags: X.Y.Z, X.Y and latest for a release, only X.Y.Z-rcN for a pre-release.
+#
+# It fires when a release is PUBLISHED: release-windows.yml turns every v* tag into a draft release, and publishing it is the
+# maintainer's approval for these images as well. A manual run from a tag publishes like a release; from a branch it builds and
+# smoke-tests only. It does not create, edit or upload to releases, and shares no cache with the other workflows.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  # Lower case: GHCR refuses upper case in image names, and github.repository is "ultrathinker/BeeMemoryBank".
+  IMAGE_NS: ghcr.io/ultrathinker
+
+jobs:
+  build:
+    name: build ${{ matrix.image }} ${{ matrix.arch }}
+    # Fork guard: the names above are this repository's packages; a fork's run does nothing at all.
+    if: github.repository == 'ultrathinker/BeeMemoryBank'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write   # push by digest (tag runs only)
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { image: beememorybank,       kind: full,  file: Dockerfile,              arch: amd64, runner: ubuntu-latest }
+          - { image: beememorybank,       kind: full,  file: Dockerfile,              arch: arm64, runner: ubuntu-24.04-arm }
+          - { image: beememorybank-blind, kind: blind, file: docker/blind/Dockerfile, arch: amd64, runner: ubuntu-latest }
+          - { image: beememorybank-blind, kind: blind, file: docker/blind/Dockerfile, arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The binaries report VERSION (Directory.Build.props stamps it), so the tag must name it: v2.4.0, or a pre-release of it
+      # (v2.4.0-rc1 while VERSION says 2.4.0 or 2.4.0-rc1).
+      - name: The tag must match VERSION
+        if: github.ref_type == 'tag'
+        run: |
+          want="$(tr -d '[:space:]' < VERSION)"
+          case "${GITHUB_REF_NAME#v}" in
+            "$want" | "$want"-*) ;;
+            *) echo "::error::tag $GITHUB_REF_NAME does not match VERSION $want"; exit 1 ;;
+          esac
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NS }}/${{ matrix.image }}
+          # Labels only here (the tags are written by the merge job): source, revision, version, created, licenses...
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.licenses=AGPL-3.0-only
+
+      # This platform only, loaded into the runner's Docker for the smoke test. Nothing leaves the runner here.
+      - name: Build (local, for the smoke test)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          provenance: false
+          sbom: false
+          tags: bmb-smoke/${{ matrix.image }}:${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Smoke test (start, healthy, /api/version is VERSION; full node - first-run page, model hash, exposed ports)
+        run: bash scripts/smoke-docker.sh "bmb-smoke/${{ matrix.image }}:${{ matrix.arch }}" "${{ matrix.kind }}" "$(tr -d '[:space:]' < VERSION)"
+
+      - name: Log in to ghcr.io
+        if: github.ref_type == 'tag'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same Dockerfile on the same builder: every layer is cached from the step above, this one only pushes - by digest,
+      # with no tag, so a failure anywhere leaves at most an untagged digest behind.
+      - name: Push by digest (no tag yet)
+        id: push
+        if: github.ref_type == 'tag'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          sbom: false
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE_NS }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export the digest
+        if: github.ref_type == 'tag'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          case "$DIGEST" in sha256:*) ;; *) echo "::error::no digest from the push"; exit 1 ;; esac
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.ref_type == 'tag'
+        with:
+          # Underscores between the parts: an image name holds hyphens, and `digests-beememorybank-*` would also match
+          # `digests-beememorybank-blind-amd64`, merging the blind image's digests into the full image's manifest list.
+          name: digests_${{ matrix.image }}_${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: tag ${{ matrix.image }}
+    needs: build
+    if: github.repository == 'ultrathinker/BeeMemoryBank' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write       # the manifest list and its tags, and the attestation pushed next to the image
+      id-token: write       # the provenance attestation's signing identity
+      attestations: write
+    strategy:
+      fail-fast: false      # one image's failure must not cancel the other's tagging
+      matrix:
+        image: [beememorybank, beememorybank-blind]
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests_${{ matrix.image }}_*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # From the release tag: v2.4.0 -> 2.4.0, 2.4 and latest; a pre-release v2.4.0-rc1 -> 2.4.0-rc1 only (the semver type
+      # extends nothing else for a pre-release, and latest=auto writes latest only for a final release).
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NS }}/${{ matrix.image }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=semver,pattern={{version}},value=${{ github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.ref_name }}
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: One manifest list over both platforms, with every tag
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
+          IMAGE: ${{ env.IMAGE_NS }}/${{ matrix.image }}
+        run: |
+          [ "$(ls | wc -l)" = 2 ] || { echo "::error::expected one digest per platform, found: $(ls)"; exit 1; }
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$META_JSON")
+          [ -n "$tags" ] || { echo "::error::no tag computed from $GITHUB_REF_NAME"; exit 1; }
+          docker buildx imagetools create $tags $(printf "$IMAGE@sha256:%s " *)
+
+      - name: Show what was published
+        id: index
+        env:
+          IMAGE: ${{ env.IMAGE_NS }}/${{ matrix.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
+          echo "digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)" >> "$GITHUB_OUTPUT"
+
+      # A GitHub-signed provenance statement on the published index:
+      #   gh attestation verify oci://ghcr.io/ultrathinker/beememorybank:X.Y.Z --owner ultrathinker
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_NS }}/${{ matrix.image }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          push-to-registry: true
+
+  verify:
+    name: verify ${{ matrix.image }} ${{ matrix.arch }} (anonymous pull)
+    needs: merge
+    if: github.repository == 'ultrathinker/BeeMemoryBank' && github.ref_type == 'tag'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: beememorybank,       kind: full,  arch: amd64, runner: ubuntu-latest }
+          - { image: beememorybank,       kind: full,  arch: arm64, runner: ubuntu-24.04-arm }
+          - { image: beememorybank-blind, kind: blind, arch: amd64, runner: ubuntu-latest }
+          - { image: beememorybank-blind, kind: blind, arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No login on purpose: this is what a stranger's `docker pull` does. It is red while a package is still private, which is
+      # the reminder for the one-time "make it public" in the package settings.
+      - name: Pull what was published and smoke test it again
+        run: bash scripts/smoke-docker.sh "${IMAGE_NS}/${{ matrix.image }}:${GITHUB_REF_NAME#v}" "${{ matrix.kind }}" "$(tr -d '[:space:]' < VERSION)"

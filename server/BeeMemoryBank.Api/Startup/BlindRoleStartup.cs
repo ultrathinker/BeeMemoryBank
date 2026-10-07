@@ -1,3 +1,7 @@
+using BeeMemoryBank.AppPaths;
+using BeeMemoryBank.Core.IO;
+using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
@@ -29,6 +33,7 @@ public static class BlindRoleStartup
         var key = services.GetRequiredService<FileNodeKey>();
         var config = services.GetRequiredService<IConfiguration>();
         await EnsureIdentityAsync(nodeRepo, key, config["BMB_NODE_NAME"], logger);
+        RepairSecretPermissions(dataPath, key.Path, logger);
 
         // A restore_network whose reseed flag a crash may have lost (plan 5.3), and a rotation a
         // crash left in Committing.
@@ -88,6 +93,25 @@ public static class BlindRoleStartup
         if (!key.Matches(identity.Ed25519PublicKey))
             throw new InvalidOperationException(
                 $"Blind node: identity key {key.Path} does not belong to node {identity.NodeId}.");
+    }
+
+    /// <summary>
+    /// The three files that hold a secret in clear - the identity seed, the TLS key, the backup credentials - made
+    /// owner-only where an older build left them with the folder's permissions (on Windows, its inherited ACL: review
+    /// release-a #7). Repaired in place and logged, never refused: a node must not stop starting because of how an
+    /// earlier build created its files. A repair that fails is a warning, and the node starts anyway.
+    /// </summary>
+    internal static void RepairSecretPermissions(string dataPath, string seedPath, ILogger logger)
+    {
+        foreach (var file in new[] { seedPath, BlindTlsCertificate.PathIn(dataPath), BlindBackupSettingsStore.SettingsFileIn(dataPath) })
+        {
+            if (OwnerOnlyFile.TryTighten(file, out var problem))
+                logger.LogInformation("Blind node: {Path} was readable by other accounts of this computer; it is now owner-only", file);
+            else if (problem != null)
+                logger.LogWarning(
+                    "Blind node: could not make {Path} owner-only ({Problem}); other accounts of this computer may be able to read it",
+                    file, problem);
+        }
     }
 
     /// <summary>

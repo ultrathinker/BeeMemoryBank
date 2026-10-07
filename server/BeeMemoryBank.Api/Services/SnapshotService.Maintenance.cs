@@ -17,22 +17,13 @@ public partial class SnapshotService
 {
     /// <summary>
     /// Deletes any *.enc file in data/media that has no corresponding row in tbl_media.
-    /// Called after every restore (network or join) to reconcile state. Also called from
-    /// the startup sweep in Program.cs to clean up debris left by a process kill that
-    /// happened during an in-progress restore (media files copied early but DB transaction
-    /// never committed).
+    /// Called after every restore (network or join) to reconcile state, and from the startup
+    /// sweep (ApiStartupTasks), right after <see cref="ResumeMediaStaging"/>, for whatever a
+    /// process kill left behind.
     /// </summary>
     public void CleanupOrphanMediaFiles()
     {
-        var registeredIds = new HashSet<Guid>();
-        using (var conn = _connFactory.CreateConnection())
-        using (var cmd = conn.CreateCommand())
-        {
-            cmd.CommandText = "SELECT id FROM tbl_media";
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-                registeredIds.Add(reader.GetGuid(0));
-        }
+        var registeredIds = RegisteredMediaIds();
 
         var mediaDir = Path.Combine(_dataPath, "media");
         if (!Directory.Exists(mediaDir)) return;
@@ -50,6 +41,65 @@ public partial class SnapshotService
 
         if (orphansDeleted > 0)
             _logger?.LogInformation("Deleted {Count} orphan media files after import", orphansDeleted);
+    }
+
+    /// <summary>
+    /// A restore commits the database first and swaps <c>media.staging</c> into <c>media</c> afterwards. A process
+    /// that died between the two left the restored legacy media (rows without a blob, bytes only in an .enc file) in
+    /// <c>media.staging</c>, where nothing reads it: those images answered 404 until someone moved the folder by hand.
+    /// At startup, before the orphan sweep, every staged .enc whose id the committed tbl_media names and that
+    /// <c>media</c> does not already hold is moved into <c>media</c>. Nothing is overwritten and nothing is deleted:
+    /// a staged file that is not needed stays where it is (the next restore clears the folder), and an empty
+    /// staging folder is removed. Returns how many files were moved.
+    /// </summary>
+    public int ResumeMediaStaging()
+    {
+        var stagingDir = Path.Combine(_dataPath, "media.staging");
+        if (!Directory.Exists(stagingDir)) return 0;
+
+        var registeredIds = RegisteredMediaIds();
+        var mediaDir = Path.Combine(_dataPath, "media");
+        Directory.CreateDirectory(mediaDir);
+
+        var moved = 0;
+        var left = 0;
+        foreach (var staged in Directory.GetFiles(stagingDir, "*.enc"))
+        {
+            var name = Path.GetFileName(staged);
+            var target = Path.Combine(mediaDir, name);
+            if (Guid.TryParse(Path.GetFileNameWithoutExtension(staged), out var id)
+                && registeredIds.Contains(id)
+                && !File.Exists(target))
+            {
+                File.Move(staged, target, overwrite: false);
+                moved++;
+            }
+            else
+            {
+                left++;
+            }
+        }
+
+        if (left == 0 && Directory.GetFileSystemEntries(stagingDir).Length == 0)
+            Directory.Delete(stagingDir);
+
+        if (moved > 0 || left > 0)
+            _logger?.LogWarning(
+                "Startup: an interrupted restore left media in media.staging; moved {Moved} file(s) the database names into media/, left {Left} in place",
+                moved, left);
+        return moved;
+    }
+
+    private HashSet<Guid> RegisteredMediaIds()
+    {
+        var registeredIds = new HashSet<Guid>();
+        using var conn = _connFactory.CreateConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id FROM tbl_media";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            registeredIds.Add(reader.GetGuid(0));
+        return registeredIds;
     }
 
     private static async Task<byte[]> ExtractManifestFromTarGzAsync(string tarGzPath)

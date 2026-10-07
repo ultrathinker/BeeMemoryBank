@@ -409,10 +409,14 @@ public class SearchService(
         List<Article> filtered = scopeHolder.Scope.FilterArticles(articles);
 
         // Preserve SearchRanked's descending-score order across the GetByIdsAsync/FilterArticles
-        // round-trip, neither of which is documented to preserve input order.
-        Dictionary<Guid, int> rankByArticleId = ranked
-            .Select((result, index) => (result.ArticleId, index))
-            .ToDictionary(x => x.ArticleId, x => x.index);
+        // round-trip, neither of which is documented to preserve input order. An article ranked
+        // twice (the same document live in two sealed segments, e.g. after a merge whose
+        // persistence was lost) keeps its first, best rank instead of failing the whole search.
+        var rankByArticleId = new Dictionary<Guid, int>(ranked.Count);
+        for (int index = 0; index < ranked.Count; index++)
+        {
+            rankByArticleId.TryAdd(ranked[index].ArticleId, index);
+        }
         filtered.Sort((a, b) => rankByArticleId[a.Id].CompareTo(rankByArticleId[b.Id]));
 
         return filtered;

@@ -23,7 +23,8 @@ public sealed record AnchorVerification(
     bool HeadProven = true,
     StateDigestHistoryCheck? History = null,
     IReadOnlyList<StateDigestEntry>? Unchecked = null,
-    StateDigestTrustCheck? Trust = null)
+    StateDigestTrustCheck? Trust = null,
+    string? Digest = null)
 {
     /// <summary>
     /// Is this whitelist row vouched for — key and superadmin flag as it stands — by an anchor that matches
@@ -33,6 +34,14 @@ public sealed record AnchorVerification(
     public bool Vouches(Guid nodeId) =>
         MatchesAnchor && Trust != null
         && !Trust.Unconfirmed.Any(e => string.Equals(e.Id, nodeId.ToString(), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Would this whitelist row - key and superadmin flag as given - be vouched for by the matching anchor's trust section?
+    /// The same row check as <see cref="Vouches"/>, decided before the row is written: a restore writes each peer with
+    /// its final status, so no moment exists at which a row the anchor does not vouch for is active (review A2-a).
+    /// </summary>
+    public bool VouchesRow(Guid nodeId, byte[] publicKey, bool superadmin) =>
+        MatchesAnchor && Digest != null && StateDigest.TrustProves(Digest, nodeId, publicKey, superadmin);
 
     /// <summary>
     /// The imported version history and conflict copies against the matching anchor's history section:
@@ -164,7 +173,7 @@ public class StateAnchorService(SessionService session, IDbConnectionFactory con
             return new AnchorVerification(true, a.AnchorId, a.CreatedAt, StateDigest.Matches(a.Digest, state),
                 state.BeyondCut.Count, state.BeyondCut.Count - unverified.Count, state.Unchecked.Count, unverified, unconfirmed, otherFormat,
                 History: StateDigest.CompareHistory(a.Digest, state), Unchecked: state.Unchecked,
-                Trust: StateDigest.CompareTrust(a.Digest, state));
+                Trust: StateDigest.CompareTrust(a.Digest, state), Digest: a.Digest);
         }
 
         return new AnchorVerification(false, null, null, false, 0, 0, 0, [], unconfirmed, otherFormat);

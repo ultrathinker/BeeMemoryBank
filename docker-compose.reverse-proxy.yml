@@ -1,5 +1,9 @@
 # Reference deployment for a node that must be reachable from other nodes / MCP agents.
 #
+# It builds from this source tree. To run the ready-made image instead, replace the `build:` block below with
+#   image: ghcr.io/ultrathinker/beememorybank:${BMB_VERSION:-latest}
+# (see docker-compose.image.yml); everything else stays as it is.
+#
 # Use this when a reverse proxy (Apache/Nginx/Caddy) terminates TLS in front of the node. The
 # default docker-compose.yml publishes only the Web port and is the right choice for a purely
 # local node; this file is its counterpart for a published one.
@@ -74,7 +78,7 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - BMB_DATA_PATH=/app/data
-      - BMB_ONNX_MODEL_PATH=/app/data/model.onnx
+      # No BMB_ONNX_MODEL_PATH: the search model is inside the image. A model.onnx in the data folder is still used first.
       # Whose X-Forwarded-For to believe. REQUIRED for any proxied deployment: Docker's published
       # port DNATs through the bridge, so without this every external client appears to the node as
       # the bridge gateway (172.x.0.1) and they all share ONE rate-limit bucket — meaning a single

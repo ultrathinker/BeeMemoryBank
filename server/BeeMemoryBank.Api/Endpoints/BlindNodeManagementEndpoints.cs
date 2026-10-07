@@ -18,6 +18,10 @@ public static class BlindNodeManagementEndpoints
 
         group.MapGet("/", async (BlindNodeManager manager) => Results.Ok(await manager.ListAsync()));
 
+        // Which blind nodes need attention (BMB-77): the list the desktop shell turns into notifications, through the node front's
+        // /node/alarms. Kinds, times and protocol numbers only, and names only while the vault is unlocked.
+        group.MapGet("/alarms", async (BlindNodeManager manager) => Results.Ok(await manager.GetAlarmsAsync()));
+
         group.MapPost("/", async (AddBlindNodeRequest req, BlindNodeManager manager, CancellationToken ct) =>
         {
             try

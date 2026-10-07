@@ -16,9 +16,10 @@ namespace BeeMemoryBank.Core.Services;
 /// itself initialized, refused the next restore with "restore needs a fresh node" and had no slot
 /// to unlock with.</para>
 ///
-/// <para>So the bootstrap raises this marker BEFORE its first write and lowers it in the same
-/// transaction as the write that completes the bootstrap (the sentinel is on disk and the identity
-/// has been verified by then). While it is up the node reports not-initialized, which is the
+/// <para>So the bootstrap raises this marker BEFORE its first write and lowers it in the
+/// transaction that ends the whole restore: after the bootstrap (sentinel on disk, identity
+/// verified), the peers with their final status, the clock floor and this device's recovery box
+/// (review release-a2 A2-a). While it is up the node reports not-initialized, which is the
 /// instruction the operator needs — restore again — and the next attempt is allowed in and resumes
 /// instead of repeating (that is <see cref="RecoveryRestoreService"/>'s own re-entry rule). The
 /// marker is not a security boundary: <see cref="InitializationService.IsClaimedAsync"/> is what
@@ -55,8 +56,8 @@ public sealed class RestoreBootstrapMarker(IDbConnectionFactory dbFactory)
     }
 
     /// <summary>
-    /// Lowers the flag inside the caller's transaction: the write that completes the bootstrap and
-    /// the flag that says it has not are one step, so a node can never report a finished bootstrap
+    /// Lowers the flag inside the caller's transaction: the last write of the restore and the flag
+    /// that says it has not finished are one step, so a node can never report a finished restore
     /// over a half-written one, nor the other way round.
     /// </summary>
     public static void Clear(IDbConnection conn, IDbTransaction tx)

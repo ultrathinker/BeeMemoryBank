@@ -24,6 +24,12 @@ public interface IShellPlatform
     /// </summary>
     IPowerEventsService? CreatePowerEvents(SleepLockRequest lockNode, Func<bool> lockOnSleepEnabled);
 
+    /// <summary>
+    /// The system's notice outside the app's windows (the blind-node alarms, BMB-77): a balloon on Windows, a banner on macOS. Null when the
+    /// system has none the shell can use; the alarms then reach only the tray tooltip.
+    /// </summary>
+    IUserNotifier? CreateNotifier();
+
     IFileManagerReveal FileManager { get; }
 
     /// <summary>The <c>avares://</c> resource of the tray / menu-bar icon.</summary>

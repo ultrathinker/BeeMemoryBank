@@ -320,6 +320,73 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Review A2-c: the staged database and its sidecars. The switch renames <c>new.db</c> onto the live path, and a
+    /// rename moves a link as a link, so a <c>new.db</c> planted as one would become the live database's path. Refused
+    /// before anything moves: the live database, its sidecars and the staged media all stay where they were.
+    /// </summary>
+    [Theory]
+    [InlineData("new.db")]
+    [InlineData("new.db-wal")]
+    [InlineData("new.db-shm")]
+    public void ASwitchWithALinkAtTheStagedDatabase_IsRefused_AndNothingIsMoved(string name)
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "bmb-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            File.WriteAllText(Path.Combine(outside, "victim.txt"), "not the cutover's");
+            var cutover = StartSwitch();
+            if (name == "new.db") File.Delete(InCutover(name));
+            if (!TryCreateDirectoryLink(InCutover(name), outside)) return; // no link, no test
+
+            var switchFiles = () => cutover.SwitchFiles();
+
+            switchFiles.Should().Throw<BlindSeedRejectedException>($"{name} is a link, not the cutover's staged file");
+            File.ReadAllText(Live).Should().Be("old main");
+            File.ReadAllText(Live + "-wal").Should().Be("old wal");
+            File.ReadAllText(Live + "-shm").Should().Be("old shm");
+            File.Exists(InCutover("old.db")).Should().BeFalse("nothing was moved aside");
+            Directory.Exists(InCutover("media")).Should().BeTrue("the staged media did not move either");
+            File.ReadAllText(Path.Combine(outside, "victim.txt")).Should().Be("not the cutover's");
+        }
+        finally
+        {
+            TryRemoveDirectoryLink(InCutover(name));
+            TryDeleteTree(outside);
+        }
+    }
+
+    /// <summary>
+    /// And the old database's sidecars, which a rollback moves back onto the live ones: a link among them is
+    /// refused before the rollback touches the live database.
+    /// </summary>
+    [Fact]
+    public async Task ARollbackWithALinkAtAnOldSidecar_IsRefused_AndTheLiveDatabaseStays()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "bmb-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            var cutover = StartSwitch();
+            await RetriedAsync(cutover.SwitchFiles);
+            File.Delete(InCutover("old.db-shm"));
+            if (!TryCreateDirectoryLink(InCutover("old.db-shm"), outside)) return; // no link, no test
+
+            var rollBack = () => cutover.RollBack();
+
+            rollBack.Should().Throw<BlindSeedRejectedException>("old.db-shm is a link, not the old database's sidecar");
+            File.ReadAllText(Live).Should().Be("new main", "a refusal changes nothing");
+            File.ReadAllText(InCutover("old.db")).Should().Be("old main");
+            File.ReadAllText(InCutover("old.db-wal")).Should().Be("old wal");
+        }
+        finally
+        {
+            TryRemoveDirectoryLink(InCutover("old.db-shm"));
+            TryDeleteTree(outside);
+        }
+    }
+
     /// <summary>The same at start for an older build's <c>.pre-seed</c> copy: a link there is refused, not wiped through.</summary>
     [Fact]
     public void APreSeedPathThatIsALink_IsRefusedAtStart_AndWhatItPointsAtSurvives()

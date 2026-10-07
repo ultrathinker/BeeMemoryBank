@@ -164,6 +164,11 @@ public sealed class IndexBuilder
     // a reader's snapshot is stable even if a merge replaces this field concurrently.
     private volatile IReadOnlyList<SealedSegment> _sealedSegments = [];
 
+    // Test seam: runs in SearchRanked/SearchRankedReference right after the snapshot block, on the
+    // reader's own thread, so a test can seal or merge in exactly the window a concurrent writer
+    // would. Always null in production.
+    internal Action? AfterHotSnapshotForTests;
+
     /// <summary>
     /// Creates an index builder.
     /// </summary>
@@ -445,15 +450,20 @@ public sealed class IndexBuilder
 
         Dictionary<Guid, HotBufferEntry> hotBufferSnapshot;
         long sealedTotalTermOccurrences;
+        IReadOnlyList<SealedSegment> segments;
         lock (_writeLock)
         {
             hotBufferSnapshot = new Dictionary<Guid, HotBufferEntry>(_hotBuffer);
             sealedTotalTermOccurrences = _sealedTotalTermOccurrencesApprox;
+
+            // Read under the same lock as the hot buffer, never after it: a seal in between moves
+            // documents from the hot buffer into a new segment, and a reader holding the old hot
+            // copy plus the new segment list would see those documents twice. The list itself is
+            // copy-on-write, so this snapshot stays stable after the lock is released.
+            segments = _sealedSegments;
         }
 
-        // Single volatile read, same reasoning as Lookup: a stable snapshot even if a concurrent
-        // merge swaps `_sealedSegments` out underneath this method while it runs.
-        IReadOnlyList<SealedSegment> segments = _sealedSegments;
+        AfterHotSnapshotForTests?.Invoke();
 
         // --- N: exact corpus size (see remarks above) ---
         int corpusSize = hotBufferSnapshot.Count;
@@ -641,9 +651,9 @@ public sealed class IndexBuilder
     /// <item><description><see cref="Segment.SegmentReader.GetDocument"/> (a Guid construction) is
     /// called ONLY for the &lt;= <paramref name="topK"/> survivors, never once per posting.</description></item>
     /// </list>
-    /// The concurrency-safety pattern matches the reference: the hot buffer and
-    /// <see cref="_sealedTotalTermOccurrencesApprox"/> are snapshotted under <see cref="_writeLock"/>,
-    /// and <see cref="_sealedSegments"/> is read once via its single volatile access.
+    /// The concurrency-safety pattern matches the reference: the hot buffer,
+    /// <see cref="_sealedTotalTermOccurrencesApprox"/> and <see cref="_sealedSegments"/> are all
+    /// snapshotted together under <see cref="_writeLock"/>.
     /// </para>
     /// </summary>
     public IReadOnlyList<(Guid ArticleId, float Score)> SearchRanked(IEnumerable<string> stemmedTerms, int topK)
@@ -664,15 +674,18 @@ public sealed class IndexBuilder
 
         Dictionary<Guid, HotBufferEntry> hotBufferSnapshot;
         long sealedTotalTermOccurrences;
+        IReadOnlyList<SealedSegment> segments;
         lock (_writeLock)
         {
             hotBufferSnapshot = new Dictionary<Guid, HotBufferEntry>(_hotBuffer);
             sealedTotalTermOccurrences = _sealedTotalTermOccurrencesApprox;
+
+            // Same lock as the hot-buffer copy, same reasoning as SearchRankedReference: both halves
+            // of the index from one moment, so a concurrent seal cannot make a document count twice.
+            segments = _sealedSegments;
         }
 
-        // Single volatile read, same reasoning as Lookup/SearchRankedReference: a stable snapshot even
-        // if a concurrent merge swaps `_sealedSegments` out underneath this method while it runs.
-        IReadOnlyList<SealedSegment> segments = _sealedSegments;
+        AfterHotSnapshotForTests?.Invoke();
 
         // --- N: exact corpus size (computed identically to the reference) ---
         int corpusSize = hotBufferSnapshot.Count;

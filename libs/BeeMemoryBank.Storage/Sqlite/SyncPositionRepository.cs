@@ -17,13 +17,31 @@ public class SyncPositionRepository(DbConnectionFactory factory) : BaseRepositor
     public async Task UpsertAsync(SyncPosition position)
     {
         using var conn = OpenConnection();
+        await UpsertAsync(conn, null, position);
+    }
+
+    /// <summary><see cref="UpsertAsync(SyncPosition)"/> on the caller's connection, inside its transaction.</summary>
+    public static async Task UpsertAsync(System.Data.IDbConnection conn, System.Data.IDbTransaction? tx, SyncPosition position)
+    {
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_sync_position (remote_node_id, last_sequence_num, updated_at)
               VALUES (@RemoteNodeId, @LastSequenceNum, @UpdatedAt)
               ON CONFLICT(remote_node_id) DO UPDATE SET
                 last_sequence_num = excluded.last_sequence_num,
                 updated_at = excluded.updated_at",
-            position);
+            position, tx);
+    }
+
+    public async Task<bool> TryAdoptAsync(Guid remoteNodeId, long lastSequenceNum)
+    {
+        using var conn = OpenConnection();
+        // One statement: the check and the insert cannot be split by another writer.
+        var inserted = await conn.ExecuteAsync(
+            @"INSERT INTO tbl_sync_position (remote_node_id, last_sequence_num, updated_at)
+              VALUES (@remoteNodeId, @lastSequenceNum, @updatedAt)
+              ON CONFLICT(remote_node_id) DO NOTHING",
+            new { remoteNodeId, lastSequenceNum, updatedAt = DateTime.UtcNow });
+        return inserted == 1;
     }
 
     public async Task<List<SyncPosition>> GetAllAsync()

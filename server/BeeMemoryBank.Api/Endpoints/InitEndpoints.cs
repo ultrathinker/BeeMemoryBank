@@ -454,22 +454,10 @@ public static class InitEndpoints
                         var (cpSeq, lamportTs) = await snapshotService.RestoreForJoinAsync(
                             tempTarGz, sigBytes, producerPubKey);
 
-                        await syncPositionRepo.UpsertAsync(new SyncPosition
-                        {
-                            RemoteNodeId = remote.NodeId,
-                            LastSequenceNum = cpSeq,
-                            UpdatedAt = DateTime.UtcNow
-                        });
-
-                        const long MAX_CLOCK_ADVANCE = 1_000_000;
-                        var cappedLamport = Math.Min(lamportTs, lamportClock.Current + MAX_CLOCK_ADVANCE);
-                        if (lamportTs > cappedLamport)
-                            logger.LogWarning(
-                                "Producer lamport_ts {Producer} exceeds local+MAX_CLOCK_ADVANCE, capping at {Capped}.",
-                                lamportTs, cappedLamport);
-                        lamportClock.Update(cappedLamport);
-
-                        await nodeRepo.MarkInitialSyncCompletedAsync();
+                        // Pull position at the checkpoint, clock past the imported rows (durably), initial sync done:
+                        // the same tail as bmb join.
+                        var cappedLamport = await BeeMemoryBank.Sync.SnapshotJoin.CompleteAsync(
+                            remote.NodeId, cpSeq, lamportTs, syncPositionRepo, lamportClock, nodeRepo, dbConnFactory, logger);
 
                         logger.LogInformation("Snapshot join complete. CP={Cp}, Lamport={Lamport}",
                             cpSeq, cappedLamport);

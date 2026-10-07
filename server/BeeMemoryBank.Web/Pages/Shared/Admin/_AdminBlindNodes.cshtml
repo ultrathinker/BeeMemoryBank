@@ -72,10 +72,17 @@ else
                     <span title="This node held no position for the blind node's log, and took the point where the log starts as its own.">Adopted checkpoint @adopted</span>
                 }
             </div>
+            @* The banners are the alarms the Api judged for this node (BlindAlarmService): the same list the desktop app notifies from. *@
             @if (node.Alarms.Contains("old_protocol"))
             {
                 <sl-alert variant="danger" open style="margin-top:8px;">
                     This blind node runs an older sync protocol. Update it: until then it receives nothing.
+                </sl-alert>
+            }
+            @if (node.Alarms.Contains("pc_too_old"))
+            {
+                <sl-alert variant="danger" open style="margin-top:8px;">
+                    This blind node runs a newer sync protocol than this PC. Update this PC: until then it takes nothing from the blind node.
                 </sl-alert>
             }
             @if (node.Alarms.Contains("silent"))

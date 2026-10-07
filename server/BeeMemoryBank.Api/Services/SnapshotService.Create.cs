@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.AppPaths;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -58,7 +60,8 @@ public partial class SnapshotService
             if (File.Exists(dbPath))
             {
                 var dbSize = new FileInfo(dbPath).Length;
-                var tempDriveInfo = new DriveInfo(Path.GetPathRoot(Path.GetTempPath())!);
+                // The working copy is staged in the data folder (SnapshotStaging), so that is the drive it needs.
+                var tempDriveInfo = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(SnapshotStaging.DirIn(_dataPath)))!);
                 var snapshotsDriveInfo = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(outputDir))!);
                 var requiredBytes = dbSize * 2;
                 // Typed, not a message the caller has to recognise: the network-restore flow routes
@@ -76,13 +79,15 @@ public partial class SnapshotService
         catch (ArgumentException) { /* DriveInfo can fail on unusual paths */ }
         catch (DriveNotFoundException) { }
 
-        var tempDb = Path.GetTempFileName();
+        // Inside the data folder, owner-only, swept at the next start if this process dies before the finally below:
+        // until FilterSecretsFrom has run, this is the whole database (key slots, wrapped key, password hashes).
+        var tempDb = SnapshotStaging.NewFile(_dataPath);
         try
         {
             using (var conn = (SqliteConnection)_connFactory.CreateConnection())
             {
                 using var cmd = conn.CreateCommand();
-                cmd.CommandText = $"VACUUM INTO '{tempDb}'";
+                cmd.CommandText = $"VACUUM INTO '{tempDb.Replace("'", "''")}'";
                 cmd.ExecuteNonQuery();
             }
 

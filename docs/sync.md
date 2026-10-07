@@ -413,6 +413,15 @@ When a fresh node joins an existing network, it does NOT replay the full event l
 producer. Instead, the producer sends a signed snapshot of the current state, and the joiner
 tails events from that point onward.
 
+All three ways to join take the snapshot: the Setup page (`POST /api/init/join`), `bmb join`
+(the CLI, since 2.4.0; before that it stopped after the key exchange and the first sync then asked
+for sequence 0, which a producer that ever compacted or re-keyed its log answers with 410 forever),
+and the phone. `bmb join` refuses a producer whose sync protocol version is not compatible (the same
+gate as the Setup page) before it writes anything, and a blind node, which has no join door, is
+named as such ("join a node that holds the data"). When the snapshot step fails, `bmb join` prints
+the reason, exits non-zero and removes the rows it had written, so it can simply be run again; the
+phone does the same. The Setup page keeps its partial node and says "wipe & retry".
+
 **Flow (joiner perspective):**
 
 1. `POST /api/init/join` on the local Web/API: key exchange with remote, receive master DEK,
@@ -446,12 +455,19 @@ tails events from that point onward.
    preserved (they were populated in step 1).
 6. Set `sync_position[producer] = cp_seq` so subsequent pulls only fetch tail events.
 7. Initialize Lamport clock: `min(snapshot.lamport, local + MAX_CLOCK_ADVANCE)` where
-   `MAX_CLOCK_ADVANCE = 1_000_000` (clock-skew attack mitigation).
+   `MAX_CLOCK_ADVANCE = 1_000_000` (clock-skew attack mitigation). The value is also kept as the
+   durable floor `lamport_floor` in `tbl_migration_marker`: the joiner holds no event that carries
+   it, and every start initializes the clock from `max(MAX(tbl_event.lamport_ts), floor)`.
 8. `MarkInitialSyncCompletedAsync` on `tbl_node_identity`.
+
+Steps 6-8 are one shared routine (`SnapshotJoin.CompleteAsync`) for the Setup page and `bmb join`.
 
 **Re-join:** if a node's position falls below the producer's last compaction CP, regular
 sync returns 410 Gone. The node has no data to recover from — admin must wipe and rejoin.
-See `docs/compaction.md`.
+See `docs/compaction.md`. The node says so: every page of its Web UI shows "This node cannot
+catch up ... Wipe this node and join again" (from `snapshotRequired` in `GET /api/sync/status`),
+and so does `bmb status` (the scheduler also records the state in `tbl_migration_marker`, key
+`sync_snapshot_required`, because the CLI is another process). A successful sync clears it.
 
 **Secret filtering:** the snapshot sent to a joiner is built with `filterSecrets=true`, which
 drops `tbl_node_identity`, `tbl_session`, `tbl_agent*`, `tbl_sync_*`, `tbl_compaction_log`,

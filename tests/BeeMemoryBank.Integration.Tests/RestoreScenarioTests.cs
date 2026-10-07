@@ -478,6 +478,94 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         await AssertEverythingOpensAsync(target);
     }
 
+    // ─── Review release-a2 A2-a: the restore tail ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A restore cut right after the peers are written (a kill, a power cut). It used to write every peer the source
+    /// named as active - superadmins as the source claimed - and demote the ones no anchor vouches for only afterwards,
+    /// with the restore marker already down: the cut left a node that called itself finished and trusted unverified
+    /// superadmins. Now each peer is written with its final status, and the marker stays up until the very end, so the
+    /// cut is a restore to run again. Here nothing is vouched (three unlinked keys: the head is not proven).
+    /// </summary>
+    [Fact]
+    public async Task ARestoreCutRightAfterThePeersAreWritten_TrustsNoUnvouchedPeer_AndIsRunAgain()
+    {
+        var folder = await OldStrongBoxesBackAsync("DELETE FROM tbl_dek_retired_link;");
+        await RewriteRecoverySetAsync(folder);
+        using var target = new RecoveryTestFactory();
+        var service = target.Services.GetRequiredService<RecoveryRestoreService>();
+        List<(string Id, string Status, long Super)>? atTheCut = null;
+        bool? initializedAtTheCut = null;
+        service.StepForTests = async step =>
+        {
+            if (step != "peers-written") return;
+            using (var conn = target.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+                atTheCut = (await conn.QueryAsync<(string, string, long)>("SELECT node_id, status, is_superadmin FROM tbl_whitelist")).ToList();
+            using (var scope = target.Services.CreateScope())
+                initializedAtTheCut = await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync();
+            throw new IOException("simulated crash right after the peers were written");
+        };
+
+        var cut = () => target.Services.GetRequiredService<BlindRestoreClient>().RestoreFromBackupAsync(folder, Who);
+        await cut.Should().ThrowAsync<Exception>();
+
+        atTheCut.Should().NotBeNullOrEmpty("precondition: the source names peers");
+        atTheCut!.Should().OnlyContain(r => r.Status != "A" && r.Super == 0,
+            "no anchor vouches for any of them, and at no point is one of them active or a superadmin");
+        initializedAtTheCut.Should().BeFalse("the marker stays up until the restore is done: the operator is told to restore again");
+
+        service.StepForTests = null;
+        var result = await target.Services.GetRequiredService<BlindRestoreClient>().RestoreFromBackupAsync(folder, Who);
+
+        result.UnconfirmedPeers.Should().NotBeNullOrEmpty();
+        using (var conn = target.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            (await conn.QueryAsync<string>("SELECT node_id FROM tbl_whitelist")).Should().OnlyHaveUniqueItems(
+                "the run after the cut replaces the rows it wrote before");
+        await AssertEverythingOpensAsync(target);
+    }
+
+    /// <summary>
+    /// The clock a restored node starts from after a restart. A restored node imports rows but no events, and every
+    /// start rebuilt the clock from the event log alone: only this device's box event carried the raised clock, and
+    /// publishing it swallows every failure. Without the box event the node came back at 0, below every imported row.
+    /// </summary>
+    [Fact]
+    public async Task ARestoredNodeWithoutItsBoxEvent_StillRestartsAboveTheImportedRows()
+    {
+        using var target = new RecoveryTestFactory();
+        var result = await target.Services.GetRequiredService<BlindRestoreClient>().RestoreFromBackupAsync(source.BackupFolder, Who);
+        using (var conn = target.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync("DELETE FROM tbl_event"); // as if the box had never been published
+
+        using var scope = target.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<IEventLogRepository>().GetMaxLamportTimestampAsync())
+            .Should().BeGreaterThanOrEqualTo(result.LamportTs, "the clock floor the restore wrote is what the next start begins from");
+    }
+
+    [Fact]
+    public async Task TheDeviceBoxIsOut_BeforeTheRestoreMarkerComesDown()
+    {
+        using var target = new RecoveryTestFactory();
+        var service = target.Services.GetRequiredService<RecoveryRestoreService>();
+        bool? markerUp = null;
+        long boxEvents = -1;
+        service.StepForTests = async step =>
+        {
+            if (step != "before-marker-lowered") return;
+            using (var scope = target.Services.CreateScope())
+                markerUp = await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().IsSetAsync();
+            using var conn = target.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+            boxEvents = await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_event WHERE event_type = @T", new { T = BeeMemoryBank.Sync.EventTypes.RecoveryBoxSet });
+        };
+
+        await target.Services.GetRequiredService<BlindRestoreClient>().RestoreFromBackupAsync(source.BackupFolder, Who);
+
+        markerUp.Should().BeTrue();
+        boxEvents.Should().BeGreaterThan(0, "a restore cut before its device box is out is a restore to run again");
+        using (var scope = target.Services.CreateScope())
+            (await scope.ServiceProvider.GetRequiredService<RestoreBootstrapMarker>().IsSetAsync()).Should().BeFalse("the marker is down once it is done");
+    }
+
     /// <summary>The recovery set next to a tampered copy, rebuilt from that copy (what a tamperer would ship).</summary>
     private static async Task RewriteRecoverySetAsync(string folder, Action<RecoverySet>? edit = null)
     {

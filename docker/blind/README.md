@@ -18,7 +18,23 @@ by the PC, which is why the two are set together in `compose.yaml`.
 Volumes: `bmb-blind-data` (the node's whole state: database, media, settings, console password,
 job history, restic cache) and `bmb-blind-backups` (mounted at `/backups`, for a folder repository).
 
-## Build and start
+## Start from the ready-made image
+
+The image is on GitHub's container registry, `ghcr.io/ultrathinker/beememorybank-blind`, for `linux/amd64` and
+`linux/arm64` (a Raspberry Pi 4/5 included). No clone, no build — in an empty folder, naming the host's LAN address (the
+sync port is published on that address only, and compose refuses to start without it):
+
+```bash
+curl -fsSL -o compose.yaml https://raw.githubusercontent.com/ultrathinker/BeeMemoryBank/main/docker/blind/compose.image.yaml
+BMB_LAN_ADDR=192.168.1.20 docker compose up -d
+```
+
+(or put `BMB_LAN_ADDR=…` into a `.env` next to it; `BMB_VERSION=2.4` there stays on one release line). Update with
+`docker compose pull && docker compose up -d`. `compose.image.yaml` is `compose.yaml` with the published image instead of
+the build: the same container, volumes and ports, so a node started either way keeps its data when switched to the other.
+Tags: `X.Y.Z`, `X.Y`, `latest`; a pre-release gets only its own tag.
+
+## Build and start from source
 
 From the repository root, naming the host's LAN address — the sync port is published on that
 address only, and compose refuses to start without it:
@@ -30,7 +46,9 @@ BMB_LAN_ADDR=192.168.1.20 docker compose -f docker/blind/compose.yaml up -d --bu
 (or put `BMB_LAN_ADDR=…` into `docker/blind/.env`).
 
 The image downloads restic (0.17.3, amd64 or arm64) at build time and refuses to build if the
-download does not match the checksum pinned in the Dockerfile.
+download does not match the checksum pinned in the Dockerfile. Only the sync port 5610 is declared
+as exposed in the image; the console's 5611 is published by the compose files on the host's
+loopback only.
 
 ## First setup
 

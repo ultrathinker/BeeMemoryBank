@@ -17,6 +17,8 @@
     <!-- Aliased for the same reason: the console page's own `Program` (BlindConsolePasswordTests hosts it
          in front of a real blind node, so the password change is tested through both processes). -->
     <ProjectReference Include="..\..\server\BeeMemoryBank.BlindConsole\BeeMemoryBank.BlindConsole.csproj" Aliases="BlindConsoleApp" />
+    <!-- CliJoinTests runs the real `bmb join` against a real Api on Kestrel (BMB-81). Aliased: the CLI's own `Program`. -->
+    <ProjectReference Include="..\..\server\BeeMemoryBank.Cli\BeeMemoryBank.Cli.csproj" Aliases="CliApp" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
@@ -49,6 +51,8 @@
     <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
     <!-- A throw-away CA and a loopback TLS server (public-CA trust mode, ADR 0007): one source in tests/shared. -->
     <Compile Include="..\shared\TestPki.cs" Link="Shared\TestPki.cs" />
+    <!-- Windows-ACL facts and helpers (review release-a #7). -->
+    <Compile Include="..\shared\WindowsAcl.cs" Link="Shared\WindowsAcl.cs" />
   </ItemGroup>
 
 </Project>

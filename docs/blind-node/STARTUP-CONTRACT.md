@@ -28,7 +28,7 @@ came from in `BeeMemoryBank.Api` (`Program.cs`, `Startup/ApiServices.cs`, `Start
 1. `BlindSeedCutover.Recover` - a seed cutover a crash interrupted is finished or rolled back **before anything opens the database**.
 2. `MigrationRunner.RunMigrationsAsync` - needs no DEK; the full, byte-identical SQL set is embedded (the runner deletes the ledger rows of migrations it cannot find - see ADR 0001).
 3. `StoredEventRepair.RunAsync`.
-4. `BlindRoleStartup.RunAsync` - blind temp dir cleaned, `RefuseDekMaterial` (key slots / wrapped agent DEK / `os-auto-unlock.dat` / `update-unlock.dat` -> refuse to start), identity from the key file (`EnsureIdentityAsync`), pending restores and rotations retried.
+4. `BlindRoleStartup.RunAsync` - blind temp dir cleaned, `RefuseDekMaterial` (key slots / wrapped agent DEK / `os-auto-unlock.dat` / `update-unlock.dat` -> refuse to start), identity from the key file (`EnsureIdentityAsync`), the three secrets in clear (key file, TLS pfx, `blind/settings.json`) made owner-only where an older build left them with the folder's inherited Windows ACL (`RepairSecretPermissions`: repaired in place and logged, a failure is a warning, never a refusal), pending restores and rotations retried.
 5. `FolderBootstrapper.RunIfNeededAsync`.
 6. Lamport clock restored from the database.
 7. Crash-recovery sweeps: stuck restore rows -> Failed, leftover `beememorybank.db.standalone-staging` removed, stuck `Committing` DEK rotations originated here -> Failed, stale `Proposed` rows (> 24 h) -> Cancelled, orphan media files reconciled.
@@ -58,4 +58,6 @@ for the console and the CLI (internal key). Without `BMB_BLIND_HTTPS_PORT` the p
 `beememorybank.db` (+ `-wal`/`-shm`), the node key file (`FileNodeKey.FileName`), the TLS pfx, `.internal-key`
 (development only), `blind-tmp/` (cleaned at start), backup settings and restic repository paths under
 `BlindPaths`. A new image must open all of them unchanged; the compatibility fixture (a copy of a real node's
-volume) is the test.
+volume) is the test. The key file, the pfx and the backup settings are created owner-only (`OwnerOnlyFile`: 0600 on
+Linux/macOS; on Windows a protected DACL without Everyone/Users/Authenticated Users and the like, with the node's
+account and SYSTEM in full control, named accounts and Administrators kept).

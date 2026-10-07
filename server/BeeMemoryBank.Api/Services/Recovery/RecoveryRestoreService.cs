@@ -81,6 +81,14 @@ public class RecoveryRestoreService(
     private static readonly SemaphoreSlim Gate = new(1, 1);
 
     /// <summary>
+    /// Test seam: awaited at the named points of the restore tail ("peers-written", "before-marker-lowered"); a test
+    /// throws from it to cut the restore there, as a crash would. Always null in production.
+    /// </summary>
+    internal Func<string, Task>? StepForTests { get; set; }
+
+    private Task StepAsync(string name) => StepForTests?.Invoke(name) ?? Task.CompletedTask;
+
+    /// <summary>
     /// A blind package (BlindPackageBuilder). Read with the blind seed's own reader
     /// (<see cref="SnapshotService.ExtractVerifiedAsync"/>: every file against the signed manifest), the
     /// embedded signature checked against <paramref name="producerPublicKey"/>, and its signed
@@ -244,8 +252,8 @@ public class RecoveryRestoreService(
             // is halfway through a restore": without it, a crash in the middle of the bootstrap
             // leaves an identity row that IsInitializedAsync reads as a finished node, and the
             // operator's next attempt is refused with "restore needs a fresh node" (review
-            // release-a2 batch 2; the marker is lowered with the write that completes the
-            // bootstrap, see step 3).
+            // release-a2 batch 2; the marker is lowered with the last write of the restore,
+            // see step 8).
             await sp.GetRequiredService<RestoreBootstrapMarker>().SetAsync(ct);
 
             // 2. The replicated state.
@@ -390,11 +398,10 @@ public class RecoveryRestoreService(
 
             using (var conn = connFactory.CreateConnection())
             {
-                // One transaction for the last writes of the bootstrap AND the marker that says it
-                // is not finished: commit both or neither. Lowering the marker anywhere else would
-                // leave a window in which the node reports a finished vault over a half-written one
-                // (the brick this marker exists for), and a marker that outlived a complete
-                // bootstrap would send the operator back to the restore wizard forever.
+                // The last writes of the bootstrap, together. The marker stays up past them: it is lowered only
+                // when the whole restore is done (step 8) - the peers, the clock floor and this device's box
+                // included - so that a cut anywhere before that is a restore to run again, never a node that
+                // reports itself finished over a half-done one (review release-a2 A2-a).
                 using var tx = conn.BeginTransaction();
                 await conn.ExecuteAsync(
                     "INSERT OR IGNORE INTO tbl_migration_marker (key, value, set_at) VALUES ('legacy_password_unified', '1', @T)",
@@ -416,7 +423,6 @@ public class RecoveryRestoreService(
                 // Search index and embeddings are node-local: rebuild them from the imported content.
                 await conn.ExecuteAsync("UPDATE tbl_article SET embedding_pending = 1, index_pending = 1 WHERE status = 'A'", transaction: tx);
 
-                RestoreBootstrapMarker.Clear(conn, tx);
                 tx.Commit();
             }
 
@@ -424,29 +430,46 @@ public class RecoveryRestoreService(
             clock.RaiseTo(maxImported);
             var lamport = clock.Tick();
 
-            // 5. Who it trusts and how far it has pulled from each: the manifest's whitelist (superadmin
-            // flags and pins included) and positions, the blind node it came from with the address the
-            // user typed. Never a row for itself.
-            await ImportPeersAsync(sp, evidence.Manifest, blind, nodeId);
-
-            // 6. The anchor: date, and whether the state at it is intact.
+            // 5. The anchor: date, whether the state at it is intact - and, from its trust section, which of the
+            // rows the source names it vouches for. Checked BEFORE any peer row exists (the check reads no
+            // whitelist row for that; see AnchorVerification.VouchesRow).
             AnchorVerification anchor;
             using (var conn = connFactory.CreateConnection())
                 anchor = await StateAnchorService.VerifyAsync(conn, keys.Current, evidence.Events,
                     evidence.Manifest?.Keys ?? new Dictionary<Guid, byte[]>(), keys.HeadProven);
 
-            // 6b. A peer stays active only where a DEK-authenticated anchor vouches for its row (its trust section):
-            // what the source says about who is in the mesh is as unverified as its data otherwise.
-            var unconfirmedPeers = await DeactivateUnvouchedPeersAsync(connFactory, anchor, blind?.NodeId);
-            await nodeRepo.MarkInitialSyncCompletedAsync();
+            // 6. Who it trusts and how far it has pulled from the blind node, each peer with its FINAL status, and the
+            // clock floor - one transaction. A peer is active only where the anchor vouches for its row: what the
+            // source says about who is in the mesh is as unverified as its data otherwise. The old order wrote every
+            // peer active (superadmin as the source claimed) and demoted the unvouched ones afterwards, so a cut in
+            // between left them trusted. The floor makes the clock above durable: no imported row carries an event,
+            // and every start rebuilds the clock from the event log and the floor (LamportFloor).
+            var unconfirmedPeers = await WritePeersAsync(connFactory, evidence.Manifest, blind, nodeId, anchor, lamport);
+            sp.GetService<SpkiPinRegistry>()?.Invalidate();
+            await StepAsync("peers-written");
 
-            // 7. This device's box, like every other slot change.
+            // 7. This device's box, like every other slot change - before the marker comes down, so a restore cut
+            // before the box is out is run again (the box is published again; the newer one supersedes).
             await sp.GetRequiredService<IRecoveryBoxPublisher>().PublishDeviceBoxAsync(slot, keys.Current);
+            await StepAsync("before-marker-lowered");
+
+            // 8. Done: the initial sync marked and the marker lowered, together.
+            using (var conn = connFactory.CreateConnection())
+            {
+                using var tx = conn.BeginTransaction();
+                await conn.ExecuteAsync(
+                    "UPDATE tbl_node_identity SET initial_sync_completed = 1 WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)",
+                    transaction: tx);
+                RestoreBootstrapMarker.Clear(conn, tx);
+                tx.Commit();
+            }
 
             logger.LogInformation(
                 "Restore complete: node {Node}, {Retired} older key(s) kept, anchor {Anchor} ({Confirmed})",
                 nodeId, keys.Retired.Count, anchor.AnchorId ?? "none", anchor.State);
-            return new RestoreResult(nodeId, publicKey, anchor, keys.Retired.Count, lamport, keys.RemainingBoxes,
+            // Without its trust comparison: it was made before the peer rows existed, so Vouches would read it as "every
+            // node vouched for". The per-row answer is UnconfirmedPeers (and the rows' status).
+            return new RestoreResult(nodeId, publicKey, anchor with { Trust = null }, keys.Retired.Count, lamport, keys.RemainingBoxes,
                 UnconfirmedPeers: unconfirmedPeers);
         }
         finally
@@ -455,13 +478,6 @@ public class RecoveryRestoreService(
         }
     }
 
-    /// <summary>
-    /// Every restored row the anchor does not vouch for (<see cref="AnchorVerification.Vouches"/>) — all of them
-    /// when no anchor matches — is kept but made inactive (<see cref="RestoredPeerStatus.Unconfirmed"/>, no
-    /// superadmin flag): it cannot authenticate, sync or author anything here until the user confirms it or pairs
-    /// the node again. The blind node restored from is the exception: the restore code the user typed names its
-    /// key, so it stays active, but never as a superadmin. Local only.
-    /// </summary>
     /// <summary>
     /// True when the identity row a previous restore attempt left still holds a seed this run can
     /// open — a v=1 row whose wrapped seed decrypts under the DEK derived from the recovery material.
@@ -534,64 +550,62 @@ public class RecoveryRestoreService(
         }
     }
 
-    private static async Task<IReadOnlyList<RestoredPeerRef>> DeactivateUnvouchedPeersAsync(
-        DbConnectionFactory connFactory, AnchorVerification anchor, Guid? blindSource)
-    {
-        using var conn = connFactory.CreateConnection();
-        var unvouched = (await conn.QueryAsync<(string Id, string Name, long Super)>(
-                "SELECT node_id, display_name, is_superadmin FROM tbl_whitelist WHERE status = 'A'"))
-            .Where(r => Guid.TryParse(r.Id, out _))
-            .Select(r => new RestoredPeerRef(Guid.Parse(r.Id), r.Name, r.Super != 0))
-            .Where(r => !anchor.Vouches(r.NodeId))
-            .ToList();
-        var listed = new List<RestoredPeerRef>();
-        foreach (var r in unvouched)
-        {
-            if (r.NodeId == blindSource)
-            {
-                await conn.ExecuteAsync("UPDATE tbl_whitelist SET is_superadmin = 0 WHERE node_id = @Id COLLATE NOCASE", new { Id = r.NodeId.ToString() });
-                continue;
-            }
-            await conn.ExecuteAsync("UPDATE tbl_whitelist SET status = @U, is_superadmin = 0 WHERE node_id = @Id COLLATE NOCASE",
-                new { U = RestoredPeerStatus.Unconfirmed, Id = r.NodeId.ToString() });
-            listed.Add(r);
-        }
-        return listed;
-    }
-
     private static bool ProducerKeyMatches(string? rowKeyB64, byte[] producerPublicKey)
     {
         try { return rowKeyB64 != null && Convert.FromBase64String(rowKeyB64).AsSpan().SequenceEqual(producerPublicKey); }
         catch (FormatException) { return false; }
     }
 
-    private static async Task ImportPeersAsync(IServiceProvider sp, RestoreManifest? manifest, RestoreBlindPeer? blind, Guid self)
+    /// <summary>
+    /// The peers the source names (and the blind node restored from), each written with its final status in ONE
+    /// transaction, together with the pull position for the blind node and the clock floor. Returns the peers kept
+    /// inactive. A row the matching anchor vouches for (<see cref="AnchorVerification.VouchesRow"/>: key and superadmin
+    /// flag as written) is active as the source has it; the blind node restored from stays active - the restore code the
+    /// user typed names its key - but never as a superadmin; every other row is kept but inactive
+    /// (<see cref="RestoredPeerStatus.Unconfirmed"/>, no superadmin flag): it cannot authenticate, sync or author
+    /// anything here until the user confirms it or pairs the node again. Never a row for itself. A restore run again
+    /// after a cut replaces everything the cut run wrote to the whitelist and the pull positions, not only the rows it names itself.
+    /// </summary>
+    internal static async Task<IReadOnlyList<RestoredPeerRef>> WritePeersAsync(
+        DbConnectionFactory connFactory, RestoreManifest? manifest, RestoreBlindPeer? blind, Guid self, AnchorVerification anchor,
+        long lamportFloor)
     {
-        var whitelist = sp.GetRequiredService<IWhitelistRepository>();
-        var positions = sp.GetRequiredService<ISyncPositionRepository>();
         var now = DateTime.UtcNow;
         var peers = (manifest?.Whitelist ?? []).Where(p => p.NodeId != self).GroupBy(p => p.NodeId).Select(g => g.First()).ToList();
         if (blind != null && peers.All(p => p.NodeId != blind.NodeId))
             peers.Add(new RestorePeer(blind.NodeId, blind.DisplayName, blind.PublicKey, null, IsSuperadmin: false, null));
 
+        var unconfirmed = new List<RestoredPeerRef>();
+        using var conn = connFactory.CreateConnection();
+        using var tx = conn.BeginTransaction();
+        // While the marker is up this restore owns both tables (the node is not initialized and nothing else writes them), so what an
+        // earlier, cut attempt left in them is its own: a re-run from another source must not keep a peer, a superadmin or a pull
+        // position that only the cut run named and the finishing run never checked against its anchor.
+        await conn.ExecuteAsync("DELETE FROM tbl_whitelist", transaction: tx);
+        await conn.ExecuteAsync("DELETE FROM tbl_sync_position", transaction: tx);
         foreach (var peer in peers)
         {
             var isBlindSource = blind != null && peer.NodeId == blind.NodeId;
             var tlsSpki = isBlindSource ? blind!.TlsSpki ?? peer.TlsSpki : peer.TlsSpki;
             var tlsTrust = isBlindSource ? blind!.TlsTrust ?? peer.TlsTrust : peer.TlsTrust;
-            await whitelist.CreateAsync(new WhitelistEntry
+            var vouched = anchor.VouchesRow(peer.NodeId, peer.PublicKey, peer.IsSuperadmin);
+            if (!vouched && !isBlindSource)
+                unconfirmed.Add(new RestoredPeerRef(peer.NodeId, peer.DisplayName, peer.IsSuperadmin));
+
+            await WhitelistRepository.InsertAsync(conn, tx, new WhitelistEntry
             {
                 NodeId = peer.NodeId, DisplayName = peer.DisplayName, Ed25519PublicKey = peer.PublicKey,
                 ApiAddress = isBlindSource ? blind!.ApiAddress.TrimEnd('/') : peer.ApiAddress,
                 // The blind node we came from: the pin the user typed. Everyone else: the pin the manifest carries.
                 TlsSpki = BlindTrust.PinOf(tlsTrust, tlsSpki),
                 TlsTrust = BlindTrust.Effective(tlsTrust, tlsSpki),
-                IsSuperadmin = peer.IsSuperadmin, Status = "A", CreatedAt = now, UpdatedAt = now,
+                IsSuperadmin = vouched && peer.IsSuperadmin,
+                Status = vouched || isBlindSource ? "A" : RestoredPeerStatus.Unconfirmed,
+                CreatedAt = now, UpdatedAt = now,
                 // The row's LWW version as the source held it: an older whitelist_update must still lose.
                 LamportTs = peer.LamportTs, SourceNodeId = peer.SourceNodeId
             });
         }
-        sp.GetService<SpkiPinRegistry>()?.Invalidate();
 
         // The source's pull positions are NOT taken over. They count in each peer's own log, differ from node to
         // node (no anchor can cover them), and nothing in the package shows how far a peer's log really is
@@ -602,10 +616,14 @@ public class RecoveryRestoreService(
         // What this node pulled from the blind node: everything the package covered (its own signed checkpoint —
         // the one position the producer speaks for itself about; whatever it withheld comes from the peers).
         if (blind != null)
-            await positions.UpsertAsync(new SyncPosition
+            await SyncPositionRepository.UpsertAsync(conn, tx, new SyncPosition
             {
                 RemoteNodeId = blind.NodeId, LastSequenceNum = manifest?.IncludesUpTo ?? blind.CpSeq, UpdatedAt = now
             });
+
+        LamportFloor.Raise(conn, tx, lamportFloor);
+        tx.Commit();
+        return unconfirmed;
     }
 
     // Of several unproven heads, the one that opens the most recently written body (by content version).

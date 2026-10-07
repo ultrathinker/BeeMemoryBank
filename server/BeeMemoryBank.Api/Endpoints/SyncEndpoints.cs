@@ -690,7 +690,8 @@ public static class SyncEndpoints
             IWhitelistRepository whitelistRepo,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             INodeIdentityRepository nodeRepo,
-            PeerNewerProtocolState peerNewerProtocolState) =>
+            PeerNewerProtocolState peerNewerProtocolState,
+            SnapshotRequiredState snapshotRequiredState) =>
         {
             var identity = await nodeRepo.GetAsync();
             var totalEvents = await eventLogRepo.GetTotalCountAsync();
@@ -720,6 +721,16 @@ public static class SyncEndpoints
                 connectedNodes = remoteNodes.Count,
                 isInvisible = invisibleMode.IsInvisible,
                 peerNewerProtocol = peerNewerProtocolState.HasNewerProtocol,
+                // A full peer compacted past this node's position: it cannot catch up and must be wiped and joined again.
+                snapshotRequired = snapshotRequiredState.LastException is { } required
+                    ? new
+                    {
+                        remoteUrl = required.RemoteUrl,
+                        lastCompactionCp = required.LastCompactionCp,
+                        currentHeadSeq = required.CurrentHeadSeq,
+                        message = SnapshotRequiredState.Describe(required.RemoteUrl, required.LastCompactionCp, required.CurrentHeadSeq)
+                    }
+                    : null,
                 nodes = nodeStatuses
             });
         // Network topology — peer node ids, display names and, in /status, their API addresses. Every browser consumer already reaches it through an /api-proxy route that requires the superadmin role, so this only stops a signed-in user calling the API directly.

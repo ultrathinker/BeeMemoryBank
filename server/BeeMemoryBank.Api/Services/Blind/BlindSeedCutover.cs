@@ -75,8 +75,8 @@ public sealed class BlindSeedCutover
             RefuseLink(_dir);
             RefuseLink(MarkerPath);
             RefuseLink(StagedMediaDir);
-            RefuseLink(OldDbPath);
             RefuseLink(OldMediaDir);
+            RefuseDatabaseLinks();
             switch (PhaseOf().Phase)
             {
                 case Switching:
@@ -158,10 +158,10 @@ public sealed class BlindSeedCutover
     public void SwitchFiles()
     {
         RefuseLink(_livePath);
-        RefuseLink(OldDbPath);
         RefuseLink(OldMediaDir);
         RefuseLink(StagedMediaDir);
         foreach (var suffix in Sidecars) RefuseLink(_livePath + suffix);
+        RefuseDatabaseLinks();
         if (File.Exists(StagedDbPath))
         {
             if (!File.Exists(OldDbPath)) File.Move(_livePath, OldDbPath);
@@ -185,9 +185,9 @@ public sealed class BlindSeedCutover
     /// </summary>
     public void RollBack()
     {
+        RefuseDatabaseLinks();
         var newDbInstalled = !File.Exists(StagedDbPath);
         RefuseLink(_livePath);
-        RefuseLink(OldDbPath);
         RefuseLink(OldMediaDir);
         RefuseLink(_liveMedia);
         if (File.Exists(OldDbPath))
@@ -396,9 +396,9 @@ public sealed class BlindSeedCutover
     {
         var restoredDb = false;
         RefuseLink(_livePath);
-        RefuseLink(OldDbPath);
         RefuseLink(OldMediaDir);
         RefuseLink(_liveMedia);
+        RefuseDatabaseLinks();
         if (!File.Exists(_livePath) && File.Exists(OldDbPath))
         {
             // Nothing live to lose, and a node without its database does not start: the old one,
@@ -459,6 +459,20 @@ public sealed class BlindSeedCutover
         if (IsLink(path))
             throw new BlindSeedRejectedException(
                 $"Refusing to touch {path}: it is a link (or another reparse point), not this cutover's own file. Nothing was changed; resolve it by hand.");
+    }
+
+    /// <summary>
+    /// The staged and the old database with their sidecars (review A2-c). The switch renames <c>new.db</c> onto the
+    /// live path and a rename moves a link as a link, so a <c>new.db</c> planted as one would become the live
+    /// database's path; the old database's sidecars are moved back onto the live ones by a rollback.
+    /// </summary>
+    private void RefuseDatabaseLinks()
+    {
+        foreach (var db in new[] { StagedDbPath, OldDbPath })
+        {
+            RefuseLink(db);
+            foreach (var suffix in Sidecars) RefuseLink(db + suffix);
+        }
     }
 
     private static bool IsDirectlyUnder(string path, string parent) =>

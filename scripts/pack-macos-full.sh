@@ -578,7 +578,7 @@ fi
 # ---- 5. optional: signing and notarization (OFF by default, never run) --------------------------------------------------------
 # Switch on with BMB_MACOS_SIGN=1. Read from the environment, never written down here:
 #   BMB_MACOS_SIGN_IDENTITY   the "Developer ID Application: ..." identity (name or hash) in the keychain that codesign should use
-#   BMB_MACOS_KEYCHAIN        optional: a keychain file to take the identity from (a dedicated build keychain, not the login one)
+#   BMB_MACOS_KEYCHAIN        optional: a keychain file to take the identity AND the notary profile from (a dedicated release keychain, not the login one)
 # and for notarization (BMB_MACOS_NOTARIZE=1), either
 #   BMB_MACOS_NOTARY_PROFILE  a profile stored earlier with "xcrun notarytool store-credentials", or
 #   BMB_MACOS_TEAM_ID, BMB_MACOS_NOTARY_APPLE_ID, BMB_MACOS_NOTARY_PASSWORD (an app-specific password)
@@ -658,7 +658,7 @@ if [ "${BMB_MACOS_SIGN:-0}" = "1" ]; then
     [ ! -e "$ZIP" ] || die "$ZIP already exists"
     ditto -c -k --keepParent "$SIGNED_APP" "$ZIP"
     if [ -n "${BMB_MACOS_NOTARY_PROFILE:-}" ]; then
-      xcrun notarytool submit "$ZIP" --keychain-profile "$BMB_MACOS_NOTARY_PROFILE" --wait
+      xcrun notarytool submit "$ZIP" --keychain-profile "$BMB_MACOS_NOTARY_PROFILE" ${BMB_MACOS_KEYCHAIN:+--keychain "$BMB_MACOS_KEYCHAIN"} --wait
     else
       : "${BMB_MACOS_TEAM_ID:?set BMB_MACOS_TEAM_ID (or BMB_MACOS_NOTARY_PROFILE) to notarize}"
       : "${BMB_MACOS_NOTARY_APPLE_ID:?set BMB_MACOS_NOTARY_APPLE_ID}"

@@ -12,6 +12,7 @@
 ![SQLite](https://img.shields.io/badge/DB-SQLite-lightgrey)
 ![Build & Test](https://github.com/ultrathinker/BeeMemoryBank/actions/workflows/build.yml/badge.svg)
 ![Build Mobile](https://github.com/ultrathinker/BeeMemoryBank/actions/workflows/build-mobile.yml/badge.svg)
+[![Docker image](https://img.shields.io/badge/ghcr.io-beememorybank-blue?logo=docker)](https://github.com/ultrathinker/BeeMemoryBank/pkgs/container/beememorybank)
 ![Tests](https://img.shields.io/badge/tests-359%2F359-brightgreen)
 ![Security audit](https://img.shields.io/badge/security_audit-7_waves_clean-brightgreen)
 
@@ -215,27 +216,60 @@ The Desktop app can keep several completely separate memory banks side by side, 
 
 ## :rocket: Quick Start
 
-### Docker (recommended)
+### Docker: ready-made image (recommended)
+
+You need Docker with Compose v2 (Docker Desktop, or Docker Engine on Linux). The image runs on amd64 and arm64
+(a PC, a Mac with Apple silicon, a Raspberry Pi 4/5, an ARM server); Docker picks the right one.
+
+```bash
+mkdir bee-memory-bank && cd bee-memory-bank
+curl -fsSL -o docker-compose.yml https://raw.githubusercontent.com/ultrathinker/BeeMemoryBank/main/docker-compose.image.yml
+docker compose up -d
+docker compose ps        # wait until the state says "healthy" (about half a minute)
+```
+
+Open <http://localhost:5301>. The first visit lands on **Setup**: choose your master password and create your bank.
+Nothing else to download: the search model is inside the image.
+
+- **Where your data lives:** in a Docker volume (`docker volume ls` lists it as `bee-memory-bank_bmb-data`, after the
+  folder name). To keep it in a folder you choose, put `BMB_DATA_PATH=./data` into a `.env` file next to the compose file
+  before the first start. `docker compose down` keeps the volume; `docker compose down -v` deletes it, with your data.
+  **Coming from the source `docker-compose.yml`?** That file keeps the data in `./data`. Put `BMB_DATA_PATH=./data` into
+  `.env` before you start the ready-made image in the same folder, or it opens an empty node on Setup (your bank stays
+  untouched in `./data`). A volume belongs to the folder name: keep the folder, or start with `docker compose -p <old name>`.
+- **Who can reach it:** only this computer. The Web port is published on `127.0.0.1:5301`; the API port 5300 is not
+  published at all. To open the login page to your LAN, or to put a domain and TLS in front, read
+  [docs/internet-access.md](docs/internet-access.md) and `docker-compose.reverse-proxy.yml`.
+- **Update:** Admin → Snapshots → Create (a safety copy), then `docker compose pull && docker compose up -d`. To stay on
+  one release line put `BMB_VERSION=2.4` into `.env`. Data migrations only go forward: to go back to an older version,
+  restore the snapshot you made before updating.
+- **Back up:** Admin → Snapshots, and a copy of the data while the node is stopped:
+  `docker compose stop && docker compose cp bmb:/app/data ./bmb-data-copy && docker compose start`.
+- **AI assistants on this computer:** uncomment the two marked lines in the compose file, see
+  [docs/deployment.md](docs/deployment.md).
+- **Blind node image:** `ghcr.io/ultrathinker/beememorybank-blind`, see [docker/blind/README.md](docker/blind/README.md).
+- **Tags:** `X.Y.Z` (exact), `X.Y` (newest patch of that line), `latest`. A pre-release gets only its own tag. The images
+  are built by GitHub Actions from a published release; check where one came from with
+  `gh attestation verify oci://ghcr.io/ultrathinker/beememorybank:X.Y.Z --owner ultrathinker`.
+
+### Docker: build from source
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/ultrathinker/BeeMemoryBank.git
 cd BeeMemoryBank
 
-# 2. Download the ONNX model for semantic search (113 MB, required)
-mkdir -p data
-curl -L -o data/model.onnx "https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx"
-
-# 3. Build and start (Web UI on :5301, this computer only)
+# 2. Build and start (Web UI on :5301, this computer only). The build downloads the search model (113 MB) and checks it.
 docker compose up -d --build
 
-# 4. Check health (from inside the container: the API port is not published on the host)
+# 3. Check health (from inside the container: the API port is not published on the host)
 docker compose exec bmb curl -f http://localhost:5300/health
 ```
 
 Open `http://localhost:5301` in your browser and log in with your master password.
 
-Data is stored in `./data` on the host (including `model.onnx`). To customize ports, copy `.env.example` to `.env` and edit as needed.
+Data is stored in `./data` on the host. To customize ports, copy `.env.example` to `.env` and edit as needed. (A
+`model.onnx` from an older setup in `./data` is still used; you can delete it, the image has its own.)
 
 Docker publishes the Web port on `127.0.0.1` only, so the login page is reachable from this computer and nobody else. To expose it on purpose (a trusted LAN, behind TLS), set `BMB_WEB_BIND=0.0.0.0` in `.env`. The API port (5300, which also serves `/mcp` for AI assistants) is not published at all. To let AI assistants on this computer reach the node, uncomment the two marked lines in `docker-compose.yml`; for assistants on other computers use `docker-compose.reverse-proxy.yml` behind your own proxy. Until then the Profile page tells you that assistants cannot reach the node yet, rather than printing an address that does not work. Details: [docs/deployment.md](docs/deployment.md).
 
@@ -258,6 +292,17 @@ The node a blind copy calls can be a Docker blind node or an ordinary full node 
 reverse proxy with a Let's Encrypt certificate. Mark it under Admin → Trusted Nodes → "Let blind copies call this node"
 (a normal or a pinned certificate) and forward `/api/blind/replica` as well; see
 [docs/internet-access.md](docs/internet-access.md#let-blind-copies-call-this-node).
+
+**When a blind node goes quiet.** "Last contact" on the Blind nodes page is the last time this PC and the blind node actually
+talked (a sync, or the blind node calling), not the last time something changed in the vault, so a quiet vault never makes a
+healthy blind node look silent. The page shows a banner after three days without contact, and when a blind node runs an
+older or a newer sync protocol than this PC. The desktop app (Windows: a notification balloon, macOS: a banner) also tells
+you, once per problem and at most once a day after that: when this PC has not reached a server blind node for six hours
+while it was awake, when a blind copy that calls this PC has not called for three days, and when the protocols differ. The
+tray's tooltip says how many blind nodes need attention. Nothing is judged while the node is in invisible mode or before its
+first sync after starting or waking; the app also waits a few minutes after it starts or the computer wakes, and it does not
+notify about a blind copy that calls another node (this PC hears nothing from it either way). While the vault is locked the
+notice names no blind node.
 
 ### Windows Desktop App and Service (native, no NSSM needed)
 
@@ -593,7 +638,7 @@ In Development mode `BMB_INTERNAL_KEY` is not required — both processes auto-g
 2. **Log in.** If you initialized via CLI (`bmb init --name "X"`), the login is `X` and the password is the master password. If via the Web Setup form, the login is whatever you typed there.
 3. **AI agent token** (optional): Admin → Agents → Create. Copy the bearer token (shown **once**).
 4. **MCP in your AI client** (Claude Code / Cursor / Windsurf): add `bee-memory-bank` with `Authorization: Bearer bee_xxxxx`.
-5. **Add a second node** (optional): on the other machine, after `dotnet publish`, run `bmb join --remote https://first-node --password "MasterP" --name "OtherNode" --data ./data`. The new node downloads a signed encrypted snapshot, verifies it, and joins the sync mesh.
+5. **Add a second node** (optional): on the other machine, after `dotnet publish`, run `bmb join --remote https://first-node --password "MasterP" --name "OtherNode" --data ./data`. The new node downloads a signed encrypted snapshot, verifies it, and joins the sync mesh. If anything fails, `bmb join` says why, exits non-zero and rolls the new node back, so it can be run again (with a new join code if you used `--code`: a code is spent by the first attempt). If the process itself is killed half-way, delete the new node's data folder and start over.
 6. **Keep a recovery key** (recommended): Admin → Security → **Issue new recovery key**, and store it offline. If the administrator password is ever forgotten, the Sign In page's **Forgot your password? Use a recovery key** sets a new one (or `bmb user reset-password --user NAME --recovery-key-stdin`). See [docs/account-recovery.md](docs/account-recovery.md).
 
 #### HTTPS Reverse Proxy
@@ -659,7 +704,8 @@ automatic certificates, Cloudflare Tunnel or Tailscale instead of an open port)?
 
 | Method | Commands |
 |---|---|
-| Docker | `git pull && docker compose up -d --build` |
+| Docker, ready-made image | `docker compose pull && docker compose up -d` |
+| Docker, built from source | `git pull && docker compose up -d --build` |
 | Linux/systemd | `git pull` → `dotnet publish ...` → `sudo systemctl restart beememorybank-api beememorybank-web` |
 | macOS/launchd | `git pull` → `dotnet publish ...` → `launchctl kickstart -k gui/$(id -u)/com.beememorybank.api` (and `.web`) |
 | Windows/NSSM | `git pull` → `dotnet publish ...` → `nssm stop BeeMemoryBankWeb` → `nssm restart BeeMemoryBankApi` → `nssm start BeeMemoryBankWeb` (`nssm restart` takes one service name; Web depends on Api, so it goes down first and comes up last) |
@@ -673,12 +719,14 @@ Tip: take a snapshot via Admin → Snapshots → Create before updating, in case
 | Symptom | Cause | Fix |
 |---|---|---|
 | `BMB_INTERNAL_KEY is not set` on API startup | Production mode without the key | Generate with `openssl rand -base64 32`, export to both processes (or use `EnvironmentFile=` for systemd) |
-| `ONNX model not found` | `model.onnx` not downloaded | `curl -L -o data/model.onnx ...` |
+| `ONNX model not found` | Native install: `model.onnx` not downloaded (the Docker images carry it) | `curl -L -o data/model.onnx ...`, or set `BMB_ONNX_MODEL_PATH` to where it is. In Docker, remove an old `BMB_ONNX_MODEL_PATH=/app/data/model.onnx` line from your compose file. |
 | Static files 404 (CSS/JS) | Web launched outside its `publish/web/` dir | `cd publish/web && ./BeeMemoryBank.Web` (or set `WorkingDirectory=` in the systemd unit) |
 | Login accepted, then redirect back to /Login | HTTP instead of HTTPS — `Secure` cookie dropped by browser | Put TLS in front (Caddy or nginx + certbot). Same problem when accessing via LAN IP without TLS. |
 | `bmb init` wrote data where API doesn't look | `--data` and `BMB_DATA_PATH` disagree | Use the same absolute path for both |
 | 401/403 between Web and API | Different `BMB_INTERNAL_KEY` in the two processes | Use `EnvironmentFile=` (systemd) or a shared env file |
 | `docker compose down -v` did not delete `./data` | `data/` is a bind mount, not a named volume — `-v` doesn't touch it | Remove manually: `rm -rf data/` |
+| `docker compose down -v` deleted the bank | The ready-made image keeps the data in a Docker volume, and `-v` deletes volumes | Restore a snapshot. Use `docker compose down` (no `-v`), or keep the data in a folder with `BMB_DATA_PATH=./data` |
+| `docker compose pull` says `denied` or `unauthorized` | An old login to ghcr.io, or a mistyped image name | `docker logout ghcr.io`, then pull again; the images are public |
 | `Too many attempts` for everyone at once, or peers stop syncing after one busy client | Behind a proxy, every client looks like the proxy, so they share one rate-limit bucket | Set `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS=true` (proxy on the same host) or `BMB_TRUSTED_PROXIES` (Docker or remote proxy) — see [HTTPS Reverse Proxy](#https-reverse-proxy). The startup log prints which hops are trusted. |
 | `/api/join` or `/api/auth/remote-token` accepts unlimited wrong-password guesses from a same-host reverse proxy | The API's `RateLimitMiddleware` used to skip every loopback caller, so the Web process and any proxy on the host did too — including untrusted internet traffic forwarded to 127.0.0.1 | Set `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS=true` so the Web layer's real-client limiter sees the actual peer IP and throttles. The API's limiter now keys on the internal key, not loopback, and counts loopback-without-key traffic against its bucket. |
 
@@ -795,6 +843,7 @@ If these are dealbreakers, Obsidian / Logseq / AnyType / Notion may suit you bet
 - [x] Activity audit log
 - [x] Multi-user authentication with role-based access (superadmin, user)
 - [x] Docker Compose deployment
+- [x] Ready-made Docker images on ghcr.io (full node and blind node, amd64 and arm64)
 - [x] Full-text search (article body, encrypted content)
 - [x] Encrypted image storage with per-image keys (drag & drop, paste, upload)
 - [x] Article version history with encrypted storage and inline diff viewer
@@ -892,6 +941,11 @@ machine, and a maintainer approves each release by hand before it is signed and 
 
 Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
 [SignPath Foundation](https://signpath.org/).
+
+The Docker images (`ghcr.io/ultrathinker/beememorybank`, `ghcr.io/ultrathinker/beememorybank-blind`) are built by the
+[image workflow](.github/workflows/docker-publish.yml) on GitHub Actions when a maintainer publishes a release, and only
+after each image passed a start-up test. They are not Authenticode-signed (no SignPath certificate applies to an image);
+each carries a GitHub-signed build provenance attestation instead.
 
 - Committers and reviewers: [ultrathinker](https://github.com/ultrathinker)
 - Approvers: [ultrathinker](https://github.com/ultrathinker)

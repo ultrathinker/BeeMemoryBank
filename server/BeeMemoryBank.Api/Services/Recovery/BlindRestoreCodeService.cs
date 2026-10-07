@@ -5,6 +5,22 @@ using Dapper;
 
 namespace BeeMemoryBank.Api.Services.Recovery;
 
+/// <summary>What a claim did with its code (<see cref="BlindRestoreCodeService.ConsumeAsync"/>).</summary>
+public enum RestoreCodeUse
+{
+    /// <summary>The code was open and is now spent by this device.</summary>
+    First,
+
+    /// <summary>
+    /// This same device spent it a moment ago, still within the code's lifetime: its claim is being repeated, because the
+    /// first one failed after the code was spent (a crash, a database error) and the device retried.
+    /// </summary>
+    Repeat,
+
+    /// <summary>Not open, and not spent by this device: refused.</summary>
+    Refused
+}
+
 /// <summary>One issued restore code, as the log shows it (never the code itself).</summary>
 public sealed record RestoreCodeLogEntry(string IssuedAt, string ExpiresAt, string? IssuedBy, string? UsedAt, string? ClaimedNodeId, bool Revoked);
 
@@ -43,8 +59,12 @@ public class BlindRestoreCodeService(IDbConnectionFactory connFactory, IAuditLog
         return (code, expires);
     }
 
-    /// <summary>True for an open code (issued, not expired, not used, not revoked). A wrong code is counted.</summary>
-    public async Task<bool> ValidateAsync(string? code)
+    /// <summary>
+    /// True for an open code (issued, not expired, not used, not revoked) - or, when <paramref name="claimant"/> is given,
+    /// for one that device itself spent within the code's lifetime (a repeated claim, <see cref="RestoreCodeUse.Repeat"/>).
+    /// A wrong code is counted.
+    /// </summary>
+    public async Task<bool> ValidateAsync(string? code, Guid? claimant = null)
     {
         if (string.IsNullOrWhiteSpace(code)) return false;
         var now = DateTime.UtcNow.ToString("O");
@@ -54,6 +74,7 @@ public class BlindRestoreCodeService(IDbConnectionFactory connFactory, IAuditLog
               WHERE code_hash = @H AND used_at IS NULL AND revoked = 0 AND expires_at > @Now",
             new { H = Hash(code), Now = now });
         if (open > 0) return true;
+        if (claimant is { } node && await SpentByAsync(conn, code, node, now)) return true;
 
         await conn.ExecuteAsync(
             @"UPDATE tbl_blind_restore_code SET failed_attempts = failed_attempts + 1
@@ -64,16 +85,31 @@ public class BlindRestoreCodeService(IDbConnectionFactory connFactory, IAuditLog
         return false;
     }
 
-    /// <summary>Uses the code up. False when it was not open (or someone used it a moment ago).</summary>
-    public async Task<bool> ConsumeAsync(string code, Guid claimedBy)
+    /// <summary>
+    /// Uses the code up for <paramref name="claimedBy"/>. A code this same device already spent, within its lifetime, is
+    /// answered <see cref="RestoreCodeUse.Repeat"/> instead of refused: the claim after it writes to other tables on other
+    /// connections, and a failure there (or a crash) used to burn the only code while the device was not trusted - its
+    /// retry got 401, and the person had to issue a new code at the console. Possession of the code stays the only
+    /// authority: a second device (another node id) is refused, and what a repeat may write is the caller's to limit.
+    /// </summary>
+    public async Task<RestoreCodeUse> ConsumeAsync(string code, Guid claimedBy)
     {
+        var now = DateTime.UtcNow.ToString("O");
         using var conn = connFactory.CreateConnection();
         var changed = await conn.ExecuteAsync(
             @"UPDATE tbl_blind_restore_code SET used_at = @Now, claimed_node_id = @Node
               WHERE code_hash = @H AND used_at IS NULL AND revoked = 0 AND expires_at > @Now",
-            new { H = Hash(code), Now = DateTime.UtcNow.ToString("O"), Node = claimedBy.ToString() });
-        return changed == 1;
+            new { H = Hash(code), Now = now, Node = claimedBy.ToString() });
+        if (changed == 1) return RestoreCodeUse.First;
+        return await SpentByAsync(conn, code, claimedBy, now) ? RestoreCodeUse.Repeat : RestoreCodeUse.Refused;
     }
+
+    private static async Task<bool> SpentByAsync(System.Data.IDbConnection conn, string code, Guid node, string now) =>
+        await conn.ExecuteScalarAsync<long>(
+            @"SELECT COUNT(*) FROM tbl_blind_restore_code
+              WHERE code_hash = @H AND used_at IS NOT NULL AND revoked = 0 AND expires_at > @Now
+                AND claimed_node_id = @Node COLLATE NOCASE",
+            new { H = Hash(code), Now = now, Node = node.ToString() }) > 0;
 
     public async Task<List<RestoreCodeLogEntry>> LogAsync(int limit = 50)
     {

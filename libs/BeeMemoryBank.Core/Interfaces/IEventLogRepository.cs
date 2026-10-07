@@ -9,6 +9,10 @@ public interface IEventLogRepository
     /// <summary>Atomically inserts the event if not already present. Returns true if inserted, false if duplicate.</summary>
     Task<bool> AppendIfNotExistsAsync(SyncEvent evt);
     Task<bool> ExistsAsync(Guid eventId);
+    /// <summary>
+    /// Where this node's Lamport clock starts: the newest event's time, or the durable floor a snapshot join or a
+    /// restore recorded, whichever is higher.
+    /// </summary>
     Task<long> GetMaxLamportTimestampAsync();
     /// <summary>Events from this node after the specified position (for serving to other nodes).</summary>
     Task<List<SyncEvent>> GetAfterSequenceAsync(long afterSequenceNum, int limit = 1000);

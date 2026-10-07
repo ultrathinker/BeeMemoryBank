@@ -103,6 +103,12 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
     public async Task CreateAsync(WhitelistEntry entry)
     {
         using var conn = OpenConnection();
+        await InsertAsync(conn, null, entry);
+    }
+
+    /// <summary><see cref="CreateAsync"/> on the caller's connection, inside its transaction (a restore writes its peers in one).</summary>
+    public static async Task InsertAsync(System.Data.IDbConnection conn, System.Data.IDbTransaction? tx, WhitelistEntry entry)
+    {
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_whitelist
               (node_id, display_name, ed25519_public_key, api_address, can_generate_embeddings, status, created_at, updated_at, is_superadmin, lamport_ts, source_node_id, tls_spki, tls_trust)
@@ -122,7 +128,7 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 entry.SourceNodeId,
                 entry.TlsSpki,
                 entry.TlsTrust
-            });
+            }, tx);
     }
 
     public async Task UpdateAsync(WhitelistEntry entry)

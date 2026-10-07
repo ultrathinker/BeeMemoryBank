@@ -196,6 +196,8 @@ Lock is therefore a real operation with a short half-life unless you also remove
 
 **Lock on sleep (desktop app, optional, off by default).** The setting "Lock the vault when this computer sleeps" in the desktop app's Settings window (Power) is off until the person turns it on; it is read at each sleep, so it takes effect at once, and with it off a sleep sends nothing. With it on, the desktop app locks the node it started when the computer goes to sleep (Windows and macOS), and the person signs in again after waking up. The shell calls `POST /node/lock` on its node's front — loopback only (an off-machine caller gets 404), and only with the node's internal key in `X-Internal-Key` — and the front calls the Api's `POST /api/session/lock` as the node itself (internal key and superadmin role, bounded to a few seconds). It is the same Lock as the button, with the same limits: a superadmin-owned agent key re-unlocks the process on its next request, and a node the app merely attached to (one it did not start, so it holds no key for) is not locked by it.
 
+**Blind-node alarms (desktop app).** Once a minute the desktop app asks the node it started `GET /node/alarms`, with the same gates as `POST /node/lock` (loopback only, 404 otherwise; the node's internal key, 403 without it); the front calls the Api's `GET /api/blind-nodes/alarms` as the node itself (internal key and superadmin role, bounded to a few seconds). The answer holds alarm kinds, blind-node ids, times and protocol numbers, and a blind node's display name only while the vault is unlocked; no free text, so nothing a remote node says reaches a notification. The texts of the notices are fixed in the app.
+
 ## Reporting a Vulnerability
 
 We take security vulnerabilities seriously. If you discover a vulnerability in BeeMemoryBank, please report it responsibly.
@@ -230,6 +232,23 @@ Send an email to **universeissilent42@gmail.com** with:
 |---|---|
 | Latest release | Yes |
 | Development branch | Best effort |
+
+### Docker images (supply chain)
+
+- `ghcr.io/ultrathinker/beememorybank` and `ghcr.io/ultrathinker/beememorybank-blind` are built by
+  `.github/workflows/docker-publish.yml` on GitHub Actions, never on a developer machine, and only when a maintainer
+  publishes a release (the same approval the Windows installer has). Each architecture's image is started and checked
+  (`scripts/smoke-docker.sh`) before any tag is written; a failed check leaves no `X.Y.Z`, `X.Y` or `latest` behind.
+- Each published image carries a GitHub-signed build provenance attestation:
+  `gh attestation verify oci://ghcr.io/ultrathinker/beememorybank:X.Y.Z --owner ultrathinker`. Every action the workflow
+  uses is pinned by commit, it runs only in this repository (a fork's run does nothing), and only the jobs that can push
+  hold `packages: write` (every step that pushes runs for a release tag only, and there is no pull-request trigger).
+- What the build downloads is checked: the embedding model against the SHA-256 the node itself verifies
+  (`ADD --checksum`), restic against its release checksum. The base images are Microsoft's `dotnet/aspnet:10.0` and
+  `dotnet/sdk:10.0`, kept current by Dependabot.
+- Nothing secret is in a layer: the internal key, the console password and the restic password are created in the data
+  volume at the first start. The containers run as root for now; the images declare only the Web port (5301) and the
+  blind node's sync port (5610) as exposed.
 
 ## Folder-Level Access Control
 

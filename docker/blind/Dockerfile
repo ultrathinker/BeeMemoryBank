@@ -80,10 +80,11 @@ ENV BMB_DATA_PATH=/app/data \
     BMB_BLIND_LOCAL_PORT=5612 \
     BMB_API_URL=http://127.0.0.1:5612
 
-# 5610 — sync surface, published on the LAN. 5611 — the console, published on the HOST's
-# loopback only (see compose.yaml; binding the container side to 127.0.0.1 would break the
-# host-loopback publish, the same DNAT-shape as the main image's API port).
-EXPOSE 5610 5611
+# 5610 — sync surface, published on the LAN. The console (5611) is deliberately not EXPOSEd: it is
+# published on the HOST's loopback only (see compose.yaml), and `docker run -P` or a NAS port dialog
+# must not offer it on every address. Binding the container side to 127.0.0.1 instead would break the
+# host-loopback publish (the same DNAT shape as the main image's API port).
+EXPOSE 5610
 
 # Both listeners, because either one alone is a half-working node: the TLS port is what the mesh
 # and the pairing dial (curl -k: the certificate is self-signed and pinned by the peers, not by a

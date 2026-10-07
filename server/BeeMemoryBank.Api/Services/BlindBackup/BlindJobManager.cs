@@ -123,6 +123,22 @@ public sealed class BlindJobManager
         return gate.Task.WaitAsync(ct);
     }
 
+    /// <summary>
+    /// The same wait for a running job, which says so while it is parked: "paused" is on the job's detail until its
+    /// next progress report. The console shows why nothing moves, and a test can tell a parked job from one that has
+    /// not got that far yet instead of sleeping.
+    /// </summary>
+    internal Task WaitForResumeAsync(RunningJob job, CancellationToken ct)
+    {
+        TaskCompletionSource gate;
+        lock (_sync)
+        {
+            gate = _resume;
+            if (!gate.Task.IsCompleted) job.Detail = "paused";
+        }
+        return gate.Task.WaitAsync(ct);
+    }
+
     /// <summary>Progress callback from <see cref="BlindJobContext"/>; computes speed/ETA from byte samples.</summary>
     internal void Report(RunningJob job, double? fraction, long? bytesDone, long? totalBytes, string? detail)
     {
@@ -555,5 +571,5 @@ public sealed class BlindJobContext(RunningJob job, BlindJobManager manager)
         manager.Report(job, fraction, bytesDone, totalBytes, detail);
     }
 
-    public Task WaitForResumeAsync(CancellationToken ct) => manager.WaitForResumeAsync(ct);
+    public Task WaitForResumeAsync(CancellationToken ct) => manager.WaitForResumeAsync(job, ct);
 }

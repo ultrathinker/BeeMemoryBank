@@ -73,10 +73,13 @@ public class SyncClient(
                     peerNodeId, ex.RemoteUrl, why);
                 throw;
             }
-            await syncPositionRepo.UpsertAsync(new SyncPosition
-            {
-                RemoteNodeId = peerNodeId, LastSequenceNum = ex.LastCompactionCp, UpdatedAt = DateTime.UtcNow
-            });
+            // The rules above read the position; the write must not trust that read. Two syncs with the same blind peer
+            // can overlap (the scheduler's cycle and a reseed's pull from the Blind nodes page do not share a lock), and
+            // with an upsert both adopted, the second moving the cursor the first had just set. TryAdoptAsync only ever
+            // creates the row: one caller adopts, the other finds a cursor and simply syncs from it (where a further 410
+            // is a refusal, as for any cursor that exists).
+            if (!await syncPositionRepo.TryAdoptAsync(peerNodeId, ex.LastCompactionCp))
+                return await SyncWithAsync(http, remoteApiBase, peerNodeId, ct);
             logger.LogWarning(
                 "Blind node {NodeId} ({Url}) starts its log at checkpoint {Cp} (its head is {Head}); this node held no pull " +
                 "position for it. Everything at or below the checkpoint came from this node's own seed, so the pull position " +

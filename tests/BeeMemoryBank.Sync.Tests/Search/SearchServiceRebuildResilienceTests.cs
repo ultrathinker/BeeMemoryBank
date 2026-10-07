@@ -4,6 +4,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Search;
 using BeeMemoryBank.Search.Indexing;
+using BeeMemoryBank.Search.Segment;
 using BeeMemoryBank.Storage.Search;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync.Search;
@@ -195,6 +196,31 @@ public class SearchServiceRebuildResilienceTests : IAsyncLifetime
         // single created article findable by the shared term, none missing, none duplicated.
         List<Article> finalResults = await node2.SearchService.SearchIndexedContentAsync(sharedTerm, topK: articleCount + 10);
         finalResults.Select(a => a.Id).Distinct().Count().Should().Be(articleCount, "after the rebuild and full reindex settle, every originally-created article must be findable again -- exactly once each");
+    }
+
+    [Fact]
+    public async Task SearchIndexedContentAsync_WhenTheIndexRanksAnArticleTwice_ReturnsItOnce_DoesNotThrow()
+    {
+        // The same article live in two sealed segments: what a lost merge persistence leaves behind
+        // after a restart adopts both the old and the new segment. SearchRanked then ranks it twice;
+        // the search must keep the better rank, not fail with a duplicate-key error.
+        const string term = "duplicaterankmarker";
+        var node = await CreateNode(initialize: true);
+        var article = await node.ArticleService.CreateAsync("Doc", "/", [], $"{term} body");
+        var other = await node.ArticleService.CreateAsync("Other", "/", [], $"{term} {term} {term} body");
+
+        List<string> stems = new DefaultTokenizer().Tokenize($"{term} body").Select(t => new DefaultStemmer().Stem(t)).ToList();
+        List<string> otherStems = new DefaultTokenizer().Tokenize($"{term} {term} {term} body").Select(t => new DefaultStemmer().Stem(t)).ToList();
+        byte[] first = SegmentWriter.Build([new SegmentDocument(0, article.Id, Guid.Empty, stems), new SegmentDocument(1, other.Id, Guid.Empty, otherStems)]);
+        byte[] second = SegmentWriter.Build([new SegmentDocument(0, article.Id, Guid.Empty, stems)]);
+        node.Builder.AdoptPersistedSegment(new SegmentReader(first), new HashSet<Guid>());
+        node.Builder.AdoptPersistedSegment(new SegmentReader(second), new HashSet<Guid>());
+        node.Builder.SearchRanked([new DefaultStemmer().Stem(term)], topK: 10).Count(r => r.ArticleId == article.Id)
+            .Should().Be(2, "the setup must really make the index rank the article twice");
+
+        List<Article> results = await node.SearchService.SearchIndexedContentAsync(term, topK: 10);
+
+        results.Select(a => a.Id).Should().Equal(other.Id, article.Id);
     }
 
     /// <summary>Runs ProcessPendingAsync repeatedly until no articles remain index_pending, bounded so a real hang fails loudly.</summary>

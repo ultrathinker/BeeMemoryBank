@@ -4,6 +4,8 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using BeeMemoryBank.AppPaths;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Data.Sqlite;
@@ -37,15 +39,17 @@ public static class SnapshotCommand
         var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
         var identity = await nodeRepo.GetAsync();
 
-        // Create a VACUUM copy of the database for a consistent snapshot
-        var tempDb = Path.GetTempFileName();
+        // Create a VACUUM copy of the database for a consistent snapshot - staged in the data folder like the node's own
+        // snapshots (SnapshotStaging), owner-only, not in the OS temp folder. The node's next start removes it if this
+        // command dies before its finally; the CLI itself never sweeps, since the node may be running a snapshot.
+        var tempDb = SnapshotStaging.NewFile(Path.GetDirectoryName(services.GetRequiredService<BeeMemoryBank.Core.Services.MediaStorageOptions>().MediaDir)!);
         try
         {
             var connFactory = services.GetRequiredService<DbConnectionFactory>();
             using (var conn = (SqliteConnection)connFactory.CreateConnection())
             {
                 using var cmd = conn.CreateCommand();
-                cmd.CommandText = $"VACUUM INTO '{tempDb}'";
+                cmd.CommandText = $"VACUUM INTO '{tempDb.Replace("'", "''")}'";
                 cmd.ExecuteNonQuery();
             }
 

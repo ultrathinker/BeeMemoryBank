@@ -278,6 +278,15 @@ else
     // The local flags table exists on every node; here it only holds the note of an adopted blind checkpoint (the
     // Blind nodes page, SyncClient.SyncWithPeerAsync). A blind node registers it with its own services.
     builder.Services.AddSingleton<BeeMemoryBank.Sync.Blind.BlindState>();
+    // Which blind nodes need attention (BMB-77): judged on the sync loop's own clock of completed cycles and failure streaks.
+    builder.Services.AddSingleton(sp => new BlindAlarmService(
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<BeeMemoryBank.Core.Services.InvisibleModeService>(),
+        sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
+        sp.GetService<BeeMemoryBank.Sync.SyncScheduler>()));
+    // Built when the host starts (the sync loop's first cycle is seconds later), not at the first look at the Blind nodes page: it only
+    // learns of the cycles it was there for, and until one completes after it exists the page and the alarms say "warming up".
+    builder.Services.AddHostedService<BlindAlarmStarter>();
     builder.Services.AddSingleton<BlindNodeManager>();
     builder.Services.AddSingleton<BeeMemoryBank.Sync.Blind.IBlindPeerReseeder>(sp => sp.GetRequiredService<BlindNodeManager>());
     // Pairing an Android blind node, which calls one of the nodes above (plan section 10).

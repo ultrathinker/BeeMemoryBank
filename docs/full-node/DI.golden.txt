@@ -2,6 +2,7 @@ Singleton BeeMemoryBank.Api.Endpoints.RestoreProgress => BeeMemoryBank.Api.Endpo
 Singleton BeeMemoryBank.Api.Endpoints.SyncEndpoints+SyncChallengeRateLimiter => BeeMemoryBank.Api.Endpoints.SyncEndpoints+SyncChallengeRateLimiter
 Singleton BeeMemoryBank.Api.Helpers.McpToolRegistry => instance BeeMemoryBank.Api.Helpers.McpToolRegistry
 Singleton BeeMemoryBank.Api.McpTools.McpResponseManager => factory
+Singleton BeeMemoryBank.Api.Services.BlindAlarmService => factory
 Singleton BeeMemoryBank.Api.Services.BlindBackup.BlindBackupService => factory
 Singleton BeeMemoryBank.Api.Services.BlindBackup.BlindBackupSettingsStore => instance BeeMemoryBank.Api.Services.BlindBackup.BlindBackupSettingsStore
 Singleton BeeMemoryBank.Api.Services.BlindBackup.BlindBackupStatusContributor => BeeMemoryBank.Api.Services.BlindBackup.BlindBackupStatusContributor
@@ -195,10 +196,12 @@ Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Servi
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.BlindBackup.BlindBackupScheduleService
 Singleton Microsoft.Extensions.Hosting.IHostedService => factory
+Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.BlindAlarmStarter
 Singleton Microsoft.Extensions.Hosting.IHostedService => ModelContextProtocol.AspNetCore.IdleTrackingBackgroundService
 Singleton Microsoft.Extensions.Hosting.IHostedService => Microsoft.AspNetCore.Hosting.GenericWebHostService
 # hosted services at run time
 BeeMemoryBank.Api.Services.AuditLogPruningHostedService
+BeeMemoryBank.Api.Services.BlindAlarmStarter
 BeeMemoryBank.Api.Services.BlindBackup.BlindBackupScheduleService
 BeeMemoryBank.Api.Services.BlindReplicaPackageCache
 BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor

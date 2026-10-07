@@ -53,7 +53,10 @@ alone. On the next `GET /api/sync/events?afterSequence=X` (with X below CP), the
       "current_head_seq": <head>,
       "message": "Your position is older than the last compaction point. Wipe this node and rejoin via /Setup." }
 
-That peer must wipe its data and rejoin via the snapshot flow (Setup → Join Network).
+That peer must wipe its data and rejoin via the snapshot flow (Setup → Join Network, or
+`bmb join`, which takes the snapshot too since 2.4.0). The peer shows this state on every page of
+its Web UI and in `bmb status` ("This node cannot catch up ... Wipe this node and join again").
+A node that joins after a compaction is not affected: it starts from the snapshot's checkpoint.
 
 ## Audit trail
 

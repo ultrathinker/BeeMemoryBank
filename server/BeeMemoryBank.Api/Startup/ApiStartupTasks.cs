@@ -194,17 +194,27 @@ using (var scope = app.Services.CreateScope())
         }
     }
 
-    // Network-wide restore copies media files into data/media BEFORE the SQL commit so that
-    // tbl_media row inserts are guaranteed to find the file on disk. If the process died in
-    // that window, we have orphan *.enc files (DB has no row referencing them). Reconcile here.
+    // A restore stages media in data/media.staging, commits the database, and only then swaps
+    // the staging folder into data/media. A process that died after the commit but before the
+    // swap left the restored legacy media (bytes only in .enc files, no blob) in media.staging:
+    // resume that first, moving in what the committed tbl_media names. Then the orphan sweep:
+    // *.enc files in data/media that no row references belong to the state a restore replaced.
     try
     {
-        app.Services.GetRequiredService<SnapshotService>().CleanupOrphanMediaFiles();
+        var snapshots = app.Services.GetRequiredService<SnapshotService>();
+        snapshots.ResumeMediaStaging();
+        snapshots.CleanupOrphanMediaFiles();
     }
     catch (Exception ex)
     {
-        startupLogger.LogWarning(ex, "Startup orphan-media cleanup failed (non-fatal).");
+        startupLogger.LogWarning(ex, "Startup media reconciliation failed (non-fatal).");
     }
+
+    // A snapshot's working copy of the database (the whole vault until it is filtered) that a kill or power cut left
+    // in data/tmp. Nothing is in progress at start.
+    var staleSnapshotCopies = BeeMemoryBank.Core.IO.SnapshotStaging.Sweep(dataPath);
+    if (staleSnapshotCopies > 0)
+        startupLogger.LogInformation("Startup: removed {Count} working copy file(s) an interrupted snapshot left", staleSnapshotCopies);
 }
 
 // ── OS auto-unlock (opt-in; where the OS has a secret store: Windows DPAPI, macOS Keychain) ──

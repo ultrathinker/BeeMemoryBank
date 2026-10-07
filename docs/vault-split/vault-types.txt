@@ -169,6 +169,7 @@ BeeMemoryBank.Sync.RemoteSentinelVerifier+SentinelDto
 BeeMemoryBank.Sync.Search.SearchIndexLifecycleService
 BeeMemoryBank.Sync.Search.SearchIndexRuntimeState
 BeeMemoryBank.Sync.SessionNodeAuthSigner
+BeeMemoryBank.Sync.SnapshotJoin
 BeeMemoryBank.Sync.SnapshotJoinClient
 BeeMemoryBank.Sync.SnapshotJoinClient+AuthTokenDto
 BeeMemoryBank.Sync.SnapshotJoinClient+ChallengeResponseDto

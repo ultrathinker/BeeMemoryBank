@@ -43,8 +43,9 @@ rule for port 5311 limited to the local network (and can remove it again from th
 changes the firewall without asking. The Windows service has no desktop to ask on: its installer's
 "Configure Windows Firewall Exception" option opens the ports. On a Mac the app changes nothing:
 macOS asks whether "Bee Memory Bank" may accept incoming connections when the first device connects;
-choose Allow. In Docker there is no such switch: the ports `docker-compose.yml` publishes decide, see
-[deployment.md](deployment.md). Keep the node closed if you can; a node nobody can reach is a node
+choose Allow. In Docker there is no such switch: the ports the compose file publishes decide
+(`docker-compose.yml`, or `docker-compose.image.yml` for the ready-made image; both publish only the Web port, on the
+host's loopback), see [deployment.md](deployment.md). Keep the node closed if you can; a node nobody can reach is a node
 nobody can attack.
 
 ## Which ports, and which to expose
@@ -60,7 +61,10 @@ nobody can attack.
 Published Docker ports skip `ufw` (Docker writes its own firewall rules), so a `0.0.0.0` mapping is
 reachable from the internet even on a host you believe is firewalled. Use
 [`docker-compose.reverse-proxy.yml`](../docker-compose.reverse-proxy.yml): it binds 5300 and 5301 to the
-host's loopback only. The reasoning is in [deployment.md](deployment.md#reverse-proxy--what-is-exposed).
+host's loopback only (with the ready-made image, replace its `build:` block by
+`image: ghcr.io/ultrathinker/beememorybank:${BMB_VERSION:-latest}`). The image does not even declare 5300 as an exposed
+port, so `docker run -P` and NAS port dialogs do not offer it. The reasoning is in
+[deployment.md](deployment.md#reverse-proxy--what-is-exposed).
 
 ## 1. Router and DNS
 

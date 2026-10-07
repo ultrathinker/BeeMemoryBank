@@ -49,3 +49,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # The blind node image (docker/blind/Dockerfile) has its own base images: without this entry they were never proposed.
+  - package-ecosystem: "docker"
+    directory: "/docker/blind"
+    schedule:
+      interval: "weekly"

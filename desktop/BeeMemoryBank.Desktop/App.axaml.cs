@@ -104,6 +104,9 @@ public partial class App : Application
             profilesItem.Menu = profilesMenu;
             RebuildStorageMenu(profilesMenu, mainWindow);
 
+            // "1 blind node needs attention" in the tooltip (BMB-77): the watcher reports from its polling thread.
+            mainWindow.BlindAlarmsChanged += (s, e) => Dispatcher.UIThread.Post(UpdateTrayTooltip);
+
             mainWindow.ActiveProfileChanged += (s, e) =>
             {
                 Dispatcher.UIThread.Post(() =>
@@ -361,7 +364,8 @@ public partial class App : Application
 
     /// <summary>
     /// Updates <see cref="TrayIcon.ToolTipText"/> to follow §4.5: bare product name when ≤ 1
-    /// profile, "BeeMemoryBank — &lt;active profile name&gt;" when ≥ 2.
+    /// profile, "BeeMemoryBank — &lt;active profile name&gt;" when ≥ 2; followed by
+    /// "— N blind nodes need attention" while the blind-node alarm watcher has raised alarms.
     /// </summary>
     private void UpdateTrayTooltip()
     {
@@ -372,6 +376,9 @@ public partial class App : Application
         if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop) return;
         if (desktop.MainWindow is not MainWindow mw) return;
 
-        _trayIcon.ToolTipText = Services.StorageDisplayLogic.FormatShellTitle(mw.Profiles, mw.ActiveProfileId);
+        var title = Services.StorageDisplayLogic.FormatShellTitle(mw.Profiles, mw.ActiveProfileId);
+        _trayIcon.ToolTipText = Services.BlindAlarmWatcher.TooltipSuffix(mw.BlindAlarmCount) is { } attention
+            ? $"{title} — {attention}"
+            : title;
     }
 }

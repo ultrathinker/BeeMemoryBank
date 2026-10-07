@@ -1,7 +1,9 @@
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.TestSupport;
 
 namespace BeeMemoryBank.Sync.Tests;
 
@@ -30,6 +32,23 @@ public sealed class FileNodeKeyTests : IDisposable
         key.ReadSeed().Should().HaveCount(32);
         key.Matches(pub).Should().BeTrue();
         key.Matches(Ed25519Signer.GenerateKeyPair().publicKey).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Review release-a #7: on Windows the seed used to take over the data folder's inherited ACL, so in a folder
+    /// outside the user's profile every account of the computer could read the node's identity.
+    /// </summary>
+    [WindowsAclFact]
+    public void Create_InAFolderEveryAccountCanRead_TheSeedIsOwnerOnly()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        WindowsAcl.MakeReadableByAllUsers(_dir);
+        var key = NewKey();
+
+        key.Create();
+
+        WindowsAcl.UsersCanRead(key.Path).Should().BeFalse();
+        WindowsAcl.OwnerHasFullControl(key.Path).Should().BeTrue();
     }
 
     [Fact]
@@ -85,6 +104,38 @@ public sealed class FileNodeKeyTests : IDisposable
         createdAgain.Should().BeFalse();
         again.Should().Equal(first, "a node that already has a key must never be handed another one");
         File.ReadAllBytes(key.Path).Should().Equal(onDisk);
+    }
+
+    /// <summary>
+    /// Review A2-d: two first starts on one volume at the same instant. Both used to see "no seed", both wrote one and
+    /// renamed it over the other's, so one returned a public key that was no longer in the file - its identity row then
+    /// failed "does not belong to node" at every later start. Now the second rename does not replace, and the loser takes
+    /// the winner's key.
+    /// </summary>
+    [Fact]
+    public void TwoFirstStartsAtOnce_BothGetTheKeyThatIsInTheFile()
+    {
+        const int rounds = 200;
+        for (var round = 0; round < rounds; round++)
+        {
+            var key = new FileNodeKey(Path.Combine(_dir, $"race-{round}.key"));
+            using var barrier = new Barrier(2);
+            var results = new (byte[] PublicKey, bool Created)[2];
+
+            var tasks = Enumerable.Range(0, 2).Select(i => Task.Factory.StartNew(() =>
+            {
+                barrier.SignalAndWait();
+                var pub = new FileNodeKey(key.Path).LoadOrCreate(out var created);
+                results[i] = (pub, created);
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+            Task.WaitAll(tasks, TimeSpan.FromSeconds(30)).Should().BeTrue();
+
+            results[0].PublicKey.Should().Equal(results[1].PublicKey, $"round {round}: both starts must end up with one identity");
+            key.Matches(results[0].PublicKey).Should().BeTrue($"round {round}: the key returned is the key in the file");
+            results.Count(r => r.Created).Should().Be(1, $"round {round}: exactly one start created the key");
+        }
+
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty("the loser's temp file is not left behind");
     }
 
     [Fact]

@@ -1,0 +1,58 @@
+# Blind node stack from the ready-made image (ghcr.io/ultrathinker/beememorybank-blind): no git clone, no build.
+#   curl -fsSL -o compose.yaml https://raw.githubusercontent.com/ultrathinker/BeeMemoryBank/main/docker/blind/compose.image.yaml
+#   BMB_LAN_ADDR=<this host's LAN address> docker compose up -d
+# Everything else is compose.yaml (the build-from-source file): the same ports, volumes and names, so switching from one to
+# the other keeps the node's data. Update: docker compose pull && docker compose up -d.
+name: bmb-blind
+
+services:
+  blind:
+    # latest = the newest release; pin a release line or an exact version with BMB_VERSION in .env (2.4, 2.4.0).
+    # The image is for linux/amd64 and linux/arm64 (a Raspberry Pi 4/5 included); Docker picks the right one.
+    image: ghcr.io/ultrathinker/beememorybank-blind:${BMB_VERSION:-latest}
+    container_name: bmb-blind
+    # Fixed, not the container id: restic clears a dead process's repository lock by itself only
+    # when the lock was taken on the same host name. A restic killed by a restart or a recreate
+    # (new id, new hostname) would otherwise block forget/prune for 30 minutes.
+    hostname: bmb-blind
+    ports:
+      # Sync surface for the mesh's full nodes (every full device calls the blind node).
+      # Bound to ONE address the operator names — the host's LAN address — never all
+      # interfaces: on a host with a public interface "5610:5610" would publish the sync
+      # surface to the Internet (Docker's DNAT bypasses the host firewall). No address, no
+      # start: compose refuses with the message below instead of guessing.
+      - "${BMB_LAN_ADDR:?set BMB_LAN_ADDR to this host's LAN address, e.g. BMB_LAN_ADDR=192.168.1.20}:5610:5610"
+      # The management page. Loopback-only on the HOST side: `ssh <host> -L 5611:127.0.0.1:5611`
+      # or browse on the host itself. Nothing on the LAN can reach it.
+      - "127.0.0.1:5611:5611"
+    volumes:
+      # The node's whole state: vault DB, media, blind settings, restic password, console
+      # password, job history, restic cache. Losing this volume is losing the node.
+      - data:/app/data
+      # Where a FOLDER restic repository lives (e.g. /backups/restic), if that is the chosen
+      # target. Point it at another disk or a NAS mount: a backup on the node's own disk dies with
+      # it. S3 deployments don't need this mount.
+      - backups:/backups
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - BMB_ROLE=blind
+      - BMB_DATA_PATH=/app/data
+      # The published sync port speaks HTTPS with the node's own self-signed certificate; BMB_BLIND_LOCAL_PORT keeps a plain
+      # loopback port beside it for the console and `docker exec … bmb` (see compose.yaml for the whole story).
+      - BMB_BLIND_HTTPS_PORT=5610
+      - BMB_BLIND_LOCAL_PORT=5612
+      # What the pair code tells a PC to dial. BMB_LAN_ADDR is the same address the port above is
+      # published on, and compose refuses to start without it, so the two cannot drift apart.
+      - "BMB_PUBLIC_ADDRESS=https://${BMB_LAN_ADDR:?set BMB_LAN_ADDR to this host's LAN address, e.g. BMB_LAN_ADDR=192.168.1.20}:5610"
+      # Where local tools find the Api: the console, and `docker exec bmb-blind bmb blind …`.
+      # The LOCAL plain port, not 5610 — that one speaks TLS the mesh pins, not the local tools.
+      - BMB_API_URL=http://127.0.0.1:5612
+    restart: unless-stopped
+
+# The same named volumes as compose.yaml. To keep the repository on a host folder instead (another disk, a NAS mount), replace
+# the service's volume line with a bind: `- /mnt/nas/bmb:/backups`.
+volumes:
+  data:
+    name: bmb-blind-data
+  backups:
+    name: bmb-blind-backups

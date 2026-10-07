@@ -3,6 +3,9 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.AppPaths;
+using BeeMemoryBank.Core.IO;
+using BeeMemoryBank.TestSupport;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -265,6 +268,136 @@ public class SnapshotServiceTests : IAsyncLifetime
         manifest.RootElement.TryGetProperty("lamportTsAtCp", out _).Should().BeFalse();
         manifest.RootElement.TryGetProperty("producerNodeId", out _).Should().BeFalse();
         manifest.RootElement.TryGetProperty("migrationVersion", out _).Should().BeFalse();
+    }
+
+    // ─── Review release-a #1: the working copy of the database is staged in the data folder ───
+
+    [Fact]
+    public async Task CreateAsync_StagesInsideTheDataFolder_NotInTheOsTempFolder_AndRemovesTheCopy()
+    {
+        string? staged = null;
+        var additions = new SnapshotAdditions([], path =>
+        {
+            staged = path;
+            File.Exists(path).Should().BeTrue();
+            if (!OperatingSystem.IsWindows())
+                File.GetUnixFileMode(path).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }, new Dictionary<string, byte[]>());
+
+        await _service.CreateAsync(filterSecrets: true, sign: false, additions: additions);
+
+        staged.Should().NotBeNull();
+        Path.GetDirectoryName(staged).Should().Be(SnapshotStaging.DirIn(_tempDir),
+            "the copy of the whole database is made next to the live one, not in the OS temp folder");
+        File.Exists(staged).Should().BeFalse("the copy is removed once the archive is written");
+        if (!OperatingSystem.IsWindows())
+            (File.GetUnixFileMode(SnapshotStaging.DirIn(_tempDir)) & (UnixFileMode.GroupRead | UnixFileMode.OtherRead))
+                .Should().Be(UnixFileMode.None);
+    }
+
+    [WindowsAclFact]
+    public async Task CreateAsync_OnWindows_TheWorkingCopyIsOwnerOnly_EvenInAFolderEveryAccountCanRead()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        Directory.CreateDirectory(_tempDir);
+        WindowsAcl.MakeReadableByAllUsers(_tempDir);
+        bool? usersCouldRead = null;
+        var additions = new SnapshotAdditions([], path => usersCouldRead = WindowsAcl.UsersCanRead(path), new Dictionary<string, byte[]>());
+
+        await _service.CreateAsync(filterSecrets: true, sign: false, additions: additions);
+
+        usersCouldRead.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenItFails_LeavesNoWorkingCopy()
+    {
+        var additions = new SnapshotAdditions([], _ => throw new IOException("simulated failure"), new Dictionary<string, byte[]>());
+
+        var act = () => _service.CreateAsync(filterSecrets: true, sign: false, additions: additions);
+
+        await act.Should().ThrowAsync<IOException>();
+        Directory.GetFiles(SnapshotStaging.DirIn(_tempDir)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void StartupSweep_RemovesAbandonedWorkingCopies_AndNothingElse()
+    {
+        var dir = SnapshotStaging.DirIn(_tempDir);
+        var abandoned = SnapshotStaging.NewFile(_tempDir);
+        File.WriteAllText(abandoned, "a whole database, as a kill left it");
+        File.WriteAllText(abandoned + "-journal", "its journal");
+        var other = Path.Combine(dir, "not-a-snapshot.txt");
+        File.WriteAllText(other, "someone else's");
+
+        SnapshotStaging.Sweep(_tempDir).Should().Be(2);
+
+        File.Exists(abandoned).Should().BeFalse();
+        File.Exists(abandoned + "-journal").Should().BeFalse();
+        File.Exists(other).Should().BeTrue("only the snapshot's own files are swept");
+    }
+
+    /// <summary>
+    /// Review release-a #2: a restore commits the database, then swaps media.staging into media. A kill between the two
+    /// left the restored legacy media in media.staging, where nothing reads it, and the next start's orphan sweep then
+    /// removed the replaced state's files. The startup resume moves in what the committed tbl_media names, never
+    /// overwriting, and leaves the rest where it is.
+    /// </summary>
+    [Fact]
+    public async Task ResumeMediaStaging_AfterARestoreCutBeforeTheMediaSwap_MovesInWhatTheDatabaseNames()
+    {
+        var restored = Guid.NewGuid();
+        var alreadyThere = Guid.NewGuid();
+        var notInTheDatabase = Guid.NewGuid();
+        var orphan = Guid.NewGuid();
+        await InsertLegacyMediaRowAsync(restored);
+        await InsertLegacyMediaRowAsync(alreadyThere);
+        var media = Path.Combine(_tempDir, "media");
+        var staging = Path.Combine(_tempDir, "media.staging");
+        Directory.CreateDirectory(media);
+        Directory.CreateDirectory(staging);
+        await File.WriteAllTextAsync(Path.Combine(media, $"{alreadyThere}.enc"), "live");
+        await File.WriteAllTextAsync(Path.Combine(media, $"{orphan}.enc"), "replaced state");
+        await File.WriteAllTextAsync(Path.Combine(staging, $"{restored}.enc"), "restored");
+        await File.WriteAllTextAsync(Path.Combine(staging, $"{alreadyThere}.enc"), "staged copy");
+        await File.WriteAllTextAsync(Path.Combine(staging, $"{notInTheDatabase}.enc"), "not named");
+
+        // The startup order: resume first, then the orphan sweep.
+        _service.ResumeMediaStaging().Should().Be(1);
+        _service.CleanupOrphanMediaFiles();
+
+        (await File.ReadAllTextAsync(Path.Combine(media, $"{restored}.enc"))).Should().Be("restored");
+        (await File.ReadAllTextAsync(Path.Combine(media, $"{alreadyThere}.enc"))).Should().Be("live", "nothing in media/ is overwritten");
+        File.Exists(Path.Combine(media, $"{orphan}.enc")).Should().BeFalse("a file no row names belongs to the replaced state");
+        Directory.GetFiles(staging).Select(Path.GetFileName).Should().BeEquivalentTo(
+            [$"{alreadyThere}.enc", $"{notInTheDatabase}.enc"], "what is not moved stays where it is");
+    }
+
+    [Fact]
+    public async Task ResumeMediaStaging_RemovesAnEmptyStagingFolder_AndIsANoOpWithoutOne()
+    {
+        _service.ResumeMediaStaging().Should().Be(0);
+
+        var restored = Guid.NewGuid();
+        await InsertLegacyMediaRowAsync(restored);
+        var staging = Path.Combine(_tempDir, "media.staging");
+        Directory.CreateDirectory(staging);
+        await File.WriteAllTextAsync(Path.Combine(staging, $"{restored}.enc"), "restored");
+
+        _service.ResumeMediaStaging().Should().Be(1);
+
+        Directory.Exists(staging).Should().BeFalse();
+        File.Exists(Path.Combine(_tempDir, "media", $"{restored}.enc")).Should().BeTrue();
+    }
+
+    /// <summary>A media row of the pre-blob-store shape: no ciphertext hash, the bytes only in media/{id}.enc.</summary>
+    private async Task InsertLegacyMediaRowAsync(Guid id)
+    {
+        using var conn = _factory.CreateConnection();
+        await Dapper.SqlMapper.ExecuteAsync(conn,
+            @"INSERT INTO tbl_media (id, file_name, content_type, file_size, encrypted_dek, dek_iv, iv, created_at, lamport_ts, source_node_id)
+              VALUES (@Id, 'legacy.bin', 'application/octet-stream', 3, @Blob, @Blob, @Blob, @Now, 1, @Source)",
+            new { Id = id.ToString().ToUpperInvariant(), Blob = new byte[12], Now = DateTime.UtcNow.ToString("O"), Source = _testNodeId.ToString() });
     }
 
     private static async Task<string> ExtractSnapshotToTempDirAsync(string tarGzPath)

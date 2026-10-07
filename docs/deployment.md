@@ -23,9 +23,44 @@
 Container: bmb  (docker compose)
 Web:  127.0.0.1:5301  → container :5301   (published, this computer only)
 API:  container :5300                     (NOT published — see below)
-Data: /var/lib/beememorybank  (bind mount to /app/data)
-Image: multi-stage build from Dockerfile
+Data: /var/lib/beememorybank  (bind mount to /app/data), or the Docker volume bmb-data
+Image: ghcr.io/ultrathinker/beememorybank:<version> (docker-compose.image.yml),
+       or a multi-stage build from Dockerfile (docker-compose.yml)
 ```
+
+### The ready-made image
+
+Released versions are on GitHub's container registry: `ghcr.io/ultrathinker/beememorybank` (full node) and
+`ghcr.io/ultrathinker/beememorybank-blind` (blind node, see [docker/blind/README.md](../docker/blind/README.md)), each for
+`linux/amd64` and `linux/arm64`. Tags: `X.Y.Z`, `X.Y` (the newest patch of that line) and `latest`; a pre-release
+(`2.4.0-rc1`) gets only its own tag. `docker-compose.image.yml` runs it with the same safety defaults as
+`docker-compose.yml`; `BMB_VERSION` in `.env` picks the tag. The image carries everything: the Api, the Web front, the CLI
+(`/app/cli/bmb.dll`) and the search model (`/app/api/model.onnx`, checked against its SHA-256 when the image is built). A
+`model.onnx` in the data folder is still used first, as a repair copy; `BMB_ONNX_MODEL_PATH`, when set, wins over both.
+
+By default the data is in the Docker volume `bmb-data` (scoped to the compose project: `docker volume ls` shows
+`<folder>_bmb-data`). `BMB_DATA_PATH=./data` (or an absolute path) in `.env` keeps it in a host folder instead; set it
+before the first start. Either way the container runs as root, as the image built from source always did, so a host
+folder ends up owned by root.
+
+Switching an existing source deployment (`docker-compose.yml`, data in `./data`) to the image: put `BMB_DATA_PATH=./data` into
+`.env` first. Without it the image's compose file uses the volume, and the node opens empty on Setup while your bank sits
+untouched in `./data`. The volume is named after the compose project (the folder): renaming or moving the folder starts a
+new one, so keep the folder name or pass `-p <old project name>`.
+
+Behind your own reverse proxy: copy `docker-compose.reverse-proxy.yml` and replace its `build:` block with
+`image: ghcr.io/ultrathinker/beememorybank:${BMB_VERSION:-latest}`; nothing else changes.
+
+Updating: make a snapshot (Admin → Snapshots), then `docker compose pull && docker compose up -d`. Data migrations only go
+forward, so going back to an older tag means restoring that snapshot. The in-app "Apply update" button belongs to a
+source deployment with its own update script (`scripts/bmb-self-update.sh`); with the image, update with `docker compose pull`.
+
+The images are built by `.github/workflows/docker-publish.yml` when a release is published (the maintainer's approval of
+the draft release), smoke-tested on each architecture before anything is tagged, and carry a GitHub build provenance
+attestation: `gh attestation verify oci://ghcr.io/ultrathinker/beememorybank:X.Y.Z --owner ultrathinker`.
+`scripts/smoke-docker.sh <image> <full|blind> <version>` is the same start-up test, for an image you built yourself.
+
+### Exposure
 
 The shipped `docker-compose.yml` deliberately publishes only the Web port, and only on this
 computer's loopback (`127.0.0.1`) — the right choice for a purely local node. Docker's port
@@ -185,7 +220,7 @@ So under Docker, restart the container after the `docker exec` above, before ope
 cd /path/to/BeeMemoryBank
 git pull
 
-# 2. Rebuild and restart
+# 2. Rebuild and restart (with the ready-made image instead: docker compose pull && docker compose up -d)
 sudo docker compose -f deploy/<config>/docker-compose.yml up -d --build
 
 # Verify
@@ -265,7 +300,7 @@ The page polls `GET /` every 3 seconds and automatically redirects to `/` once t
 ```bash
 # 1. Install Docker
 
-# 2. Clone the repository
+# 2. Clone the repository (or, without a clone: the ready-made image, docker-compose.image.yml)
 git clone <repo-url> /path/to/BeeMemoryBank
 cd /path/to/BeeMemoryBank
 
@@ -276,8 +311,8 @@ sudo chown $USER /var/lib/beememorybank
 # 4. Build and start (customize ports in .env if needed)
 docker compose up -d --build
 
-# 5. Join the network via bmb CLI
-docker compose exec bmb dotnet /app/api/BeeMemoryBank.Cli.dll join \
+# 5. Join the network via bmb CLI (the CLI is /app/cli/bmb.dll in both images)
+docker compose exec bmb dotnet /app/cli/bmb.dll join \
   --remote https://your-server.example.com \
   --password "..." --name "NewNode" \
   --data /app/data

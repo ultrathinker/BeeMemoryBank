@@ -21,6 +21,12 @@ restore button of a snapshot).
 
 The server is unavailable while a restore runs. When it ends the vault is locked and you sign in again.
 
+While a snapshot is being made (by hand, before an update, for compaction, for a joining device or a blind copy), its
+working copy of the database is made in the node's data folder (`tmp/snapshot-*.tmp`, owner-only), not in the
+operating system's temp folder, and is removed when the archive is written. Until the snapshot filters it, that copy is
+the whole database; if the process is killed in between, the node removes the leftover at its next start. A snapshot
+therefore needs free space for about twice the database on the data drive, and on the drive of the snapshots folder.
+
 ## Restore this node only
 
 Use it to bring **this** node back from one of its own snapshots, or from a copy made by another node in the

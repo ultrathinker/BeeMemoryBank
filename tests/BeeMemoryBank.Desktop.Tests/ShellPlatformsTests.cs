@@ -67,6 +67,10 @@ public sealed class ShellPlatformsTests
 
         using var power = platform.CreatePowerEvents(NoLock, () => true);
         power.Should().BeOfType<PowerEventsService>();
+
+        // Its hidden window is made only when the first notice is shown.
+        using var notifier = platform.CreateNotifier() as IDisposable;
+        notifier.Should().BeOfType<WindowsBalloonNotifier>();
     }
 
     [Fact]
@@ -82,6 +86,7 @@ public sealed class ShellPlatformsTests
         sleep.Should().BeOfType<MacOS.MacOsPreventSleep>();
         using var power = platform.CreatePowerEvents(NoLock, () => true);
         power.Should().BeOfType<MacOS.MacOsSleepMonitor>();
+        platform.CreateNotifier().Should().BeOfType<MacOS.MacOsNotifier>();
         platform.TrayIconIsTemplate.Should().BeTrue();
         platform.TrayIconAsset.Should().EndWith("tray-template@2x.png");
         platform.InterceptsApplicationQuit.Should().BeTrue("Cmd+Q must be caught and routed through the graceful stop");
@@ -98,6 +103,7 @@ public sealed class ShellPlatformsTests
 
         platform.CreatePreventSleep(new DesktopSettingsStore(Path.Combine(_dir, "settings.json"))).Should().BeNull();
         platform.CreatePowerEvents(NoLock, () => true).Should().BeNull();
+        platform.CreateNotifier().Should().BeNull();
 
         var autostart = platform.CreateAutostart();
         autostart.IsEnabled.Should().BeFalse();

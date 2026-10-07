@@ -32,6 +32,10 @@ public partial class MainWindow : Window
     // The request the power-events services make when the computer goes to sleep (see LockNodeOnSleepAsync). Set in the constructor,
     // where _nodeLifecycle exists.
     private readonly Services.NodeLockRequest _lockOnSleep;
+    // The poll of the open node's blind-node alarms (BMB-77) and what turns them into notifications; started with the first node.
+    private readonly Services.NodeAlarmsRequest _alarmsRequest;
+    private Services.BlindAlarmWatcher? _blindAlarms;
+    private Services.IUserNotifier? _notifier;
 
     /// <summary>
     /// "Lock the vault when this computer sleeps" (off by default, per app like the other flags in desktop-settings.json). The sleep
@@ -68,6 +72,12 @@ public partial class MainWindow : Window
     /// </summary>
     public event EventHandler? ActiveProfileChanged;
 
+    /// <summary>How many blind nodes need attention now (the tray tooltip says so); 0 before the first node started.</summary>
+    public int BlindAlarmCount => _blindAlarms?.AttentionCount ?? 0;
+
+    /// <summary>Raised, on a background thread, when <see cref="BlindAlarmCount"/> changes.</summary>
+    public event EventHandler? BlindAlarmsChanged;
+
     public MainWindow()
     {
         // ProfileSwitchService must be constructed AFTER _profiles and _nodeLifecycle are
@@ -79,6 +89,10 @@ public partial class MainWindow : Window
         // A node this app merely attached to is not its to authenticate to: the environment may still hold the key of a node it
         // hosted before, so the attached case is excluded here rather than sending a stale key.
         _lockOnSleep = new Services.NodeLockRequest(
+            () => _frontUrl,
+            () => _nodeLifecycle.IsAttachedToExternalNode ? null : Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"));
+        // The same address and the same key rule as the lock request: a node this app merely attached to is not asked.
+        _alarmsRequest = new Services.NodeAlarmsRequest(
             () => _frontUrl,
             () => _nodeLifecycle.IsAttachedToExternalNode ? null : Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"));
         InitializeComponent();
@@ -196,6 +210,7 @@ public partial class MainWindow : Window
         BmbWebView.NewWindowRequested += OnWebViewNewWindowRequested;
         BmbWebView.Source = new Uri(frontUrl);
         StartPowerEventsMonitoring();
+        StartBlindAlarmWatcher();
 
         SplashPanel.IsVisible = false;
         ErrorPanel.IsVisible = false;
@@ -565,6 +580,42 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             Debug.WriteLine($"Error disposing power events service: {ex.Message}");
+        }
+
+        try
+        {
+            _blindAlarms?.Dispose();
+            _blindAlarms = null;
+            (_notifier as IDisposable)?.Dispose();
+            _notifier = null;
+            _alarmsRequest.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error stopping the blind-node alarm watcher: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Starts the blind-node alarm watcher once (it follows profile switches by itself: it reads the open profile at each poll). Its
+    /// notifications go through the system's notifier: the balloon on Windows, the banner on macOS.
+    /// </summary>
+    private void StartBlindAlarmWatcher()
+    {
+        if (_blindAlarms != null) return;
+        try
+        {
+            _notifier = Services.ShellPlatforms.Current.CreateNotifier();
+            _blindAlarms = new Services.BlindAlarmWatcher(
+                _alarmsRequest.PollAsync, _notifier,
+                new Services.DesktopSettingsEpisodeStore(new Services.DesktopSettingsStore()),
+                () => _activeProfileId);
+            _blindAlarms.Changed += (_, _) => BlindAlarmsChanged?.Invoke(this, EventArgs.Empty);
+            _blindAlarms.Start();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to start the blind-node alarm watcher: {ex.Message}");
         }
     }
 

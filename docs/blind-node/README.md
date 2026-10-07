@@ -18,7 +18,7 @@ content is a different assembly, `BeeMemoryBank.Vault`, which no blind program r
 | console | `server/BeeMemoryBank.BlindConsole` | unchanged: one embedded page and a proxy to the local node |
 | Android app | `mobile/BeeMemoryBank.BlindMobile` | thin MAUI/Android adapters over `Blind.AppCore` (Keystore, committed SharedPreferences and WorkManager), plus the shared libraries + `Blind.PhoneClient`; never the Vault |
 | Windows app | `desktop/BeeMemoryBank.BlindDesktop`, `desktop/BeeMemoryBank.BlindDesktop.Windows` | a quiet tray app and one small window over `Blind.AppCore` (Avalonia; the host is cross-platform, the macOS head reuses it). The Windows assembly implements the AppCore seams: DPAPI secrets, atomic JSON state, AC power and network cost from the Windows APIs, HKCU Run autostart. In-process timer scheduler (15-minute sync, hourly long job); it is a client of a listening node like the Android app: it starts no web server, no child process and listens on no port; no Vault, Hosting, full Desktop or Node reference |
-| image | `docker/blind` | the three programs published per `TARGETARCH`, plus restic |
+| image | `docker/blind` | the three programs published per `TARGETARCH`, plus restic; released as `ghcr.io/ultrathinker/beememorybank-blind` (amd64 + arm64, `.github/workflows/docker-publish.yml`), run by `docker/blind/compose.image.yaml` |
 | guards | `tests/BeeMemoryBank.BlindNode.Tests`, `tests/BeeMemoryBank.BlindMobile.Tests`, `tests/BeeMemoryBank.BlindDesktop.Tests` | the blind-only integration tests of `Integration.Tests`, linked and run against this host; route matrix; composition, linked-set and migration guards; the Android and Windows boundary guards (the Windows one scans the published folder) |
 | tools | `tools/blind-link`, `tools/blind-e2e` | recomputes the linked Api set by compiling; Docker end-to-end, upgrade/rollback rehearsal on a copy of a live node's data, real-phone check; the Windows app's end-to-end check is the opt-in `DesktopEndToEndTests` (`BMB_E2E_DESKTOP=1`) |
 
@@ -54,6 +54,9 @@ python tools/blind-e2e/e2e_docker.py --image bmb-blind:dev --full-exe <BeeMemory
 python tools/blind-e2e/fixture_rehearsal.py --data <copy of a node's /app/data> --old <older image> --new bmb-blind:dev --work <scratch dir>
 python tools/blind-e2e/phone_e2e.py --image bmb-blind:dev --full-exe <BeeMemoryBank.Api.exe> --work <scratch dir> --serial <test phone> --apk <signed APK>
 ```
+
+The released image runs through the same script: `--image ghcr.io/ultrathinker/beememorybank-blind:<version>`.
+`scripts/smoke-docker.sh <image> blind <version>` is the quick start-up check the image workflow runs on each architecture.
 
 `e2e_docker.py` starts the image and a real full node with its own data directory, pairs, seeds, syncs, serves a restore package,
 restarts; with `--first-image` it first runs the older image, then swaps the container to the new one on the same volumes and checks

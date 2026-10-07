@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace BeeMemoryBank.Desktop.Services;
 
-/// <summary>The Windows set: the registry Run key, SetThreadExecutionState, the hidden power-broadcast window and Explorer.</summary>
+/// <summary>The Windows set: the registry Run key, SetThreadExecutionState, the hidden power-broadcast window, the balloon notifier and Explorer.</summary>
 internal sealed class WindowsShellPlatform : IShellPlatform
 {
     public ShellOs Os => ShellOs.Windows;
@@ -25,6 +25,9 @@ internal sealed class WindowsShellPlatform : IShellPlatform
         // The Windows monitor shows its own balloon and does not wait for the callback: the lock request goes out in the background.
         return new PowerEventsService(() => { _ = Task.Run(() => lockNode(CancellationToken.None)); }, lockOnSleepEnabled);
     }
+
+    /// <summary>A balloon on a hidden window of the notifier's own (the power-events service keeps its own one for the sleep notice).</summary>
+    public IUserNotifier? CreateNotifier() => OperatingSystem.IsWindows() ? new WindowsBalloonNotifier() : null;
 
     public IFileManagerReveal FileManager { get; } = new WindowsFileManager();
 

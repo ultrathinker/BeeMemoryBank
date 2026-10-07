@@ -1,3 +1,5 @@
+# Bee Memory Bank, built from this source tree: `docker compose up -d --build`.
+# Without a clone, the ready-made image is simpler: docker-compose.image.yml (README: "Docker: ready-made image").
 services:
   bmb:
     build:
@@ -32,7 +34,8 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - BMB_DATA_PATH=/app/data
-      - BMB_ONNX_MODEL_PATH=/app/data/model.onnx
+      # No BMB_ONNX_MODEL_PATH: the image build downloads the search model and checks its hash. A model.onnx in the
+      # data folder (from an older setup) is still used first.
       # OPTIONAL, goes with the API port line above: tells the Profile page which host port the API
       # is on, so the snippet for an AI assistant prints http://127.0.0.1:<port>/mcp. Without it the
       # page says that assistants cannot reach this node yet.

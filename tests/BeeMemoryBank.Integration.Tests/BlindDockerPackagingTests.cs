@@ -100,6 +100,36 @@ public class BlindDockerPackagingTests
     /// The healthcheck has to survive the switch to TLS — a container whose health probe can no
     /// longer talk to its own Api is reported unhealthy while the node is fine, and Docker restarts it.
     /// </summary>
+    /// <summary>
+    /// BMB-88: the compose file of the ready-made image is the build-from-source one with the published image in place of the
+    /// build: the same project name, ports, volumes and environment, so switching between them keeps the node and its data.
+    /// </summary>
+    [Fact]
+    public void TheImageComposeFile_IsTheBuildOne_WithThePublishedImage()
+    {
+        static string[] Active(string text) => text.Split('\n').Select(l => l.TrimEnd('\r'))
+            .Where(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith('#')).ToArray();
+        var build = Active(ComposeFile());
+        var image = Active(RepoFile("docker", "blind", "compose.image.yaml"));
+
+        image.Should().Contain("    image: ghcr.io/ultrathinker/beememorybank-blind:${BMB_VERSION:-latest}");
+        image.Should().NotContain(l => l.TrimStart().StartsWith("build:") || l.Contains("dockerfile:") || l.Contains("context:"));
+        var fromSource = new[] { "    build:", "      context: ../..", "      dockerfile: docker/blind/Dockerfile", "    image: bmb-blind" };
+        image.Where(l => !l.Contains("ghcr.io/ultrathinker/beememorybank-blind")).Should().Equal(build.Where(l => !fromSource.Contains(l)),
+            "everything but the image source is the same file");
+    }
+
+    /// <summary>
+    /// BMB-88: only the sync port is EXPOSEd. The console is meant for the host's loopback; `docker run -P` and the port dialogs
+    /// of NAS and container GUIs offer every EXPOSEd port on every address.
+    /// </summary>
+    [Fact]
+    public void OnlyTheSyncPort_IsExposed_NotTheConsole()
+    {
+        Regex.Matches(RepoFile("docker", "blind", "Dockerfile"), @"^EXPOSE\s+(.*)$", RegexOptions.Multiline)
+            .Select(m => m.Groups[1].Value.Trim()).Should().Equal("5610");
+    }
+
     [Fact]
     public void Healthcheck_UsesTheTlsListenerAndTheLocalOne()
     {

@@ -61,11 +61,8 @@ public class SnapshotJoinClientTests : IAsyncLifetime
     [Fact]
     public async Task DownloadAndImportAsync_RealHandshake_ImportsSnapshotAndPeerCanThenSync()
     {
-        // NodeA has real content before the phone joins. The body needs to be large enough that
-        // the snapshot's compressed:decompressed ratio stays under SnapshotJoinClient's zip-bomb
-        // guard (decompressed <= 20x compressed) — a near-empty freshly-migrated schema alone
-        // compresses so well (mostly-empty B-tree pages) that it trips that guard on its own.
-        var article = await CreateArticleAsync(_clientA, "Mobile-join article", "/Mobile", new string('a', 80_000));
+        // NodeA has real content before the phone joins.
+        var article = await CreateArticleAsync(_clientA, "Mobile-join article", "/Mobile", "A short mobile-join body.");
         var articleId = Guid.Parse(article.GetProperty("id").GetString()!);
 
         // Mirrors NodeSetupService.JoinAsync: generate a keypair, call /api/join to register on
@@ -134,6 +131,61 @@ public class SnapshotJoinClientTests : IAsyncLifetime
             pullReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             var pullResp = await _mobileHttp.SendAsync(pullReq);
             pullResp.IsSuccessStatusCode.Should().BeTrue();
+        }
+        finally
+        {
+            try { Directory.Delete(joinerDir, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task DownloadAndImportAsync_ASmallVaultOfThreeShortNotes_Imports()
+    {
+        // A small vault's snapshot is mostly empty schema pages and compresses about 30:1, past the
+        // 20x zip-bomb ratio on its own. The client used to have no floor under that ratio (the
+        // server-side extractor has had a 50 MB one all along), so a phone could not join a new,
+        // small vault at all: "Tar archive exceeds maximum extracted size (0MB)".
+        var ids = new List<Guid>();
+        for (var i = 1; i <= 3; i++)
+        {
+            var created = await CreateArticleAsync(_clientA, $"Small note {i}", "/Small", $"Note {i}.");
+            ids.Add(Guid.Parse(created.GetProperty("id").GetString()!));
+        }
+
+        var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
+        var joinerNodeId = Guid.NewGuid();
+        var joinResp = await _mobileHttp.PostAsJsonAsync("http://localhost/api/join", new
+        {
+            masterPassword = MasterPassword,
+            nodeId = joinerNodeId,
+            displayName = "SmallVaultPhone",
+            ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
+            apiAddress = (string?)null
+        }, JsonOpts);
+        joinResp.IsSuccessStatusCode.Should().BeTrue(await joinResp.Content.ReadAsStringAsync());
+        var remote = (await joinResp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts)).GetProperty("remoteNode");
+        var remotePublicKey = Convert.FromBase64String(remote.GetProperty("ed25519PublicKeyB64").GetString()!);
+
+        var joinerDir = Path.Combine(Path.GetTempPath(), $"bmb_mobile_join_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(joinerDir);
+        try
+        {
+            using var joinerFactory = DbConnectionFactory.CreateInMemory($"bmb_mobile_join_{Guid.NewGuid():N}");
+            await new MigrationRunner(joinerFactory).RunMigrationsAsync();
+            var client = new SnapshotJoinClient(
+                _mobileHttp, joinerFactory, joinerDir, NullLogger<SnapshotJoinClient>.Instance);
+
+            var (cpSeq, _) = await client.DownloadAndImportAsync(
+                "http://localhost", joinerNodeId, privateKey, remotePublicKey);
+
+            cpSeq.Should().BeGreaterThan(0);
+            using var conn = joinerFactory.CreateConnection();
+            foreach (var (id, i) in ids.Select((id, i) => (id, i + 1)))
+            {
+                var title = await conn.QuerySingleAsync<string>(
+                    "SELECT title FROM tbl_article WHERE id = @Id", new { Id = id });
+                title.Should().Be($"Small note {i}");
+            }
         }
         finally
         {

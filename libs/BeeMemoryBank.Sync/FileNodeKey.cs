@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Crypto;
 
@@ -50,23 +51,63 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
     /// <para>A file that DOES hold a valid seed is never replaced, whatever else is wrong with the
     /// node: a silently re-minted identity no longer matches the whitelist rows the whole mesh
     /// keeps for this node, and nothing an operator can do afterwards repairs that.</para>
+    ///
+    /// <para>Two starts that both find no file (review A2-d) do not both win: the new seed is
+    /// renamed into place without replacing anything, and the start whose rename finds the other's
+    /// seed there takes that one. Only a file that exists but holds no seed is replaced.</para>
     /// </summary>
     public byte[] LoadOrCreate(out bool created)
     {
         if (TryReadSeed(out var seed))
         {
-            try
-            {
-                created = false;
-                return NodeIdentityCrypto.PublicKeyOf(seed);
-            }
-            finally
-            {
-                Array.Clear(seed);
-            }
+            created = false;
+            return PublicKeyOfAndClear(seed);
         }
         created = true;
-        return WriteNewSeed(replaceExisting: true);
+        if (File.Exists(Path))
+            return WriteNewSeed(replaceExisting: true);
+        try
+        {
+            return WriteNewSeed(replaceExisting: false);
+        }
+        catch (IOException)
+        {
+            // Another start renamed its seed into place first: that one is the node's identity.
+            if (!TryReadWinner(out var winner)) throw;
+            created = false;
+            return PublicKeyOfAndClear(winner);
+        }
+    }
+
+    /// <summary>
+    /// The seed another start has just renamed into place. A brand-new file can be held for a moment
+    /// by a scanner on Windows (a sharing violation on the read), so a few short retries first.
+    /// </summary>
+    private bool TryReadWinner(out byte[] seed)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return TryReadSeed(out seed);
+            }
+            catch (IOException) when (attempt < 10)
+            {
+                Thread.Sleep(50);
+            }
+        }
+    }
+
+    private static byte[] PublicKeyOfAndClear(byte[] seed)
+    {
+        try
+        {
+            return NodeIdentityCrypto.PublicKeyOf(seed);
+        }
+        finally
+        {
+            Array.Clear(seed);
+        }
     }
 
     /// <summary>
@@ -115,15 +156,15 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
         RefuseIfLink();
         var (publicKey, seed) = Ed25519Signer.GenerateKeyPair();
         var temp = Path + "." + Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant() + ".tmp";
+        var tempCreated = false;
         try
         {
-            var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
-            // Set at creation, not chmod-ed afterwards: there is no moment the seed is on disk
-            // with the umask's default permissions.
-            if (!OperatingSystem.IsWindows())
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            using (var file = new FileStream(temp, options))
+            // Owner-only at creation, not chmod-ed afterwards: there is no moment the seed is on disk
+            // with the umask's default permissions (0600), or with the folder's inherited ACL on
+            // Windows (OwnerOnlyFile).
+            using (var file = OwnerOnlyFile.CreateNew(temp))
             {
+                tempCreated = true;
                 file.Write(seed);
                 // On the platter before the rename, deliberately: a rename that survives a power
                 // cut while the bytes are still in the page cache is the empty final file this
@@ -150,6 +191,12 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
                     $"Node identity key {Path} appeared while a new one was being written; keeping the one on disk.");
 
             File.Move(temp, Path, overwrite: replaceExisting);
+        }
+        catch when (tempCreated)
+        {
+            // Our own temp file, never renamed: a seed nobody will use.
+            try { File.Delete(temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            throw;
         }
         finally
         {

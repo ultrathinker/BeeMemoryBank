@@ -296,7 +296,7 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
             .StatusCode.Should().Be(HttpStatusCode.NoContent);
         (await client.PostAsJsonAsync("/api/blind/backup/mode", new { mode = "pause" })).StatusCode.Should().Be(HttpStatusCode.OK);
         (await client.PostAsync("/api/blind/backup/now", content: null)).StatusCode.Should().Be(HttpStatusCode.Accepted);
-        await Task.Delay(300); // the job has read its settings (password one) and is parked
+        await WaitUntilJobDetailAsync(client, "paused"); // the job has read its settings (password one) and is parked
 
         (await ChangeConsolePasswordAsync(client, "console-pw-one", "console-pw-two")).StatusCode.Should().Be(HttpStatusCode.NoContent);
         (await client.PostAsJsonAsync("/api/blind/backup/mode", new { mode = "economy" })).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -785,6 +785,21 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
             await Task.Delay(100);
         }
         throw new TimeoutException("backup job did not finish in 15s");
+    }
+
+    /// <summary>Waits until the current job reports this detail (a parked job says "paused") — an observable state, not a sleep.</summary>
+    private async Task WaitUntilJobDetailAsync(HttpClient client, string detail)
+    {
+        for (var i = 0; i < 150; i++)
+        {
+            var s = await (await client.GetAsync("/api/blind/status")).Content.ReadFromJsonAsync<JsonElement>();
+            var job = s.GetProperty("jobs").EnumerateArray().FirstOrDefault();
+            if (job.ValueKind != JsonValueKind.Undefined && job.TryGetProperty("detail", out var d)
+                && d.ValueKind == JsonValueKind.String && d.GetString() == detail)
+                return;
+            await Task.Delay(50);
+        }
+        throw new TimeoutException($"the job did not show '{detail}' in 7.5s");
     }
 
     // ── fakes ────────────────────────────────────────────────────────────────

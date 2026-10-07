@@ -11,13 +11,16 @@ namespace BeeMemoryBank.Api.Services;
 public sealed class BlindNodeUnreachableException(string message, Exception? inner = null) : Exception(message, inner);
 
 /// <summary>A blind node as the PC's "Blind nodes" page shows it (plan 9, 5.6).</summary>
-/// <param name="Alarms">"old_protocol" — it last spoke a protocol below this build's;
+/// <param name="Alarms">The kinds of the <see cref="BlindAlarmService"/> alarms the page shows as banners: "old_protocol" — it last
+/// spoke a protocol below this build's; "pc_too_old" — above it (this PC cannot apply what it holds, so the PC is the one to update);
 /// "silent" — no contact in <see cref="BlindNodeManager.SilentAfter"/>.</param>
 /// <param name="AdoptedCheckpoint">The checkpoint this node took from the blind node as its pull position, when it held
 /// none (see <see cref="SyncClient.SyncWithPeerAsync"/>); null when it never had to.</param>
+/// <param name="CreatedAt">When the row was added: a node never heard from is judged from here.</param>
+/// <param name="ProtocolSeenAt">When the node last declared its protocol to this PC (it called, or answered my-standing).</param>
 public sealed record BlindNodeStatus(
     Guid NodeId, string DisplayName, string? Address, int? Protocol, DateTime? LastContact,
-    IReadOnlyList<string> Alarms, long? AdoptedCheckpoint = null);
+    IReadOnlyList<string> Alarms, long? AdoptedCheckpoint = null, DateTime CreatedAt = default, DateTime? ProtocolSeenAt = null);
 
 /// <param name="Warnings">What the pre-flight wants the operator to know, which did not stop the add.</param>
 public sealed record BlindNodeAdded(Guid NodeId, string DisplayName, long PackageCp, IReadOnlyList<string> Warnings);
@@ -27,18 +30,37 @@ public sealed record BlindNodeAdded(Guid NodeId, string DisplayName, long Packag
 /// Also the full node's <see cref="IBlindPeerReseeder"/>: after each sync with a blind peer it
 /// reseeds that peer when the gap detector fired or the peer asks for it — and only then.
 /// </summary>
+/// <param name="time">The clock of every contact and silence judgement; null means the system clock.</param>
+/// <param name="alarms">Judges the rows (<see cref="BlindAlarmService"/>); null means one on <paramref name="time"/> that judges at once.</param>
 public sealed class BlindNodeManager(
     IServiceScopeFactory scopeFactory,
     IHttpClientFactory httpClientFactory,
     SpkiPinRegistry pins,
-    ILogger<BlindNodeManager> logger) : IBlindPeerReseeder
+    ILogger<BlindNodeManager> logger,
+    TimeProvider? time = null,
+    BlindAlarmService? alarms = null) : IBlindPeerReseeder
 {
-    /// <summary>A blind node that has not been in contact this long is flagged (plan 5.6).</summary>
+    /// <summary>A blind node that has not been in contact this long is flagged on the Blind nodes page (plan 5.6).</summary>
     public static readonly TimeSpan SilentAfter = TimeSpan.FromDays(3);
+
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private readonly BlindAlarmService _alarms = alarms ?? new BlindAlarmService(time ?? TimeProvider.System);
 
     private const int PartBytes = 32 * 1024 * 1024;
 
+    /// <summary>The blind nodes with their banners: the alarms of <see cref="GetAlarmsAsync"/> the page shows.</summary>
     public async Task<IReadOnlyList<BlindNodeStatus>> ListAsync()
+    {
+        var nodes = await ReadAsync();
+        var banners = _alarms.Judge(nodes).Alarms.Where(a => a.Banner).ToLookup(a => a.NodeId, a => a.Kind);
+        return nodes.Select(n => n with { Alarms = banners[n.NodeId].Distinct().ToList() }).ToList();
+    }
+
+    /// <summary>Which blind nodes need attention now (<see cref="BlindAlarmService"/>).</summary>
+    public async Task<BlindAlarmReport> GetAlarmsAsync() => _alarms.Judge(await ReadAsync());
+
+    /// <summary>Every active blind row with its contact facts; no alarms yet.</summary>
+    private async Task<IReadOnlyList<BlindNodeStatus>> ReadAsync()
     {
         using var scope = scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;
@@ -50,17 +72,14 @@ public sealed class BlindNodeManager(
             .ToDictionary(p => p.RemoteNodeId, p => p.PushedAt);
         var adopted = await sp.GetRequiredService<BlindState>().GetAdoptedCheckpointsAsync();
 
-        var now = DateTime.UtcNow;
         return rows.Select(r =>
         {
-            // Most recent contact in either direction, or when it last authenticated to us.
+            // Most recent contact in either direction, or when it last authenticated to us — or, for a node this PC calls,
+            // when it last answered this PC's my-standing call (AsksForReseedAsync records that as its protocol sighting).
             var latest = new[] { pulled.GetValueOrDefault(r.NodeId), pushed.GetValueOrDefault(r.NodeId), r.LastProtocolSeenAt ?? default }.Max();
             DateTime? last = latest > DateTime.MinValue ? latest : null;
-            var alarms = new List<string>();
-            if (r.LastProtocolVersion is { } v && v < SyncProtocolVersion.Current) alarms.Add("old_protocol");
-            if ((last ?? r.CreatedAt) < now - SilentAfter) alarms.Add("silent");
-            return new BlindNodeStatus(r.NodeId, r.DisplayName, r.ApiAddress, r.LastProtocolVersion, last, alarms,
-                adopted.TryGetValue(r.NodeId, out var cp) ? cp : null);
+            return new BlindNodeStatus(r.NodeId, r.DisplayName, r.ApiAddress, r.LastProtocolVersion, last, [],
+                adopted.TryGetValue(r.NodeId, out var cp) ? cp : null, r.CreatedAt, r.LastProtocolSeenAt);
         }).ToList();
     }
 
@@ -92,14 +111,14 @@ public sealed class BlindNodeManager(
             entry.ApiAddress = code.Address;
             entry.TlsSpki = code.TlsSpki;
             entry.TlsTrust = BlindTrust.Pin;
-            entry.UpdatedAt = DateTime.UtcNow;
+            entry.UpdatedAt = UtcNow();
             entry.LamportTs = version.LamportTs;
             entry.SourceNodeId = version.SourceNodeId;
             await whitelist.UpdateAsync(entry);
         }
         else
         {
-            var now = DateTime.UtcNow;
+            var now = UtcNow();
             entry = new WhitelistEntry
             {
                 NodeId = code.NodeId,
@@ -205,7 +224,13 @@ public sealed class BlindNodeManager(
         await ReseedAsync(peer.NodeId, ct);
     }
 
-    /// <summary>The blind node's own flag (plan 5.3) — acted on only by a node it sees as superadmin.</summary>
+    /// <summary>
+    /// The blind node's own flag (plan 5.3) — acted on only by a node it sees as superadmin. The answer is also this PC's
+    /// evidence of contact: an authenticated round trip, made every cycle whether or not the vault changed, so it is recorded with
+    /// the protocol the blind node declares in it. That is what fills "Protocol" on the Blind nodes page and arms the old / newer
+    /// protocol alarms — a server blind node never calls this PC, so nothing else ever records them. The column is a local
+    /// observation (<see cref="IWhitelistRepository.RecordProtocolVersionAsync"/>): no event, nothing replicated.
+    /// </summary>
     private async Task<bool> AsksForReseedAsync(WhitelistEntry peer, HttpClient http, CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
@@ -219,6 +244,9 @@ public sealed class BlindNodeManager(
         using var resp = await http.SendAsync(req, ct);
         if (!resp.IsSuccessStatusCode) return false;
         var standing = await resp.Content.ReadFromJsonAsync<MyStanding>(ct);
+        if (standing is null) return false;
+        if (standing.ResponderNodeId == peer.NodeId && standing.Protocol > 0)
+            await sp.GetRequiredService<IWhitelistRepository>().RecordProtocolVersionAsync(peer.NodeId, standing.Protocol, UtcNow());
         return standing is { ReseedNeeded: true, CallerIsSuperadmin: true };
     }
 
@@ -245,11 +273,13 @@ public sealed class BlindNodeManager(
         return previous;
     }
 
-    private static async Task StartPushingFromAsync(IServiceProvider sp, Guid blindId, long cp) =>
+    private async Task StartPushingFromAsync(IServiceProvider sp, Guid blindId, long cp) =>
         await sp.GetRequiredService<ISyncPushPositionRepository>().UpsertAsync(new SyncPushPosition
         {
-            RemoteNodeId = blindId, LastPushedSeq = cp, PushedAt = DateTime.UtcNow
+            RemoteNodeId = blindId, LastPushedSeq = cp, PushedAt = UtcNow()
         });
+
+    private DateTime UtcNow() => _time.GetUtcNow().UtcDateTime;
 
     /// <summary>
     /// The sync client, whose handler checks pins; with a long timeout, because the last part of a

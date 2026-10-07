@@ -47,6 +47,9 @@ public class SyncScheduler(
     /// <summary>True while a wipe or a reseed owns the mesh state and the loop is held off.</summary>
     public bool IsPaused => _paused;
 
+    /// <summary>The peers this loop cannot reach now, each with the start of its failure streak (<see cref="UnreachablePeers.FailingSince"/>).</summary>
+    public IReadOnlyDictionary<Guid, DateTime> UnreachableSince() => _unreachable.FailingSince();
+
     /// <summary>
     /// Holds the sync loop off and waits out the cycle already running, if any: the caller owns this
     /// node's mesh state until the returned handle is disposed.

@@ -47,4 +47,34 @@ public class UnreachablePeersTests
         peers.ShouldSkip(node, T0).Should().BeFalse();
         peers.NoteFailure(node, T0, Interval).Failures.Should().Be(1, "a new streak starts from one interval");
     }
+
+    [Fact]
+    public void FailingSince_IsTheFirstFailureOfTheStreak_AndEndsWithIt()
+    {
+        var peers = new UnreachablePeers();
+        var node = Guid.NewGuid();
+        peers.NoteFailure(node, T0, Interval);
+        peers.NoteFailure(node, T0.AddMinutes(2), Interval);
+        peers.NoteFailure(node, T0.AddMinutes(17), Interval);
+
+        peers.FailingSince().Should().Equal(new Dictionary<Guid, DateTime> { [node] = T0 });
+
+        peers.NoteSuccess(node);
+        peers.FailingSince().Should().BeEmpty();
+    }
+
+    /// <summary>BMB-77: a night the PC slept through is not a night the peer was down.</summary>
+    [Fact]
+    public void AGapLongerThanTheStreakBreak_MeansThisComputerWasAsleep_SoTheStreakStartsAgain()
+    {
+        var peers = new UnreachablePeers();
+        var node = Guid.NewGuid();
+        peers.NoteFailure(node, T0, Interval);
+        var woke = T0 + UnreachablePeers.StreakBreak + TimeSpan.FromHours(8);
+
+        var (failures, _) = peers.NoteFailure(node, woke, Interval);
+
+        peers.FailingSince()[node].Should().Be(woke);
+        failures.Should().Be(2, "the back-off is not reset: only the awake streak starts again");
+    }
 }

@@ -130,7 +130,7 @@ public class SnapshotJoinClient
         }
         finally
         {
-            if (File.Exists(tempTarGz)) File.Delete(tempTarGz);
+            TryDeleteTemp(() => { if (File.Exists(tempTarGz)) File.Delete(tempTarGz); });
         }
     }
 
@@ -191,9 +191,18 @@ public class SnapshotJoinClient
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+            TryDeleteTemp(() => { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); });
         }
+    }
+
+    /// <summary>
+    /// Clean-up of a temp file or folder, never fatal: by then the import has committed (or has failed with its own error, which a
+    /// clean-up failure must not replace), and a scanner holding a just-extracted file (a sharing violation on Windows) is not a failed join.
+    /// </summary>
+    private static void TryDeleteTemp(Action delete)
+    {
+        try { delete(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* left in the temp folder, which the OS sweeps */ }
     }
 
     private void ImportTablesFromAttachedDb(string extractedDbPath)
@@ -296,8 +305,14 @@ public class SnapshotJoinClient
 
     private static async Task ExtractTarGzAsync(string archivePath, string destDir, CancellationToken ct = default)
     {
+        // Cap at min(50 GB, max(20 x compressed, 50 MB)), the same rule as the server's extractor
+        // (SnapshotService.ExtractTarGzAsync). Without the floor a small vault's snapshot - mostly
+        // empty schema pages, about 30:1 compressed - trips the 20x ratio on its own, and a phone
+        // could not join a new vault at all.
+        const long absoluteCap = 50_000_000_000;
+        const long floor = 50_000_000;
         var compressedSize = new FileInfo(archivePath).Length;
-        var maxTotalSize = Math.Min(compressedSize * 20, 50_000_000_000);
+        var maxTotalSize = Math.Min(absoluteCap, Math.Max(compressedSize * 20, floor));
         const long maxFileCount = 1_000_000;
         long totalExtracted = 0;
         long fileCount = 0;

@@ -1,4 +1,9 @@
-#!/bin/sh
+#!/bin/bash
+# Full node entrypoint: the Api on 5300 and the Web front on 5301. Both run as children of this script, and whichever exits
+# first takes the container down with it, so the restart policy brings back BOTH; `docker stop` reaches both of them (the
+# same shape as docker/blind/entrypoint.sh).
+set -e
+
 mkdir -p /app/data/temp /app/data/media
 
 # Auto-generate BMB_INTERNAL_KEY if not set — protects API from unauthorized local processes
@@ -24,8 +29,31 @@ fi
 # (`127.0.0.1:5004:5300`). Bind the port on the HOST side to control exposure.
 ASPNETCORE_URLS=http://0.0.0.0:5300 \
     dotnet /app/api/BeeMemoryBank.Api.dll &
+api=$!
 
-# Start Web as the main process — Docker monitors this (port 5301)
-export ASPNETCORE_URLS=http://0.0.0.0:5301
-export BMB_API_URL=http://localhost:5300
-cd /app/web && exec dotnet BeeMemoryBank.Web.dll
+# The Web front (port 5301), talking to the Api over the container's own loopback.
+(
+    cd /app/web
+    ASPNETCORE_URLS=http://0.0.0.0:5301 BMB_API_URL=http://localhost:5300 \
+        exec dotnet BeeMemoryBank.Web.dll
+) &
+web=$!
+
+# docker stop sends SIGTERM to this script (PID 1); pass it on so both hosts shut down cleanly (the Api closes its database)
+# instead of being SIGKILLed after the stop timeout.
+stopping=
+trap 'stopping=1; kill -TERM "$api" "$web" 2>/dev/null || true' TERM INT
+
+set +e
+wait -n "$api" "$web"
+status=$?
+kill -TERM "$api" "$web" 2>/dev/null
+if [ -n "$stopping" ]; then
+    # Stopped from outside: the stop is clean when both hosts shut down cleanly.
+    wait "$api"; api_status=$?
+    wait "$web"; web_status=$?
+    [ "$api_status" -eq 0 ] && [ "$web_status" -eq 0 ] && exit 0
+    exit 143
+fi
+wait
+exit "$status"

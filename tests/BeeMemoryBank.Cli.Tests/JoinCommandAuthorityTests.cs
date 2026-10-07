@@ -13,7 +13,8 @@ namespace BeeMemoryBank.Cli.Tests;
 /// BMB-42 for <c>bmb join</c>: the host it joined through is recorded as a superadmin, inherited peers
 /// keep the authority the host reports (the CLI used to drop it, leaving every other superadmin of the
 /// mesh a plain peer on this node only), and a blind node is never a superadmin. The host is a
-/// one-shot local HTTP listener answering <c>/api/join</c> the way the real endpoint does.
+/// local HTTP listener answering <c>/api/join</c> the way the real endpoint does, and then the challenge, the
+/// authentication and the for-join snapshot of the join (<see cref="FakeJoinHost"/>).
 /// </summary>
 public class JoinCommandAuthorityTests : IDisposable
 {
@@ -40,7 +41,8 @@ public class JoinCommandAuthorityTests : IDisposable
         using var listener = new HttpListener();
         listener.Prefixes.Add($"http://localhost:{port}/");
         listener.Start();
-        var serve = ServeJoinOnceAsync(listener, JoinResponseJson(hostId,
+        var host = new FakeJoinHost(hostId);
+        var serve = ServeJoinAsync(listener, host, JoinResponseJson(host,
             (superPeer, true), (plainPeer, false), (blindPeer, true)));
 
         var output = new StringWriter();
@@ -58,7 +60,7 @@ public class JoinCommandAuthorityTests : IDisposable
             "a blind node is never a superadmin, whatever the host's row says");
     }
 
-    private static string JoinResponseJson(Guid hostId, params (Guid NodeId, bool IsSuperadmin)[] peers)
+    private static string JoinResponseJson(FakeJoinHost host, params (Guid NodeId, bool IsSuperadmin)[] peers)
     {
         var dek = MasterKeyManager.GenerateMasterDek();
         var salt = KeyDerivation.GenerateSalt();
@@ -67,7 +69,11 @@ public class JoinCommandAuthorityTests : IDisposable
 
         return JsonSerializer.Serialize(new
         {
-            remoteNode = new { nodeId = hostId, displayName = "Host", ed25519PublicKeyB64 = Key(), protocolVersion = 2 },
+            remoteNode = new
+            {
+                nodeId = host.HostId, displayName = "Host", ed25519PublicKeyB64 = host.PublicKeyB64,
+                protocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
+            },
             keySlot = new
             {
                 encryptedMasterDekB64 = Convert.ToBase64String(encDek),
@@ -88,16 +94,26 @@ public class JoinCommandAuthorityTests : IDisposable
         });
     }
 
-    private static async Task ServeJoinOnceAsync(HttpListener listener, string body)
+    /// <summary>The join (<c>/api/join</c> first), then the snapshot's three requests; done once the snapshot is served.</summary>
+    private static async Task ServeJoinAsync(HttpListener listener, FakeJoinHost host, string joinBody)
     {
-        var ctx = await listener.GetContextAsync();
-        ctx.Request.Url!.AbsolutePath.Should().Be("/api/join");
-        using (var reader = new StreamReader(ctx.Request.InputStream)) await reader.ReadToEndAsync();
-        var bytes = System.Text.Encoding.UTF8.GetBytes(body);
-        ctx.Response.ContentType = "application/json";
-        ctx.Response.ContentLength64 = bytes.Length;
-        await ctx.Response.OutputStream.WriteAsync(bytes);
-        ctx.Response.Close();
+        var path = "";
+        for (var request = 0; request < 4 && path != "/api/sync/snapshot/for-join"; request++)
+        {
+            var ctx = await listener.GetContextAsync();
+            path = ctx.Request.Url!.AbsolutePath;
+            if (request == 0) path.Should().Be("/api/join");
+            using (var reader = new StreamReader(ctx.Request.InputStream)) await reader.ReadToEndAsync();
+            var (status, headers, bytes) = path == "/api/join"
+                ? (200, new Dictionary<string, string>(), System.Text.Encoding.UTF8.GetBytes(joinBody))
+                : host.Answer(path) ?? (404, new Dictionary<string, string>(), []);
+            ctx.Response.StatusCode = status;
+            foreach (var (name, value) in headers) ctx.Response.Headers[name] = value;
+            ctx.Response.ContentType = path == "/api/sync/snapshot/for-join" ? "application/gzip" : "application/json";
+            ctx.Response.ContentLength64 = bytes.Length;
+            await ctx.Response.OutputStream.WriteAsync(bytes);
+            ctx.Response.Close();
+        }
     }
 
     private static int FreePort()

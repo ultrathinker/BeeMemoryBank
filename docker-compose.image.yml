@@ -1,0 +1,46 @@
+# Bee Memory Bank from the ready-made image: no git clone, no build, no model download.
+#   mkdir bee-memory-bank && cd bee-memory-bank
+#   curl -fsSL -o docker-compose.yml https://raw.githubusercontent.com/ultrathinker/BeeMemoryBank/main/docker-compose.image.yml
+#   docker compose up -d
+# Then open http://localhost:5301 (this computer only) and create your bank on the Setup page.
+# Update: docker compose pull && docker compose up -d (make a snapshot in Admin first). README: "Docker: ready-made image".
+#
+# The same safety defaults as docker-compose.yml (the build-from-source file): only the Web port is published, on this
+# computer's loopback. To put the node behind your own reverse proxy, take docker-compose.reverse-proxy.yml and replace its
+# `build:` block with the `image:` line below (docs/deployment.md).
+
+services:
+  bmb:
+    # latest = the newest release. To stay on one release line put BMB_VERSION=2.4 into .env (patch updates only), or an exact
+    # version (2.4.0) for nothing to move. The image is for linux/amd64 and linux/arm64; Docker picks the right one.
+    image: ghcr.io/ultrathinker/beememorybank:${BMB_VERSION:-latest}
+    # Only the Web port is published, and only on this computer's loopback. Docker's port publishing skips ufw, and the API
+    # port (5300: /mcp, sync, /api/session/unlock — a master-password oracle) must never be published on 0.0.0.0. To open the
+    # login page to your LAN on purpose set BMB_WEB_BIND=0.0.0.0 in .env and put TLS in front of it (the session cookie is
+    # Secure); read docs/internet-access.md first.
+    ports:
+      - "${BMB_WEB_BIND:-127.0.0.1}:${BMB_WEB_PORT:-5301}:5301"
+      # OPTIONAL: let AI assistants on THIS computer reach the node. It takes two lines in this
+      # file, both commented out: this one, and BMB_API_PUBLISHED_PORT under "environment:" below.
+      # Loopback only, never 0.0.0.0. For assistants on other computers use a reverse proxy (docs/deployment.md).
+      # - "127.0.0.1:${BMB_API_PORT:-5300}:5300"
+    volumes:
+      # A Docker volume by default: it survives `docker compose down` (but NOT `docker compose down -v`), leaves no
+      # root-owned folder next to this file, and keeps SQLite off Docker Desktop's shared folders. To keep the data in a
+      # folder of yours instead, set BMB_DATA_PATH=./data (or an absolute path) in .env BEFORE the first start.
+      - ${BMB_DATA_PATH:-bmb-data}:/app/data
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - BMB_DATA_PATH=/app/data
+      # No BMB_ONNX_MODEL_PATH: the search model is inside the image (a model.onnx you put into the data folder is used first).
+      # OPTIONAL, goes with the API port line above: tells the Profile page which host port the API
+      # is on, so the snippet for an AI assistant prints http://127.0.0.1:<port>/mcp.
+      # - BMB_API_PUBLISHED_PORT=${BMB_API_PORT:-5300}
+      # To print one fixed address instead (for example one behind your own proxy), set BMB_MCP_URL
+      # in .env, e.g. https://bee.example.com/mcp. Empty = not set.
+      - BMB_MCP_URL=${BMB_MCP_URL:-}
+    # No healthcheck block: the image carries its own (Dockerfile HEALTHCHECK).
+    restart: unless-stopped
+
+volumes:
+  bmb-data:

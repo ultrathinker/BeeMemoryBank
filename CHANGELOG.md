@@ -22,6 +22,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 2.4.0: ready-made Docker images, alarms for a silent blind node, `bmb join` takes the snapshot (2026-10-07)
+
+No sync protocol change (still 3) and no database migration: nodes of 2.0.x to 2.3.0 keep syncing with 2.4.0 in both directions.
+
+- **Ready-made Docker images** on GitHub's container registry: `ghcr.io/ultrathinker/beememorybank` (full node) and `ghcr.io/ultrathinker/beememorybank-blind`
+  (blind node), for `linux/amd64` and `linux/arm64`. A node starts from one compose file (`docker-compose.image.yml`, `docker/blind/compose.image.yaml`): no clone,
+  no build, no model download. Tags `X.Y.Z`, `X.Y` and `latest` (a pre-release gets its own tag only); each image carries a GitHub build provenance
+  attestation, and each architecture is started and checked before any tag is written. The full-node image is built per architecture (about 140 MB of
+  programs instead of 640), carries the search model verified by its SHA-256 at build time, declares only the Web port (5301) as exposed, and `docker stop`
+  now stops the Api cleanly as well. Coming from the source `docker-compose.yml`: put `BMB_DATA_PATH=./data` into `.env` first, see the README.
+- **The desktop app tells you when a blind node needs attention.** A Windows notification (a banner on macOS), once per problem and a reminder at most once a
+  day: a server blind node this PC could not reach for 6 hours while awake, a blind copy that has not called for 3 days, or a sync protocol mismatch; and
+  "N blind nodes need attention" in the tray tooltip. A sleep of the computer pauses an outage, it does not end it. Nothing is judged in invisible mode or
+  before a sync cycle has completed. The Blind nodes page also warns when a blind node runs a newer sync protocol than this PC ("update this PC"), shows the
+  protocol of server blind nodes, and its "last contact" includes this PC's own call each cycle. `GET /api/blind-nodes/alarms` (superadmin, internal key).
+- **`bmb join` takes the signed snapshot** like the Setup page and the phone, so a node joined from the command line gets every note even when the source
+  compacted or re-keyed its log. A failed join says why, exits non-zero and rolls the new node back, so it can be run again; joining a blind node says to join
+  a node that holds the data. A node that joined from a snapshot or was restored no longer restarts with its clock at zero (its first edits could lose to older
+  ones on other devices).
+- **A node that cannot catch up says so.** When a peer compacted past this node, every page of the web UI and `bmb status` show it, instead of only the log.
+
+Fixed in this release:
+
+- A phone can join a new or small vault again: the join no longer stops with "Tar archive exceeds maximum extracted size (0MB)".
+- Search no longer fails now and then with "An item with the same key has already been added" while the index is being written to.
+- On Windows, a blind node's identity key, TLS key and backup credentials are readable only by the account that runs it (and SYSTEM); files an older version
+  left readable by every account are repaired at start. On a FAT32 or exFAT disk, which has no ACLs, the file is created as before.
+- A snapshot's working copy of the database is made, owner-only, inside the node's data folder instead of the system's temp folder, and removed at the next
+  start if a crash left it behind. It needs free space on the data drive about the size of the database.
+- A blind node whose first start was cut off while it wrote its TLS certificate starts again; two first starts on the same data volume no longer leave an
+  identity key that does not match its record; the seed cutover also refuses a link planted at the staged database or a sidecar.
+- Restoring from a backup or a blind node is safe against a cut halfway: devices the backup's anchor does not vouch for are never trusted, not even for a
+  moment, a restore run again replaces everything the cut run wrote, and the restored node never restarts with its clock below the restored data. After a
+  restore cut between the database and the media swap, the next start moves the restored images into place.
+- Claiming a blind node with a restore code survives a failure halfway: the device's retry completes the claim instead of finding the code used up (a used
+  code still cannot be used by another device or to change a trusted key). Two syncs with the same blind node at the same moment no longer both adopt its
+  checkpoint.
+
 #### 2.3.0: the product does what the website promised (2026-10-07)
 
 No sync protocol change (still 3). One database migration (036) adds the trust mode of a trusted node; nodes of 2.0.x to 2.2.0 keep syncing with 2.3.0

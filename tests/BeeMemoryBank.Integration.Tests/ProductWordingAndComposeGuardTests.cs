@@ -58,6 +58,36 @@ public class ProductWordingAndComposeGuardTests
         var text = Read(".env.example");
 
         text.Should().Contain("BMB_WEB_BIND").And.Contain("BMB_MCP_URL").And.Contain("BMB_API_PORT");
+        text.Should().Contain("BMB_VERSION").And.Contain("the Docker volume bmb-data", "BMB-88: the image's release and data place");
+    }
+
+    // ── BMB-88: the ready-made image ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void TheImageComposeFile_RunsThePublishedImage_WithTheSameSafetyDefaults()
+    {
+        var active = ActiveLines(Read("docker-compose.image.yml"));
+
+        active.Where(l => PortMapping.IsMatch(l)).Should().ContainSingle("only the Web port is published").Which
+            .Should().Contain("\"${BMB_WEB_BIND:-127.0.0.1}:${BMB_WEB_PORT:-5301}:5301\"");
+        active.Should().NotContain(l => l.Contains(":5300\""), "the API port stays unpublished unless the owner uncomments the optional line");
+        active.Should().Contain(l => l.Trim() == "image: ghcr.io/ultrathinker/beememorybank:${BMB_VERSION:-latest}");
+        active.Should().NotContain(l => l.TrimStart().StartsWith("build:"), "this file is for people without the source tree");
+        active.Should().Contain(l => l.Trim() == "- ${BMB_DATA_PATH:-bmb-data}:/app/data", "a Docker volume unless the owner names a folder");
+        active.Should().Contain(l => l.Trim() == "bmb-data:");
+        active.Should().NotContain(l => l.Contains("name: bmb-data"),
+            "a fixed volume name would let a second copy of this file on the same host open the same database");
+    }
+
+    [Theory]
+    [InlineData("docker-compose.yml")]
+    [InlineData("docker-compose.reverse-proxy.yml")]
+    [InlineData("docker-compose.image.yml")]
+    public void NoComposeFile_PointsTheModelIntoTheDataFolder(string file)
+    {
+        // The image carries the verified model; BMB_ONNX_MODEL_PATH is authoritative, so pointing it at a file the data folder
+        // does not have would switch search by meaning off.
+        ActiveLines(Read(file)).Should().NotContain(l => l.Contains("BMB_ONNX_MODEL_PATH"));
     }
 
     [Fact]

@@ -62,8 +62,10 @@ public class EventLogRepository(DbConnectionFactory factory) : BaseRepository(fa
     public async Task<long> GetMaxLamportTimestampAsync()
     {
         using var conn = OpenConnection();
+        // The clock's starting point: the newest event, or the floor a snapshot join or a restore left
+        // when there is no event to carry it (LamportFloor).
         return await conn.ExecuteScalarAsync<long>(
-            "SELECT COALESCE(MAX(lamport_ts), 0) FROM tbl_event");
+            $"SELECT MAX(COALESCE((SELECT MAX(lamport_ts) FROM tbl_event), 0), ({LamportFloor.SelectSql}))");
     }
 
     public async Task<List<SyncEvent>> GetAfterSequenceAsync(long afterSequenceNum, int limit = 1000)
