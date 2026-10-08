@@ -79,8 +79,8 @@ after pairing; without it the screen says that no warning can come).
 
 ## Build and run
 
-On a Mac with Xcode 26.x and the .NET 10 SDK with the iOS workloads (`dotnet workload install ios maui-ios`; Xcode 26.5 was used for
-verification):
+On a Mac with Xcode 26.5 and the .NET 10.0.300 SDK with the matching iOS workloads (`dotnet workload install ios maui-ios --version 10.0.300.3`, which
+carries .NET for iOS 26.5; the newest workload wants Xcode 27 and has not been tried):
 
 ```
 scripts/build-ios-blind.sh simulator            # .app for the Apple-silicon simulator

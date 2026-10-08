@@ -297,10 +297,10 @@ password. It is not a full-node client. In particular, iOS does not guarantee pe
 backup to completion while the app is closed, and does not restart the app after a reboot. The exact comparison with Android is in
 [the iPhone blind-copy guide](docs/blind-node/IOS.md#what-ios-cannot-do-that-android-does).
 
-Build it from source on a Mac with Xcode 26.x and the .NET iOS workload:
+Build it from source on a Mac with Xcode 26.5 and the matching .NET iOS workload (a newer workload wants Xcode 27):
 
 ```bash
-dotnet workload install ios maui-ios
+dotnet workload install ios maui-ios --version 10.0.300.3
 scripts/build-ios-blind.sh simulator Release
 ```
 
@@ -312,10 +312,10 @@ There is no download for the iPhone app yet. Apple apps reach people through Tes
 The regular iPhone app is a full node with the vault on the phone. It opens with the master password or Face ID / Touch ID, reads and
 edits Markdown locally, and syncs as a client with the computers and servers in its network. iOS makes it a node that calls and cannot
 be called: it has no listener, web server, or MCP server, and changes from other nodes arrive when the app next opens. Build it from
-source on a Mac with Xcode 26.x and the .NET iOS workload:
+source on a Mac with Xcode 26.5 and the matching .NET iOS workload:
 
 ```bash
-dotnet workload install ios maui-ios
+dotnet workload install ios maui-ios --version 10.0.300.3
 scripts/build-ios-full.sh simulator
 ```
 
