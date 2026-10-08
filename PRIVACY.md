@@ -36,6 +36,15 @@ Everything else listens on your own computer (`127.0.0.1`) only, until you open 
 The desktop window uses Microsoft Edge WebView2, which is maintained by Microsoft and has its own
 update and security services. Their privacy statement applies to them.
 
+The iPhone blind copy (in development, not distributed yet; see [docs/blind-node/IOS.md](docs/blind-node/IOS.md)) talks only to the node
+named in its call code. Its "no contact with the node" warning is a local notification the phone schedules for itself: there is no push
+server, and nothing goes to Apple beyond what iOS itself does for every app.
+
+The iPhone regular app (in development, not distributed yet; see [docs/full-node/IOS.md](docs/full-node/IOS.md)) talks only to the nodes
+of your own network that it syncs with, and while joining, to the computer or server you named. It listens on nothing, has no analytics
+and no push server. Its data stays in the app's own folder on the phone, excluded from iCloud and computer backups; the key for Face ID
+unlock is kept by the phone's Keychain on that phone only.
+
 ## Questions
 
 Open an issue at <https://github.com/ultrathinker/BeeMemoryBank/issues>.

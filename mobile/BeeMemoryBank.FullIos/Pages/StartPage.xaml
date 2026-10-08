@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Pages.StartPage"
+             Shell.NavBarIsVisible="False">
+    <Grid RowDefinitions="*,Auto,Auto,*" Padding="24">
+        <Label Grid.Row="1" Text="Bee Memory Bank" Style="{StaticResource Title}" HorizontalOptions="Center" />
+        <VerticalStackLayout Grid.Row="2" Spacing="12" Margin="0,24,0,0">
+            <ActivityIndicator x:Name="Busy" IsRunning="True" />
+            <Label x:Name="Problem" Style="{StaticResource Error}" HorizontalTextAlignment="Center" IsVisible="False" />
+        </VerticalStackLayout>
+    </Grid>
+</ContentPage>

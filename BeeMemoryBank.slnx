@@ -39,6 +39,8 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BeeMemoryBank.BlindMobile.Tests/BeeMemoryBank.BlindMobile.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.BlindIos.Tests/BeeMemoryBank.BlindIos.Tests.csproj" />
+    <Project Path="tests/BeeMemoryBank.FullIos.Tests/BeeMemoryBank.FullIos.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.Blind.AppCore.Tests/BeeMemoryBank.Blind.AppCore.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.BlindDesktop.Tests/BeeMemoryBank.BlindDesktop.Tests.csproj" />
     <Project Path="tests/BeeMemoryBank.BlindDesktop.MacOS.Tests/BeeMemoryBank.BlindDesktop.MacOS.Tests.csproj" />

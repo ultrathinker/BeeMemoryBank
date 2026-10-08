@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Pages.CreateVaultPage"
+             Title="New memory bank">
+    <Grid RowDefinitions="*,Auto" Padding="24,8,24,24">
+        <ScrollView>
+            <VerticalStackLayout Spacing="8">
+                <Label Text="Name of this iPhone" Style="{StaticResource Section}" />
+                <Entry x:Name="NameEntry" Placeholder="iPhone" ReturnType="Next" AutomationId="NameEntry" />
+                <Label Text="Master password" Style="{StaticResource Section}" />
+                <Entry x:Name="PasswordEntry" IsPassword="True" Placeholder="Master password" ReturnType="Next" AutomationId="PasswordEntry" />
+                <Entry x:Name="RepeatEntry" IsPassword="True" Placeholder="The same again" ReturnType="Done" Completed="OnCreate" AutomationId="RepeatEntry" />
+                <Label Style="{StaticResource Muted}" Text="At least 8 characters, with an upper-case letter, a lower-case letter and a digit. It opens your memory bank on every device and is never stored: nobody can reset it for you. You will get a recovery key next, for the day you forget it." />
+                <Label x:Name="ErrorLabel" Style="{StaticResource Error}" IsVisible="False" />
+            </VerticalStackLayout>
+        </ScrollView>
+        <VerticalStackLayout Grid.Row="1" Spacing="8">
+            <Label x:Name="StatusLabel" Style="{StaticResource Muted}" HorizontalTextAlignment="Center" IsVisible="False" />
+            <ActivityIndicator x:Name="Busy" IsRunning="False" IsVisible="False" />
+            <Button x:Name="CreateButton" Text="Create" Clicked="OnCreate" AutomationId="CreateVaultButton" />
+        </VerticalStackLayout>
+    </Grid>
+</ContentPage>

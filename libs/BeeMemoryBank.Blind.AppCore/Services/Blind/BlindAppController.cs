@@ -179,8 +179,11 @@ public sealed class BlindAppController(
             catch (Exception ex)
             {
                 // Any exception, as the Android worker does: a sync that dies on something unexpected must not vanish.
-                log.Add("sync", $"Sync failed: {ex.Message}");
-                return $"Sync failed: {ex.Message}";
+                // With the inner exceptions' words: "The SSL connection could not be established, see inner exception." alone cannot tell a
+                // refused pin from a closed port.
+                var reason = BlindRunReport.Reason(ex);
+                log.Add("sync", $"Sync failed: {reason}");
+                return $"Sync failed: {reason}";
             }
         }
         finally

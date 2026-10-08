@@ -69,6 +69,15 @@ public sealed record BlindHomeView(
             Log: string.Join("\n", status.RecentLog.Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.Message}")));
     }
 
+    /// <summary>
+    /// The "notes" line of a screen, from <see cref="BlindReplicaStats.CountNotesAsync"/>: before the first load the copy holds nothing yet,
+    /// and a count that could not be read is "unknown", never 0.
+    /// </summary>
+    public static string NotesText(long? count, BlindAppStatus status) =>
+        !status.InitialLoadDone ? "Notes in this copy: none yet (the first load is not done)."
+        : count is { } n ? $"Notes in this copy: {n}."
+        : "Notes in this copy: unknown (the database could not be read just now).";
+
     /// <summary>The screen when even the status could not be read: a sentence, and the way out.</summary>
     public static string StatusFailedText(Exception ex) =>
         $"Could not read the state of the phone: {ex.Message} Close the app and open it again; if this stays, choose Disconnect and wipe.";

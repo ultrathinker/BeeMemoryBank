@@ -28,6 +28,29 @@ public static class BlindRunReport
         Record(log, kind, $"Stopped by an unexpected error ({error.GetType().Name}): {error.Message}{Where(error)}");
 
     /// <summary>
+    /// The exception's message, followed by the messages of its inner exceptions that say something new (type and words). The TLS and socket
+    /// errors of the HTTP stack hide the cause behind "The SSL connection could not be established, see inner exception.": without the
+    /// inner part a refused certificate, a reset connection and a protocol mismatch read the same on the screen. Messages only, never data.
+    /// </summary>
+    public static string Reason(Exception error)
+    {
+        var text = new System.Text.StringBuilder(OneLine(error.Message));
+        var seen = new HashSet<string>(StringComparer.Ordinal) { OneLine(error.Message) };
+        for (var inner = error.InnerException; inner is not null && seen.Count <= MaxInner; inner = inner.InnerException)
+        {
+            var message = OneLine(inner.Message);
+            if (message.Length == 0 || !seen.Add(message)) continue;
+            text.Append($" ({inner.GetType().Name}: {message})");
+        }
+        return text.Length <= MaxReason ? text.ToString() : text.ToString(0, MaxReason) + "...";
+    }
+
+    private const int MaxInner = 3;
+    private const int MaxReason = 400;
+
+    private static string OneLine(string? message) => (message ?? "").ReplaceLineEndings(" ").Trim();
+
+    /// <summary>
     /// " [at A.B.M &lt; C.D.N &lt; ...]": the first few methods of the stack, names only (no arguments, no file paths). A Release
     /// build on a phone has no debugger and nothing prints a caught exception, so without this a NullReferenceException
     /// from deep in a backup says nothing about where.

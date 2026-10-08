@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+	</array>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>XSAppIconAssets</key>
+	<string>Assets.xcassets/appicon.appiconset</string>
+	<!-- iOS asks before an app may reach a device on the local network; the nodes a phone syncs with are often there. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Bee Memory Bank syncs your notes with your computers and servers. When one of them is on your home network, the app needs to reach it there.</string>
+	<!-- Face ID releases the Keychain key that opens the vault (QuickUnlock); iOS refuses Face ID to an app without this text. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>Face ID opens your memory bank without typing the master password. The password itself is never stored.</string>
+	<!-- A computer shows its join code as a QR code of a bmb-join: link: the Camera opens it in this app, which fills in the join page
+	     (nothing is sent until the master password is typed and Join tapped). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.beememorybank.mobile.join-code</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>bmb-join</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

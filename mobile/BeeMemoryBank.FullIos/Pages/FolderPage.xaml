@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:services="clr-namespace:BeeMemoryBank.FullIos.Services"
+             x:Class="BeeMemoryBank.FullIos.Pages.FolderPage"
+             Title="Notes">
+    <ContentPage.ToolbarItems>
+        <ToolbarItem Text="Trash" Order="Secondary" Clicked="OnTrash" />
+        <ToolbarItem IconImageSource="new_folder.png" Text="New folder" Clicked="OnNewFolder" />
+    </ContentPage.ToolbarItems>
+    <Grid>
+        <RefreshView x:Name="Refresher" Refreshing="OnRefreshing">
+            <CollectionView x:Name="List" SelectionMode="None" AutomationId="FolderList">
+                <CollectionView.Header>
+                    <Label x:Name="PathLabel" Style="{StaticResource Muted}" Padding="20,8,20,4" />
+                </CollectionView.Header>
+                <CollectionView.EmptyView>
+                    <Label x:Name="EmptyLabel" Text="Nothing here yet. Tap + to write a note." Style="{StaticResource Muted}" HorizontalTextAlignment="Center" Margin="24,48" />
+                </CollectionView.EmptyView>
+                <CollectionView.ItemTemplate>
+                    <DataTemplate x:DataType="services:NoteListItem">
+                        <SwipeView>
+                            <SwipeView.RightItems>
+                                <SwipeItems Mode="Execute">
+                                    <SwipeItem Text="Delete" BackgroundColor="{StaticResource DangerColor}" Invoked="OnSwipeDelete" IsVisible="{Binding IsNote}" />
+                                </SwipeItems>
+                            </SwipeView.RightItems>
+                            <Grid ColumnDefinitions="36,*" Padding="20,12" MinimumHeightRequest="56"
+                                  BackgroundColor="{AppThemeBinding Light={StaticResource LightBackground}, Dark={StaticResource DarkBackground}}">
+                                <Grid.GestureRecognizers>
+                                    <TapGestureRecognizer Tapped="OnItemTapped" />
+                                </Grid.GestureRecognizers>
+                                <Label Text="{Binding Glyph}" FontSize="20" VerticalOptions="Center" />
+                                <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
+                                    <Label Text="{Binding Name}" FontSize="17" LineBreakMode="TailTruncation" />
+                                    <Label Text="{Binding Detail}" Style="{StaticResource Muted}" FontSize="12" IsVisible="{Binding IsNote}" />
+                                </VerticalStackLayout>
+                            </Grid>
+                        </SwipeView>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+        </RefreshView>
+        <!-- The main action of the page where the thumb is: bottom right. -->
+        <Button Text="+" FontSize="30" Padding="0" WidthRequest="60" HeightRequest="60" CornerRadius="30"
+                HorizontalOptions="End" VerticalOptions="End" Margin="20" Clicked="OnNewNote" AutomationId="NewNoteButton"
+                SemanticProperties.Description="New note" />
+    </Grid>
+</ContentPage>

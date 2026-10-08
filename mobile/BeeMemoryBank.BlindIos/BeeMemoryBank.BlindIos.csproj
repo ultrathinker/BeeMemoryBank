@@ -1,0 +1,106 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The iPhone blind app ("Bee Memory Bank Blind"): a blind copy on iOS, the same product as the Android blind app
+    (mobile/BeeMemoryBank.BlindMobile) on the same shared libraries and Blind.AppCore, with the iOS seams of its own: the Keychain for the
+    three secrets, an atomic state file and the data folder in the app's container (file protection, no device backup), BGTaskScheduler
+    for the background rounds, a local notification when the node has been silent too long, the share sheet for "Save to...".
+
+    A project of its own rather than a second target of the Android project: an iOS build needs a Mac with Xcode, and a multi-targeted
+    Android project would no longer restore on the Linux and Windows machines that build the Android app; the Android project's guards
+    (ForbiddenReferencesTests, BlindManifestTests, AppBoundaryTests) read its project, assets and output, which stay exactly as they were;
+    and the iOS life cycle has almost nothing in common with WorkManager and a foreground service. What is platform-free is shared the
+    way the desktop copies share it: Blind.AppCore (controller, pairing, screen texts), plus three files linked from the other blind apps
+    (the in-process scheduler, the atomic state file and the trimmer roots).
+
+    Never the Vault, Hosting, AppPaths or the Apple desktop layer: tests/BeeMemoryBank.BlindIos.Tests reads this file and the built app,
+    and docs/blind-node/IOS-APP.golden.txt is the list of product assemblies the app may carry.
+
+    Build: on a Mac with Xcode, `scripts/build-ios-blind.sh` (simulator or device). Device signing comes from the build machine (environment
+    or the script's options), never from this file: the identity and the profile name carry the Apple team.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework></TargetFramework>
+    <TargetFrameworks>net10.0-ios</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <UseMaui>true</UseMaui>
+    <SingleProject>true</SingleProject>
+    <!-- A team that cannot register com.beememorybank.blind builds with -p:BmbIosBundleId=its.own.id (the background task identifiers do
+         not depend on it). -->
+    <ApplicationId Condition="'$(BmbIosBundleId)' != ''">$(BmbIosBundleId)</ApplicationId>
+    <ApplicationId Condition="'$(ApplicationId)' == ''">com.beememorybank.blind</ApplicationId>
+    <ApplicationTitle>Bee Memory Bank Blind</ApplicationTitle>
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+    <RootNamespace>BeeMemoryBank.BlindIos</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <_BmbCoreVersion>$([System.Text.RegularExpressions.Regex]::Match('$(Version)', '^\d+\.\d+\.\d+').Value)</_BmbCoreVersion>
+    <_BmbCoreVersion Condition="'$(_BmbCoreVersion)' == ''">1.0.0</_BmbCoreVersion>
+    <ApplicationDisplayVersion>$(_BmbCoreVersion)</ApplicationDisplayVersion>
+    <_BmbMajor>$(_BmbCoreVersion.Split('.')[0])</_BmbMajor>
+    <_BmbMinor>$(_BmbCoreVersion.Split('.')[1])</_BmbMinor>
+    <_BmbPatch>$(_BmbCoreVersion.Split('.')[2])</_BmbPatch>
+    <ApplicationVersion>$([MSBuild]::Add($([MSBuild]::Add($([MSBuild]::Multiply($(_BmbMajor), 10000)), $([MSBuild]::Multiply($(_BmbMinor), 100)))), $(_BmbPatch)))</ApplicationVersion>
+
+    <!-- HttpClientHandler is the managed SocketsHttpHandler, not NSURLSession: the pinned node's key is then checked by the same
+         ServerCertificateCustomValidationCallback, on every TLS handshake, as on Android, Windows and macOS (BlindHttpHandler), and App
+         Transport Security has no say over a self-signed, pinned node on the local network. -->
+    <UseNativeHttpHandler>false</UseNativeHttpHandler>
+    <!-- Everything is compiled ahead of time, and the interpreter is there only for code made at run time: Dapper builds its row readers
+         with Reflection.Emit, which a device without a JIT cannot run otherwise (the first query would throw). -->
+    <MtouchInterpreter>-all</MtouchInterpreter>
+    <!-- A Release build for iOS drops the .NET runtime's own messages by default and keeps only their keys: on the iPhone a failed sync
+         then read "net_http_ssl_connection_failed (AuthenticationException: net_ssl_io_cert_custom_validation)" in the log and on the
+         screen. The messages are what BlindRunReport shows to say why a sync failed. -->
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
+    <CodesignEntitlements>Platforms\iOS\Entitlements.plist</CodesignEntitlements>
+    <!-- -p:BmbE2E=true: a Release build that still takes the end-to-end check's call code at launch (BlindHomePage); never for people. -->
+    <DefineConstants Condition="'$(BmbE2E)' == 'true'">$(DefineConstants);BMB_E2E</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The same icon as the Android blind app; iOS needs an opaque one, so the white background is filled in. -->
+    <MauiIcon Include="..\BeeMemoryBank.BlindMobile\Resources\AppIcon\appicon.svg" Link="Resources\AppIcon\appicon.svg" Color="#FFFFFF" ForegroundScale="0.62" />
+    <!-- Without a launch screen iOS runs the app in a letterboxed compatibility mode. A copy of the same picture: the resizer names its
+         output after the file, and a linked file keeps the link's folder in that name, which it refuses. -->
+    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#1c1017" BaseSize="128,128" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Apple's privacy manifest: the file-time, boot-time, disk-space and user-defaults APIs the .NET runtime and MAUI use. -->
+    <BundleResource Include="Platforms\iOS\PrivacyInfo.xcprivacy" LogicalName="PrivacyInfo.xcprivacy" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Dapper's ValueTuple readers: the same trimmer roots as the Android blind app (the reason is in that file). -->
+    <TrimmerRootDescriptor Include="..\BeeMemoryBank.BlindMobile\Linker.xml" Link="Linker.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Platform-free code of the desktop copies, linked rather than copied: the in-process timer loop the app runs while it is open
+         (15-minute sync, hourly long job, first-load retry), and the state file written whole and renamed into place. Both depend on
+         Blind.AppCore only. -->
+    <Compile Include="..\..\desktop\BeeMemoryBank.BlindDesktop\Scheduling\BlindTimerScheduler.cs" Link="Shared\BlindTimerScheduler.cs" />
+    <Compile Include="..\..\desktop\BeeMemoryBank.BlindDesktop.MacOS\Storage\MacOsBlindStateStore.cs" Link="Shared\MacOsBlindStateStore.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Maui.Controls" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="QRCoder" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The shared libraries, the phone's client and the blind app core: the same set the Android blind app references. Never the
+         Vault (master key, sessions, content crypto), Hosting, AppPaths or BeeMemoryBank.Platforms.Apple (the macOS Keychain layer). -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.PhoneClient\BeeMemoryBank.Blind.PhoneClient.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.AppCore\BeeMemoryBank.Blind.AppCore.csproj" />
+  </ItemGroup>
+
+</Project>

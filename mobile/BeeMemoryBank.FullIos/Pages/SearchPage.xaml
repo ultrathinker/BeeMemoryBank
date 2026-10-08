@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:services="clr-namespace:BeeMemoryBank.FullIos.Services"
+             x:Class="BeeMemoryBank.FullIos.Pages.SearchPage"
+             Title="Search">
+    <Grid RowDefinitions="Auto,Auto,*">
+        <SearchBar x:Name="Query" Placeholder="Search your notes" TextChanged="OnTextChanged" SearchButtonPressed="OnSearch" AutomationId="SearchBar" />
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Padding="20,0,20,4">
+            <Label Text="Also in the text of the notes" Style="{StaticResource Muted}" VerticalOptions="Center" />
+            <Switch Grid.Column="1" x:Name="InText" IsToggled="True" Toggled="OnInTextToggled" />
+        </Grid>
+        <CollectionView Grid.Row="2" x:Name="Results" SelectionMode="None">
+            <CollectionView.EmptyView>
+                <Label x:Name="EmptyLabel" Style="{StaticResource Muted}" HorizontalTextAlignment="Center" Margin="24,48"
+                       Text="Titles, folders and, with the switch on, the notes' text. Search by meaning runs on your computers." />
+            </CollectionView.EmptyView>
+            <CollectionView.ItemTemplate>
+                <DataTemplate x:DataType="services:NoteListItem">
+                    <Grid ColumnDefinitions="36,*" Padding="20,10" MinimumHeightRequest="56">
+                        <Grid.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnItemTapped" />
+                        </Grid.GestureRecognizers>
+                        <Label Text="{Binding Glyph}" FontSize="20" VerticalOptions="Center" />
+                        <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
+                            <Label Text="{Binding Name}" FontSize="17" LineBreakMode="TailTruncation" />
+                            <Label Text="{Binding Path}" Style="{StaticResource Muted}" FontSize="12" />
+                        </VerticalStackLayout>
+                    </Grid>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+    </Grid>
+</ContentPage>

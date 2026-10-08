@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Pages.JoinPage"
+             Title="Join">
+    <Grid RowDefinitions="*,Auto" Padding="24,8,24,24">
+        <ScrollView>
+            <VerticalStackLayout Spacing="8">
+                <Label Text="Join code" Style="{StaticResource Section}" />
+                <Label Style="{StaticResource Muted}" Text="On your computer open Admin, then Connect a device, and copy the code that starts with bmb-join: (or scan its QR code with the Camera). A server with its own https address can be typed instead." />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <Editor x:Name="CodeEditor" Placeholder="bmb-join:?a=..." AutoSize="TextChanges" MinimumHeightRequest="80" AutomationId="CodeEditor" />
+                    <Button Grid.Column="1" Text="Paste" Style="{StaticResource Secondary}" VerticalOptions="Start" Clicked="OnPaste" />
+                </Grid>
+                <Label Text="Master password" Style="{StaticResource Section}" />
+                <Entry x:Name="PasswordEntry" IsPassword="True" Placeholder="The master password of your memory bank" ReturnType="Next" AutomationId="PasswordEntry" />
+                <Label Style="{StaticResource Muted}" Text="With a join code it goes only to the computer that made the code: the code pins that computer's key." />
+                <Label Text="Name of this iPhone" Style="{StaticResource Section}" />
+                <Entry x:Name="NameEntry" Placeholder="iPhone" ReturnType="Done" Completed="OnJoin" AutomationId="NameEntry" />
+                <Label x:Name="ErrorLabel" Style="{StaticResource Error}" IsVisible="False" />
+            </VerticalStackLayout>
+        </ScrollView>
+        <VerticalStackLayout Grid.Row="1" Spacing="8">
+            <Label x:Name="StatusLabel" Style="{StaticResource Muted}" HorizontalTextAlignment="Center" IsVisible="False" />
+            <ActivityIndicator x:Name="Busy" IsRunning="False" IsVisible="False" />
+            <Button x:Name="JoinButton" Text="Join" Clicked="OnJoin" AutomationId="JoinVaultButton" />
+        </VerticalStackLayout>
+    </Grid>
+</ContentPage>

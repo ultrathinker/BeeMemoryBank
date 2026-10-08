@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Pages.SettingsPage"
+             Title="Settings">
+    <Grid RowDefinitions="*,Auto" Padding="20,8,20,20">
+        <ScrollView>
+            <VerticalStackLayout Spacing="8">
+                <Label Text="Unlocking" Style="{StaticResource Section}" />
+                <Grid ColumnDefinitions="*,Auto">
+                    <Label x:Name="QuickLabel" VerticalOptions="Center" />
+                    <Switch Grid.Column="1" x:Name="QuickSwitch" Toggled="OnQuickToggled" />
+                </Grid>
+                <Label x:Name="QuickDetail" Style="{StaticResource Muted}" />
+                <Label Text="Lock when I leave the app" Style="{StaticResource Section}" />
+                <Picker x:Name="GracePicker" SelectedIndexChanged="OnGraceChanged" />
+                <Label Text="Lock when the app is open but not used" Style="{StaticResource Section}" />
+                <Picker x:Name="IdlePicker" SelectedIndexChanged="OnIdleChanged" />
+                <Label Text="Recovery" Style="{StaticResource Section}" />
+                <Button Text="Make a new recovery key" Style="{StaticResource Secondary}" Clicked="OnNewRecoveryKey" />
+                <Label Style="{StaticResource Muted}" Text="Recovery keys made earlier keep working. Make a new one if a copy was lost or seen by someone." />
+                <Label Text="About" Style="{StaticResource Section}" />
+                <Label x:Name="AboutLabel" Style="{StaticResource Muted}" />
+            </VerticalStackLayout>
+        </ScrollView>
+        <Button Grid.Row="1" Text="Lock now" Clicked="OnLock" AutomationId="LockButton" />
+    </Grid>
+</ContentPage>

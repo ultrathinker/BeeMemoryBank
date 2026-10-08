@@ -1,0 +1,102 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The iPhone app of the ordinary (full) node, "Bee Memory Bank": the whole vault on the phone, opened with the master password, its notes
+    read, searched and edited on the phone, and synced with the other nodes. The same product as the Android app
+    (mobile/BeeMemoryBank.Mobile) on the same shared and vault libraries, used in process: no web server, no listening socket (iOS suspends
+    an app in the background, so the phone is a node that calls - a sync client - never one that is called).
+
+    A project of its own, like the iPhone blind app and for the same reasons: an iOS target would make the Android project need the iOS
+    workload on the Linux and Windows machines that build the APK, and the life cycles share little. Platform-free code is shared by
+    linking the Android app's files (the join by code) rather than copying them; the logic of this app that does not touch iOS is in
+    Services/*.cs and is compiled and tested on any OS by tests/BeeMemoryBank.FullIos.Tests.
+
+    Never Hosting, AppPaths, Infrastructure, the Apple desktop layer or anything of the blind copies: tests/BeeMemoryBank.FullIos.Tests
+    reads this file and the built app, and docs/full-node/IOS-APP.golden.txt is the list of product assemblies the app may carry.
+
+    Build: on a Mac with Xcode, `scripts/build-ios-full.sh` (simulator or device). Device signing comes from the build machine, never
+    from this file.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework></TargetFramework>
+    <TargetFrameworks>net10.0-ios</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <UseMaui>true</UseMaui>
+    <SingleProject>true</SingleProject>
+    <!-- The Android ordinary app's id: one product on both stores. A team that cannot register it builds with -p:BmbIosBundleId=its.own.id. -->
+    <ApplicationId Condition="'$(BmbIosBundleId)' != ''">$(BmbIosBundleId)</ApplicationId>
+    <ApplicationId Condition="'$(ApplicationId)' == ''">com.beememorybank.mobile</ApplicationId>
+    <ApplicationTitle>Bee Memory Bank</ApplicationTitle>
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+    <RootNamespace>BeeMemoryBank.FullIos</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <_BmbCoreVersion>$([System.Text.RegularExpressions.Regex]::Match('$(Version)', '^\d+\.\d+\.\d+').Value)</_BmbCoreVersion>
+    <_BmbCoreVersion Condition="'$(_BmbCoreVersion)' == ''">1.0.0</_BmbCoreVersion>
+    <ApplicationDisplayVersion>$(_BmbCoreVersion)</ApplicationDisplayVersion>
+    <_BmbMajor>$(_BmbCoreVersion.Split('.')[0])</_BmbMajor>
+    <_BmbMinor>$(_BmbCoreVersion.Split('.')[1])</_BmbMinor>
+    <_BmbPatch>$(_BmbCoreVersion.Split('.')[2])</_BmbPatch>
+    <ApplicationVersion>$([MSBuild]::Add($([MSBuild]::Add($([MSBuild]::Multiply($(_BmbMajor), 10000)), $([MSBuild]::Multiply($(_BmbMinor), 100)))), $(_BmbPatch)))</ApplicationVersion>
+
+    <!-- HttpClientHandler is the managed SocketsHttpHandler, not NSURLSession: a node joined by code is dialled on the key the code pinned,
+         checked by SpkiPinRegistry's ServerCertificateCustomValidationCallback on every TLS handshake, as on Android and the desktops, and
+         App Transport Security has no say over a node with a self-signed, pinned key on the local network. -->
+    <UseNativeHttpHandler>false</UseNativeHttpHandler>
+    <!-- On a device everything is compiled ahead of time, and the interpreter is there only for code made at run time: Dapper builds its
+         row readers with Reflection.Emit, which a device without a JIT cannot run otherwise (the first query would throw). The simulator
+         runs on the JIT: an ahead-of-time simulator build is several GB of objects for nothing a device build does not show. -->
+    <MtouchInterpreter Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">-all</MtouchInterpreter>
+    <!-- A Release build would keep only the keys of the runtime's own messages ("net_http_ssl_connection_failed"): the screens show why a
+         join or a sync failed in words, as the blind app does since its run on the iPhone (+1 MB). -->
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
+    <CodesignEntitlements>Platforms\iOS\Entitlements.plist</CodesignEntitlements>
+    <!-- -p:BmbE2E=true: a Release build that still takes the end-to-end check's hooks (Services/FullE2E.cs); never for people. -->
+    <DefineConstants Condition="'$(BmbE2E)' == 'true'">$(DefineConstants);BMB_E2E</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The Android ordinary app's icon; iOS needs an opaque one, so the white background is filled in. -->
+    <MauiIcon Include="..\BeeMemoryBank.Mobile\Resources\AppIcon\appicon.svg" Link="Resources\AppIcon\appicon.svg" Color="#FFFFFF" ForegroundScale="0.62" />
+    <!-- Without a launch screen iOS runs the app in a letterboxed compatibility mode. -->
+    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#1c1017" BaseSize="128,128" />
+    <!-- The Android app's Bootstrap icons, larger: iOS tints the tab bar's icons itself. -->
+    <MauiImage Include="Resources\Images\*.svg" BaseSize="26,26" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Apple's privacy manifest: the file-time, boot-time, disk-space and user-defaults APIs the .NET runtime and MAUI use. -->
+    <BundleResource Include="Platforms\iOS\PrivacyInfo.xcprivacy" LogicalName="PrivacyInfo.xcprivacy" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Dapper's ValueTuple readers: the same trimmer roots as the Android apps (the reason is in that file). -->
+    <TrimmerRootDescriptor Include="..\BeeMemoryBank.BlindMobile\Linker.xml" Link="Linker.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The Android app's join by code, linked rather than copied: the same master-password exchange, key-pinned client and snapshot
+         import on both phones. -->
+    <Compile Include="..\BeeMemoryBank.Mobile\Services\NodeSetupService.cs" Link="Shared\NodeSetupService.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Maui.Controls" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Markdig" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The shared libraries and the vault: the set the Android ordinary app references, without the model (Embeddings: search by meaning
+         is not on the phone, see docs/full-node/IOS.md) and without Media (no photo upload yet). Never Hosting, AppPaths, Infrastructure,
+         BeeMemoryBank.Platforms.Apple (the macOS Keychain layer) or the blind copies' libraries. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+  </ItemGroup>
+
+</Project>

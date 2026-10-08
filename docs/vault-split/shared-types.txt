@@ -20,6 +20,7 @@ BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindPaths
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindPhoneReset
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindPhoneSync
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindReplicaSource
+BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindReplicaStats
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindRunReport
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.BlindStartup
 BeeMemoryBank.Blind.AppCore BeeMemoryBank.BlindMobile.Services.Blind.IBlindAppController

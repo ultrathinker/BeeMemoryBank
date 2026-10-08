@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Pages.WelcomePage"
+             Title="Welcome"
+             NavigationPage.HasNavigationBar="False">
+    <Grid RowDefinitions="*,Auto" Padding="24,48,24,24">
+        <ScrollView>
+            <VerticalStackLayout Spacing="16">
+                <Label Text="Bee Memory Bank" Style="{StaticResource Title}" />
+                <Label Text="Your notes, encrypted, on your own devices. This iPhone keeps a full copy you can read, search and edit, also without a connection, and syncs it with your computers and servers." />
+                <Label Style="{StaticResource Muted}" Text="Already use Bee Memory Bank on a computer? Join it: open Connect a device there and use its join code. Starting fresh? Create a new memory bank on this iPhone; you can connect your computers to it later." />
+            </VerticalStackLayout>
+        </ScrollView>
+        <VerticalStackLayout Grid.Row="1" Spacing="12">
+            <Button x:Name="JoinButton" Text="Join my memory bank" Clicked="OnJoin" AutomationId="JoinButton" />
+            <Button x:Name="CreateButton" Text="Create a new memory bank" Style="{StaticResource Secondary}" Clicked="OnCreate" AutomationId="CreateButton" />
+        </VerticalStackLayout>
+    </Grid>
+</ContentPage>

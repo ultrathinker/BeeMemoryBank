@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Pages.RecoveryKeyPage"
+             Title="Recovery key"
+             NavigationPage.HasBackButton="False">
+    <Grid RowDefinitions="*,Auto" Padding="24,8,24,24">
+        <ScrollView>
+            <VerticalStackLayout Spacing="12">
+                <Label Text="Write down your recovery key" FontSize="22" FontAttributes="Bold" />
+                <Label Text="It is the only way back in if you forget the master password. It is shown now and never again: the app does not keep it." />
+                <Border Style="{StaticResource Card}">
+                    <Label x:Name="KeyLabel" FontFamily="Menlo" FontSize="18" LineBreakMode="CharacterWrap" HorizontalTextAlignment="Center" AutomationId="RecoveryKey" />
+                </Border>
+                <Button x:Name="CopyButton" Text="Copy" Style="{StaticResource Secondary}" Clicked="OnCopy" />
+                <Label Style="{StaticResource Muted}" Text="A copy stays on this iPhone only and leaves the clipboard after two minutes. Keep the key on paper or in a password manager, away from this phone." />
+                <Grid ColumnDefinitions="*,Auto" Margin="0,12,0,0">
+                    <Label Text="I have written it down" VerticalOptions="Center" />
+                    <Switch x:Name="ConfirmSwitch" Grid.Column="1" Toggled="OnConfirmToggled" AutomationId="ConfirmSwitch" />
+                </Grid>
+            </VerticalStackLayout>
+        </ScrollView>
+        <Button Grid.Row="1" x:Name="ContinueButton" Text="Continue" IsEnabled="False" Clicked="OnContinue" AutomationId="ContinueButton" />
+    </Grid>
+</ContentPage>

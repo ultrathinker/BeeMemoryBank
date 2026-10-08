@@ -1,0 +1,43 @@
+name: Build iPhone apps
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    if: github.repository == 'ultrathinker/BeeMemoryBank'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install iOS workloads
+        run: dotnet workload install ios maui-ios
+
+      - name: Build unsigned simulator app
+        run: scripts/build-ios-blind.sh simulator Release
+
+      - name: Build unsigned regular simulator app
+        run: scripts/build-ios-full.sh simulator Release
+
+      - name: Build iPhone guard tests
+        run: dotnet build tests/BeeMemoryBank.BlindIos.Tests/BeeMemoryBank.BlindIos.Tests.csproj -c Release -m:2 -nr:false
+
+      - name: Build regular iPhone guard tests
+        run: dotnet build tests/BeeMemoryBank.FullIos.Tests/BeeMemoryBank.FullIos.Tests.csproj -c Release -m:2 -nr:false
+
+      - name: Test and scan the built blind app
+        run: BMB_REQUIRE_IOS_SCAN=1 dotnet test tests/BeeMemoryBank.BlindIos.Tests/BeeMemoryBank.BlindIos.Tests.csproj -c Release --no-build -- xUnit.MaxParallelThreads=2
+
+      - name: Test and scan the built regular app
+        run: BMB_REQUIRE_IOS_SCAN=1 dotnet test tests/BeeMemoryBank.FullIos.Tests/BeeMemoryBank.FullIos.Tests.csproj -c Release --no-build -- xUnit.MaxParallelThreads=2

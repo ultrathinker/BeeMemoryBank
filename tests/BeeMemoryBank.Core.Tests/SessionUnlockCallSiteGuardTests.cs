@@ -97,6 +97,22 @@ public class SessionUnlockCallSiteGuardTests
 
         ["mobile/BeeMemoryBank.Mobile/Platforms/Android/MainActivity.cs"] =
             "Android auto-unlock on resume, from the password held in the platform keystore.",
+
+        ["mobile/BeeMemoryBank.FullIos/Services/FullVault.cs"] =
+            "The iPhone app's vault: opens the vault it has just created or joined, and the typed master password.",
+
+        ["mobile/BeeMemoryBank.FullIos/Services/QuickUnlock.cs"] =
+            "iPhone Face ID / Touch ID unlock via UnlockWithDek: the master DEK unwrapped with a Keychain key only the biometry " +
+            "releases, checked against the sentinel before it is installed. Unlocking IS the feature.",
+
+        ["mobile/BeeMemoryBank.FullIos/Services/FullSelfCheck.cs"] =
+            "The iPhone app's measuring run: unlocks a scratch vault of its own, in a composition of its own, never the app's.",
+
+        ["mobile/BeeMemoryBank.FullIos/Pages/UnlockPage.xaml.cs"] =
+            "The iPhone app's unlock screen (calls FullVault.UnlockAsync with the typed password).",
+
+        ["mobile/BeeMemoryBank.FullIos/FullE2E.cs"] =
+            "The iPhone app's end-to-end hooks (Debug and E2E builds only): unlock the throwaway test vault through FullVault.",
     };
 
     [Fact]

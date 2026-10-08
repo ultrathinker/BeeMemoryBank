@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The iPhone blind app's guards and the logic of its platform-free files. The app itself (net10.0-ios) builds only on a Mac with Xcode;
+    its files that do not touch iOS (Services/*.cs, and the two files it links from the desktop copies) are compiled here for net10.0 and
+    tested on any OS. The boundary tests read the app's project file and the golden list everywhere, and the built .app where there is one.
+  -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- What the app carries: Blind.AppCore and, through it, the shared libraries and the phone's client. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Blind.AppCore\BeeMemoryBank.Blind.AppCore.csproj" />
+    <!-- The Vault is referenced by the TESTS only: the boundary control needs the real Vault assembly to prove that the scan flags it. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindIos\Services\*.cs" Link="App\%(Filename)%(Extension)" />
+    <Compile Include="..\..\desktop\BeeMemoryBank.BlindDesktop\Scheduling\BlindTimerScheduler.cs" Link="App\BlindTimerScheduler.cs" />
+    <Compile Include="..\..\desktop\BeeMemoryBank.BlindDesktop.MacOS\Storage\MacOsBlindStateStore.cs" Link="App\MacOsBlindStateStore.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The assembly-boundary scanner and the vault boundary (BMB-99): one source in tests/shared, linked into every project that proves the boundary. -->
+    <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
+    <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+  </ItemGroup>
+
+</Project>

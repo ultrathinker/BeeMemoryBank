@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.BlindIos.Pages.BlindHomePage"
+             Title="Blind copy"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="16" MaximumWidthRequest="520">
+
+            <!-- What went wrong, when the screen could not be filled; the way out is always Disconnect and wipe at the bottom -->
+            <Label x:Name="StatusErrorLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap" />
+            <Label x:Name="StartErrorLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap" />
+            <Label x:Name="KeyStoreLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
+            <Label x:Name="FailureLabel" IsVisible="False" TextColor="{StaticResource WarningColor}" LineBreakMode="WordWrap" />
+            <Label x:Name="NoticeLabel" IsVisible="False" FontSize="12" LineBreakMode="WordWrap" />
+
+            <!-- State -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="6">
+                    <Label Text="State" FontAttributes="Bold" />
+                    <Label x:Name="NameLabel" />
+                    <Label x:Name="NodeLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" />
+                    <Label x:Name="PairLabel" LineBreakMode="WordWrap" />
+                    <Label x:Name="LoadLabel" LineBreakMode="WordWrap" />
+                    <Label x:Name="NotesLabel" AutomationId="BlindNotesLabel" />
+                    <Label x:Name="SyncLabel" AutomationId="BlindSyncLabel" />
+                    <Button x:Name="SyncNowButton" Text="Sync now" Style="{StaticResource PrimaryButton}" Clicked="OnSyncNowClicked" />
+                    <Label x:Name="BackupLabel" />
+                    <ProgressBar x:Name="JobProgress" IsVisible="False" ProgressColor="{StaticResource PrimaryColor}" />
+                    <Label x:Name="JobLabel" IsVisible="False" FontSize="12" />
+                    <Label x:Name="BackgroundLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Label x:Name="AlertsLabel" IsVisible="False" FontSize="12" TextColor="{StaticResource WarningColor}" LineBreakMode="WordWrap" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Codes -->
+            <Frame x:Name="CodesFrame" BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="1. Add this iPhone on the computer" FontAttributes="Bold" />
+                    <Label Text="On the computer, open Blind nodes, choose Add Android blind copy (an iPhone is added the same way), and scan or paste this code. It carries this iPhone's key and a one-time secret; show it only to your own computer."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Image x:Name="PhoneCodeImage" HeightRequest="240" WidthRequest="240" HorizontalOptions="Center" BackgroundColor="White" />
+                    <Label x:Name="PhoneCodeLabel" FontSize="11" LineBreakMode="WordWrap" />
+                    <Button x:Name="CopyCodeButton" Text="Copy this iPhone's code" Clicked="OnCopyPhoneCodeClicked" />
+                    <Button x:Name="RePairButton" Text="Re-pair…" IsVisible="False" Clicked="OnRePairClicked" />
+
+                    <Label Text="2. Scan or paste the code the computer shows back" FontAttributes="Bold" Margin="0,12,0,0" />
+                    <Label Text="Scan its QR code with the Camera app (it opens this app), or copy it and paste it here."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Entry x:Name="CallCodeEntry" AutomationId="BlindCallCodeEntry" Placeholder="bmb-blind-call:?…"
+                           IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <HorizontalStackLayout Spacing="8">
+                        <Button x:Name="PasteButton" Text="Paste" Style="{StaticResource SecondaryButton}" Clicked="OnPasteClicked" />
+                        <Button x:Name="ConnectButton" Text="Connect" Style="{StaticResource PrimaryButton}" Clicked="OnConnectClicked" />
+                    </HorizontalStackLayout>
+                    <Label x:Name="CallErrorLabel" TextColor="{StaticResource ErrorColor}" IsVisible="False" LineBreakMode="WordWrap" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Backups -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Backups" FontAttributes="Bold" />
+                    <Label Text="Encrypted with this iPhone's backup key; the computer can open them with the master password. A backup runs while the app is open, or when iOS grants it background time."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Label x:Name="KeyLostLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap" />
+                    <Button x:Name="BackupNowButton" Text="Back up now" Style="{StaticResource PrimaryButton}" Clicked="OnBackupNowClicked" />
+                    <Button x:Name="SaveToButton" Text="Save the latest backup to…" Clicked="OnSaveToClicked" />
+                    <HorizontalStackLayout Spacing="8">
+                        <Label Text="Schedule" VerticalOptions="Center" />
+                        <Picker x:Name="SchedulePicker" WidthRequest="160" SelectedIndexChanged="OnScheduleChanged" />
+                    </HorizontalStackLayout>
+                    <Label x:Name="BackupsLabel" FontSize="12" LineBreakMode="WordWrap" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Log -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="6">
+                    <Label Text="Log" FontAttributes="Bold" />
+                    <Label x:Name="LogLabel" FontSize="11" LineBreakMode="WordWrap" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Danger -->
+            <Frame BorderColor="{StaticResource ErrorColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Disconnect and wipe" FontAttributes="Bold" TextColor="{StaticResource ErrorColor}" />
+                    <Label Text="Deletes this copy, its backups on the iPhone and its keys. Revoke the iPhone on the computer too. Backups you saved elsewhere stay where you saved them."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Button Text="Disconnect and wipe…" BackgroundColor="Transparent" TextColor="{StaticResource ErrorColor}" Clicked="OnWipeClicked" />
+                </VerticalStackLayout>
+            </Frame>
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

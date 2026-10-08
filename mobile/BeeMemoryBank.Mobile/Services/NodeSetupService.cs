@@ -255,7 +255,11 @@ public class NodeSetupService
             UpdatedAt = now,
             // The host just proved it holds the master password by handing over a slot it opens,
             // and it records this phone as a superadmin for the same reason (JoinAuthority, BMB-42).
-            IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId)
+            IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId),
+            // The key the code pinned is the key this phone dials the node by from now on (SpkiPinRegistry), as the desktop
+            // setup and `bmb join --code` record it: the node's certificate is self-signed or from its own local CA, which no
+            // ordinary check on the phone trusts, so without the pin every sync after the join would fail.
+            TlsSpki = code?.SpkiPin
         });
 
         _logger.LogInformation("Starting snapshot import from {Url}", remoteUrl);

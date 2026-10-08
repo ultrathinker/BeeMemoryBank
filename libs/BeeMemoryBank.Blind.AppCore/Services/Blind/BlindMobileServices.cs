@@ -159,6 +159,8 @@ public static class BlindMobileServices
 
         services.AddSingleton<BlindAppController>();
         services.AddSingleton<IBlindAppController>(sp => sp.GetRequiredService<BlindAppController>());
+        // How many notes the copy holds, for a host's screen (row count only, nothing is opened).
+        services.AddSingleton(sp => new BlindReplicaStats(sp.GetRequiredService<BlindStartup>(), sp.GetRequiredService<IDbConnectionFactory>()));
 
         return services;
     }

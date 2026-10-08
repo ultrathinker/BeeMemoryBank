@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+	</array>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>XSAppIconAssets</key>
+	<string>Assets.xcassets/appicon.appiconset</string>
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
+	<!-- Background rounds (IosBlindBackground): a short sync when iOS grants app refresh time, and the first load or a due backup when
+	     it grants a processing window. The identifiers must equal IosBlindBackgroundPlan's. No other background mode: a blind copy keeps
+	     no socket open and listens on no port. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.beememorybank.blind.sync</string>
+		<string>com.beememorybank.blind.work</string>
+	</array>
+	<!-- iOS asks before an app may reach a device on the local network; the node a copy calls is often one. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>The blind copy calls the computer or server that holds your memory bank. When that node is on your home network, the copy needs to reach it there.</string>
+	<!-- The computer shows its answer as a QR code of a bmb-blind-call: link: the Camera opens it in this app, which then connects as if
+	     the code had been pasted (the code is only accepted when it was made for this phone's own pairing secret). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.beememorybank.blind.call-code</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>bmb-blind-call</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

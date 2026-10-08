@@ -1,0 +1,12 @@
+# The product assemblies the iPhone full app (mobile/BeeMemoryBank.FullIos) carries, one per line, sorted.
+# FullIosBoundaryTests holds the app's project-reference closure to this list on any OS, and the BeeMemoryBank.* assemblies of every built
+# .app (and of the folders named in BMB_SCAN_DIRS) to it on a Mac. Change it only when the app is meant to carry another product assembly
+# (BeeMemoryBank.Embeddings the day search by meaning comes to the phone); never Hosting, Hosting.AspNetCore, AppPaths, Infrastructure,
+# Platforms.Apple or a library of the blind copies.
+BeeMemoryBank.Core
+BeeMemoryBank.Crypto
+BeeMemoryBank.FullIos
+BeeMemoryBank.Search
+BeeMemoryBank.Storage
+BeeMemoryBank.Sync
+BeeMemoryBank.Vault

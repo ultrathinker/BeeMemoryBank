@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Pages.NotePage"
+             Title="Note">
+    <ContentPage.ToolbarItems>
+        <ToolbarItem x:Name="EditItem" Text="Edit" Clicked="OnEdit" AutomationId="EditButton" />
+        <ToolbarItem Text="Move to trash" Order="Secondary" Clicked="OnDelete" />
+    </ContentPage.ToolbarItems>
+    <Grid RowDefinitions="Auto,*" Padding="16,4,16,0">
+        <VerticalStackLayout Spacing="2" Padding="4,0,4,8">
+            <Label x:Name="TitleLabel" FontSize="24" FontAttributes="Bold" AutomationId="NoteTitle" />
+            <Label x:Name="MetaLabel" Style="{StaticResource Muted}" FontSize="13" />
+        </VerticalStackLayout>
+        <WebView Grid.Row="1" x:Name="Body" BackgroundColor="Transparent" Navigating="OnNavigating" />
+        <!-- A note protected by its own passphrase: nothing of it is shown until the passphrase is given. -->
+        <Border Grid.Row="1" x:Name="LockedCard" Style="{StaticResource Card}" VerticalOptions="Start" IsVisible="False">
+            <VerticalStackLayout Spacing="10">
+                <Label Text="This note has its own passphrase." FontAttributes="Bold" />
+                <Label x:Name="HintLabel" Style="{StaticResource Muted}" IsVisible="False" />
+                <Entry x:Name="PassphraseEntry" IsPassword="True" Placeholder="Passphrase of this note" ReturnType="Go" Completed="OnOpenProtected" />
+                <Label x:Name="PassphraseError" Style="{StaticResource Error}" IsVisible="False" />
+                <Button Text="Open" Clicked="OnOpenProtected" />
+            </VerticalStackLayout>
+        </Border>
+    </Grid>
+</ContentPage>

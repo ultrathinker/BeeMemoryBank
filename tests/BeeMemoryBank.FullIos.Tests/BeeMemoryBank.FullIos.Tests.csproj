@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The iPhone full app's guards and the logic of its platform-free files. The app itself (net10.0-ios) builds only on a Mac with Xcode;
+    its files that do not touch iOS (Services/*.cs, and the Android app's join it links) are compiled here for net10.0 and tested on any
+    OS. The boundary tests read the app's project file and the golden list everywhere, and the built .app where there is one.
+  -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- What the app carries: the vault and, through it, the shared libraries. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\mobile\BeeMemoryBank.FullIos\Services\*.cs" Link="App\%(Filename)%(Extension)" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.Mobile\Services\NodeSetupService.cs" Link="App\NodeSetupService.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Markdig" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The assembly-boundary scanner (BMB-99): one source in tests/shared, linked into every project that proves a boundary. -->
+    <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
+    <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+  </ItemGroup>
+
+</Project>

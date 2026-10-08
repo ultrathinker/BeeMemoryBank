@@ -22,6 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### 2.5.0: the iPhone apps (2026-10-08)
+
+No sync protocol change (still 3) and no database migration. The macOS, Windows, and Android blind apps are unaffected except for the shared blind-copy status types; the Android ordinary app also receives the join-by-code fix below.
+
+- **The iPhone blind copy.** `Bee Memory Bank Blind` is an iOS app that keeps an encrypted replica, pairs through a computer, syncs,
+  makes backups and never holds or asks for the master password. Its Keychain secrets are readable only after the first device unlock,
+  never synchronized or restored onto another device; its data folder is excluded from device backups; and it uses pinned TLS like the
+  other blind copies. The app has a local three-day no-contact notification and accepts the pairing call code by paste or QR link. It
+  runs while open and requests iOS background time, but iOS decides when to grant it; background sync and long work are not guaranteed
+  like Android's WorkManager jobs. It is source-only for now: build it on a Mac with Xcode and the .NET iOS workload. A manual macOS
+  workflow builds the unsigned simulator app and scans the built output to keep Vault code out.
+- **More useful blind-copy status.** The shared `Blind.AppCore` reports the number of replicated notes and retains the text of a failed
+  sync's exception (`BlindReplicaStats` and its failed-sync reason) so the iPhone screen can explain a failure in words instead of an opaque runtime resource key.
+- **The iPhone regular app.** `Bee Memory Bank` is a full-node app with the vault on the phone: create a vault with a recovery key shown once or join a computer with its pinned join code, unlock with the master password or Face ID / Touch ID, and read and edit Markdown rendered locally with no network loads. It syncs as a client while open and once when leaving; iOS makes it a node that calls and cannot be called. It is source-only for now; see `docs/full-node/IOS.md`.
+
+### Fixed
+
+- **Android ordinary app: join by code.** A node that joined through a computer's pinned join code did not retain that pin on the computer's whitelist row, so later sync with a self-signed computer certificate failed. The joined row now retains the code's pin, as the desktop and CLI join flows do.
+
 #### 2.4.0: ready-made Docker images, alarms for a silent blind node, `bmb join` takes the snapshot (2026-10-07)
 
 No sync protocol change (still 3) and no database migration: nodes of 2.0.x to 2.3.0 keep syncing with 2.4.0 in both directions.

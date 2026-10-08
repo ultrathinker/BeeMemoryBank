@@ -80,6 +80,13 @@ API agent keys use a separate wrapping mechanism:
 - The Master DEK exists only in memory during an active session
 - Salt and wrapped key material are stored per-slot for offline brute-force resistance
 
+### iPhone Regular App
+
+The source-only iPhone regular app keeps the vault in its app container, excluded from iCloud and computer backups. Its master password
+is never stored; the Master DEK exists only while the app is unlocked. Optional Face ID / Touch ID unlock uses a random key in the
+device-only Keychain, gated by the current biometric set, to wrap the DEK rather than storing the password. The app has no listener or
+server surface: it calls pinned peers while open and for the short time iOS grants as it leaves the foreground.
+
 ### Online DEK Rotation
 
 Replacing the Master DEK across an entire network without exporting/re-importing the vault. Reasons to rotate: suspected compromise of the current DEK, periodic key hygiene, or rotating off material that may have transited insecure paths.

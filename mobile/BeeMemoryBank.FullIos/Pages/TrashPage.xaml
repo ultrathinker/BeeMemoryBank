@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:services="clr-namespace:BeeMemoryBank.FullIos.Services"
+             x:Class="BeeMemoryBank.FullIos.Pages.TrashPage"
+             Title="Trash">
+    <CollectionView x:Name="List" SelectionMode="None">
+        <CollectionView.Header>
+            <Label Style="{StaticResource Muted}" Padding="20,8,20,8"
+                   Text="Notes deleted on any of your devices. Restoring one makes a copy named [RESTORED] at the top level; emptying the trash is done on a computer." />
+        </CollectionView.Header>
+        <CollectionView.EmptyView>
+            <Label Text="The trash is empty." Style="{StaticResource Muted}" HorizontalTextAlignment="Center" Margin="24,48" />
+        </CollectionView.EmptyView>
+        <CollectionView.ItemTemplate>
+            <DataTemplate x:DataType="services:TrashItem">
+                <Grid ColumnDefinitions="*,Auto" Padding="20,10" MinimumHeightRequest="56">
+                    <VerticalStackLayout VerticalOptions="Center" Spacing="2">
+                        <Label Text="{Binding Title}" FontSize="17" LineBreakMode="TailTruncation" />
+                        <Label Text="{Binding Path}" Style="{StaticResource Muted}" FontSize="12" />
+                    </VerticalStackLayout>
+                    <Button Grid.Column="1" Text="Restore" Style="{StaticResource Secondary}" MinimumHeightRequest="40" FontSize="15" Clicked="OnRestore" />
+                </Grid>
+            </DataTemplate>
+        </CollectionView.ItemTemplate>
+    </CollectionView>
+</ContentPage>

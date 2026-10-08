@@ -101,7 +101,7 @@ If you've ever wished your AI assistant could remember the work it did with you 
 | :arrows_counterclockwise: | **Multi-Node Sync** | Event sourcing, Lamport clocks, Ed25519-signed events, near-realtime push-on-save sync between public nodes, works behind NAT |
 | :framed_picture: | **Encrypted Images** | Drag & drop, paste, or upload images in the editor — encrypted with per-image keys, decrypted on the fly |
 | :globe_with_meridians: | **Web UI** | Dark theme, Markdown editor (EasyMDE), folder tree, tag management, activity feed |
-| :iphone: | **Mobile App** | .NET MAUI, biometric unlock, offline-first — **Android available now; iOS coming** |
+| :iphone: | **Mobile Apps** | .NET MAUI, biometric unlock, offline-first — Android is available now; the iPhone blind and regular apps are source-only previews |
 | :keyboard: | **CLI** | `bmb` command-line tool for init, join, unlock, article management, snapshots, `user reset-password` |
 | :jigsaw: | **REST API** | 33 endpoint groups, OpenAPI support, agent bearer auth with auto-unlock |
 | :file_zip: | **Data Export** | Download folders or articles as ZIP archives with all attached images |
@@ -273,7 +273,7 @@ Data is stored in `./data` on the host. To customize ports, copy `.env.example` 
 
 Docker publishes the Web port on `127.0.0.1` only, so the login page is reachable from this computer and nobody else. To expose it on purpose (a trusted LAN, behind TLS), set `BMB_WEB_BIND=0.0.0.0` in `.env`. The API port (5300, which also serves `/mcp` for AI assistants) is not published at all. To let AI assistants on this computer reach the node, uncomment the two marked lines in `docker-compose.yml`; for assistants on other computers use `docker-compose.reverse-proxy.yml` behind your own proxy. Until then the Profile page tells you that assistants cannot reach the node yet, rather than printing an address that does not work. Details: [docs/deployment.md](docs/deployment.md).
 
-### macOS app, blind-copy apps and the Android blind app
+### macOS app and blind-copy apps
 
 Every release page also carries these downloads:
 
@@ -283,10 +283,44 @@ Every release page also carries these downloads:
 | `BeeMemoryBank-Blind-<version>-macos-arm64.zip` | The blind copy for macOS: a menu-bar app that keeps an encrypted copy of a memory bank (it never has the master password). Same signing. |
 | `BeeMemoryBank-Blind-<version>-win-x64.zip` | The blind copy for Windows: unzip anywhere and run `BeeMemoryBank.BlindDesktop.exe`; it lives in the tray. Not code-signed yet, so SmartScreen may warn: choose **More info → Run anyway**. |
 | `BeeMemoryBank-Blind-<version>-android.apk` | The blind copy for Android, signed with the project's release key. Allow installing from this source once when Android asks. |
+| iPhone blind app | Source-only for now; there is no download yet. See the build and distribution notes below. |
+| iPhone regular app | Source-only for now; there is no download yet. See the build and distribution notes below. |
 
 A blind copy is paired with a node in two steps shown in its window: it shows a code, the node (the full app or the web page "Blind nodes")
 answers with a call code, and you paste that back. The first load starts right after pairing and does not wait for the charger or a particular network.
 Where each app keeps its data and what it sends over the network: [PRIVACY.md](PRIVACY.md).
+
+### iPhone blind app (source-only for now)
+
+The iPhone app is a blind copy: it keeps an encrypted replica, pairs and syncs with a node, and never holds or asks for the master
+password. It is not a full-node client. In particular, iOS does not guarantee periodic background sync, cannot run a large first load or
+backup to completion while the app is closed, and does not restart the app after a reboot. The exact comparison with Android is in
+[the iPhone blind-copy guide](docs/blind-node/IOS.md#what-ios-cannot-do-that-android-does).
+
+Build it from source on a Mac with Xcode 26.x and the .NET iOS workload:
+
+```bash
+dotnet workload install ios maui-ios
+scripts/build-ios-blind.sh simulator Release
+```
+
+There is no download for the iPhone app yet. Apple apps reach people through TestFlight, the App Store, or ad hoc distribution; see
+[the distribution guide](docs/blind-node/IOS-DISTRIBUTION.md) for the owner-only signing and release steps.
+
+### iPhone regular app (source-only for now)
+
+The regular iPhone app is a full node with the vault on the phone. It opens with the master password or Face ID / Touch ID, reads and
+edits Markdown locally, and syncs as a client with the computers and servers in its network. iOS makes it a node that calls and cannot
+be called: it has no listener, web server, or MCP server, and changes from other nodes arrive when the app next opens. Build it from
+source on a Mac with Xcode 26.x and the .NET iOS workload:
+
+```bash
+dotnet workload install ios maui-ios
+scripts/build-ios-full.sh simulator
+```
+
+There is no download for this app yet. Its keys, lock behavior, sync limits, build instructions, and simulator check are in
+[the iPhone regular-app guide](docs/full-node/IOS.md); the shared distribution guide covers the owner-only signing and release steps.
 
 The node a blind copy calls can be a Docker blind node or an ordinary full node — for example your server behind a
 reverse proxy with a Let's Encrypt certificate. Mark it under Admin → Trusted Nodes → "Let blind copies call this node"
@@ -824,7 +858,7 @@ To set expectations and help you decide if BeeMemoryBank fits your workflow:
 - **Not a Notion replacement** — no real-time collaboration, no databases/views, no block editor. Markdown-first by design.
 - **Not an Obsidian-style Zettelkasten** — no manual `[[wiki links]]`. Article connections emerge from shared concept tags instead, which is better for AI agents but a different mental model if you're coming from Obsidian.
 - **Not a multi-tenant SaaS platform** — team vault with a trusted superadmin, not hostile-tenant isolation. See [Security Model](#shield-security-model) below.
-- **Not cross-platform on mobile yet** — Android only today; **iOS coming**.
+- **Not fully distributed on mobile yet** — Android is available today; the iPhone blind and regular apps are source-only previews.
 - **Not an enterprise-backed product** — single maintainer, actively developed. Bus factor is real; plan accordingly if you depend on it for critical data.
 
 If these are dealbreakers, Obsidian / Logseq / AnyType / Notion may suit you better. If they aren't — read on.
@@ -856,7 +890,7 @@ If these are dealbreakers, Obsidian / Logseq / AnyType / Notion may suit you bet
 - [x] Emergent concept-tag knowledge graph (D3.js force-directed, automatic bidirectional connections, no manual wiki-links)
 - [x] Semantic search powered by ONNX multilingual-e5-small (384-dim real ML embeddings, self-hosted, multilingual)
 - [x] CI/CD pipeline (GitHub Actions)
-- [ ] iOS app (coming)
+- [ ] iPhone blind and regular apps (source-only previews: both build and pass simulator checks; neither is distributed yet; [blind](docs/blind-node/IOS.md), [regular](docs/full-node/IOS.md))
 
 ---
 

@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Application xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.App">
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- The product's crimson, in a light and a dark version: every colour follows the system's appearance. -->
+            <Color x:Key="LightBackground">#FFFFFF</Color>
+            <Color x:Key="DarkBackground">#1C1017</Color>
+            <Color x:Key="LightSurface">#F5F0F2</Color>
+            <Color x:Key="DarkSurface">#2A1520</Color>
+            <Color x:Key="LightText">#1C1017</Color>
+            <Color x:Key="DarkText">#E8D8DF</Color>
+            <Color x:Key="LightMuted">#6E5A64</Color>
+            <Color x:Key="DarkMuted">#A88A97</Color>
+            <Color x:Key="LightAccent">#C2185B</Color>
+            <Color x:Key="DarkAccent">#F06292</Color>
+            <Color x:Key="LightBorder">#E3D7DD</Color>
+            <Color x:Key="DarkBorder">#4A2838</Color>
+            <Color x:Key="DangerColor">#D32F2F</Color>
+
+            <Style TargetType="ContentPage" ApplyToDerivedTypes="True">
+                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource LightBackground}, Dark={StaticResource DarkBackground}}" />
+            </Style>
+            <Style TargetType="NavigationPage">
+                <Setter Property="BarBackgroundColor" Value="{AppThemeBinding Light={StaticResource LightBackground}, Dark={StaticResource DarkBackground}}" />
+                <Setter Property="BarTextColor" Value="{AppThemeBinding Light={StaticResource LightText}, Dark={StaticResource DarkText}}" />
+            </Style>
+            <Style TargetType="Label">
+                <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource LightText}, Dark={StaticResource DarkText}}" />
+                <Setter Property="FontSize" Value="16" />
+            </Style>
+            <Style TargetType="Label" x:Key="Title">
+                <Setter Property="FontSize" Value="28" />
+                <Setter Property="FontAttributes" Value="Bold" />
+            </Style>
+            <Style TargetType="Label" x:Key="Muted">
+                <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource LightMuted}, Dark={StaticResource DarkMuted}}" />
+                <Setter Property="FontSize" Value="14" />
+            </Style>
+            <Style TargetType="Label" x:Key="Error">
+                <Setter Property="TextColor" Value="{StaticResource DangerColor}" />
+                <Setter Property="FontSize" Value="14" />
+            </Style>
+            <Style TargetType="Label" x:Key="Section">
+                <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource LightMuted}, Dark={StaticResource DarkMuted}}" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="FontAttributes" Value="Bold" />
+                <Setter Property="Margin" Value="0,16,0,4" />
+            </Style>
+            <Style TargetType="Entry">
+                <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource LightText}, Dark={StaticResource DarkText}}" />
+                <Setter Property="PlaceholderColor" Value="{AppThemeBinding Light={StaticResource LightMuted}, Dark={StaticResource DarkMuted}}" />
+                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource LightSurface}, Dark={StaticResource DarkSurface}}" />
+                <Setter Property="FontSize" Value="17" />
+                <Setter Property="MinimumHeightRequest" Value="48" />
+            </Style>
+            <Style TargetType="Editor">
+                <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource LightText}, Dark={StaticResource DarkText}}" />
+                <Setter Property="PlaceholderColor" Value="{AppThemeBinding Light={StaticResource LightMuted}, Dark={StaticResource DarkMuted}}" />
+                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource LightSurface}, Dark={StaticResource DarkSurface}}" />
+                <Setter Property="FontSize" Value="16" />
+            </Style>
+            <Style TargetType="SearchBar">
+                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource LightBackground}, Dark={StaticResource DarkBackground}}" />
+                <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource LightText}, Dark={StaticResource DarkText}}" />
+                <Setter Property="PlaceholderColor" Value="{AppThemeBinding Light={StaticResource LightMuted}, Dark={StaticResource DarkMuted}}" />
+                <Setter Property="CancelButtonColor" Value="{AppThemeBinding Light={StaticResource LightAccent}, Dark={StaticResource DarkAccent}}" />
+            </Style>
+            <Style TargetType="Button">
+                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource LightAccent}, Dark={StaticResource DarkAccent}}" />
+                <Setter Property="TextColor" Value="{AppThemeBinding Light=White, Dark={StaticResource DarkBackground}}" />
+                <Setter Property="FontSize" Value="17" />
+                <Setter Property="FontAttributes" Value="Bold" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="MinimumHeightRequest" Value="52" />
+                <Setter Property="VisualStateManager.VisualStateGroups">
+                    <VisualStateGroupList>
+                        <VisualStateGroup x:Name="CommonStates">
+                            <VisualState x:Name="Normal" />
+                            <VisualState x:Name="Disabled">
+                                <VisualState.Setters>
+                                    <Setter Property="Opacity" Value="0.45" />
+                                </VisualState.Setters>
+                            </VisualState>
+                        </VisualStateGroup>
+                    </VisualStateGroupList>
+                </Setter>
+            </Style>
+            <Style TargetType="Button" x:Key="Secondary">
+                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource LightSurface}, Dark={StaticResource DarkSurface}}" />
+                <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource LightAccent}, Dark={StaticResource DarkAccent}}" />
+                <Setter Property="FontSize" Value="17" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="MinimumHeightRequest" Value="52" />
+            </Style>
+            <Style TargetType="Button" x:Key="Danger">
+                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource LightSurface}, Dark={StaticResource DarkSurface}}" />
+                <Setter Property="TextColor" Value="{StaticResource DangerColor}" />
+                <Setter Property="FontSize" Value="17" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="MinimumHeightRequest" Value="52" />
+            </Style>
+            <Style TargetType="Border" x:Key="Card">
+                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource LightSurface}, Dark={StaticResource DarkSurface}}" />
+                <Setter Property="Stroke" Value="{AppThemeBinding Light={StaticResource LightBorder}, Dark={StaticResource DarkBorder}}" />
+                <Setter Property="StrokeShape" Value="RoundRectangle 12" />
+                <Setter Property="Padding" Value="16" />
+            </Style>
+            <Style TargetType="BoxView" x:Key="Separator">
+                <Setter Property="Color" Value="{AppThemeBinding Light={StaticResource LightBorder}, Dark={StaticResource DarkBorder}}" />
+                <Setter Property="HeightRequest" Value="1" />
+            </Style>
+            <Style TargetType="Switch">
+                <Setter Property="OnColor" Value="{AppThemeBinding Light={StaticResource LightAccent}, Dark={StaticResource DarkAccent}}" />
+            </Style>
+            <Style TargetType="ActivityIndicator">
+                <Setter Property="Color" Value="{AppThemeBinding Light={StaticResource LightAccent}, Dark={StaticResource DarkAccent}}" />
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
