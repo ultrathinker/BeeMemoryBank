@@ -28,6 +28,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// NodeSetupService.JoinAsync does: call /api/join first (to register on the remote's whitelist
 /// and fetch the key slot), THEN drive SnapshotJoinClient for the actual data transfer.
 /// </summary>
+[Collection(ProcessWideRateLimiterCollection.Name)]
 public class SnapshotJoinClientTests : IAsyncLifetime
 {
     private const string MasterPassword = "mobileJoinPassword123";

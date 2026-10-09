@@ -40,6 +40,141 @@ public class OwnerOnlyFileTests : IDisposable
         Directory.GetFiles(_dir).Should().ContainSingle();
     }
 
+    /// <summary>
+    /// BMB-188: several starts creating the same secret at the same instant. On Linux and macOS
+    /// <c>File.Move(overwrite: false)</c> is a check and then a rename that replaces, so writers that all saw no file
+    /// all "won", each later one silently replacing the one before: a start went on with bytes that were no longer on
+    /// disk. Exactly one may win, and the file holds what that one wrote.
+    /// </summary>
+    [Fact]
+    public void WriteNew_ManyAtOnce_ExactlyOneWins_AndTheFileHoldsWhatItWrote()
+    {
+        const int rounds = 200, writers = 4;
+        for (var round = 0; round < rounds; round++)
+        {
+            var path = Path.Combine(_dir, $"race-{round}.bin");
+            using var barrier = new Barrier(writers);
+            var won = new bool[writers];
+
+            var tasks = Enumerable.Range(0, writers).Select(i => Task.Factory.StartNew(() =>
+            {
+                barrier.SignalAndWait();
+                try
+                {
+                    OwnerOnlyFile.WriteNew(path, [(byte)i]);
+                    won[i] = true;
+                }
+                catch (IOException)
+                {
+                    // Lost: the file was already there.
+                }
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+            Task.WaitAll(tasks, TimeSpan.FromSeconds(30)).Should().BeTrue();
+
+            won.Count(w => w).Should().Be(1, $"round {round}: exactly one writer creates the file");
+            File.ReadAllBytes(path).Should().Equal([(byte)Array.IndexOf(won, true)], $"round {round}: the file holds the winner's bytes");
+        }
+
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty("a loser removes its temp file");
+    }
+
+    [Fact]
+    public void MoveNoReplace_RenamesTheFile_AndKeepsItsOwnerOnlyMode()
+    {
+        var from = Path.Combine(_dir, "secret.bin.tmp");
+        var to = Path.Combine(_dir, "secret.bin");
+        using (var file = OwnerOnlyFile.CreateNew(from)) file.Write([1, 2, 3]);
+
+        OwnerOnlyFile.MoveNoReplace(from, to);
+
+        Directory.GetFiles(_dir).Should().Equal(to);
+        File.ReadAllBytes(to).Should().Equal(1, 2, 3);
+        if (!OperatingSystem.IsWindows())
+            File.GetUnixFileMode(to).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    [Fact]
+    public void MoveNoReplace_OntoAnExistingFile_Throws_AndTouchesNeither()
+    {
+        var from = Path.Combine(_dir, "new.bin");
+        var to = Path.Combine(_dir, "existing.bin");
+        File.WriteAllBytes(from, [1]);
+        File.WriteAllBytes(to, [9]);
+
+        var act = () => OwnerOnlyFile.MoveNoReplace(from, to);
+
+        act.Should().Throw<IOException>();
+        File.ReadAllBytes(to).Should().Equal(9);
+        File.ReadAllBytes(from).Should().Equal(1);
+    }
+
+    /// <summary>A dangling symlink at the final name is something there: not replaced, and nothing written through it.</summary>
+    [Fact]
+    public void MoveNoReplace_OntoADanglingSymlink_Throws_AndWritesNothingThroughIt()
+    {
+        if (OperatingSystem.IsWindows()) return; // symlinks need privileges there
+        var from = Path.Combine(_dir, "new.bin");
+        var to = Path.Combine(_dir, "secret.bin");
+        var pointedAt = Path.Combine(_dir, "elsewhere.bin");
+        File.WriteAllBytes(from, [1]);
+        File.CreateSymbolicLink(to, pointedAt);
+
+        var act = () => OwnerOnlyFile.MoveNoReplace(from, to);
+
+        act.Should().Throw<IOException>();
+        File.Exists(pointedAt).Should().BeFalse("the link was not followed");
+        new FileInfo(to).LinkTarget.Should().Be(pointedAt, "the link was not replaced");
+    }
+
+    /// <summary>Any refusal other than "already there" goes to File.Move, which reports it in its own words.</summary>
+    [Fact]
+    public void MoveNoReplace_OfAMissingFile_ThrowsFileNotFound()
+    {
+        var act = () => OwnerOnlyFile.MoveNoReplace(Path.Combine(_dir, "missing.bin"), Path.Combine(_dir, "secret.bin"));
+
+        act.Should().Throw<FileNotFoundException>();
+        Directory.GetFiles(_dir).Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// BMB-188, without the write and the flush around it: the narrowest form of the race, so a regression shows in the
+    /// first rounds. Every mover has its own file; exactly one gets the name, and the losers keep theirs.
+    /// </summary>
+    [Fact]
+    public void MoveNoReplace_ManyAtOnce_ExactlyOneGetsTheName()
+    {
+        const int rounds = 300, movers = 8;
+        for (var round = 0; round < rounds; round++)
+        {
+            var to = Path.Combine(_dir, $"race-{round}.bin");
+            var from = Enumerable.Range(0, movers).Select(i => Path.Combine(_dir, $"race-{round}-{i}.tmp")).ToArray();
+            for (var i = 0; i < movers; i++) File.WriteAllBytes(from[i], [(byte)i]);
+            using var barrier = new Barrier(movers);
+            var won = new bool[movers];
+
+            var tasks = Enumerable.Range(0, movers).Select(i => Task.Factory.StartNew(() =>
+            {
+                barrier.SignalAndWait();
+                try
+                {
+                    OwnerOnlyFile.MoveNoReplace(from[i], to);
+                    won[i] = true;
+                }
+                catch (IOException)
+                {
+                    // Lost: the name was taken.
+                }
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+            Task.WaitAll(tasks, TimeSpan.FromSeconds(30)).Should().BeTrue();
+
+            won.Count(w => w).Should().Be(1, $"round {round}: exactly one mover gets the name");
+            var winner = Array.IndexOf(won, true);
+            File.ReadAllBytes(to).Should().Equal([(byte)winner], $"round {round}: the name holds the winner's file");
+            for (var i = 0; i < movers; i++)
+                File.Exists(from[i]).Should().Be(i != winner, $"round {round}: only the winner's file was moved");
+        }
+    }
+
     [Fact]
     public void WriteNew_ThatFailsBeforeTheRename_LeavesNothing()
     {

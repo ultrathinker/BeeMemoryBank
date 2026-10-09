@@ -89,6 +89,9 @@ public static class PublicSurface
         // Joining a network. Authorised by the master password inside the handler; a joining node
         // has nothing else to present.
         new("POST", "/api/join"),
+        // The joiner taking back the row its failed join left: the same master password, checked in the handler, and it removes only a
+        // never-synced row of that attempt.
+        new("POST", "/api/join/abort"),
         new("GET", "/api/blind/status"), // BMB-54: a superadmin peer's sync token; the handler checks it
 
         // Restore from a blind node (BMB-43, plan 6.7): a new device has nothing but the one-time

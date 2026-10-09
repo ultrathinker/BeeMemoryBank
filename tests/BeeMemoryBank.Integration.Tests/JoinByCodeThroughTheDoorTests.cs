@@ -106,6 +106,55 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AJoinThatFailedOnTheJoiner_IsTakenBackThroughTheDoor_AndOnlyWithTheCodesToken()
+    {
+        var session = await _door.EnableAsync();
+        var (publicKey, _) = Ed25519Signer.GenerateKeyPair();
+        var nodeId = Guid.NewGuid();
+        using var http = JoinHttp.CreateClient(session.SpkiPin);
+        http.BaseAddress = new Uri($"https://127.0.0.1:{_doorPort}");
+
+        using (var join = new HttpRequestMessage(HttpMethod.Post, "/api/join")
+        {
+            Content = JsonContent.Create(new
+            {
+                masterPassword = Password, nodeId, displayName = "Failing", ed25519PublicKeyB64 = Convert.ToBase64String(publicKey)
+            }, options: JsonOpts)
+        })
+        {
+            join.Headers.Add(JoinCode.TokenHeader, session.Token);
+            (await http.SendAsync(join)).StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+
+        HttpRequestMessage Abort(string? token)
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, "/api/join/abort")
+            {
+                Content = JsonContent.Create(new { masterPassword = Password, nodeId, ed25519PublicKeyB64 = Convert.ToBase64String(publicKey) }, options: JsonOpts)
+            };
+            if (token != null) req.Headers.Add(JoinCode.TokenHeader, token);
+            return req;
+        }
+
+        using (var noToken = Abort(null))
+            (await http.SendAsync(noToken)).StatusCode.Should().Be(HttpStatusCode.Forbidden, "the door asks for the code's token before it passes a password on");
+        using (var other = Abort(RandomToken()))
+            (await http.SendAsync(other)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        using var scope = _nodeA.Services.CreateScope();
+        var rows = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
+        (await rows.GetByNodeIdAsync(nodeId))!.Status.Should().Be("A", "nothing was removed by a call the door refused");
+
+        using (var abort = Abort(session.Token))
+        {
+            var resp = await http.SendAsync(abort);
+            resp.StatusCode.Should().Be(HttpStatusCode.OK);
+            (await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts)).GetProperty("removed").GetBoolean().Should().BeTrue();
+        }
+        (await rows.GetByNodeIdAsync(nodeId, includeDeleted: true))!.Status.Should().Be("R");
+    }
+
+    [Fact]
     public async Task WrongToken_IsRefusedByTheDoorWithItsOwnSentence_AndNothingReachesTheApiOrIsCreated()
     {
         var session = await _door.EnableAsync();

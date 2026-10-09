@@ -88,6 +88,24 @@ public class NodeSetupService
             apiAddress = (string?)null
         };
 
+        // The host writes this phone's row as soon as it accepts the join. From there on a failure leaves that row behind unless the host
+        // is told (POST /api/join/abort). Best effort: a host or proxy that does not know the route, or does not answer, keeps the
+        // sentence that names the row, and nothing here replaces the error that made the join fail. The sentence is returned to be
+        // added to that error; rowCertain is false when the join never got an answer, so the host may or may not have written the row.
+        var hostTold = false;
+        async Task<string> AbortNoteAsync(bool rowCertain = true)
+        {
+            hostTold = true;
+            var outcome = await JoinAbortClient.TryAbortAsync(http, remoteUrl, password, nodeId, publicKey, code?.Token);
+            if (outcome.HostForgot())
+                return $"The other computer was told and no longer lists this phone ('{name}').";
+            return rowCertain
+                ? $"The other computer still lists this phone ('{name}') as a member that has never synced: revoke it there " +
+                  "(Admin page, Nodes), or it holds back compaction of that computer's event log."
+                : $"If the other computer recorded this phone ('{name}') before the connection failed, it lists it as a member that has never synced: " +
+                  "revoke it there (Admin page, Nodes), or it holds back compaction of that computer's event log.";
+        }
+
         HttpResponseMessage response;
         try
         {
@@ -96,7 +114,8 @@ public class NodeSetupService
                 Content = JsonContent.Create(joinRequest, options: _jsonOptions)
             };
             if (code?.Token != null) request.Headers.Add(JoinCode.TokenHeader, code.Token);
-            response = await http.SendAsync(request);
+            // Bounded here, not by the client (JoinHttp): the snapshot request of this join waits for the host to build the snapshot.
+            response = await JoinHttp.BoundAsync(t => http.SendAsync(request, t));
         }
         catch (HttpRequestException ex) when (code != null && ex.HttpRequestError == HttpRequestError.SecureConnectionError)
         {
@@ -106,161 +125,197 @@ public class NodeSetupService
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"Cannot reach remote node: {ex.Message}");
+            throw new InvalidOperationException($"Cannot reach remote node: {ex.Message}"
+                + (ex is HttpRequestException unanswered && JoinAbortClient.MayHaveReachedHost(unanswered)
+                    ? " " + await AbortNoteAsync(rowCertain: false) : ""));
         }
 
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync();
-            throw new InvalidOperationException($"Join rejected ({(int)response.StatusCode}): {errorBody}");
+            // A server-side failure (a proxy that gave up while the host went on) may have come after the host wrote the row.
+            var rejectedNote = (int)response.StatusCode >= 500 ? " " + await AbortNoteAsync(rowCertain: false) : "";
+            throw new InvalidOperationException($"Join rejected ({(int)response.StatusCode}): {errorBody}{rejectedNote}");
         }
 
-        var joinResponse = await response.Content.ReadFromJsonAsync<JoinResponseDto>(_jsonOptions)
-            ?? throw new InvalidOperationException("Empty response from remote node");
-
-        var slot = joinResponse.KeySlot;
-        var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
-        var remoteIv = Convert.FromBase64String(slot.IvB64);
-        var remoteSalt = Convert.FromBase64String(slot.SaltB64);
-
-        // The peer chose these numbers; refuse hostile ones before the phone commits memory to them.
+        // From the host's answer on, the host holds this phone's row, so any failure before the snapshot step (an answer that cannot be
+        // read or lacks a part, a field that is not base64, a local write that throws) must take that row back as well, and the
+        // phone back to "uninitialized". The checks inside that already told the host throw their own sentence, which stays.
+        JoinResponseDto joinResponse;
+        JoinRemoteNodeDto remote;
+        NodeIdentity identity;
+        byte[] masterDek = [];
         try
         {
-            KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
-        }
-        catch (System.Security.Cryptography.CryptographicException ex)
-        {
-            throw new InvalidOperationException($"The remote node sent an invalid key slot. {ex.Message}");
-        }
+            var answer = await response.Content.ReadFromJsonAsync<JoinResponseDto>(_jsonOptions)
+                ?? throw new InvalidOperationException("Empty response from remote node. " + await AbortNoteAsync());
+            if (answer.RemoteNode == null || answer.KeySlot == null)
+                throw new InvalidOperationException("The answer of the remote node is incomplete.");
+            joinResponse = answer;
 
-        byte[] masterDek;
-        try
-        {
-            var remoteKek = KeyDerivation.DeriveKek(password, remoteSalt,
-                slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
-            masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, remoteIv, remoteKek);
-        }
-        catch (KdfBusyException)
-        {
-            throw new InvalidOperationException("Too many password checks in progress, try again in a moment.");
-        }
-        catch
-        {
-            throw new InvalidOperationException("Could not decrypt Master DEK — wrong password?");
-        }
+            var slot = joinResponse.KeySlot;
+            var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
+            var remoteIv = Convert.FromBase64String(slot.IvB64);
+            var remoteSalt = Convert.FromBase64String(slot.SaltB64);
 
-        var localSalt = KeyDerivation.GenerateSalt();
-        var localKek = KeyDerivation.DeriveKek(password, localSalt);
-        var (localEncryptedDek, localIv) = MasterKeyManager.WrapMasterDek(masterDek, localKek);
-
-        var now = DateTime.UtcNow;
-
-        // Wrap the Ed25519 private key with the master DEK (v=1) right away
-        // instead of storing it raw. Without this, an attacker with file-system
-        // access (rooted device, lost-phone scenario) reads the seed straight
-        // out of beememorybank.db and can sign arbitrary sync events as this
-        // node — effectively destroying the user's network state.
-        var (wrappedPrivKey, privKeyIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
-        // Do NOT zero `privateKey` here — the snapshot-join handshake below still
-        // signs the /api/sync/challenge response with it. Cleared in the finally
-        // after the handshake. Forgetting this made every join fail with HTTP 401.
-
-        var identity = new NodeIdentity
-        {
-            NodeId = nodeId,
-            DisplayName = name,
-            Ed25519PublicKey = publicKey,
-            Ed25519PrivateKey = wrappedPrivKey,
-            Ed25519PrivateKeyIV = privKeyIv,
-            Ed25519PrivateKeyV = 1,
-            InitialSyncCompleted = false,
-            CreatedAt = now
-        };
-        await _nodeRepo.CreateAsync(identity);
-
-        var localSlot = new MasterKeyStore
-        {
-            SlotType = "user",
-            EncryptedMasterDek = localEncryptedDek,
-            IV = localIv,
-            Salt = localSalt,
-            ArgonMemory = CryptoConstants.DefaultArgonMemory,
-            ArgonIterations = CryptoConstants.DefaultArgonIterations,
-            ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
-            CreatedAt = now
-        };
-        var localSlotId = await _keySlotRepo.CreateAsync(localSlot);
-
-        var user = new User
-        {
-            Username = name,
-            DisplayName = name,
-            PasswordHash = UserService.HashPassword(password),
-            Role = UserRoles.Superadmin,
-            KeySlotId = localSlotId,
-            IsActive = true,
-            CreatedAt = now
-        };
-        await _userRepo.CreateAsync(user);
-
-        var sentinel = MasterKeyManager.ComputeSentinel(masterDek);
-        await _nodeRepo.StoreSentinelAsync(sentinel);
-
-        WriteMigrationMarker();
-
-        Array.Clear(masterDek);
-
-        foreach (var entry in joinResponse.Whitelist ?? [])
-        {
-            if (entry.NodeId == nodeId) continue;
-            if (entry.NodeId == joinResponse.RemoteNode.NodeId) continue;
+            // The peer chose these numbers; refuse hostile ones before the phone commits memory to them.
+            try
+            {
+                KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+            }
+            catch (System.Security.Cryptography.CryptographicException ex)
+            {
+                throw new InvalidOperationException($"The remote node sent an invalid key slot. {ex.Message} " + await AbortNoteAsync());
+            }
 
             try
             {
-                var existing = await _whitelistRepo.GetByNodeIdAsync(entry.NodeId);
-                if (existing != null) continue;
-
-                await _whitelistRepo.CreateAsync(new WhitelistEntry
-                {
-                    NodeId = entry.NodeId,
-                    DisplayName = entry.DisplayName,
-                    Ed25519PublicKey = Convert.FromBase64String(entry.Ed25519PublicKeyB64),
-                    ApiAddress = entry.ApiAddress,
-                    Status = "A",
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                    // Propagate IsSuperadmin from the bootstrap node's whitelist so this
-                    // new node knows which transitively-discovered peers are Superadmins.
-                    // Without this, every other Superadmin in the cluster gets demoted to
-                    // plain peer locally → their whitelist_*/hard_delete/restore_network
-                    // events get rejected once a 3rd node joins.
-                    IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin)
-                });
+                var remoteKek = KeyDerivation.DeriveKek(password, remoteSalt,
+                    slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+                masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, remoteIv, remoteKek);
             }
-            catch (Exception ex)
+            catch (KdfBusyException)
             {
-                _logger.LogWarning(ex, "Failed to import whitelist entry for node {NodeId}", entry.NodeId);
+                throw new InvalidOperationException("Too many password checks in progress, try again in a moment. " + await AbortNoteAsync());
             }
+            catch
+            {
+                throw new InvalidOperationException("Could not decrypt Master DEK — wrong password? " + await AbortNoteAsync());
+            }
+
+            var localSalt = KeyDerivation.GenerateSalt();
+            var localKek = KeyDerivation.DeriveKek(password, localSalt);
+            var (localEncryptedDek, localIv) = MasterKeyManager.WrapMasterDek(masterDek, localKek);
+
+            var now = DateTime.UtcNow;
+
+            // Wrap the Ed25519 private key with the master DEK (v=1) right away
+            // instead of storing it raw. Without this, an attacker with file-system
+            // access (rooted device, lost-phone scenario) reads the seed straight
+            // out of beememorybank.db and can sign arbitrary sync events as this
+            // node — effectively destroying the user's network state.
+            var (wrappedPrivKey, privKeyIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
+            // Do NOT zero `privateKey` here — the snapshot-join handshake below still
+            // signs the /api/sync/challenge response with it. Cleared in the finally
+            // after the handshake. Forgetting this made every join fail with HTTP 401.
+
+            identity = new NodeIdentity
+            {
+                NodeId = nodeId,
+                DisplayName = name,
+                Ed25519PublicKey = publicKey,
+                Ed25519PrivateKey = wrappedPrivKey,
+                Ed25519PrivateKeyIV = privKeyIv,
+                Ed25519PrivateKeyV = 1,
+                InitialSyncCompleted = false,
+                CreatedAt = now
+            };
+            await _nodeRepo.CreateAsync(identity);
+
+            var localSlot = new MasterKeyStore
+            {
+                SlotType = "user",
+                EncryptedMasterDek = localEncryptedDek,
+                IV = localIv,
+                Salt = localSalt,
+                ArgonMemory = CryptoConstants.DefaultArgonMemory,
+                ArgonIterations = CryptoConstants.DefaultArgonIterations,
+                ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
+                CreatedAt = now
+            };
+            var localSlotId = await _keySlotRepo.CreateAsync(localSlot);
+
+            var user = new User
+            {
+                Username = name,
+                DisplayName = name,
+                PasswordHash = UserService.HashPassword(password),
+                Role = UserRoles.Superadmin,
+                KeySlotId = localSlotId,
+                IsActive = true,
+                CreatedAt = now
+            };
+            await _userRepo.CreateAsync(user);
+
+            var sentinel = MasterKeyManager.ComputeSentinel(masterDek);
+            await _nodeRepo.StoreSentinelAsync(sentinel);
+
+            WriteMigrationMarker();
+
+            Array.Clear(masterDek);
+
+            foreach (var entry in joinResponse.Whitelist ?? [])
+            {
+                if (entry.NodeId == nodeId) continue;
+                if (entry.NodeId == joinResponse.RemoteNode.NodeId) continue;
+
+                try
+                {
+                    var existing = await _whitelistRepo.GetByNodeIdAsync(entry.NodeId);
+                    if (existing != null) continue;
+
+                    // The key the host dials this peer by: without it the peer is checked through the public CAs, which a
+                    // self-signed one never passes (SpkiPinRegistry). A pin this build cannot use leaves the peer out.
+                    if (!JoinTls.TryInherit(entry.TlsTrust, entry.TlsSpki, out var tlsTrust, out var tlsSpki))
+                    {
+                        _logger.LogWarning("Not importing peer {NodeId}: the host sent a TLS pin that is not a pin.", entry.NodeId);
+                        continue;
+                    }
+
+                    await _whitelistRepo.CreateAsync(new WhitelistEntry
+                    {
+                        NodeId = entry.NodeId,
+                        DisplayName = entry.DisplayName,
+                        Ed25519PublicKey = Convert.FromBase64String(entry.Ed25519PublicKeyB64),
+                        ApiAddress = entry.ApiAddress,
+                        Status = "A",
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                        // Propagate IsSuperadmin from the bootstrap node's whitelist so this
+                        // new node knows which transitively-discovered peers are Superadmins.
+                        // Without this, every other Superadmin in the cluster gets demoted to
+                        // plain peer locally → their whitelist_*/hard_delete/restore_network
+                        // events get rejected once a 3rd node joins.
+                        IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin),
+                        TlsTrust = tlsTrust,
+                        TlsSpki = tlsSpki
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to import whitelist entry for node {NodeId}", entry.NodeId);
+                }
+            }
+
+            remote = joinResponse.RemoteNode;
+            await _whitelistRepo.CreateAsync(new WhitelistEntry
+            {
+                NodeId = remote.NodeId,
+                DisplayName = remote.DisplayName,
+                Ed25519PublicKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64),
+                ApiAddress = remoteUrl.TrimEnd('/'),
+                Status = "A",
+                CreatedAt = now,
+                UpdatedAt = now,
+                // The host just proved it holds the master password by handing over a slot it opens,
+                // and it records this phone as a superadmin for the same reason (JoinAuthority, BMB-42).
+                IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId),
+                // The key the code pinned is the key this phone dials the node by from now on (SpkiPinRegistry), as the desktop
+                // setup and `bmb join --code` record it: the node's certificate is self-signed or from its own local CA, which no
+                // ordinary check on the phone trusts, so without the pin every sync after the join would fail.
+                TlsSpki = code?.SpkiPin
+            });
+        }
+        catch (Exception ex) when (!hostTold)
+        {
+            Array.Clear(privateKey);
+            Array.Clear(masterDek);
+            _logger.LogError(ex, "The answer of the host could not be used — rolling back the partial node so a retry can start clean.");
+            try { RollbackPartialNode(); }
+            catch (Exception rbEx) { _logger.LogError(rbEx, "Rollback of partial node failed; a manual reset may be required."); }
+            throw new InvalidOperationException($"The join could not be completed: {ex.Message}. " + await AbortNoteAsync(), ex);
         }
 
-        var remote = joinResponse.RemoteNode;
-        await _whitelistRepo.CreateAsync(new WhitelistEntry
-        {
-            NodeId = remote.NodeId,
-            DisplayName = remote.DisplayName,
-            Ed25519PublicKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64),
-            ApiAddress = remoteUrl.TrimEnd('/'),
-            Status = "A",
-            CreatedAt = now,
-            UpdatedAt = now,
-            // The host just proved it holds the master password by handing over a slot it opens,
-            // and it records this phone as a superadmin for the same reason (JoinAuthority, BMB-42).
-            IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId),
-            // The key the code pinned is the key this phone dials the node by from now on (SpkiPinRegistry), as the desktop
-            // setup and `bmb join --code` record it: the node's certificate is self-signed or from its own local CA, which no
-            // ordinary check on the phone trusts, so without the pin every sync after the join would fail.
-            TlsSpki = code?.SpkiPin
-        });
 
         _logger.LogInformation("Starting snapshot import from {Url}", remoteUrl);
         try
@@ -271,20 +326,10 @@ public class NodeSetupService
                 privateKey,
                 Convert.FromBase64String(remote.Ed25519PublicKeyB64));
 
-            await _syncPositionRepo.UpsertAsync(new SyncPosition
-            {
-                RemoteNodeId = remote.NodeId,
-                LastSequenceNum = cpSeq,
-                UpdatedAt = DateTime.UtcNow
-            });
-
-            const long MAX_CLOCK_ADVANCE = 1_000_000;
-            var capped = Math.Min(lamportTs, _clock.Current + MAX_CLOCK_ADVANCE);
-            if (lamportTs > capped)
-                _logger.LogWarning("Producer Lamport {L} exceeds local+MAX_CLOCK_ADVANCE, capping at {Cap}", lamportTs, capped);
-            _clock.Update(capped);
-
-            await _nodeRepo.MarkInitialSyncCompletedAsync();
+            // The same tail as bmb join and the Setup page: the pull position at the checkpoint, the clock past the imported rows
+            // (durably: LamportFloor, or a restarted phone begins at 0 and loses every edit it makes), the initial sync done.
+            var capped = await SnapshotJoin.CompleteAsync(
+                remote.NodeId, cpSeq, lamportTs, _syncPositionRepo, _clock, _nodeRepo, _dbFactory, _logger);
 
             _logger.LogInformation("Snapshot import done. CP={Cp}, Lamport={Lamport}", cpSeq, capped);
         }
@@ -297,8 +342,10 @@ public class NodeSetupService
             _logger.LogError(ex, "Snapshot import failed — rolling back the partial node so a retry can start clean.");
             try { RollbackPartialNode(); }
             catch (Exception rbEx) { _logger.LogError(rbEx, "Rollback of partial node failed; a manual reset may be required."); }
+            // The host recorded this phone when the key exchange succeeded: ask it to take the row back.
             throw new InvalidOperationException(
-                $"Key exchange succeeded but snapshot import failed: {ex.Message}. Please try again.", ex);
+                $"Key exchange succeeded but snapshot import failed: {ex.Message}. Please try again. " +
+                await AbortNoteAsync(), ex);
         }
         finally
         {
@@ -348,7 +395,9 @@ public class NodeSetupService
 
     private sealed record JoinResponseDto(JoinRemoteNodeDto RemoteNode, JoinKeySlotDto KeySlot, List<JoinWhitelistEntryDto>? Whitelist);
     private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
-    private sealed record JoinWhitelistEntryDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false);
+    private sealed record JoinWhitelistEntryDto(
+        Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false,
+        string? TlsTrust = null, string? TlsSpki = null);
     private sealed record JoinKeySlotDto(
         string EncryptedMasterDekB64,
         string IvB64,

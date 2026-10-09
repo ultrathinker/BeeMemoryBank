@@ -74,6 +74,20 @@ public class BlindSecretFilePermissionsTests : IDisposable
         again.Lines.Should().BeEmpty();
     }
 
+    private const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    [UnixModeFact]
+    public void TheThreeWriters_CreateMode0600Files_WhateverTheFoldersUmaskWouldGive()
+    {
+        var seed = new FileNodeKey(Path.Combine(_data, FileNodeKey.FileName));
+        seed.Create();
+        using (BlindTlsCertificate.LoadOrCreate(_data)) { }
+        new BlindBackupSettingsStore(_data).Save(new BlindBackupSettings { ResticPassword = "restic-secret" });
+
+        foreach (var file in new[] { seed.Path, BlindTlsCertificate.PathIn(_data), BlindBackupSettingsStore.SettingsFileIn(_data) })
+            File.GetUnixFileMode(file).Should().Be(OwnerOnly, $"{Path.GetFileName(file)} holds a secret in clear");
+    }
+
     [Fact]
     public void TheRepair_NeverThrows_WhenThereIsNothingThere()
     {

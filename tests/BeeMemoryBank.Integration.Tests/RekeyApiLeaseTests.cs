@@ -48,4 +48,19 @@ public sealed class RekeyApiLeaseTests
         await factory.DisposeAsync();
         SqliteConnection.ClearAllPools();
     }
+
+    [Fact]
+    public async Task ARunningApi_KeepsASecondNodeOffItsFolder_UntilItStops()
+    {
+        var factory = new BmbWebApplicationFactory();
+        await factory.InitializeNodeAsync("Owner", "apiInstancePw1");
+        var d = factory.DataPath;
+
+        var second = () => InstanceGuard.Acquire(d, TimeSpan.FromMilliseconds(200));
+        second.Should().Throw<InstanceInUseException>("a second container on the same volume must not start");
+
+        await factory.DisposeAsync();
+        SqliteConnection.ClearAllPools();
+        InstanceGuard.Acquire(d, TimeSpan.FromSeconds(5)).Dispose(); // the stop released the folder
+    }
 }

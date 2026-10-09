@@ -58,7 +58,7 @@ public class ZipExportServiceTests : IAsyncLifetime
             new NullLamportClock(), new NullActorProvider(), new SyncTrigger(), _session, blobRepo);
         _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo,
             new NullLamportClock(), mediaEventLogger, new MediaStorageOptions(Path.GetTempPath()), _factory,
-            new ImageSharpImageTranscoder(), blobRepo: blobRepo);
+            new SkiaImageTranscoder(), blobRepo: blobRepo);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(), mediaRepo, _folderRepo,
@@ -169,7 +169,7 @@ public class ZipExportServiceTests : IAsyncLifetime
             new NullLamportClock(), new NullActorProvider(), new SyncTrigger(), otherSession, otherBlobRepo);
         var otherMediaService = new MediaService(otherMediaRepo, otherArticleRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), otherMediaEventLogger, new MediaStorageOptions(Path.GetTempPath()), otherVaultFactory,
-            new ImageSharpImageTranscoder(), blobRepo: otherBlobRepo);
+            new SkiaImageTranscoder(), blobRepo: otherBlobRepo);
         var otherArticleService = new ArticleService(otherArticleRepo, otherBodyRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), new NullEventLogger(), otherMediaRepo, otherFolderRepo,
             otherVersionRepo, new NullActorProvider(), otherConceptTagService, otherVaultFactory);
@@ -236,7 +236,7 @@ public class ZipExportServiceTests : IAsyncLifetime
             new NullLamportClock(), new NullActorProvider(), new SyncTrigger(), otherSession, otherBlobRepo);
         var otherMediaService = new MediaService(otherMediaRepo, otherArticleRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), otherMediaEventLogger, new MediaStorageOptions(Path.GetTempPath()), otherVaultFactory,
-            new ImageSharpImageTranscoder(), blobRepo: otherBlobRepo);
+            new SkiaImageTranscoder(), blobRepo: otherBlobRepo);
         var otherArticleService = new ArticleService(otherArticleRepo, otherBodyRepo, otherSession, otherNodeRepo,
             new NullLamportClock(), new NullEventLogger(), otherMediaRepo, otherFolderRepo,
             otherVersionRepo, new NullActorProvider(), otherConceptTagService, otherVaultFactory);

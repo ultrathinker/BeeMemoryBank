@@ -35,6 +35,9 @@ var dataPath = builder.Configuration["BeeMemoryBank:DataPath"]
 // back, and vault.lease held shared for the life of the process.
 var (rekeySwap, vaultLease) = BeeMemoryBank.AppPaths.VaultStartup.Enter(dataPath);
 dataPath = rekeySwap.DataDir;
+// One node process per data folder: the lease above is shared by design, so it would let a second container on the same
+// volume start and write different events under this node's id (week review F4).
+var instanceLock = BeeMemoryBank.AppPaths.InstanceGuard.AcquireOrExit(dataPath);
 // Created by a factory so the host disposes it (an instance registration is never disposed).
 builder.Services.AddSingleton<BeeMemoryBank.AppPaths.VaultLease>(_ => vaultLease);
 
@@ -60,6 +63,7 @@ if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"))
 builder.AddBlindNodeServices(dataPath);
 
 var app = builder.Build();
+app.Lifetime.ApplicationStopped.Register(instanceLock.Dispose); // the folder is free again once this host has stopped
 app.Services.GetRequiredService<BeeMemoryBank.AppPaths.VaultLease>(); // the lease now lives, and ends, with the host
 
 app.UseLoopbackForwardedHeaders();

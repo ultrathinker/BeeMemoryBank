@@ -149,6 +149,16 @@ public sealed class BlindAndroidLifecycleSourceTests
     }
 
     [Fact]
+    public void ASyncThatFails_IsLoggedWithItsInnerCauses_LikeTheOtherHostsDo()
+    {
+        // The HTTP stack's own message ("An error occurred while sending the request.") hides what failed; BlindRunReport.Reason adds the
+        // inner causes. What it produces is tested with the shared code (BlindRunReportReasonTests); this holds that the Android worker uses it.
+        var worker = ClassOf("BlindSyncWorker");
+        worker.Should().Contain("Sync failed: {BlindRunReport.Reason(ex)}");
+        worker.Should().NotContain("Sync failed: {ex.Message}");
+    }
+
+    [Fact]
     public void TheAppCore_IsComposedWithThePhonesDeviceName_SoThePageNeedsNoIdentityCodeOfItsOwn()
     {
         Source("MauiProgram.cs").Should().Contain("DisplayNameFactory: () => DeviceInfo.Current.Name");

@@ -7,6 +7,7 @@ using System.Text.Json;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
@@ -48,10 +49,10 @@ public partial class SnapshotService
         var cpSeq = manifest.RootElement.GetProperty("cpSequenceNum").GetInt64();
         var lamportTs = manifest.RootElement.GetProperty("lamportTsAtCp").GetInt64();
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"bmb-join-restore-{Guid.NewGuid():N}");
+        // In the data folder and owner-only, not the OS temp folder: the extracted database is the vault in clear.
+        var tempDir = SnapshotStaging.NewDirectory(_dataPath);
         try
         {
-            Directory.CreateDirectory(tempDir);
             await ExtractTarGzAsync(tarGzPath, tempDir, new FileInfo(tarGzPath).Length);
             await VerifyManifestAsync(tempDir);
 
@@ -184,7 +185,7 @@ public partial class SnapshotService
         try
         {
             var snapSize = new FileInfo(snapshotFilePath).Length;
-            var tempDriveInfo = new DriveInfo(Path.GetPathRoot(Path.GetTempPath())!);
+            var tempDriveInfo = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(SnapshotStaging.DirIn(_dataPath)))!);
             var dataDriveInfo = new DriveInfo(Path.GetPathRoot(_dataPath)!);
             
             // Need space to extract payload.sqlite + media, plus some buffer
@@ -194,7 +195,7 @@ public partial class SnapshotService
             // disk-space refusal into a NeedsAdminDecision step and everything else into a plain
             // Failed, and it must not decide that by reading this string.
             if (tempDriveInfo.AvailableFreeSpace < requiredBytes)
-                throw new InsufficientDiskSpaceException($"Insufficient disk space in temp for restore: need ~{requiredBytes / (1024 * 1024)}MB");
+                throw new InsufficientDiskSpaceException($"Insufficient disk space in the staging folder for restore: need ~{requiredBytes / (1024 * 1024)}MB");
             if (dataDriveInfo.AvailableFreeSpace < requiredBytes)
                 throw new InsufficientDiskSpaceException($"Insufficient disk space in data for restore: need ~{requiredBytes / (1024 * 1024)}MB");
         }
@@ -208,12 +209,10 @@ public partial class SnapshotService
             _logger?.LogInformation("Created pre-restore DB backup at {Path}", backupPath);
         }
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"bmb-network-restore-{Guid.NewGuid():N}");
+        var tempDir = SnapshotStaging.NewDirectory(_dataPath);
 
         try
         {
-            Directory.CreateDirectory(tempDir);
-            
             await ExtractTarGzAsync(snapshotFilePath, tempDir, new FileInfo(snapshotFilePath).Length);
 
             var extractedDb = Path.Combine(tempDir, DbFileName);

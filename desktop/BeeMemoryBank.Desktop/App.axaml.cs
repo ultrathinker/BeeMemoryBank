@@ -55,6 +55,11 @@ public partial class App : Application
             // Setup tray icon
             CreateTrayIcon(mainWindow, desktop, quit);
 
+            // A second start of the app (Windows: it raises the activation event) and the system's reopen request (macOS: a click on the
+            // Dock icon) show the window, which usually sits hidden in the tray.
+            Program.Activation?.Listen(() => Dispatcher.UIThread.Post(() => mainWindow.ShowAndFocusWindow()));
+            Services.ReopenHandler.Attach(this, () => Dispatcher.UIThread.Post(() => mainWindow.ShowAndFocusWindow()));
+
             // Hook application exit to dispose the tray icon properly and release sleep prevention
             desktop.Exit += (s, e) =>
             {
@@ -229,10 +234,18 @@ public partial class App : Application
         // Hand the open vault to the restarted app (no second login), then stop the node
         // (RealClose -> graceful stdin-EOF shutdown) so the database is closed before Velopack
         // swaps the files, then restart into the new version.
+        //
+        // If Velopack cannot apply the update, the node is started again and the update window says
+        // why; the app is not shut down with the vault unserved.
         await _updates.ApplyAndRestartAsync(
             () => Services.NodeSessionHandoff.RequestAsync(mainWindow.FrontUrl),
-            mainWindow.RealClose,
-            () => desktop.Shutdown());
+            mainWindow.StopNodeForUpdate,
+            mainWindow.ResumeAfterFailedUpdate,
+            reason =>
+            {
+                _restarting = false;
+                _updateWindow?.ShowApplyFailed(reason);
+            });
     }
 
     private void ShowSettingsWindow(MainWindow mainWindow, IClassicDesktopStyleApplicationLifetime desktop)

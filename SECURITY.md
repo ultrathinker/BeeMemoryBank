@@ -153,6 +153,8 @@ for the same picture from the sync layer's side.
 
 `POST /api/join` takes the master password, tries it against every password-bearing key slot, and — if it opens a slot belonging to an active superadmin (or a legacy pre-user-table `password` slot) — returns the wrapped Master DEK and adds the caller to `tbl_whitelist`. There is no invite token and no per-node approval step: proving you know the password is the whole gate for mesh *membership*.
 
+A joiner whose join fails after the node answered it can take its row back with `POST /api/join/abort`. It is authorised by the same master password (the same check, so the same slots and the same superadmin rule), is rate-limited like the join, and can remove only the never-synced row of that attempt: the node id with the key the join used, active, recorded within the last hour, with no sync position, never the node's own or a blind id. The removal is a signed `whitelist_revoke` that the mesh applies like an admin's. Anyone holding the master password could already revoke that row as a superadmin, so the route grants nothing new; it only gives the joiner, which has no session, a way to do it for its own failed attempt. It logs an audit entry `join_aborted` without any secret.
+
 The new peer is stored with `is_superadmin = 1`: whoever knows the master password is a superadmin (owner's decision, BMB-42). The password already hands over the DEK, so withholding the flag protected nothing and only split the mesh — such a node applied its own hard delete or password-change notice locally while every peer refused the event. A blind node (NodeId with the blind mark) is never a superadmin and is refused by `/api/join`. `EventApplier` consults the flag before applying the cluster-state-modifying event types — `whitelist_add`, `whitelist_revoke`, `whitelist_update`, `hard_delete`, `restore_network` and `master_password_changed` — and rejects one signed by a peer whose flag is unset. Concretely, only a node whose `is_superadmin` bit is set on the *receiving* node's own whitelist row can:
 
 - **Revoke another peer.** A `whitelist_revoke` event it signs is applied by every node that receives it and accepts it. A node never revokes *itself* on a remote event, so the revoked peer keeps its own copy of the vault — but every other node stops accepting its events, which is the same thing as being cut out.
@@ -256,6 +258,19 @@ Send an email to **universeissilent42@gmail.com** with:
 - Nothing secret is in a layer: the internal key, the console password and the restic password are created in the data
   volume at the first start. The containers run as root for now; the images declare only the Web port (5301) and the
   blind node's sync port (5610) as exposed.
+
+## Uploaded Images
+
+A picture is decoded by the server (to re-encode it as JPEG, scale it down, or shrink it for an AI agent), so a hostile file is input to an image decoder.
+The image library is SkiaSharp ([ADR-0008](docs/adr/0008-image-library-skiasharp.md); notices in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt)). What the transcoder
+does before and around it:
+
+- **Only five formats reach a decoder**: JPEG, PNG, GIF, WebP and BMP, recognised by their signature. Anything else (TIFF, RAW/DNG, ICO, ...) is refused before the library sees it.
+- **Decompression bombs are refused from the header**: a file over 64 MB, or a picture of more than 100 million pixels, is a client error (HTTP 400) before any pixel is decoded or
+  allocated. A truncated or damaged file is refused, never half-decoded.
+- **SVG is never rasterised by the server**; it is stored as uploaded and served with the restrictive user-content response headers of `UserContentResponseHeaders`.
+- The decoder is native code inside the Api process. A weakness in it would be a weakness of that process, so the library is kept on a maintained line and checked with
+  `dotnet list package --vulnerable --include-transitive`; the component versions bundled in its native library are listed in the ADR.
 
 ## Folder-Level Access Control
 

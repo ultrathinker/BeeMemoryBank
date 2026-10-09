@@ -3,16 +3,16 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
-namespace BeeMemoryBank.Desktop.MacOS;
+namespace BeeMemoryBank.Platforms.Apple.LaunchAgents;
 
 /// <summary>Reads symbolic links. A seam: the walk below is tested on a fake file system on every OS, and on real links on a Mac.</summary>
-internal interface ILinkReader
+public interface ILinkReader
 {
     /// <summary>The text a symbolic link at this absolute path points to (relative or absolute, as stored); null when it is not a link or does not exist.</summary>
     string? ReadLink(string absolutePath);
 }
 
-internal sealed class FileSystemLinkReader : ILinkReader
+public sealed class FileSystemLinkReader : ILinkReader
 {
     public string? ReadLink(string absolutePath)
     {
@@ -25,10 +25,10 @@ internal sealed class FileSystemLinkReader : ILinkReader
 /// The two meanings of a path that decide where a login item really points. Both work on '/'-separated absolute paths as text (no
 /// <c>Path.GetFullPath</c>, which would turn a macOS path into a drive path when the tests run on Windows).
 /// </summary>
-internal static class ProgramPaths
+public static class ProgramPaths
 {
     /// <summary>More links than this on one path is taken for a loop (the kernel's own limit is 32 on macOS).</summary>
-    internal const int MaxLinkHops = 40;
+    public const int MaxLinkHops = 40;
 
     /// <summary>
     /// The path with empty segments, <c>.</c> and <c>..</c> taken out - what <c>Path.GetFullPath</c> gives for an absolute path - without

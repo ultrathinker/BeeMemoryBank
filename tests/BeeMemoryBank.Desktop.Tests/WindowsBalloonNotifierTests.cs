@@ -115,6 +115,24 @@ public sealed class WindowsBalloonNotifierTests
     }
 
     [Fact]
+    public void TryNotify_SaysWhetherTheNoticeWasHandedToTheShell()
+    {
+        IUserNotifier shown = new WindowsBalloonNotifier(() => Window, 7, new RecordingShell(), TimeSpan.FromSeconds(10));
+        IUserNotifier noWindow = new WindowsBalloonNotifier(() => IntPtr.Zero, 7, new RecordingShell(), TimeSpan.FromSeconds(10));
+        IUserNotifier refused = new WindowsBalloonNotifier(() => Window, 7, new RecordingShell { Shows = false }, TimeSpan.FromSeconds(10));
+        IUserNotifier failing = new WindowsBalloonNotifier(() => Window, 7, new RecordingShell { Fails = new InvalidOperationException("gone") }, TimeSpan.FromSeconds(10));
+
+        shown.TryNotify("t", "m").Should().BeTrue();
+        noWindow.TryNotify("t", "m").Should().BeFalse("there is no window to show it from");
+        refused.TryNotify("t", "m").Should().BeFalse("the shell refused the icon or the balloon");
+        failing.TryNotify("t", "m").Should().BeFalse("and it never throws");
+        ((IDisposable)shown).Dispose();
+        ((IDisposable)noWindow).Dispose();
+        ((IDisposable)refused).Dispose();
+        ((IDisposable)failing).Dispose();
+    }
+
+    [Fact]
     public void Dispose_RemovesAnIconThatIsStillThere_AndAfterThatNothingIsShown()
     {
         var shell = new RecordingShell();

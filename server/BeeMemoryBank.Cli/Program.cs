@@ -16,15 +16,23 @@ root.AddGlobalOption(dataOption);
 // ─── bmb init ───────────────────────────────────────────────────────────────
 
 var initNameOpt = new Option<string>("--name", "Node name") { IsRequired = true };
-var initPasswordOpt = new Option<string>("--password", "Master password") { IsRequired = true };
+// The password is not a required argument: --password stays (it is documented) but sits in the process list and the shell
+// history, so --password-stdin or the terminal prompt are the way to give it (PasswordInput).
+var initPasswordOpt = new Option<string?>("--password",
+    "Master password. Visible in the process list and the shell history: prefer --password-stdin, or leave it out to be asked.");
+var initPasswordStdinOpt = new Option<bool>("--password-stdin", "Read the master password from the first line of stdin");
 
 var initCmd = new Command("init", "Initial node setup");
 initCmd.AddOption(initNameOpt);
 initCmd.AddOption(initPasswordOpt);
-initCmd.SetHandler(async (data, name, password) =>
+initCmd.AddOption(initPasswordStdinOpt);
+initCmd.SetHandler(async (data, name, password, passwordStdin) =>
 {
-    Environment.Exit(await InitCommand.HandleAsync(data, name, password));
-}, dataOption, initNameOpt, initPasswordOpt);
+    var resolved = BeeMemoryBank.Cli.PasswordInput.Resolve(password, passwordStdin, "Master password: ",
+        Console.In, Console.IsInputRedirected, Console.Error);
+    if (resolved is null) Environment.Exit(1);
+    Environment.Exit(await InitCommand.HandleAsync(data, name, resolved!));
+}, dataOption, initNameOpt, initPasswordOpt, initPasswordStdinOpt);
 
 // bmb init reset — host-only node wipe. The web UI has the same operation on the superadmin-only
 // Admin page; this is the fallback for when nobody can sign in any more.
@@ -47,7 +55,9 @@ var joinRemoteOpt = new Option<string>("--remote", "Remote node URL (e.g. https:
 var joinCodeOpt = new Option<string?>("--code",
     "The join code another computer shows under Admin > Connect a device (bmb-join:?a=...). It carries the address, a one-time " +
     "token and the pin of that computer's certificate: the join goes only to the computer it belongs to. Replaces --remote.");
-var joinPasswordOpt = new Option<string>("--password", "Network master password") { IsRequired = true };
+var joinPasswordOpt = new Option<string?>("--password",
+    "Network master password. Visible in the process list and the shell history: prefer --password-stdin, or leave it out to be asked.");
+var joinPasswordStdinOpt = new Option<bool>("--password-stdin", "Read the network master password from the first line of stdin");
 var joinNameOpt = new Option<string>("--name", "Name of this node") { IsRequired = true };
 var joinAllowInsecureOpt = new Option<bool>("--allow-insecure-http",
     "Allow joining over plain HTTP to non-loopback hosts. Off by default — plain HTTP " +
@@ -57,12 +67,16 @@ var joinCmd = new Command("join", "Join a node to an existing BeeMemoryBank netw
 joinCmd.AddOption(joinRemoteOpt);
 joinCmd.AddOption(joinCodeOpt);
 joinCmd.AddOption(joinPasswordOpt);
+joinCmd.AddOption(joinPasswordStdinOpt);
 joinCmd.AddOption(joinNameOpt);
 joinCmd.AddOption(joinAllowInsecureOpt);
-joinCmd.SetHandler(async (data, remote, password, name, allowInsecure, code) =>
+joinCmd.SetHandler(async (data, remote, password, name, allowInsecure, code, passwordStdin) =>
 {
-    Environment.Exit(await JoinCommand.HandleAsync(data, remote ?? "", password, name, allowInsecure, joinCode: code));
-}, dataOption, joinRemoteOpt, joinPasswordOpt, joinNameOpt, joinAllowInsecureOpt, joinCodeOpt);
+    var resolved = BeeMemoryBank.Cli.PasswordInput.Resolve(password, passwordStdin, "Network master password: ",
+        Console.In, Console.IsInputRedirected, Console.Error);
+    if (resolved is null) Environment.Exit(1);
+    Environment.Exit(await JoinCommand.HandleAsync(data, remote ?? "", resolved!, name, allowInsecure, joinCode: code));
+}, dataOption, joinRemoteOpt, joinPasswordOpt, joinNameOpt, joinAllowInsecureOpt, joinCodeOpt, joinPasswordStdinOpt);
 root.AddCommand(joinCmd);
 
 // ─── bmb status ─────────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         "/api/sync/challenge",
         "/api/sync/authenticate",
         "/api/join",
+        "/api/join/abort",
         "/api/snapshots/restore/progress",
         "/api/dek-rotation/progress",
     ];

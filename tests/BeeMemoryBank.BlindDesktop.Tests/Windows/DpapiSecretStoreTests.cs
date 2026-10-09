@@ -207,4 +207,19 @@ public sealed class DpapiSecretStoreTests
 
         await Task.WhenAll(writers.Concat(readers));
     }
+
+    [Fact]
+    public void ABlobThatCannotBeReadForNow_IsNotReportedAsMissing()
+    {
+        var (store, folder) = NewStore();
+        store.SaveBackupKey(Bytes(9));
+
+        using (new FileStream(Path.Combine(folder, "backup-key.dpapi"), FileMode.Open, FileAccess.ReadWrite, FileShare.None)) // held by a scanner
+        {
+            var load = () => store.LoadBackupKey();
+            load.Should().Throw<IOException>("null would say 'the key is gone' and push the person toward a wipe");
+        }
+
+        store.LoadBackupKey().Should().Equal(Bytes(9), "the key was never lost; once the file is free it reads again");
+    }
 }

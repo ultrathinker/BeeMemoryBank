@@ -183,6 +183,100 @@ public sealed class BlindAlarmWatcherTests
         public void Notify(string title, string message) => times.Add(DateTime.UtcNow);
     }
 
+    /// <summary>A notifier that says whether it could show each notice (the Windows balloon does: no window, no shell icon).</summary>
+    private sealed class ReportingNotifier : IUserNotifier
+    {
+        public List<(string Title, string Message)> Attempts { get; } = new();
+        public Func<int, bool> Shows { get; set; } = _ => true;
+        public bool TryNotify(string title, string message)
+        {
+            Attempts.Add((title, message));
+            return Shows(Attempts.Count);
+        }
+        public void Notify(string title, string message) => TryNotify(title, message);
+    }
+
+    /// <summary>Polls until a notice has been tried, then moves on a few minutes (a failed one is tried again after a short wait, not at once).</summary>
+    private BlindAlarmWatcher MakeWith(IUserNotifier notifier, TimeSpan? gap = null) =>
+        new(_ => Task.FromResult(_next), notifier, _store, () => _profile, _clock, _ => { }, gap ?? TimeSpan.Zero);
+
+    [Fact]
+    public async Task ANoticeThatThrew_IsNotMarkedNotified_AndIsTriedAgainAfterAShortWait()
+    {
+        var watcher = await PastTheGraceAsync();
+        _next = Judged(Silent(NodeA));
+        _notifier.Fails = new InvalidOperationException("no shell");
+        await PollAsync(watcher, 2);
+        _notifier.Notices.Should().ContainSingle("the first attempt failed");
+        _store.Profiles["profile-a"].Should().BeEmpty("a notice nobody saw is not 'notified', and a restart must not forget it");
+
+        await PollAsync(watcher);
+        _notifier.Notices.Should().ContainSingle("not again at the very next poll: the shell is given a moment");
+
+        _notifier.Fails = null; // Explorer restarted, the tray came up
+        await PollAsync(watcher, 10);
+        _notifier.Notices.Should().HaveCountGreaterThan(1, "a notice that could not be shown is not lost for a day");
+        var shown = _notifier.Notices.Count;
+        await PollAsync(watcher, 30);
+        _notifier.Notices.Should().HaveCount(shown, "once shown it is notified, and the day's wait starts");
+        _store.Profiles["profile-a"].Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task ANoticeTheNotifierSaysItCouldNotShow_IsTriedAgainToo()
+    {
+        var notifier = new ReportingNotifier { Shows = attempt => attempt > 1 };
+        var watcher = MakeWith(notifier);
+        await PollAsync(watcher, (int)BlindAlarmWatcher.StartGrace.TotalMinutes + 1);
+        _next = Judged(Silent(NodeA));
+        await PollAsync(watcher, 2);
+        notifier.Attempts.Should().ContainSingle();
+
+        await PollAsync(watcher, 10);
+
+        notifier.Attempts.Should().HaveCount(2, "tried again after the wait, and then shown");
+        await PollAsync(watcher, 60);
+        notifier.Attempts.Should().HaveCount(2, "shown once: no more until the reminder");
+    }
+
+    [Fact]
+    public async Task InABurst_OnlyTheNoticesThatFailedAreTriedAgain()
+    {
+        var notifier = new ReportingNotifier { Shows = attempt => attempt != 2 }; // the second of two fails
+        var watcher = MakeWith(notifier);
+        await PollAsync(watcher, (int)BlindAlarmWatcher.StartGrace.TotalMinutes + 1);
+        _next = Judged(Silent(NodeA), Silent(NodeB));
+        await PollAsync(watcher, 2);
+        notifier.Attempts.Should().HaveCount(2);
+        _store.Profiles["profile-a"].Should().HaveCount(1, "only the one that was shown is notified");
+
+        await PollAsync(watcher, 10);
+
+        notifier.Attempts.Should().HaveCount(3, "the failed one, and only it, is tried again");
+        notifier.Attempts[2].Should().Be(notifier.Attempts[1]);
+    }
+
+    [Fact]
+    public async Task APollCutShortBetweenTwoNotices_DoesNotLoseTheOnesNotReached()
+    {
+        var notifier = new ReportingNotifier();
+        using var stop = new CancellationTokenSource();
+        var watcher = new BlindAlarmWatcher(_ => Task.FromResult(_next), notifier, _store, () => _profile, _clock, _ => { }, TimeSpan.FromMinutes(5));
+        await PollAsync(watcher, (int)BlindAlarmWatcher.StartGrace.TotalMinutes + 1);
+        _next = Judged(Silent(NodeA), Silent(NodeB));
+        await PollAsync(watcher);
+        _clock.Now += BlindAlarmWatcher.PollInterval;
+
+        var poll = watcher.PollOnceAsync(stop.Token); // the first notice goes out, then the pause between the two
+        await Task.Delay(300);
+        stop.Cancel();
+        var act = async () => await poll;
+        await act.Should().ThrowAsync<OperationCanceledException>();
+
+        notifier.Attempts.Should().ContainSingle();
+        _store.Profiles["profile-a"].Should().HaveCount(1, "the first was shown; the second was not reached and is not 'notified'");
+    }
+
     [Fact]
     public async Task ABlindNodeThatKeepsChangingItsDeclaredProtocol_IsOneEpisode()
     {

@@ -61,6 +61,8 @@ public class JoinCommandSnapshotTests : IDisposable
 
             rc.Should().NotBe(0);
             output.ToString().Should().Contain("signature verification failed").And.Contain("can be run again").And.NotContain(Password);
+            // The host cannot be told: say which row to revoke there, and that notes already copied stay (nothing here claims "nothing was kept").
+            output.ToString().Should().Contain("still lists this node ('CliJoiner'").And.Contain("revoke it").And.NotContain("Nothing was kept");
         }
 
         await using (var services = await CliServiceProvider.CreateAsync(_tempDir))
@@ -91,7 +93,8 @@ public class JoinCommandSnapshotTests : IDisposable
 
         rc.Should().Be(1);
         output.ToString().Should().Contain($"protocol version ({hostProtocol})");
-        server.Paths.Should().Equal("/api/join");
+        // Nothing is written here, but the host already wrote this node's row, so it is asked to take it back (JoinCommandAbortTests).
+        server.Paths.Should().Equal("/api/join", "/api/join/abort");
         await using var services = await CliServiceProvider.CreateAsync(_tempDir);
         using var scope = services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull();

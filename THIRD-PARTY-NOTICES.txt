@@ -1,0 +1,48 @@
+Third-party notices: the image library
+======================================
+
+Bee Memory Bank is licensed under the GNU Affero General Public License v3.0 (see LICENSE). This file carries the
+notices of the library that reads, scales and writes the pictures a user uploads (the full node's Api and the mobile
+app). The other packages the product uses carry their own licences inside their NuGet packages.
+
+SkiaSharp 3.119.4 (MIT)
+-----------------------
+https://github.com/mono/SkiaSharp
+
+Copyright (c) 2015-2016 Xamarin, Inc.
+Copyright (c) 2017-2018 Microsoft Corporation.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The native library (libSkiaSharp: libSkiaSharp.dll, libSkiaSharp.so, libSkiaSharp.dylib) is the Skia graphics library
+built by the SkiaSharp project together with the components below. Each keeps its own licence; the complete notice
+texts are in THIRD-PARTY-NOTICES.txt inside the SkiaSharp.NativeAssets.* NuGet packages
+(https://www.nuget.org/packages/SkiaSharp.NativeAssets.Linux.NoDependencies/3.119.4) and in the SkiaSharp repository.
+
+  Skia (chrome/m119)        BSD 3-Clause      https://skia.org
+  libpng 1.6.58             libpng licence    http://www.libpng.org
+  zlib 1.3.0.1              zlib licence      https://zlib.net
+  libjpeg-turbo 2.1.5.1     IJG, BSD, zlib    https://libjpeg-turbo.org
+  libwebp 1.6.0             BSD 3-Clause      https://chromium.googlesource.com/webm/libwebp
+  FreeType 2.13.3           FreeType licence  https://freetype.org
+  HarfBuzz 8.3.1            MIT               https://harfbuzz.github.io
+  libexpat 2.7.5            MIT               https://libexpat.github.io
+  Brotli 1.2.0              MIT               https://github.com/google/brotli
+  Wuffs 0.3.3               Apache-2.0        https://github.com/google/wuffs
+
+(Versions as recorded in the SkiaSharp 3.119.4 component manifest, cgmanifest.json, checked 2026-10-08.)

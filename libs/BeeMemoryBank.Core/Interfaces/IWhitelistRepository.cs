@@ -53,4 +53,11 @@ public interface IWhitelistRepository
     /// version columns included: this is an observation, not a replicated change.
     /// </summary>
     Task RecordProtocolVersionAsync(Guid nodeId, int protocolVersion, DateTime seenAt);
+
+    /// <summary>
+    /// A removed node is added again: its row starts over as far as this node's own bookkeeping goes (<c>created_at</c>,
+    /// <c>deleted_at</c>, the protocol it last declared and when), so the alarms judge it from now and not from the first
+    /// pairing. Touches no version column, so nothing is replicated.
+    /// </summary>
+    Task ResetLocalBookkeepingAsync(Guid nodeId, DateTime now);
 }

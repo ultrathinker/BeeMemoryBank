@@ -86,7 +86,7 @@ public class McpAclTests : IAsyncLifetime
         // (media has no .enc file any more); bee_get_file reads the bytes back.
         var blobRepo = new BlobRepository(_factory);
         var mediaEventLogger = new EventLogger(nodeRepo, new EventLogRepository(_factory), clock, new NullActorProvider(), new SyncTrigger(), _session, blobRepo);
-        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, mediaEventLogger, mediaOptions, _factory, new ImageSharpImageTranscoder(), blobRepo: blobRepo);
+        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, mediaEventLogger, mediaOptions, _factory, new SkiaImageTranscoder(), blobRepo: blobRepo);
         _mediaService = mediaService;
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), _conceptTagService, _factory);
@@ -127,7 +127,7 @@ public class McpAclTests : IAsyncLifetime
         var responseManager = new McpResponseManager(Path.GetTempPath(), new HttpContextAccessor(), _session);
 
         _searchTools = new BeeSearchTools(searchService, hybridSearchService, responseManager, _session);
-        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo), _folderAccessService, _httpContextAccessor);
+        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo), _folderAccessService, _httpContextAccessor, new SkiaImageTranscoder());
         var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, _conceptTagService, _scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _scopeHolder, NullLogger<BeeWriteTools>.Instance, responseManager);
         _uploadTools = new BeeUploadTools(_articleService, mediaService, _session, responseManager);

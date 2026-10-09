@@ -77,7 +77,6 @@ BeeMemoryBank.Blind.PhoneClient BeeMemoryBank.Sync.Blind.BlindPhoneReplicaClient
 BeeMemoryBank.Blind.PhoneClient BeeMemoryBank.Sync.Blind.IBlindPhonePullClient
 BeeMemoryBank.Blind.PhoneClient BeeMemoryBank.Sync.Blind.IBlindVerifiedPackageFetcher
 BeeMemoryBank.Blind.PhoneClient BeeMemoryBank.Sync.Blind.VerifiedReplicaPackage
-BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.AppleScriptText
 BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.BlindSecretStoreException
 BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.BlindSecretStoreFailure
 BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.CommandResult
@@ -89,8 +88,6 @@ BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindAuto
 BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindAutostartOptions
 BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindHostOptions
 BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindHostServices
-BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindLifecycle
-BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindNotifications
 BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindPaths
 BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindStateStore
 BeeMemoryBank.BlindDesktop.MacOS BeeMemoryBank.BlindDesktop.MacOS.MacOsKeychainSecretStore
@@ -264,8 +261,12 @@ BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Interop.Sec
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Keychain.IKeychainBackend
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Keychain.KeychainStatus
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Keychain.SecurityFrameworkKeychain
+BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.LaunchAgents.FileSystemLinkReader
+BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.LaunchAgents.ILinkReader
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.LaunchAgents.LaunchAgentInfo
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.LaunchAgents.LaunchAgentPlist
+BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.LaunchAgents.ProgramLocationPolicy
+BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.LaunchAgents.ProgramPaths
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Processes.ProcessTreeKill
 BeeMemoryBank.Search BeeMemoryBank.Search.DefaultStemmer
 BeeMemoryBank.Search BeeMemoryBank.Search.DefaultTokenizer

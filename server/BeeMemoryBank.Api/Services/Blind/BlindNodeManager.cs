@@ -5,6 +5,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using Dapper;
 
 namespace BeeMemoryBank.Api.Services;
 
@@ -141,12 +142,22 @@ public sealed class BlindNodeManager(
             if (await whitelist.GetByNodeIdAsync(code.NodeId, includeDeleted: true) is null)
                 await whitelist.CreateAsync(entry);
             else
+            {
                 await whitelist.UpdateAsync(entry);
+                // Removed and added again: the row is the old one, and its clocks ran on while it was gone.
+                await whitelist.ResetLocalBookkeepingAsync(code.NodeId, entry.CreatedAt);
+            }
         }
         pins.Invalidate();
 
+        // A node this PC already pulled from (added again after a removal, or paired again) may hold events that exist
+        // nowhere else, and its log may have moved past the pull position this PC kept. Take in what it has first, as a
+        // reseed does, and let the package say so; a seed that skipped this would drop those events and leave a cursor
+        // that no longer fits the log (every cycle would end in a 410).
+        var includesUpTo = await TakeInWhatTheNodeHoldsAsync(sp, http, entry, ct);
+
         var package = await sp.GetRequiredService<BlindPackageBuilder>()
-            .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: true, ct);
+            .BuildAsync(Guid.NewGuid(), includesUpTo, producerIsSuperadmin: true, ct);
         var me = await sp.GetRequiredService<INodeIdentityRepository>().GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
         var seederProof = BlindSeederProof.Compute(code.Secret, package.Manifest.SeedId, me.NodeId, me.Ed25519PublicKey);
@@ -169,8 +180,8 @@ public sealed class BlindNodeManager(
         }
         await sp.GetRequiredService<BlindState>().ClearAdoptedCheckpointAsync(code.NodeId);
         await StartPushingFromAsync(sp, code.NodeId, package.Manifest.CpSequence);
-        logger.LogInformation("Blind node {NodeId} at {Address} added and seeded (cp {Cp})",
-            code.NodeId, code.Address, package.Manifest.CpSequence);
+        logger.LogInformation("Blind node {NodeId} at {Address} added and seeded (cp {Cp}, includes up to {UpTo})",
+            code.NodeId, code.Address, package.Manifest.CpSequence, includesUpTo);
         return new BlindNodeAdded(code.NodeId, displayName, package.Manifest.CpSequence, warnings);
     }
 
@@ -248,6 +259,32 @@ public sealed class BlindNodeManager(
         if (standing.ResponderNodeId == peer.NodeId && standing.Protocol > 0)
             await sp.GetRequiredService<IWhitelistRepository>().RecordProtocolVersionAsync(peer.NodeId, standing.Protocol, UtcNow());
         return standing is { ReseedNeeded: true, CallerIsSuperadmin: true };
+    }
+
+    /// <summary>
+    /// For a node paired before: pulls everything it has (the reseed's first step) and returns how far that got. Null when this
+    /// PC holds no pull position for it, or when the position cannot be used: the node's log starts above it, or it does not
+    /// let this PC in (a volume that was made again). Then the position is dropped, so that the first cycle after the seed
+    /// adopts the new checkpoint as for any new pairing. A node that cannot be reached at all fails the add, as the seed would.
+    /// </summary>
+    private async Task<long?> TakeInWhatTheNodeHoldsAsync(IServiceProvider sp, HttpClient http, WhitelistEntry row, CancellationToken ct)
+    {
+        var positions = sp.GetRequiredService<ISyncPositionRepository>();
+        if (await positions.GetAsync(row.NodeId) is null) return null;
+        try
+        {
+            return await PullEverythingAsync(sp, http, row, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested && ex is not HttpRequestException { StatusCode: null })
+        {
+            logger.LogWarning(
+                "Blind node {NodeId} could not be pulled from before it is seeded again ({Reason}); its pull position is dropped and " +
+                "what only it holds is not carried over", row.NodeId, ex.Message);
+            // A raw statement, not a repository method: nothing else drops one peer's cursor, and ISyncPositionRepository has fakes.
+            using var conn = sp.GetRequiredService<IDbConnectionFactory>().CreateConnection();
+            await conn.ExecuteAsync("DELETE FROM tbl_sync_position WHERE remote_node_id = @id COLLATE NOCASE", new { id = row.NodeId.ToString() });
+            return null;
+        }
     }
 
     /// <summary>Pulls from the blind node until nothing new arrives; returns how far that got.</summary>

@@ -482,6 +482,7 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         ("POST", "/api/sync/blobs/get",                    HttpStatusCode.Unauthorized),
         ("POST", "/api/sync/probe-relay",                  HttpStatusCode.Unauthorized),
         ("POST", "/api/join",                              HttpStatusCode.Unauthorized),
+        ("POST", "/api/join/abort",                        HttpStatusCode.Unauthorized),
         ("GET",  "/api/snapshots/restore/{eventId}/file",  HttpStatusCode.Unauthorized),
         ("GET",  "/api/snapshots/restore/progress",        HttpStatusCode.OK),
         ("GET",  "/api/dek-rotation/progress",             HttpStatusCode.OK),
@@ -508,6 +509,12 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
         {
             request.Content = pattern switch
             {
+                "/api/join/abort" => JsonContent.Create(new
+                {
+                    masterPassword = "wrong-password-by-design",
+                    nodeId = Guid.NewGuid(),
+                    ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32])
+                }),
                 "/api/join" => JsonContent.Create(new
                 {
                     masterPassword = "wrong-password-by-design",

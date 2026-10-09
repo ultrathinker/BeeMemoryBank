@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### 2.5.1 (2026-10-09)
+
+No sync protocol change (still 3) and no database migration. The join response gains two optional fields per peer (below) and the host a new route,
+`POST /api/join/abort` (below); nodes of 2.0.x to 2.5.0 ignore the fields, never call the route and keep syncing and joining with 2.5.1 in both directions. Each fix has a test that fails without it.
+
+- **Two first starts at once on Linux or macOS no longer both create the node identity.** The second start used to replace the first one's key file, which
+  left the node refusing to start later ("does not belong to node"). The same step now protects a blind node's TLS certificate.
+- **A second node on the same data folder is refused at start** with a clear message and exit code 1 (a second container on one volume, an old container left
+  running). A node holds `.instance.lock` in its data folder while it runs; a folder shared over NFS or SMB by two computers is still not protected.
+- **`docker run` of the full image without a compose file** keeps the Api and the Web front on one data folder (`BMB_DATA_PATH=/app/data` is set in the image).
+- **Sync: "cannot catch up" is kept per peer.** A node stuck behind a peer that has compacted past it was forgotten as soon as another peer synced fine; the
+  notice now stays until that peer answers again or is removed.
+- **Adding a blind node again after removing it** takes in what it holds first, so it syncs again, Reseed works and nothing it received meanwhile is lost; its
+  silent and protocol alarms count from the new pairing.
+- **A blind copy is no longer reported silent in the first hour after this PC starts or wakes.**
+- **A phone that joined from a snapshot no longer restarts its clock at 0** (Android app and iPhone full app). After the app was killed its edits lost to every
+  peer; it now keeps the clock of the imported rows, like `bmb join` and the Setup page.
+- **A joining node pins the TLS keys of the peers it learns from the host.** The phone, `bmb join` and the Setup page used to check those peers through the
+  public certificate authorities, so a self-signed peer was unreachable and any valid certificate at its address was accepted. The join response now carries
+  `tlsTrust` and `tlsSpki` for each peer, and a value that is not a valid pin is never stored.
+- **A join no longer fails because the host needs minutes to build the snapshot of a big vault** (`bmb join` and the Setup page gave up after 30 seconds, the
+  phone after 100).
+- **After a failed join** the messages say which member row stays on the other computer and that it must be revoked on its Admin page (it holds back
+  compaction); they no longer claim that nothing was kept.
+- **The archive and the extracted database of a join or restore are made in the data folder, readable by the owner only** (not in the shared temp folder), and
+  what a killed join left behind is removed at the next start.
+- **iPhone full app:** the password and passphrase fields are emptied after every outcome of join, create, unlock and opening a protected note, not only after
+  success.
+- **Android:** sync and first-load or backup failure messages include the inner cause instead of the HTTP stack's generic "An error occurred while sending the
+  request."
+- **Windows blind app:** a state file that another program holds at start-up is no longer replaced by an empty one (it is read again, or the call fails and is
+  retried); a damaged state file is kept as `state.json.damaged-*` before it is replaced; a failed write no longer leaves the app ahead of the disk; a key
+  file that cannot be read for now is reported as "the key store did not answer", not as a lost key.
+- **macOS blind app:** the login item refuses to point at a temporary, build or quarantined (App Translocation) copy, and shows as off when the app it starts is
+  gone or was moved.
+- **Blind apps:** after a refused "Disconnect and wipe" the sync and backup schedule is given back (it stayed stopped until the app was restarted); starting the
+  app again while it is quitting brings it up instead of ending with nothing running.
+- **Full app:** a blind-node alarm notice that could not be shown is tried again after five minutes instead of being counted as shown for a day. Starting the
+  app a second time shows the running copy's window (Windows), and a click on the Dock icon shows the window (macOS). When "Restart to update" cannot apply the
+  update, the node is started again and the update window says why (it used to shut the app down with the vault not served); the reason is in
+  `logs/velopack.log`.
+- **Security:** `bmb init` and `bmb join` take the master password on stdin (`--password-stdin`) or by a prompt without echo; `--password` still works but
+  warns that it is visible in the process list and shell history.
+- **Security:** the release workflows download the search model from a pinned commit and verify its SHA-256 on every run.
+- **A failed join no longer leaves a phantom member on the other computer.** New route `POST /api/join/abort`: a joiner whose join fails after the other node
+  answered it (`bmb join`, the Setup page, the Android and iPhone apps) asks that node to take its row back, so a failed join no longer leaves an active
+  never-synced member that holds back compaction. It needs the master password, removes only the never-synced row of that attempt, and is rate-limited and
+  audited (`join_aborted`). A node or proxy that does not know the route (2.5.0 or older) keeps the old message that names the row. Reverse-proxy recipes
+  forward `/api/join/abort` together with `/api/join`; a proxy that whitelists paths exactly must add it.
+- **Two joins of the same new node id at the same moment** no longer fail with a database error on the host.
+- **The "Connect a device" door stays up two more minutes after a finished join**, answering only that abort, so a failure after the snapshot download
+  through a join code can still be taken back.
+- **Images: SixLabors.ImageSharp is gone; the image library is now SkiaSharp (MIT).** Its fixed versions need a paid licence and the free versions carry open
+  advisories (NU1902/NU1903); no advisory remains against the image library. Phone photos with an EXIF rotation are now stored upright, and transparent
+  pictures become white, not black, when converted to JPEG. A damaged, cut-short or oversized picture (over 100 megapixels or 64 MB) is refused with a clear
+  message (HTTP 400) before it is decoded, instead of an error. Only JPEG, PNG, GIF, WebP and BMP (and SVG and animated GIF untouched) reach the decoder.
+  The full-node server grows by 9 to 14 MB (the native library). `THIRD-PARTY-NOTICES.txt` is added (and copied into the Docker image).
+
 ### Removed
 
 #### 2.2.0: the Internet Access wizard, Let's Encrypt and DDNS are gone (2026-10-05)

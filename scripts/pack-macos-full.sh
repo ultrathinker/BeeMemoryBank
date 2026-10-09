@@ -42,7 +42,7 @@
 # --bundle-model FILE copies FILE to api/model.onnx after checking its SHA-256 against the one the code expects.
 #
 # The result is UNSIGNED and NOT notarized. Signing and notarization are an optional branch that is OFF unless BMB_MACOS_SIGN=1 (see
-# the optional branch at the end of this file; it has never been run, and it never signs the staged app: it makes a ditto copy in
+# the optional branch at the end of this file; it never signs the staged app: it makes a ditto copy in
 # <output>/signed/ and signs that). Nothing in this script contains a signing identity, a team id
 # or a password: they are read from the environment when the branch is switched on. For a trial without any identity use
 # scripts/validate-macos-full-adhoc.sh, which signs a COPY ad hoc.
@@ -464,7 +464,7 @@ check_app() {
   fi
 
   # native libraries of the products
-  for rel in libAvaloniaNative.dylib libSkiaSharp.dylib libHarfBuzzSharp.dylib api/libe_sqlite3.dylib api/libonnxruntime.dylib; do
+  for rel in libAvaloniaNative.dylib libSkiaSharp.dylib libHarfBuzzSharp.dylib api/libe_sqlite3.dylib api/libonnxruntime.dylib api/libSkiaSharp.dylib; do
     [ -f "$MACOS/$rel" ] || bad "missing: Contents/MacOS/$rel"
   done
 
@@ -575,7 +575,7 @@ fi
   echo "signed:                 no (see the optional branch of pack-macos-full.sh)"
 } > "$REPORT"
 
-# ---- 5. optional: signing and notarization (OFF by default, never run) --------------------------------------------------------
+# ---- 5. optional: signing and notarization (OFF by default) --------------------------------------------------------
 # Switch on with BMB_MACOS_SIGN=1. Read from the environment, never written down here:
 #   BMB_MACOS_SIGN_IDENTITY   the "Developer ID Application: ..." identity (name or hash) in the keychain that codesign should use
 #   BMB_MACOS_KEYCHAIN        optional: a keychain file to take the identity AND the notary profile from (a dedicated release keychain, not the login one)

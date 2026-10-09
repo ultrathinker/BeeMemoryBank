@@ -95,7 +95,7 @@ public class AutostartIsEnabledTests
 
     private static MacOsBlindAutostart Make(TempFolder folder) => new(
         new MacOsBlindAutostartOptions { Label = Label, LaunchAgentsDirectory = folder.File("LaunchAgents"), ProgramArguments = ["/usr/bin/true", "--minimized"], LoadImmediately = false },
-        new FakeCommandRunner(), () => 501u, _ => null);
+        new FakeCommandRunner(), () => 501u, _ => null, fileExists: _ => true);
 
     [Fact]
     public void ThroughTheSeam_NoPlist_IsFalse_AndEnabledIsTrue()
@@ -151,7 +151,7 @@ public class KeyStoreUnavailableTests
     private static ServiceProvider Build(TempFolder root, FakeKeychainBackend keychain)
     {
         var services = new ServiceCollection();
-        services.AddMacOsBlindApp(new MacOsBlindHostOptions
+        services.AddSeamsAndCore(new MacOsBlindHostOptions
         {
             ApplicationSupportRoot = root.Path,
             KeychainBackend = keychain,

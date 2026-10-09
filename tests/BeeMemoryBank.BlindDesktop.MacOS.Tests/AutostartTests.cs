@@ -157,7 +157,7 @@ public class AutostartTests
                     ProgramArguments = program ?? Program,
                     LoadImmediately = loadImmediately,
                 },
-                new LaunchctlSimulator(this), () => 501u, name => name == "XPC_SERVICE_NAME" ? ServiceName : null);
+                new LaunchctlSimulator(this), () => 501u, name => name == "XPC_SERVICE_NAME" ? ServiceName : null, fileExists: _ => true);
         }
 
         public void Dispose() => Folder.Dispose();
@@ -273,7 +273,7 @@ public class AutostartTests
         // same folder and simulated launchd state, new program path
         var second = new MacOsBlindAutostart(
             new MacOsBlindAutostartOptions { Label = Label, LaunchAgentsDirectory = rig.Folder.File("LaunchAgents"), ProgramArguments = ["/Users/someone/Apps/Blind", "--minimized"] },
-            new LaunchctlSimulator(rig), () => 501u, _ => null);
+            new LaunchctlSimulator(rig), () => 501u, _ => null, fileExists: _ => true);
         second.IsCurrent.Should().BeFalse();
         rig.Runner.Calls.Clear();
 
@@ -294,7 +294,7 @@ public class AutostartTests
             new FakeCommandRunner()
                 .On("/bin/launchctl", "print gui/501/" + Label, "", exitCode: 113)
                 .On("/bin/launchctl", "bootstrap gui/501 " + Path.Combine(rig.Folder.Path, "LaunchAgents", Label + ".plist"), "", exitCode: 125, error: "Domain does not support specified action"),
-            () => 501u, _ => null);
+            () => 501u, _ => null, fileExists: _ => true);
 
         var result = refusing.Apply(true);
 
@@ -378,5 +378,74 @@ public class AutostartTests
 
         autostart.Label.Should().Be("com.beememorybank.blind");
         autostart.PlistPath.Should().EndWith(Path.Combine("Library", "LaunchAgents", "com.beememorybank.blind.plist"));
+    }
+
+    private const string Translocated =
+        "/private/var/folders/zz/abcdef/T/AppTranslocation/6F2A1C3E-0000-0000-0000-000000000000/d/Bee Memory Bank Blind.app/Contents/MacOS/BeeMemoryBank.BlindDesktop";
+
+    private static MacOsBlindAutostart Make(TempFolder folder, string program, Func<string, bool>? exists = null) =>
+        new(new MacOsBlindAutostartOptions
+            {
+                Label = Label,
+                LaunchAgentsDirectory = folder.File("LaunchAgents"),
+                ProgramArguments = [program, "--minimized"],
+                LoadImmediately = false,
+            },
+            new FakeCommandRunner(), () => 501u, _ => null, exists ?? (_ => true), tempPath: "/var/folders/zz/abcdef/T/");
+
+    [Theory]
+    [InlineData(Translocated, "quarantine")]
+    [InlineData("/Users/someone/src/BeeMemory/bin/Debug/net10.0/BeeMemoryBank.BlindDesktop", "build folder")]
+    [InlineData("/tmp/unzipped/Blind.app/Contents/MacOS/BeeMemoryBank.BlindDesktop", "temporary")]
+    [InlineData("/usr/local/share/dotnet/dotnet", "dotnet host")]
+    public void ALoginItemThatWouldStartNothingTheNextDay_IsRefused_AndNothingIsWritten(string program, string reason)
+    {
+        using var folder = new TempFolder();
+        var autostart = Make(folder, program);
+
+        var act = () => autostart.Apply(true);
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain(reason);
+        File.Exists(autostart.PlistPath).Should().BeFalse("a plist that starts nothing the day after must not be made, and the toggle must not say on");
+        autostart.IsEnabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void AProgramThatIsNotThere_IsRefused_AndOneThatWentAwayLaterReadsAsNotEnabled()
+    {
+        using var folder = new TempFolder();
+        var present = true;
+        var autostart = Make(folder, "/Applications/Bee Memory Bank Blind.app/Contents/MacOS/BeeMemoryBank.BlindDesktop", _ => present);
+        autostart.Apply(true);
+        autostart.IsEnabled.Should().BeTrue();
+
+        present = false; // the app was moved or deleted after the box was ticked
+
+        autostart.IsEnabled.Should().BeFalse("the file the login item starts does not exist");
+        var refused = () => autostart.Apply(true);
+        refused.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("does not exist");
+    }
+
+    [Fact]
+    public void ALoginItemOfAnotherCopyOfTheApp_ReadsAsNotEnabled_ForThisCopy()
+    {
+        using var folder = new TempFolder();
+        Make(folder, "/Users/someone/Downloads/Blind.app/Contents/MacOS/BeeMemoryBank.BlindDesktop").Apply(true);
+
+        var moved = Make(folder, "/Applications/Blind.app/Contents/MacOS/BeeMemoryBank.BlindDesktop");
+
+        moved.IsEnabled.Should().BeFalse("the plist starts the old place, not this copy");
+        moved.Apply(true);
+        moved.IsEnabled.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ACopyThatCannotWriteALoginItem_StillSeesTheWorkingOneOfItsLabel()
+    {
+        using var folder = new TempFolder();
+        Make(folder, "/Applications/Blind.app/Contents/MacOS/BeeMemoryBank.BlindDesktop").Apply(true);
+
+        // The quarantined copy of the same app: it has nothing of its own to compare with.
+        Make(folder, Translocated).IsEnabled.Should().BeTrue();
     }
 }

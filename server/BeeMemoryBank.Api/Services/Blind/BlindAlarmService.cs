@@ -67,7 +67,8 @@ public sealed record BlindAlarmReport(string State, bool Locked, IReadOnlyList<B
 /// for <see cref="ServerNotifyAfter"/> while awake (the streak of <see cref="UnreachablePeers"/>, which does not count a night the PC slept
 /// through), or once there was no contact for <see cref="BlindNodeManager.SilentAfter"/>. A night's sleep of the blind node's host or a
 /// router reboot is not an emergency; a day is too slow, because its backups stop with it.</item>
-/// <item>A blind <b>copy</b> (no address; it calls a node): <see cref="CopyNotifyAfter"/>, and only when this PC has heard from it at all.
+/// <item>A blind <b>copy</b> (no address; it calls a node): <see cref="CopyNotifyAfter"/>, and only when this PC has heard from it at all,
+/// and only once this PC has been awake for <see cref="CopyGrace"/> (a copy cannot call a PC that is off).
 /// A copy that calls another node (a hub, a blind node) never calls this PC, so this PC has no evidence about it either way.</item>
 /// </list>
 /// <para>The page banner stays at <see cref="BlindNodeManager.SilentAfter"/> for every node, as before.</para>
@@ -93,11 +94,20 @@ public sealed class BlindAlarmService
     /// </summary>
     public static readonly TimeSpan CycleFresh = TimeSpan.FromMinutes(20);
 
+    /// <summary>
+    /// A blind copy is judged only once this PC has been awake this long since it started or woke (the first cycle after a gap longer than
+    /// <see cref="CycleFresh"/> begins the count). A copy's contact time moves only when it calls this PC, so right after the PC was off it
+    /// has had no chance to call yet, and a copy last heard 4 days ago is not silent for that reason. A server node is not held: this PC
+    /// calls it, and the cycle that just completed was the call.
+    /// </summary>
+    public static readonly TimeSpan CopyGrace = TimeSpan.FromHours(1);
+
     private readonly TimeProvider _time;
     private readonly InvisibleModeService? _invisible;
     private readonly SessionService? _session;
     private readonly Func<IReadOnlyDictionary<Guid, DateTime>>? _unreachableSince;
     private long _lastCycleTicks; // 0 = no completed cycle counts yet
+    private long _awakeSinceTicks; // the first completed cycle after this process started or the computer woke; 0 = none counts yet
 
     /// <param name="time">The clock of every judgement.</param>
     /// <param name="invisible">Invisible mode; null means never invisible.</param>
@@ -127,8 +137,19 @@ public sealed class BlindAlarmService
     /// A sync cycle has completed. One that ran in invisible mode contacted nobody: it does not count, and the next judgement waits for a
     /// cycle that did.
     /// </summary>
-    public void NoteSyncCycleCompleted() =>
-        Interlocked.Exchange(ref _lastCycleTicks, _invisible?.IsInvisible == true ? 0 : UtcNow().Ticks);
+    public void NoteSyncCycleCompleted()
+    {
+        if (_invisible?.IsInvisible == true)
+        {
+            Interlocked.Exchange(ref _lastCycleTicks, 0);
+            Interlocked.Exchange(ref _awakeSinceTicks, 0);
+            return;
+        }
+        var now = UtcNow().Ticks;
+        var previous = Interlocked.Exchange(ref _lastCycleTicks, now);
+        // No cycle before, or one so long ago that the computer was off or asleep (or a cycle ran for most of an hour): a new stretch awake.
+        if (previous == 0 || now - previous > CycleFresh.Ticks) Interlocked.Exchange(ref _awakeSinceTicks, now);
+    }
 
     /// <summary>Judges <paramref name="nodes"/> (the rows of <see cref="BlindNodeManager.ListAsync"/>) now.</summary>
     public BlindAlarmReport Judge(IReadOnlyList<BlindNodeStatus> nodes)
@@ -143,7 +164,9 @@ public sealed class BlindAlarmService
                 return NotJudged(BlindAlarmReport.WarmingUp, nodes, locked);
         }
 
-        var alarms = Evaluate(now, nodes, _unreachableSince?.Invoke() ?? new Dictionary<Guid, DateTime>());
+        var awakeSince = Interlocked.Read(ref _awakeSinceTicks);
+        var copiesHeard = _unreachableSince == null || (awakeSince != 0 && now - new DateTime(awakeSince, DateTimeKind.Utc) >= CopyGrace);
+        var alarms = Evaluate(now, nodes, _unreachableSince?.Invoke() ?? new Dictionary<Guid, DateTime>(), copiesHeard);
         if (locked) alarms = alarms.Select(a => a with { Name = null }).ToList();
         return new BlindAlarmReport(BlindAlarmReport.Judged, locked, alarms);
     }
@@ -161,8 +184,11 @@ public sealed class BlindAlarmService
     /// The alarms of <paramref name="nodes"/> at <paramref name="now"/>; a pure function of its arguments.
     /// </summary>
     /// <param name="unreachableSince">Per node this PC cannot reach now, when the streak began while this PC was awake.</param>
+    /// <param name="copiesHeard">This PC has been awake for <see cref="CopyGrace"/>, so a copy that calls it has had its chance to. Until
+    /// then a copy that would be silent is kept in the list without a banner or a notification (an open episode stays open, a new one
+    /// does not begin).</param>
     public static IReadOnlyList<BlindAlarm> Evaluate(
-        DateTime now, IReadOnlyList<BlindNodeStatus> nodes, IReadOnlyDictionary<Guid, DateTime> unreachableSince)
+        DateTime now, IReadOnlyList<BlindNodeStatus> nodes, IReadOnlyDictionary<Guid, DateTime> unreachableSince, bool copiesHeard = true)
     {
         var alarms = new List<BlindAlarm>();
         foreach (var node in nodes)
@@ -170,17 +196,20 @@ public sealed class BlindAlarmService
             if (ProtocolAlarmOf(node, notify: true) is { } protocolAlarm) alarms.Add(protocolAlarm);
 
             var quietSince = DateTime.SpecifyKind(node.LastContact ?? node.CreatedAt, DateTimeKind.Utc);
-            var banner = now - quietSince > BlindNodeManager.SilentAfter;
+            var isCopy = string.IsNullOrEmpty(node.Address);
+            var quiet = now - quietSince > BlindNodeManager.SilentAfter;
             var failing = DateTime.MinValue;
-            var inStreak = !string.IsNullOrEmpty(node.Address) && unreachableSince.TryGetValue(node.NodeId, out failing);
-            var notify = string.IsNullOrEmpty(node.Address)
-                // A copy: only its calls to THIS PC are evidence (they are what LastProtocolSeenAt records).
-                ? node.ProtocolSeenAt is not null && now - quietSince > CopyNotifyAfter
-                : banner || (inStreak && now - failing >= ServerNotifyAfter);
+            var inStreak = !isCopy && unreachableSince.TryGetValue(node.NodeId, out failing);
+            // A copy: only its calls to THIS PC are evidence (they are what LastProtocolSeenAt records).
+            var copyQuiet = isCopy && node.ProtocolSeenAt is not null && now - quietSince > CopyNotifyAfter;
+            // A copy cannot have called while this PC was off: until it has been awake for a while, it is not judged (see CopyGrace).
+            var held = isCopy && !copiesHeard && (quiet || copyQuiet);
+            var banner = quiet && !held;
+            var notify = isCopy ? copyQuiet && !held : banner || (inStreak && now - failing >= ServerNotifyAfter);
             // A server node this PC is failing to reach stays in the list below its threshold too (Notify and Banner both false): a sleep of
             // this PC restarts the streak, and the condition has not ended because of it. The desktop shell keeps an open episode for such an
             // alarm instead of ending it, so one outage is one episode however many times the PC sleeps; nothing else shows it.
-            if (banner || notify || inStreak)
+            if (banner || notify || inStreak || held)
                 alarms.Add(new BlindAlarm(BlindAlarmKinds.Silent, node.NodeId, node.DisplayName, quietSince, Protocol: null, notify, banner));
         }
         return alarms;

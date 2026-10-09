@@ -16,6 +16,15 @@ public sealed class WindowsAclFactAttribute : FactAttribute
     }
 }
 
+/// <summary>The Linux and macOS twin of <see cref="WindowsAclFactAttribute"/>: a fact on the 0600 file mode, skipped on Windows.</summary>
+public sealed class UnixModeFactAttribute : FactAttribute
+{
+    public UnixModeFactAttribute()
+    {
+        if (OperatingSystem.IsWindows()) Skip = "Unix file modes only; on Windows the owner-only ACL is checked instead";
+    }
+}
+
 /// <summary>Builds the situation the owner-only rule exists for, and reads back what a file's ACL allows.</summary>
 [SupportedOSPlatform("windows")]
 public static class WindowsAcl

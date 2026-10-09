@@ -6,11 +6,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Single dependency: SixLabors.ImageSharp. Everything else (Makaretu,
+    <!-- Single dependency: SkiaSharp (MIT; the managed wrapper plus its native libSkiaSharp). Everything else (Makaretu,
          DPAPI) stays in BeeMemoryBank.Infrastructure, so consumers that only need
          image transcoding (the Mobile MAUI app, in particular) do not pay for any of
-         those packages. -->
-    <PackageReference Include="SixLabors.ImageSharp" />
+         those packages. SkiaSharp brings the Windows and macOS natives by itself and the
+         Android ones for the Android app; the Linux native is added by the projects that
+         run on Linux (the Api, the tests), not here, so that the Android app is not handed
+         Linux-bionic libraries next to its own (see the SQLite note in BeeMemoryBank.Mobile.csproj). -->
+    <PackageReference Include="SkiaSharp" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
 

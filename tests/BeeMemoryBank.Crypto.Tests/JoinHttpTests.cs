@@ -30,6 +30,48 @@ public class JoinHttpTests
         (await recorder.ReceivedOrNothingAsync()).Should().NotContain(Marker);
     }
 
+    [Fact]
+    public void TheClient_HasNoTimeoutOfItsOwn_BecauseTheSnapshotRequestMustWaitForTheHostToBuildIt()
+    {
+        using var client = JoinHttp.CreateClient();
+        using var pinned = JoinHttp.CreateClient(new string('A', 43));
+
+        client.Timeout.Should().Be(Timeout.InfiniteTimeSpan);
+        pinned.Timeout.Should().Be(Timeout.InfiniteTimeSpan);
+        JoinHttp.RequestTimeout.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task ARequestThatTakesLongerThanItsLimit_FailsAsAnUnreachableHost_NotAsACancellation()
+    {
+        var act = () => JoinHttp.BoundAsync(async t =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10), t);
+            return 1;
+        }, limit: TimeSpan.FromMilliseconds(200));
+
+        var thrown = await act.Should().ThrowAsync<HttpRequestException>();
+        thrown.Which.Message.Should().Contain("did not answer within 0.2 seconds");
+        thrown.Which.InnerException.Should().BeOfType<TimeoutException>();
+    }
+
+    [Fact]
+    public async Task ARequestThatAnswersInTime_ReturnsItsAnswer()
+    {
+        (await JoinHttp.BoundAsync(t => Task.FromResult(7), limit: TimeSpan.FromSeconds(5))).Should().Be(7);
+    }
+
+    [Fact]
+    public async Task TheCallersOwnCancellation_StaysACancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var act = () => JoinHttp.BoundAsync(t => Task.Delay(TimeSpan.FromSeconds(10), t).ContinueWith(_ => 1, t), cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     /// <summary>One connection: records what it reads (until the body marker or a pause) and answers.</summary>
     internal sealed class PlainServer : IAsyncDisposable
     {

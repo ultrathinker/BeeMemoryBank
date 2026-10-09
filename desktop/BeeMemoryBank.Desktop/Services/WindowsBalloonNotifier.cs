@@ -84,35 +84,40 @@ public sealed class WindowsBalloonNotifier : IUserNotifier, IDisposable
         return clean[..keep] + "...";
     }
 
-    public void Notify(string title, string message)
+    public void Notify(string title, string message) => TryNotify(title, message);
+
+    /// <summary>Shows the notice; false when it could not be (no window, or the shell refused it, for instance while Explorer restarts).</summary>
+    public bool TryNotify(string title, string message)
     {
         try
         {
             // Before the window is asked for: a notice after Dispose must not make a window of its own that nobody closes.
-            lock (_gate) if (_disposed) return;
+            lock (_gate) if (_disposed) return false;
             var window = _window();
-            if (window == IntPtr.Zero) return;
+            if (window == IntPtr.Zero) return false;
             var (fittedTitle, fittedMessage) = Fit(title, message);
 
             long generation;
             lock (_gate)
             {
-                if (_disposed) return;
+                if (_disposed) return false;
                 var iconShown = _iconWindow == window;
                 if (!_shell.Show(window, _iconId, fittedTitle, fittedMessage, iconShown))
                 {
                     Console.Error.WriteLine("[WindowsBalloonNotifier] The notification could not be shown.");
-                    return;
+                    return false;
                 }
                 _iconWindow = window;
                 generation = ++_generation;
             }
             _ = RemoveLaterAsync(generation);
+            return true;
         }
         catch (Exception ex)
         {
             // The type only: the text of a notice is not repeated into a log.
             Console.Error.WriteLine($"[WindowsBalloonNotifier] The notification failed ({ex.GetType().Name}).");
+            return false;
         }
     }
 

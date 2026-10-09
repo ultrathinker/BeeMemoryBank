@@ -35,15 +35,25 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: libs/BeeMemoryBank.Embeddings/Models/model.onnx
-          key: onnx-multilingual-e5-small-v2-embeddings-path
+          key: onnx-multilingual-e5-small-761b726-embeddings-path
 
       - name: Download ONNX model (cache miss only)
         if: steps.onnx-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force libs/BeeMemoryBank.Embeddings/Models | Out-Null
-          Invoke-WebRequest -Uri https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx `
+          Invoke-WebRequest -Uri https://huggingface.co/Xenova/multilingual-e5-small/resolve/761b726dd34fb83930e26aab4e9ac3899aa1fa78/onnx/model_quantized.onnx `
             -OutFile libs/BeeMemoryBank.Embeddings/Models/model.onnx
+
+      # The model is a commit of the Hugging Face repository (not `main`) and its SHA-256 is checked on EVERY run, a cache hit
+      # included: what the build embeds is exactly the file the Dockerfile and EmbeddingModelWiring.BundledModelSha256 name.
+      # Core.Tests (DockerImageModelPinTests) keeps the three in step.
+      - name: Verify the ONNX model
+        shell: pwsh
+        run: |
+          $want = 'f80102d3f2a1229f387d3c81909990d8945513e347b0eab049f7de3c6f98c193'
+          $got = (Get-FileHash -Algorithm SHA256 libs/BeeMemoryBank.Embeddings/Models/model.onnx).Hash.ToLowerInvariant()
+          if ($got -ne $want) { throw "model.onnx is $got, expected $want" }
 
       # vpk pack builds a delta package against the newest release it finds in the output folder.
       # Seeding that folder with the latest published release makes updates download only the

@@ -190,6 +190,7 @@ public class SyncScheduler(
 
         // Only sync with nodes that have an API address configured
         var remoteNodes = nodes.Where(n => !string.IsNullOrEmpty(n.ApiAddress)).ToList();
+        snapshotRequiredState?.RetainOnly(remoteNodes.Select(n => n.NodeId).ToHashSet());
         if (remoteNodes.Count == 0) return new SyncCycleResult(0);
 
         using var http = httpClientFactory.CreateClient(HttpClientName);
@@ -205,7 +206,7 @@ public class SyncScheduler(
             try
             {
                 totalApplied += await syncClient.SyncWithPeerAsync(http, node.ApiAddress!, node.NodeId, ct);
-                snapshotRequiredState?.Clear();
+                snapshotRequiredState?.Clear(node.NodeId);
                 if (_unreachable.NoteSuccess(node.NodeId) is var failedBefore and > 0)
                     logger.LogInformation("{NodeId} ({Address}) is reachable again after {Failures} failed attempts",
                         node.NodeId, node.ApiAddress, failedBefore);
@@ -235,7 +236,7 @@ public class SyncScheduler(
                 logger.LogCritical(
                     "Node is out-of-sync with {Url}: compacted past us (cp={Cp}, head={Head}). Manual wipe & rejoin required.",
                     ex.RemoteUrl, ex.LastCompactionCp, ex.CurrentHeadSeq);
-                snapshotRequiredState?.Set(ex);
+                snapshotRequiredState?.Set(ex, node.NodeId);
             }
             catch (Exception ex) when (IsUnreachable(ex, ct))
             {

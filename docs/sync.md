@@ -420,12 +420,28 @@ and the phone. `bmb join` refuses a producer whose sync protocol version is not 
 gate as the Setup page) before it writes anything, and a blind node, which has no join door, is
 named as such ("join a node that holds the data"). When the snapshot step fails, `bmb join` prints
 the reason, exits non-zero and removes the rows it had written, so it can simply be run again; the
-phone does the same. The Setup page keeps its partial node and says "wipe & retry".
+phone does the same. The Setup page keeps its partial node and says "wipe & retry". Since 2.5.1 the
+joiner also tells the producer (`POST /api/join/abort`, below), so the producer does not keep the
+joiner's row, which would count as a peer that never synced and hold back compaction
+(`docs/compaction.md`) until an admin revoked it. Against a producer or proxy that does not know the
+route (a producer of 2.5.0 or older answers 404) nothing changes: the messages of `bmb join`, the phone
+and the Setup page name that row (display name, node id) and say to revoke it.
+The producer builds the whole snapshot before it sends the first header, which takes minutes on a
+big vault, so a joiner waits for it up to 30 minutes; only the requests of the key exchange are held
+to 30 seconds each.
 
 **Flow (joiner perspective):**
 
 1. `POST /api/init/join` on the local Web/API: key exchange with remote, receive master DEK,
-   create local `tbl_node_identity`, `tbl_key_slot`, and populate `tbl_whitelist`.
+   create local `tbl_node_identity`, `tbl_key_slot`, and populate `tbl_whitelist`. Each other
+   peer in the producer's `JoinResponse` whitelist carries, besides its key and address, how the
+   producer reaches it over TLS: `tlsTrust` (`pin` or `public-ca`) and, for `pin`, `tlsSpki` (the
+   SHA-256 pin of its TLS key, base64url). The joiner records them on the inherited row, so it
+   checks that peer exactly as the producer does (`SpkiPinRegistry`) instead of through the public
+   CAs, which a self-signed peer never passes. Both fields are optional: a producer of 2.5.0 or
+   older sends neither (the peer is then recorded without a mode, as before), and a joiner of 2.5.0
+   or older ignores them. A pin that is not a well-formed pin leaves that peer out of the join (the
+   peer is learned later from the whitelist events) rather than unpinned (`JoinTls`).
 2. Challenge+sig authenticate with the remote (standard `/api/sync/authenticate`).
 3. `GET /api/sync/snapshot/for-join` (Bearer auth) → signed `.tar.gz`. Headers:
    - `X-BMB-Snapshot-CP-Seq`: sequence number the snapshot represents
@@ -460,7 +476,29 @@ phone does the same. The Setup page keeps its partial node and says "wipe & retr
    it, and every start initializes the clock from `max(MAX(tbl_event.lamport_ts), floor)`.
 8. `MarkInitialSyncCompletedAsync` on `tbl_node_identity`.
 
-Steps 6-8 are one shared routine (`SnapshotJoin.CompleteAsync`) for the Setup page and `bmb join`.
+Steps 6-8 are one shared routine (`SnapshotJoin.CompleteAsync`) for the Setup page, `bmb join` and the
+phone (the Android app and the iPhone full app); without the durable floor of step 7 a restarted phone began
+its clock at 0 and every edit it made lost last-writer-wins at its peers.
+
+**Aborting a failed join (`POST /api/join/abort`, 2.5.1).** After the producer answered `POST /api/join`, any
+failure on the joiner (a timeout, an unreadable answer, a key slot it refuses, a snapshot it cannot import) makes
+`bmb join`, the Setup page and the phone (Android and iPhone) call it once, best effort (10 seconds, never
+replacing the original error). Body: `{ masterPassword, nodeId, ed25519PublicKeyB64 }`, over the same
+no-redirect, pinned connection as the join; through a join code's LAN door also its `X-BMB-Join-Token`.
+The producer checks the master password exactly as the join does (it is the same code), then removes only
+the row of that attempt: that node id with that key, active, written within the last hour, never synced (no
+row in `tbl_sync_push_position`, the test compaction uses), never its own or a blind id. The removal is an
+ordinary signed `whitelist_revoke` (logged first, as in `DELETE /api/whitelist/{nodeId}`), so the mesh, which
+heard the `whitelist_add`, hears the removal. Answers: `200 {aborted, removed}` (`removed: false` when there was
+nothing to remove, so asking twice is fine), `400` (own or blind id, malformed), `401` (wrong password), `409`
+(a row that has synced, has another key, is too old, or the producer is locked: nothing changed), `429`.
+One gate serializes the row step of `POST /api/join` and the abort; a join of an id the joiner already
+aborted (a request that arrived after the joiner gave up) is refused with `409` and writes no row, for two hours
+or until the producer restarts. The route is in the node's public surface and rate-limited like the join; an
+audit entry `join_aborted` records it (node id and display name, no secret). The sync protocol stays 3 and no
+existing message changes: a 2.5.1 joiner against an older producer gets 404 and falls back, an older joiner never
+calls it. The desktop node's "Connect a device" door passes the route (with the code's token, which it does not
+spend) and, after the joined device has its snapshot, stays up for two more minutes serving only it.
 
 **Re-join:** if a node's position falls below the producer's last compaction CP, regular
 sync returns 410 Gone. The node has no data to recover from — admin must wipe and rejoin.

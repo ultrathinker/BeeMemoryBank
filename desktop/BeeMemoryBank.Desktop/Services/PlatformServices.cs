@@ -64,6 +64,17 @@ public interface IFileManagerReveal
 public interface IUserNotifier
 {
     void Notify(string title, string message);
+
+    /// <summary>
+    /// Like <see cref="Notify"/>, and says whether the notice was handed to the system (false: there was no window or shell to show it).
+    /// Never throws. A notifier that cannot tell (a banner run in the background) leaves the default: it counts as shown. The alarm
+    /// watcher uses it to try a notice again that nobody saw, instead of treating it as notified for a day.
+    /// </summary>
+    bool TryNotify(string title, string message)
+    {
+        Notify(title, message);
+        return true;
+    }
 }
 
 /// <summary>What the "lock the node" request made when the computer went to sleep ended with.</summary>

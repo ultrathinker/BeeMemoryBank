@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BeeMemoryBank.Desktop.MacOS;
+using BeeMemoryBank.Platforms.Apple.LaunchAgents;
 using BeeMemoryBank.Desktop.Services;
 using FluentAssertions;
 using Xunit;

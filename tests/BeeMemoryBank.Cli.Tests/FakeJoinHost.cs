@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Data.Sqlite;
@@ -35,8 +36,8 @@ internal sealed class FakeJoinHost
     private readonly byte[] _snapshot;
     private readonly string _signatureB64;
 
-    /// <summary>The <c>/api/join</c> answer of this host: a key slot for <paramref name="password"/>, no other peers.</summary>
-    public string JoinResponseJson(string password, int? protocolVersion = null)
+    /// <summary>The <c>/api/join</c> answer of this host: a key slot for <paramref name="password"/>, and the other peers given (none by default).</summary>
+    public string JoinResponseJson(string password, int? protocolVersion = null, IEnumerable<IReadOnlyDictionary<string, object>>? whitelist = null)
     {
         var dek = MasterKeyManager.GenerateMasterDek();
         var salt = KeyDerivation.GenerateSalt();
@@ -57,9 +58,43 @@ internal sealed class FakeJoinHost
                 argonIterations = CryptoConstants.DefaultArgonIterations,
                 argonParallelism = CryptoConstants.DefaultArgonParallelism
             },
-            whitelist = Array.Empty<object>()
+            whitelist = (whitelist ?? []).ToArray()
         });
     }
+
+    /// <summary>
+    /// A join answer with one string field of its <paramref name="section"/> (<c>remoteNode</c> or <c>keySlot</c>) replaced: a host
+    /// whose answer parses but holds something the joiner cannot use (a base64 field that is not base64).
+    /// </summary>
+    public static string WithField(string joinResponseJson, string section, string field, string value)
+    {
+        var node = JsonNode.Parse(joinResponseJson)!;
+        node[section]![field] = value;
+        return node.ToJsonString();
+    }
+
+    /// <summary>
+    /// A whitelist entry of the host's <c>/api/join</c> answer. A field that is null is left out altogether, which is what a host
+    /// of a version that does not know it sends (<paramref name="tlsTrust"/> and <paramref name="tlsSpki"/> are 2.5.1's).
+    /// </summary>
+    public static Dictionary<string, object> Peer(
+        Guid nodeId, string? apiAddress, string? tlsTrust = null, string? tlsSpki = null, bool isSuperadmin = false)
+    {
+        var entry = new Dictionary<string, object>
+        {
+            ["nodeId"] = nodeId,
+            ["displayName"] = "Peer " + nodeId.ToString("N")[..6],
+            ["ed25519PublicKeyB64"] = Convert.ToBase64String(Ed25519Signer.GenerateKeyPair().publicKey),
+            ["isSuperadmin"] = isSuperadmin
+        };
+        if (apiAddress != null) entry["apiAddress"] = apiAddress;
+        if (tlsTrust != null) entry["tlsTrust"] = tlsTrust;
+        if (tlsSpki != null) entry["tlsSpki"] = tlsSpki;
+        return entry;
+    }
+
+    /// <summary>A well-formed TLS pin (32 random bytes, base64url) of a key nobody holds.</summary>
+    public static string NewPin() => System.Buffers.Text.Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
 
     public Guid HostId { get; }
     public byte[] PublicKey { get; }

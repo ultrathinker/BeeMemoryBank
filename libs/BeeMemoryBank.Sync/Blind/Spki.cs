@@ -15,6 +15,16 @@ public static class Spki
     public static string Of(X509Certificate2 certificate) =>
         Base64Url.EncodeToString(SHA256.HashData(certificate.PublicKey.ExportSubjectPublicKeyInfo()));
 
+    /// <summary>True if <paramref name="pin"/> is a pin as <see cref="Of"/> writes it: 32 bytes, base64url.</summary>
+    public static bool IsWellFormed(string? pin)
+    {
+        if (string.IsNullOrEmpty(pin)) return false;
+        // The status form: TryDecodeFromChars throws on a character outside the alphabet instead of answering false.
+        Span<byte> x = stackalloc byte[32];
+        return Base64Url.DecodeFromChars(pin, x, out var consumed, out var written) == System.Buffers.OperationStatus.Done
+            && consumed == pin.Length && written == 32;
+    }
+
     /// <summary>Constant-time comparison of two pins; false if either is not a well-formed pin.</summary>
     public static bool Equal(string? a, string? b)
     {

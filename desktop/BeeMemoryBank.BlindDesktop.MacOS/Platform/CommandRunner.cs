@@ -76,6 +76,5 @@ internal static class MacTools
     public const string Netstat = "/usr/sbin/netstat";
     public const string Ifconfig = "/sbin/ifconfig";
     public const string Networksetup = "/usr/sbin/networksetup";
-    public const string Osascript = "/usr/bin/osascript";
     public const string Launchctl = "/bin/launchctl";
 }

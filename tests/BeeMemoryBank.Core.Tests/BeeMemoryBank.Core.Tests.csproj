@@ -24,9 +24,11 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="FluentAssertions" />
-    <!-- BeeImportServiceTests round-trips an image through MediaService's create path; ImageSharp
-         is referenced from BeeMemoryBank.Media transitively, but tests build Image types directly. -->
-    <PackageReference Include="SixLabors.ImageSharp" />
+    <!-- BeeImportServiceTests round-trips an image through MediaService's create path; SkiaSharp
+         is referenced from BeeMemoryBank.Media transitively, but tests build bitmaps directly. -->
+    <PackageReference Include="SkiaSharp" />
+    <!-- The native library for the tests that run on Linux (CI, Docker): SkiaSharp itself carries only the Windows and macOS ones. -->
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />

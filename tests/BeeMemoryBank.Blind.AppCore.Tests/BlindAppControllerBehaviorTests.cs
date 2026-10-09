@@ -308,6 +308,23 @@ public sealed class BlindAppControllerBehaviorTests
     }
 
     [Fact]
+    public async Task AFailedFirstLoad_NamesTheInnerCause_NotOnlyTheHttpStacksGenericText()
+    {
+        var rig = new Rig();
+        await rig.Controller.InitializeAsync();
+        rig.Pair();
+        rig.Controller.SetSchedule(BlindBackupSchedule.Off);
+        rig.Replica.Failure = new HttpRequestException(
+            "An error occurred while sending the request.", new IOException("Unable to read data from the transport connection: Connection reset by peer."));
+
+        var result = await rig.Controller.RunHeavyAsync(false);
+
+        result.Should().Be("First load failed: An error occurred while sending the request. " +
+            "(IOException: Unable to read data from the transport connection: Connection reset by peer.)");
+        rig.Controller.GetStatus().RecentLog.Should().Contain(e => e.Message == result);
+    }
+
+    [Fact]
     public async Task ARepeatingFirstLoadFailure_IsOneLogLine_ThenOnlyAtDoublingAttempts_AndTheStatusCountsAttempts()
     {
         var rig = new Rig();

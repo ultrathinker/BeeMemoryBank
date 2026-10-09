@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
@@ -100,7 +101,11 @@ public class RecoveryRestoreService(
         RestoreBlindPeer? blind, IReadOnlyList<SyncEvent> events, CancellationToken ct = default,
         RestoreBoxPolicy boxes = RestoreBoxPolicy.Default)
     {
-        var dir = Path.Combine(Path.GetTempPath(), $"bmb-restore-{Guid.NewGuid():N}");
+        // In the data folder and owner-only, not the OS temp folder: the extracted package holds the vault database in clear.
+        string dataPath;
+        using (var pathScope = scopes.CreateScope())
+            dataPath = pathScope.ServiceProvider.GetRequiredService<SnapshotService>().DataPath;
+        var dir = SnapshotStaging.NewDirectory(dataPath);
         try
         {
             VerifiedSnapshot package;

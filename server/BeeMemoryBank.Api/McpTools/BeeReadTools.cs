@@ -7,9 +7,6 @@ using BeeMemoryBank.Core.Services;
 using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Processing;
 
 namespace BeeMemoryBank.Api.McpTools;
 
@@ -25,7 +22,8 @@ public class BeeReadTools(
     ArticleDiffService articleDiffService,
     TreeService treeService,
     FolderAccessService folderAccess,
-    IHttpContextAccessor httpContextAccessor)
+    IHttpContextAccessor httpContextAccessor,
+    IImageTranscoder imageTranscoder)
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -551,48 +549,19 @@ public class BeeReadTools(
 
         try
         {
-            using var image = Image.Load(data);
-            var origWidth = image.Width;
-            var origHeight = image.Height;
-            var scale = 1.0;
-            var quality = 80;
-
-            for (int i = 0; i < 10; i++)
+            var result = imageTranscoder.ShrinkJpegToFit(data, maxBytes);
+            if (result != null)
             {
-                var newWidth = (int)(origWidth * scale);
-                var newHeight = (int)(origHeight * scale);
-                var shortestSide = Math.Min(newWidth, newHeight);
-                if (shortestSide < 50)
-                {
-                    var correction = 50.0 / shortestSide;
-                    newWidth = (int)(newWidth * correction);
-                    newHeight = (int)(newHeight * correction);
-                }
-
-                if (i >= 3)
-                    quality = Math.Max(quality - 5, 10);
-
-                using var resized = image.Clone(ctx => ctx.Resize(newWidth, newHeight));
-                using var ms = new MemoryStream();
-                resized.SaveAsJpeg(ms, new JpegEncoder { Quality = quality });
-                var result = ms.ToArray();
-
-                if (result.Length <= maxBytes)
-                {
-                    return
-                    [
-                        new TextContentBlock { Text = $"Image: {fileName} ({contentType}, {data.Length / 1024}KB → {result.Length / 1024}KB)" },
-                        ToImageBlock(result, "image/jpeg")
-                    ];
-                }
-
-                var ratio = (double)maxBytes / result.Length;
-                scale = scale * Math.Sqrt(ratio) * 0.85;
+                return
+                [
+                    new TextContentBlock { Text = $"Image: {fileName} ({contentType}, {data.Length / 1024}KB → {result.Length / 1024}KB)" },
+                    ToImageBlock(result, "image/jpeg")
+                ];
             }
         }
         catch
         {
-            // ImageSharp couldn't load the image
+            // the image transcoder couldn't load the image
         }
 
         return [new TextContentBlock { Text = $"Error: image too large to fit within {maxSizeKb}KB limit" }];

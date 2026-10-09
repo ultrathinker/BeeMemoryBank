@@ -16,5 +16,11 @@ public sealed class HostLifecycle(BlindTimerScheduler scheduler, Action returnTo
     /// <summary>There is no separate backup service on a desktop; the scheduler runs the backups, and it is already stopped.</summary>
     public void StopBackupService() => scheduler.Cancel();
 
+    /// <summary>
+    /// A refused wipe (the running work did not pause in time; nothing was deleted) gives the schedule back: stopping it ended the loop,
+    /// and nothing else starts it again until the app is restarted. A scheduler that already runs is left alone.
+    /// </summary>
+    public void ResumeBackgroundWork() => scheduler.EnsureScheduled();
+
     public void RestartAfterWipe() => returnToFirstRun();
 }

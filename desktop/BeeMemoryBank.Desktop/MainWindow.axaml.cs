@@ -515,6 +515,29 @@ public partial class MainWindow : Window
         Activate();
     }
 
+    /// <summary>
+    /// "Restart to update": stops the node (graceful, so the database is closed before the files are swapped) and keeps the window, so that
+    /// <see cref="ResumeAfterFailedUpdate"/> can bring the node back when the update could not be applied. When it is applied the process ends.
+    /// </summary>
+    public void StopNodeForUpdate()
+    {
+        WebPanel.IsVisible = false;
+        ErrorPanel.IsVisible = false;
+        SplashPanel.IsVisible = true;
+        StatusText.Text = "Updating...";
+        try
+        {
+            _nodeLifecycle.StopAsync(TimeSpan.FromSeconds(15), CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error stopping node process for the update: {ex.Message}");
+        }
+    }
+
+    /// <summary>The update could not be applied: starts (or attaches to) the node again, as after "Retry".</summary>
+    public void ResumeAfterFailedUpdate() => StartHostOrAttach();
+
     public void RealClose()
     {
         _isRealClose = true;

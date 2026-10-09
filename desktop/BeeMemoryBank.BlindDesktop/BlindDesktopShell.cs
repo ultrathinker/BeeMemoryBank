@@ -140,6 +140,7 @@ public sealed class BlindDesktopShell : ITrayActions
 
     public void Open()
     {
+        if (_quitting) return; // a window shown while the app is stopping would vanish with it
         _window?.ShowAndFocus();
     }
 
@@ -185,6 +186,10 @@ public sealed class BlindDesktopShell : ITrayActions
             catch (Exception ex) { ErrorLog.Write("Removing the tray icon failed", ex); }
             try { _window?.Close(); }
             catch (Exception ex) { ErrorLog.Write("Closing the window failed", ex); }
+            // The work on the data folder has stopped: let go of the one-copy guard now, not when the process is gone, so that a start the
+            // person made in the meantime (it waits for this, see Program.DefaultHandOverWait) becomes the app instead of ending.
+            try { _instance?.Dispose(); }
+            catch (Exception ex) { ErrorLog.Write("Releasing the one-copy guard failed", ex); }
             _lifetime.Shutdown();
         }
     }

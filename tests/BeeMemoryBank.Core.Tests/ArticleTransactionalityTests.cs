@@ -83,7 +83,7 @@ public class ArticleTransactionalityTests : IAsyncLifetime
             _factory);
         _mediaService = new MediaService(
             _mediaRepo, _articleRepo, _session, _nodeRepo, _clock, _eventLogger,
-            new MediaStorageOptions(Path.GetTempPath()), _factory, new ImageSharpImageTranscoder());
+            new MediaStorageOptions(Path.GetTempPath()), _factory, new SkiaImageTranscoder());
     }
 
     public Task DisposeAsync()

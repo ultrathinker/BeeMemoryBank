@@ -75,7 +75,7 @@ internal static class FullAppLayout
 
     public static readonly string[] NativeLibraries =
     [
-        "libAvaloniaNative.dylib", "libSkiaSharp.dylib", "libHarfBuzzSharp.dylib", "api/libe_sqlite3.dylib", "api/libonnxruntime.dylib",
+        "libAvaloniaNative.dylib", "libSkiaSharp.dylib", "libHarfBuzzSharp.dylib", "api/libe_sqlite3.dylib", "api/libonnxruntime.dylib", "api/libSkiaSharp.dylib",
     ];
 
     /// <summary>File names of a data folder; none of them may be inside the bundle (the data lives under ~/Library/Application Support/BeeMemoryBankData).</summary>

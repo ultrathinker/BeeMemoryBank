@@ -271,6 +271,59 @@ public sealed class BlindNodeAlarmsTests : IAsyncLifetime
     }
 
     [Fact]
+    public void ACopyHeardFourDaysAgo_IsNotCalledSilent_RightAfterThisPcStartedOrWoke_ButIsOnceItHasHadItsChance()
+    {
+        var service = new BlindAlarmService(_clock, invisible: null, session: null, unreachableSince: () => NoStreaks);
+        // A phone that called every hour until this PC was switched off 4 days ago.
+        var copy = Node(quietFor: TimeSpan.FromDays(4), address: null, protocol: SyncProtocolVersion.Current, protocolSeenAt: Now - TimeSpan.FromDays(4));
+
+        service.NoteSyncCycleCompleted(); // the first cycle after the start: this PC has not been awake long enough for a copy to call it
+        var first = service.Judge([copy]);
+
+        first.State.Should().Be(BlindAlarmReport.Judged);
+        first.Alarms.Should().NotContain(a => a.Notify || a.Banner, "the phone had no chance to call: this PC was off");
+
+        // Awake for the grace and still not a word from it: now it is silent.
+        for (var minute = 1; minute <= 61; minute++)
+        {
+            _clock.Now += TimeSpan.FromMinutes(1);
+            service.NoteSyncCycleCompleted();
+        }
+        var later = service.Judge([copy with { LastContact = Now - TimeSpan.FromDays(4) - TimeSpan.FromHours(1) }]);
+        later.Alarms.Should().ContainSingle().Which.Should().Match<BlindAlarm>(a => a.Notify && a.Banner);
+    }
+
+    [Fact]
+    public void AServerNode_IsNotHeldByTheCopyGrace()
+    {
+        var service = new BlindAlarmService(_clock, invisible: null, session: null, unreachableSince: () => NoStreaks);
+        var server = Node(quietFor: TimeSpan.FromDays(4)); // this PC called it in the cycle that just ended: its contact time is fresh evidence
+
+        service.NoteSyncCycleCompleted();
+
+        service.Judge([server]).Alarms.Should().ContainSingle().Which.Should().Match<BlindAlarm>(a => a.Notify && a.Banner);
+    }
+
+    [Fact]
+    public void TheCopyGraceBeginsAgain_WhenTheComputerSleepsAndWakes()
+    {
+        var service = new BlindAlarmService(_clock, invisible: null, session: null, unreachableSince: () => NoStreaks);
+        var copy = Node(quietFor: TimeSpan.FromDays(4), address: null, protocol: SyncProtocolVersion.Current, protocolSeenAt: Now - TimeSpan.FromDays(4));
+        service.NoteSyncCycleCompleted();
+        for (var minute = 1; minute <= 61; minute++)
+        {
+            _clock.Now += TimeSpan.FromMinutes(1);
+            service.NoteSyncCycleCompleted();
+        }
+        service.Judge([copy]).Alarms.Should().ContainSingle().Which.Notify.Should().BeTrue();
+
+        _clock.Now += TimeSpan.FromHours(8); // the lid is closed
+        service.NoteSyncCycleCompleted();    // the first cycle after waking
+
+        service.Judge([copy]).Alarms.Should().NotContain(a => a.Notify || a.Banner, "it could not have called while the computer slept");
+    }
+
+    [Fact]
     public void InvisibleMode_JudgesNothing_AndACycleRunInItDoesNotCount()
     {
         var invisible = new BeeMemoryBank.Core.Services.InvisibleModeService();

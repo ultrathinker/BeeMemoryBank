@@ -78,6 +78,12 @@ public record JoinRequest(
     string Ed25519PublicKeyB64,
     string? ApiAddress = null);
 
+/// <summary>
+/// <c>POST /api/join/abort</c>: the joiner of <see cref="NodeId"/> takes back the row its join made. The same proof as the join (the master
+/// password), and the key the join used, so the request names the attempt and nothing else.
+/// </summary>
+public record JoinAbortRequest(string MasterPassword, Guid NodeId, string Ed25519PublicKeyB64);
+
 public record LoginRequest(string Username, string Password);
 
 /// <param name="ClientIp">The browser's address as the Web layer saw it; for the throttle and the audit log only.</param>

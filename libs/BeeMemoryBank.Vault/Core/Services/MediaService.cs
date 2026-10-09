@@ -18,7 +18,7 @@ public class MediaService(
     // Image transcoding is required: a host that forgets to register the IImageTranscoder
     // implementation would silently change behaviour (no conversion, oversized images rejected).
     // Required so a missing registration fails at DI resolution. Tests that construct
-    // MediaService directly take an ImageSharpImageTranscoder from BeeMemoryBank.Media.
+    // MediaService directly take a SkiaImageTranscoder from BeeMemoryBank.Media.
     IImageTranscoder imageTranscoder,
     // Optional and last so the many direct constructions in tests keep compiling; DI supplies the
     // real one. Only used to report a media row whose file is gone, which is not a normal state

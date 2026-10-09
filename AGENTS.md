@@ -73,6 +73,10 @@ covers what that one doesn't.
   e.g. `docker run --rm -v ${PWD}:/src -w /src mcr.microsoft.com/dotnet/sdk:10.0 ...` matches the
   GitHub Actions `ubuntu-latest` runner closely enough to catch platform-only bugs (apphost
   naming, kill-signal timing) before they ever reach real CI.
+- **`File.Move(src, dst, overwrite: false)` is not atomic on Linux/macOS.** There it is an `lstat` of the
+  destination and then a `rename(2)` that replaces whatever appeared in between (Windows' `MoveFile`
+  is one atomic step). Where two writers may race for one name (a first start creating a key file),
+  use `OwnerOnlyFile.MoveNoReplace`.
 - **Article version history is capped and can be suppressed.** Only the last 50 versions are
   kept (`DeleteOldVersionsAsync(id, 50)`); `Protect`/`ChangePassphrase` pass a `suppressVersion`
   flag to skip snapshotting the pre-protection plaintext into history — those callers purge

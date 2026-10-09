@@ -27,6 +27,12 @@ operating system's temp folder, and is removed when the archive is written. Unti
 the whole database; if the process is killed in between, the node removes the leftover at its next start. A snapshot
 therefore needs free space for about twice the database on the data drive, and on the drive of the snapshots folder.
 
+A join or a restore works the same way in the other direction: the archive it downloads and the folder it extracts it to
+(the vault database in clear: key slots, password hashes, titles, paths) are made in the same `tmp/` folder of the data
+folder, as `work-*`, owner-only (mode 0600 files and 0700 folders on Linux and macOS, an owner-only ACL on Windows),
+not in the operating system's temp folder, and are removed when the join or restore ends. If the process is killed in
+between, the leftover is removed at the next start of the node, of the phone app, or of `bmb join`.
+
 ## Restore this node only
 
 Use it to bring **this** node back from one of its own snapshots, or from a copy made by another node in the

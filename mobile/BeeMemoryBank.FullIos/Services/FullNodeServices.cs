@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core;
 using BeeMemoryBank.Core.Embeddings;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Storage;
@@ -63,6 +64,9 @@ public static class FullNodeServices
     /// </summary>
     public static async Task PrepareAsync(IServiceProvider services)
     {
+        // What a join killed half-way left in the staging folder (the downloaded archive, the extracted database): removed at the next start.
+        SnapshotStaging.Sweep(Path.GetDirectoryName(services.GetRequiredService<MediaStorageOptions>().MediaDir)!);
+
         await services.GetRequiredService<MigrationRunner>().RunMigrationsAsync();
         await services.GetRequiredService<FolderBootstrapper>().RunIfNeededAsync();
 

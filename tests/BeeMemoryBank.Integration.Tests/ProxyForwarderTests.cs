@@ -36,7 +36,7 @@ public sealed class ProxyForwarderFixture : IAsyncLifetime
     public BmbWebHostFactory Web { get; } = new();
 
     // A real 1x1 PNG, not a bare signature: the API's inline-image path decodes and re-encodes
-    // image uploads (ImageSharp), so a truncated file dies with a non-mapped exception -> 500.
+    // image uploads (SkiaSharp), so a truncated file is refused with 400 and never stored.
     public static readonly byte[] TinyPng = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
 

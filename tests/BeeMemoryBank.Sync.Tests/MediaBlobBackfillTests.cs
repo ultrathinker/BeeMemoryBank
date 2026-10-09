@@ -60,7 +60,7 @@ public class MediaBlobBackfillTests : IAsyncLifetime
         Directory.CreateDirectory(_mediaDir);
 
         _media = new MediaService(_mediaRepo, articleRepo, session, nodeRepo, clock, eventLogger,
-            new MediaStorageOptions(_mediaDir), _factory, new ImageSharpImageTranscoder(), logger: null, blobRepo: _blobs);
+            new MediaStorageOptions(_mediaDir), _factory, new SkiaImageTranscoder(), logger: null, blobRepo: _blobs);
         _backfill = new MediaBlobBackfillService(_factory, _blobs, new MediaStorageOptions(_mediaDir), logger: null);
     }
 

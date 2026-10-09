@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
@@ -82,8 +83,8 @@ public partial class SnapshotService
         var outcome = new SnapshotRestoreOutcome(standaloneMode, null, null);
         try
         {
-            tempDir = Path.Combine(Path.GetTempPath(), $"bmb-restore-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(tempDir);
+            // In the data folder and owner-only, not the OS temp folder: the extracted database is the vault in clear.
+            tempDir = SnapshotStaging.NewDirectory(_dataPath);
 
             await ExtractTarGzAsync(filePath, tempDir, new FileInfo(filePath).Length);
 

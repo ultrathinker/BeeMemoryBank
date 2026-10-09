@@ -27,7 +27,8 @@ public static class JoinCommand
         string displayName,
         bool allowInsecureHttp = false,
         TextWriter? output = null,
-        string? joinCode = null)
+        string? joinCode = null,
+        TimeSpan? requestTimeout = null)
     {
         output ??= Console.Out;
 
@@ -87,6 +88,9 @@ public static class JoinCommand
             return 1;
         }
 
+        // What an earlier join killed half-way left in the staging folder (the downloaded archive, the extracted database).
+        BeeMemoryBank.Core.IO.SnapshotStaging.Sweep(DataDirOf(scope.ServiceProvider));
+
         var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
         var nodeId = Guid.NewGuid();
 
@@ -96,8 +100,9 @@ public static class JoinCommand
         // No redirects: the join carries the master password, and a 307/308 would resend it elsewhere.
         // With a code, TLS completes only with the key the code pins (the other computer's certificate is from its own local
         // authority, which nothing here trusts).
+        // The client has no timeout of its own: each request of the key exchange is bounded below, and the snapshot request, whose first header
+        // comes only after the host has built the whole snapshot, by the snapshot client's own 30-minute budget.
         using var http = JoinHttp.CreateClient(code?.SpkiPin);
-        http.Timeout = TimeSpan.FromSeconds(30);
         var joinRequest = new
         {
             masterPassword = password,
@@ -107,6 +112,20 @@ public static class JoinCommand
             apiAddress = (string?)null
         };
 
+        // The host writes this node's row as soon as it accepts the join. From there on a failure leaves that row behind unless the host
+        // is told (POST /api/join/abort). Best effort: a host or proxy that does not know the route, or does not answer, keeps today's
+        // sentence that names the row, and nothing here replaces the error that made the join fail.
+        var hostTold = false;
+        async Task TellHostAsync(bool rowCertain = true)
+        {
+            if (hostTold) return;
+            hostTold = true;
+            var outcome = await JoinAbortClient.TryAbortAsync(http, remoteUrl, password, nodeId, publicKey, code?.Token, requestTimeout);
+            await output.WriteLineAsync(outcome.HostForgot()
+                ? $"The other computer was told and no longer lists this node ('{displayName}', {nodeId})."
+                : StillListsSentence(displayName, nodeId, rowCertain));
+        }
+
         HttpResponseMessage response;
         try
         {
@@ -115,16 +134,18 @@ public static class JoinCommand
                 Content = JsonContent.Create(joinRequest, options: JsonOptions)
             };
             if (code?.Token != null) joinMessage.Headers.Add(JoinCode.TokenHeader, code.Token);
-            response = await http.SendAsync(joinMessage);
+            response = await JoinHttp.BoundAsync(t => http.SendAsync(joinMessage, t), limit: requestTimeout);
         }
         catch (HttpRequestException ex) when (code != null)
         {
             await output.WriteLineAsync($"Error: {JoinCode.DescribeConnectionFailure(ex)}");
+            if (JoinAbortClient.MayHaveReachedHost(ex)) await TellHostAsync(rowCertain: false);
             return 1;
         }
         catch (Exception ex)
         {
             await output.WriteLineAsync($"Connection error: {ex.Message}");
+            if (ex is HttpRequestException unanswered && JoinAbortClient.MayHaveReachedHost(unanswered)) await TellHostAsync(rowCertain: false);
             return 1;
         }
 
@@ -132,7 +153,7 @@ public static class JoinCommand
         {
             // A blind node has no join door at all (only its sync and pairing surface is mapped): say what to do instead
             // of showing a bare 404.
-            if (response.StatusCode == System.Net.HttpStatusCode.NotFound && await IsBlindNodeAsync(http, remoteUrl))
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound && await IsBlindNodeAsync(http, remoteUrl, requestTimeout))
             {
                 await output.WriteLineAsync(
                     "Error: the remote node is a blind node. It keeps only encrypted data and cannot give a new node the vault's key " +
@@ -145,92 +166,122 @@ public static class JoinCommand
             await output.WriteLineAsync(doorSaid != null
                 ? $"Error from remote node ({(int)response.StatusCode}): {doorSaid}"
                 : $"Error from remote node ({(int)response.StatusCode}): {errorBody}");
+            // A server-side failure (a proxy that gave up while the host went on) may have come after the host wrote the row.
+            if ((int)response.StatusCode >= 500) await TellHostAsync(rowCertain: false);
             return 1;
         }
 
-        var joinResponse = await response.Content.ReadFromJsonAsync<JoinResponseDto>(JsonOptions);
-        if (joinResponse == null)
-        {
-            await output.WriteLineAsync("Error: empty response from remote node");
-            return 1;
-        }
-
-        await output.WriteLineAsync($"Received response from node '{joinResponse.RemoteNode.DisplayName}'");
-
-        // The same gates as the Setup page's join (InitEndpoints), before anything is written here: this node starts
-        // from the host's snapshot and log, so the host must speak this node's sync protocol.
-        var hostProtocol = joinResponse.RemoteNode.ProtocolVersion;
-        if (hostProtocol > SyncProtocolVersion.Current)
-        {
-            await output.WriteLineAsync(
-                $"Error: cannot join: remote node protocol version ({hostProtocol}) is higher than local version ({SyncProtocolVersion.Current}). Update this node first.");
-            return 1;
-        }
-        if (!SyncProtocolVersion.IsCompatiblePeer(hostProtocol))
-        {
-            await output.WriteLineAsync(
-                $"Error: cannot join: remote node protocol version ({hostProtocol}) is below {SyncProtocolVersion.MinPeer}; update it first.");
-            return 1;
-        }
-
-        var slot = joinResponse.KeySlot;
-        var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
-        var iv = Convert.FromBase64String(slot.IvB64);
-        var remoteSalt = Convert.FromBase64String(slot.SaltB64);
-
-        // The peer chose these numbers; refuse hostile ones before committing memory to them.
+        // From the host's answer on, the host holds this node's row, so any failure before the first local write (an answer that
+        // cannot be read or lacks a part, a field that is not base64, keys that cannot be wrapped) must take that row back as well.
+        // The checks inside do it themselves and return; the catch is for what they do not name.
+        JoinResponseDto joinResponse;
+        byte[] masterDek = [];
+        byte[] localSalt, localEncryptedDek, localIv;
+        DateTime now;
+        NodeIdentity identity;
         try
         {
-            KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+            var answer = await response.Content.ReadFromJsonAsync<JoinResponseDto>(JsonOptions);
+            if (answer == null)
+            {
+                await output.WriteLineAsync("Error: empty response from remote node");
+                await TellHostAsync();
+                return 1;
+            }
+            joinResponse = answer;
+            if (joinResponse.RemoteNode == null || joinResponse.KeySlot == null)
+                throw new InvalidOperationException("the answer of the remote node is incomplete");
+
+            await output.WriteLineAsync($"Received response from node '{joinResponse.RemoteNode.DisplayName}'");
+
+            // The same gates as the Setup page's join (InitEndpoints), before anything is written here: this node starts
+            // from the host's snapshot and log, so the host must speak this node's sync protocol.
+            var hostProtocol = joinResponse.RemoteNode.ProtocolVersion;
+            if (hostProtocol > SyncProtocolVersion.Current)
+            {
+                await output.WriteLineAsync(
+                    $"Error: cannot join: remote node protocol version ({hostProtocol}) is higher than local version ({SyncProtocolVersion.Current}). Update this node first.");
+                await TellHostAsync();
+                return 1;
+            }
+            if (!SyncProtocolVersion.IsCompatiblePeer(hostProtocol))
+            {
+                await output.WriteLineAsync(
+                    $"Error: cannot join: remote node protocol version ({hostProtocol}) is below {SyncProtocolVersion.MinPeer}; update it first.");
+                await TellHostAsync();
+                return 1;
+            }
+
+            var slot = joinResponse.KeySlot;
+            var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
+            var iv = Convert.FromBase64String(slot.IvB64);
+            var remoteSalt = Convert.FromBase64String(slot.SaltB64);
+
+            // The peer chose these numbers; refuse hostile ones before committing memory to them.
+            try
+            {
+                KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+            }
+            catch (System.Security.Cryptography.CryptographicException ex)
+            {
+                await output.WriteLineAsync($"Error: the remote node sent an invalid key slot. {ex.Message}");
+                await TellHostAsync();
+                return 1;
+            }
+
+            try
+            {
+                var kek = KeyDerivation.DeriveKek(password, remoteSalt,
+                    slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+                masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, iv, kek);
+            }
+            catch (KdfBusyException)
+            {
+                await output.WriteLineAsync("Error: too many password checks in progress, try again in a moment");
+                await TellHostAsync();
+                return 1;
+            }
+            catch
+            {
+                await output.WriteLineAsync("Error: failed to decrypt Master DEK (incorrect password?)");
+                await TellHostAsync();
+                return 1;
+            }
+
+            await output.WriteLineAsync("Master DEK received and decrypted");
+
+            localSalt = KeyDerivation.GenerateSalt();
+            var localKek = KeyDerivation.DeriveKek(password, localSalt);
+            (localEncryptedDek, localIv) = MasterKeyManager.WrapMasterDek(masterDek, localKek);
+
+            now = DateTime.UtcNow;
+
+            // The raw private key stays in memory until the snapshot is downloaded: the host's challenge is signed with it.
+            // Cleared in the finally below.
+            var (wrappedPk, pkIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
+
+            identity = new NodeIdentity
+            {
+                NodeId = nodeId,
+                DisplayName = displayName,
+                Ed25519PublicKey = publicKey,
+                Ed25519PrivateKey = wrappedPk,
+                Ed25519PrivateKeyIV = pkIv,
+                Ed25519PrivateKeyV = 1,
+                // Set once the snapshot is in (SnapshotJoin.CompleteAsync).
+                InitialSyncCompleted = false,
+                CreatedAt = now
+            };
         }
-        catch (System.Security.Cryptography.CryptographicException ex)
+        catch (Exception ex)
         {
-            await output.WriteLineAsync($"Error: the remote node sent an invalid key slot. {ex.Message}");
+            Array.Clear(privateKey);
+            Array.Clear(masterDek);
+            await output.WriteLineAsync($"Error: the join could not be completed: {ex.Message}");
+            await TellHostAsync();
             return 1;
         }
 
-        byte[] masterDek;
-        try
-        {
-            var kek = KeyDerivation.DeriveKek(password, remoteSalt,
-                slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
-            masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, iv, kek);
-        }
-        catch (KdfBusyException)
-        {
-            await output.WriteLineAsync("Error: too many password checks in progress, try again in a moment");
-            return 1;
-        }
-        catch
-        {
-            await output.WriteLineAsync("Error: failed to decrypt Master DEK (incorrect password?)");
-            return 1;
-        }
-
-        await output.WriteLineAsync("Master DEK received and decrypted");
-
-        var localSalt = KeyDerivation.GenerateSalt();
-        var localKek = KeyDerivation.DeriveKek(password, localSalt);
-        var (localEncryptedDek, localIv) = MasterKeyManager.WrapMasterDek(masterDek, localKek);
-
-        var now = DateTime.UtcNow;
-
-        // The raw private key stays in memory until the snapshot is downloaded: the host's challenge is signed with it.
-        // Cleared in the finally below.
-        var (wrappedPk, pkIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
-
-        var identity = new NodeIdentity
-        {
-            NodeId = nodeId,
-            DisplayName = displayName,
-            Ed25519PublicKey = publicKey,
-            Ed25519PrivateKey = wrappedPk,
-            Ed25519PrivateKeyIV = pkIv,
-            Ed25519PrivateKeyV = 1,
-            // Set once the snapshot is in (SnapshotJoin.CompleteAsync).
-            InitialSyncCompleted = false,
-            CreatedAt = now
-        };
 
         // From the first row written here to the end of the snapshot step, any failure takes the node back to "not
         // joined" (SnapshotJoin.RollbackPartialNode), the way the phone does: a retry then starts clean instead of hitting
@@ -328,6 +379,12 @@ public static class JoinCommand
                     if (entry.NodeId == nodeId) continue;
                     if (entry.NodeId == remote.NodeId) continue;
                     if (await whitelistRepo.GetByNodeIdAsync(entry.NodeId) != null) continue;
+                    // The key the host dials this peer by (see JoinTls); a pin that is not a pin leaves the peer out, not unpinned.
+                    if (!JoinTls.TryInherit(entry.TlsTrust, entry.TlsSpki, out var tlsTrust, out var tlsSpki))
+                    {
+                        await output.WriteLineAsync($"  Skipping peer {entry.DisplayName} ({entry.NodeId}): the host sent a TLS pin that is not a pin");
+                        continue;
+                    }
                     try
                     {
                         await whitelistRepo.CreateAsync(new WhitelistEntry
@@ -341,7 +398,9 @@ public static class JoinCommand
                             UpdatedAt = now,
                             // Without it every other superadmin of the mesh is a plain peer here, and
                             // their whitelist/hard-delete/restore events are refused on this node only.
-                            IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin)
+                            IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin),
+                            TlsTrust = tlsTrust,
+                            TlsSpki = tlsSpki
                         });
                     }
                     catch (Microsoft.Data.Sqlite.SqliteException ex)
@@ -368,14 +427,15 @@ public static class JoinCommand
             // sync from sequence 0, which a host that ever compacted its log (or was re-keyed) answers with 410 forever: an
             // empty node that said it had joined. Same client as the phone's join, over the same http client, so a join
             // code's pin covers the challenge, the authentication and the download too. Its download is bounded by its own
-            // 30-minute budget (ResponseHeadersRead), not by the 30-second timeout above.
+            // 30-minute budget (ResponseHeadersRead), not by the 30-second limit of the requests above.
             step = "taking the snapshot";
             await output.WriteLineAsync("Downloading the snapshot from the remote node...");
             var snapshotClient = new SnapshotJoinClient(
                 http,
                 scope.ServiceProvider.GetRequiredService<DbConnectionFactory>(),
                 DataDirOf(scope.ServiceProvider),
-                loggerFactory.CreateLogger<SnapshotJoinClient>());
+                loggerFactory.CreateLogger<SnapshotJoinClient>(),
+                requestTimeout);
             (cpSeq, var lamportTs) = await snapshotClient.DownloadAndImportAsync(
                 remoteUrl, nodeId, privateKey, Convert.FromBase64String(remote.Ed25519PublicKeyB64));
 
@@ -394,13 +454,17 @@ public static class JoinCommand
             try
             {
                 SnapshotJoin.RollbackPartialNode(dbFactory);
-                await output.WriteLineAsync("Nothing was kept: this node is not joined, and `bmb join` can be run again.");
+                await output.WriteLineAsync(
+                    "This node is not joined (its identity and keys are gone), and `bmb join` can be run again; notes already copied from " +
+                    "the snapshot stay and are skipped on the next try.");
             }
             catch (Exception rollbackEx)
             {
                 await output.WriteLineAsync(
                     $"The half-made node could not be removed ({rollbackEx.Message}); delete the data folder before joining again.");
             }
+            // The host recorded this node when the key exchange succeeded: ask it to take the row back.
+            await TellHostAsync();
             return 1;
         }
         finally
@@ -419,6 +483,16 @@ public static class JoinCommand
         return 0;
     }
 
+    /// <summary>
+    /// What the person has to do when the host could not be told to take the joiner's row back. <paramref name="rowCertain"/> is false
+    /// when the join never got an answer, so the host may or may not have written the row.
+    /// </summary>
+    private static string StillListsSentence(string displayName, Guid nodeId, bool rowCertain) =>
+        (rowCertain
+            ? $"The other computer still lists this node ('{displayName}', {nodeId}) as a member that has never synced: revoke it "
+            : $"If the other computer recorded this node ('{displayName}', {nodeId}) before the connection failed, it lists it as a member that has never synced: revoke it ")
+        + "there (Admin page, Nodes), or it holds back compaction of that computer's event log.";
+
     /// <summary>The node's data folder as the provider resolved it (a re-key swap can redirect it): where media goes.</summary>
     private static string DataDirOf(IServiceProvider services) =>
         Path.GetDirectoryName(services.GetRequiredService<MediaStorageOptions>().MediaDir)!;
@@ -427,11 +501,11 @@ public static class JoinCommand
     /// Whether the node at <paramref name="remoteUrl"/> is a blind node: its sync challenge (mapped in that role) names
     /// it, and a blind node's id carries the mark (BlindNodeId). Any failure means "cannot tell", never "blind".
     /// </summary>
-    private static async Task<bool> IsBlindNodeAsync(HttpClient http, string remoteUrl)
+    private static async Task<bool> IsBlindNodeAsync(HttpClient http, string remoteUrl, TimeSpan? requestTimeout)
     {
         try
         {
-            using var resp = await http.PostAsync($"{remoteUrl.TrimEnd('/')}/api/sync/challenge", null);
+            using var resp = await JoinHttp.BoundAsync(t => http.PostAsync($"{remoteUrl.TrimEnd('/')}/api/sync/challenge", null, t), limit: requestTimeout);
             if (!resp.IsSuccessStatusCode) return false;
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
             return doc.RootElement.TryGetProperty("serverNodeId", out var id)
@@ -454,7 +528,9 @@ public static class JoinCommand
         string DisplayName,
         string Ed25519PublicKeyB64,
         string? ApiAddress,
-        bool IsSuperadmin = false);
+        bool IsSuperadmin = false,
+        string? TlsTrust = null,
+        string? TlsSpki = null);
 
     // ProtocolVersion: a host too old to send one is below every version this node can sync with (0).
     private record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);

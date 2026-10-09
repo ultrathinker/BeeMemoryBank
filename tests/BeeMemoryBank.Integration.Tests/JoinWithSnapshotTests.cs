@@ -126,6 +126,22 @@ public class JoinWithSnapshotTests : IAsyncLifetime
         identityId.Should().Be(_joinerNodeId, "node_identity must NOT be overwritten by snapshot import");
     }
 
+    /// <summary>Review revsrv F10 / revios F5: the extracted database is the vault in clear; it is made in the data folder, owner-only, and removed.</summary>
+    [Fact]
+    public async Task RestoreForJoinAsync_ExtractsInTheDataFoldersStagingFolder_AndLeavesNothingThere()
+    {
+        await InsertProducerFolderAndArticleAsync();
+        var snapshotInfo = await _producerSnapshot.CreateAsync(filterSecrets: true, sign: true, cpSequenceNum: 42);
+        var snapshotPath = _producerSnapshot.GetSnapshotPath(snapshotInfo.FileName);
+        var signature = await File.ReadAllBytesAsync($"{snapshotPath}.sig");
+
+        await _joinerSnapshot.RestoreForJoinAsync(snapshotPath, signature, _producerPubKey);
+
+        var staging = BeeMemoryBank.Core.IO.SnapshotStaging.DirIn(_joinerDir);
+        Directory.Exists(staging).Should().BeTrue("the extraction folder is made there, not in the OS temp folder");
+        Directory.GetFileSystemEntries(staging).Should().BeEmpty();
+    }
+
     [Fact]
     public async Task RestoreForJoinAsync_BadSignature_Throws()
     {

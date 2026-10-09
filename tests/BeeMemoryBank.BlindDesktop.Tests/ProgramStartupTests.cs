@@ -22,7 +22,8 @@ public sealed class ProgramStartupTests
     }
 
     /// <summary>Runs the start-up with the error log redirected to a file of this test; the previous log path comes back afterwards.</summary>
-    private static Outcome Start(string[] args, Func<string?, IBlindDesktopPlatform> createPlatform, Func<string[], int>? ui = null)
+    private static Outcome Start(string[] args, Func<string?, IBlindDesktopPlatform> createPlatform, Func<string[], int>? ui = null,
+        TimeSpan? handOverWait = null)
     {
         var outcome = new Outcome();
         var original = ErrorLog.PathOfLog;
@@ -36,7 +37,7 @@ public sealed class ProgramStartupTests
             {
                 outcome.UiStarts++;
                 return ui?.Invoke(a) ?? 0;
-            });
+            }, handOverWait ?? TimeSpan.Zero);
             outcome.Out = stdout.ToString();
             outcome.Err = stderr.ToString();
         }
@@ -137,6 +138,51 @@ public sealed class ProgramStartupTests
         outcome.Exit.Should().Be(0);
         outcome.UiStarts.Should().Be(0);
         shown.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue("the running copy was asked to show its window");
+    }
+
+    [Fact]
+    public void ASecondStart_WhileTheRunningCopyIsQuitting_TakesOverWhenTheCopyLetsGo_InsteadOfEnding()
+    {
+        var folder = TestFolders.New("startup");
+        var running = PlatformSelector.Create(folder).TryAcquireInstance()!;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(300); // the quitting copy has stopped its work and releases the one-copy guard
+            running.Dispose();
+        });
+
+        var outcome = Start(["--data-dir", folder], PlatformSelector.Create, handOverWait: TimeSpan.FromSeconds(20));
+
+        outcome.UiStarts.Should().Be(1, "the person asked for the app again while it was quitting: it must come up, not vanish");
+        outcome.Exit.Should().Be(0);
+    }
+
+    [Fact]
+    public void ASecondStart_WhileTheRunningCopyStaysUp_EndsAfterTheWaitWithoutStartingTheUi()
+    {
+        var folder = TestFolders.New("startup");
+        using var running = PlatformSelector.Create(folder).TryAcquireInstance()!;
+        using var shown = new ManualResetEventSlim();
+        running.Listen(shown.Set);
+
+        var outcome = Start(["--data-dir", folder], PlatformSelector.Create, handOverWait: TimeSpan.FromMilliseconds(300));
+
+        outcome.Exit.Should().Be(0);
+        outcome.UiStarts.Should().Be(0);
+        shown.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue("the running copy was still asked to show its window");
+    }
+
+    [Fact]
+    public void TheGuard_CanBeReleasedEarly_AndReleasingItAgainAtTheEndIsHarmless()
+    {
+        var folder = TestFolders.New("startup");
+        var guard = PlatformSelector.Create(folder).TryAcquireInstance()!;
+
+        guard.Dispose(); // Quit releases the one-copy guard as soon as the work is stopped; Main's using disposes it again
+
+        FluentActions.Invoking(guard.Dispose).Should().NotThrow();
+        using var next = PlatformSelector.Create(folder).TryAcquireInstance();
+        next.Should().NotBeNull("the folder is free for the next start");
     }
 
     [Fact]

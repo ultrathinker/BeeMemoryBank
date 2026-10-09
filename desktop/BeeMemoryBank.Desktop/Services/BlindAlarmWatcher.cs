@@ -74,6 +74,9 @@ public sealed class BlindAlarmWatcher : IDisposable
     public static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(1);
     public static readonly TimeSpan StartGrace = TimeSpan.FromMinutes(10);
     public static readonly TimeSpan RemindEvery = TimeSpan.FromHours(24);
+
+    /// <summary>How long a notice that could not be shown waits before it is tried again (the shell may be restarting).</summary>
+    public static readonly TimeSpan RetryEvery = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan ResumeGap = TimeSpan.FromMinutes(5);
 
     /// <summary>
@@ -93,6 +96,9 @@ public sealed class BlindAlarmWatcher : IDisposable
         public int Seen;
         public int Clean;
         public DateTime? NotifiedAt;
+
+        /// <summary>Not stored: after a notice that could not be shown, the earliest time to try it again.</summary>
+        public DateTime? RetryAt;
     }
 
     private readonly Func<CancellationToken, Task<NodeAlarmsPoll>> _poll;
@@ -199,15 +205,32 @@ public sealed class BlindAlarmWatcher : IDisposable
 
             if (now >= _graceUntil)
             {
-                var due = raised.Where(e => e.NotifiedAt is not { } at || now - at >= RemindEvery)
+                var due = raised.Where(e => (e.NotifiedAt is not { } at || now - at >= RemindEvery) && (e.RetryAt is not { } retry || now >= retry))
                     .OrderBy(e => e.Alarm.Kind, StringComparer.Ordinal).ThenBy(e => e.Alarm.NodeId).ToList();
                 if (due.Count > 0)
                 {
                     // Marked before the notices go out: a poll cut short in the pause between two of them must not send the first again.
+                    // Then the mark is taken back from every notice that was not shown (it could not be, or the poll was cut short before
+                    // it): that one is not "notified", and is tried again after RetryEvery.
+                    var before = due.ToDictionary(e => e, e => e.NotifiedAt);
                     foreach (var episode in due) episode.NotifiedAt = now;
-                    changed = true;
                     Save();
-                    await ShowAsync(due.Select(e => e.Alarm).ToList(), cancellationToken).ConfigureAwait(false);
+                    var shown = new HashSet<Episode>();
+                    try
+                    {
+                        await ShowAsync(due, shown, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        foreach (var episode in due.Where(e => !shown.Contains(e)))
+                        {
+                            episode.NotifiedAt = before[episode];
+                            episode.RetryAt = now + RetryEvery;
+                        }
+                        foreach (var episode in shown) episode.RetryAt = null;
+                        Save();
+                    }
+                    changed = false;
                 }
             }
             if (changed) Save();
@@ -259,19 +282,29 @@ public sealed class BlindAlarmWatcher : IDisposable
         return changed;
     }
 
-    private async Task ShowAsync(IReadOnlyList<BlindAlarmEntry> due, CancellationToken cancellationToken)
+    /// <summary>Shows the notices of one burst; <paramref name="shown"/> gets the episodes whose notice was shown (all of a summary's, when it was).</summary>
+    private async Task ShowAsync(IReadOnlyList<Episode> due, ISet<Episode> shown, CancellationToken cancellationToken)
     {
         var notices = due.Count <= MaxNoticesPerBurst
-            ? due.Select(TextFor).ToList()
-            : due.Take(MaxNoticesPerBurst - 1).Select(TextFor)
-                .Append(("Blind nodes need attention",
-                    $"{due.Count - (MaxNoticesPerBurst - 1)} more blind-node alarms. Open Bee Memory Bank, Blind nodes, to see them."))
+            ? due.Select(e => (Text: TextFor(e.Alarm), Covers: (IReadOnlyList<Episode>)[e])).ToList()
+            : due.Take(MaxNoticesPerBurst - 1).Select(e => (Text: TextFor(e.Alarm), Covers: (IReadOnlyList<Episode>)[e]))
+                .Append((Text: (Title: "Blind nodes need attention", Message:
+                        $"{due.Count - (MaxNoticesPerBurst - 1)} more blind-node alarms. Open Bee Memory Bank, Blind nodes, to see them."),
+                    Covers: (IReadOnlyList<Episode>)due.Skip(MaxNoticesPerBurst - 1).ToList()))
                 .ToList();
         for (var i = 0; i < notices.Count; i++)
         {
             if (i > 0 && _noticeGap > TimeSpan.Zero) await Task.Delay(_noticeGap, cancellationToken).ConfigureAwait(false);
-            try { _notifier?.Notify(notices[i].Item1, notices[i].Item2); }
-            catch (Exception ex) { Log($"A notice could not be shown ({ex.GetType().Name})."); }
+            // No notifier: the tray tooltip is all there is, and that counts as the notice (nothing to try again).
+            var wasShown = true;
+            try { wasShown = _notifier?.TryNotify(notices[i].Text.Title, notices[i].Text.Message) ?? true; }
+            catch (Exception ex)
+            {
+                wasShown = false;
+                Log($"A notice could not be shown ({ex.GetType().Name}).");
+            }
+            if (wasShown)
+                foreach (var episode in notices[i].Covers) shown.Add(episode);
         }
     }
 

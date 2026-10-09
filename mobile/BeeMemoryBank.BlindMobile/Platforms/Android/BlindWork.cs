@@ -117,7 +117,7 @@ public class BlindSyncWorker(Context context, WorkerParameters parameters) : Wor
         }
         catch (Exception ex)
         {
-            services.GetRequiredService<BlindPhoneLog>().Add("sync", $"Sync failed: {ex.Message}");
+            services.GetRequiredService<BlindPhoneLog>().Add("sync", $"Sync failed: {BlindRunReport.Reason(ex)}");
             return RunAttemptCount < 3 ? Result.InvokeRetry()! : Result.InvokeSuccess()!;
         }
     }

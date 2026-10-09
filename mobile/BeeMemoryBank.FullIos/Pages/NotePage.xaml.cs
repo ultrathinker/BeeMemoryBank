@@ -93,14 +93,14 @@ public partial class NotePage : ContentPage
     {
         if (_note is null) return;
         var passphrase = PassphraseEntry.Text ?? "";
-        var text = await Task.Run(() => NotesService.OpenProtected(_note.Body, passphrase));
+        // The field is emptied whatever opening ends in (SecretFields): opened, refused, or an exception.
+        var text = await SecretFields.RunAsync(() => Task.Run(() => NotesService.OpenProtected(_note.Body, passphrase)), () => PassphraseEntry.Text = "");
         if (text is null)
         {
             PassphraseError.Text = "That is not this note's passphrase.";
             PassphraseError.IsVisible = true;
             return;
         }
-        PassphraseEntry.Text = "";
         PassphraseError.IsVisible = false;
         _passphrase = passphrase;
         _openedText = text;

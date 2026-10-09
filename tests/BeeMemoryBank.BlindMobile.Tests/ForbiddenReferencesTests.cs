@@ -25,7 +25,9 @@ public class ForbiddenReferencesTests
         "Microsoft.ML.Tokenizers",
         "Markdig",
         "Indiko.Maui.Controls.Markdown",
-        "SixLabors.ImageSharp"
+        // the image libraries: the one the product used and the one it uses now
+        "SixLabors.ImageSharp",
+        "SkiaSharp"
     ];
 
     private static string FindRepoRoot()

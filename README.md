@@ -335,7 +335,9 @@ you, once per problem and at most once a day after that: when this PC has not re
 while it was awake, when a blind copy that calls this PC has not called for three days, and when the protocols differ. The
 tray's tooltip says how many blind nodes need attention. Nothing is judged while the node is in invisible mode or before its
 first sync after starting or waking; the app also waits a few minutes after it starts or the computer wakes, and it does not
-notify about a blind copy that calls another node (this PC hears nothing from it either way). While the vault is locked the
+notify about a blind copy that calls another node (this PC hears nothing from it either way). A blind copy is judged only after
+this PC has been awake for an hour since it started or woke, so a copy that could not call while the PC was off is not reported
+silent at once. While the vault is locked the
 notice names no blind node.
 
 ### Windows Desktop App and Service (native, no NSSM needed)
@@ -355,7 +357,7 @@ The app lives in the tray. Right-click it for **Profiles** (separate memory bank
 own data folder, password and sync network: create, add an existing folder, move, rename) and
 **Settings** (start with Windows, profile to open at startup, keep the computer awake, updates).
 It checks for updates on its own and offers "Restart to update" when a new release is out;
-**Check for updates...** in the tray checks right away and shows the progress. Data
+**Check for updates...** in the tray checks right away and shows the progress. If an update cannot be applied the app keeps running and the reason is in `logs/velopack.log`. Data
 is kept in `%LOCALAPPDATA%\BeeMemoryBankData` and survives updates and uninstall.
 
 The app answers this computer only. To let other devices on your own network in, open **Admin → Nodes**:
@@ -424,11 +426,10 @@ sudo -u bmb mkdir -p /opt/beememorybank/data
 sudo -u bmb curl -L -o /opt/beememorybank/data/model.onnx \
   https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx
 
-# Master password — read from stdin so it never enters bash history or `ps aux`
-read -s -p "Master password: " BMB_PASSWORD; echo
+# Master password — asked on the terminal without echo, so it never enters bash history or `ps aux`
+# (a script can pipe it in with --password-stdin; --password "..." still works but warns)
 sudo -u bmb /opt/beememorybank/cli/bmb init \
-  --data /opt/beememorybank/data --name "MyServerNode" --password "$BMB_PASSWORD"
-unset BMB_PASSWORD
+  --data /opt/beememorybank/data --name "MyServerNode"
 ```
 
 > `bmb init --name X` creates a node named `X` AND a first user whose login is also `X`. If you want a separate username and node name, skip this step and use the Web Setup form after the services are running — it has separate fields.
@@ -514,8 +515,7 @@ mkdir -p ~/bmb/data
 curl -L -o ~/bmb/data/model.onnx \
   https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx
 
-read -s -p "Master password: " PWD; echo
-~/bmb/cli/bmb init --data ~/bmb/data --name "MyMac" --password "$PWD"; unset PWD
+~/bmb/cli/bmb init --data ~/bmb/data --name "MyMac"    # asks for the master password without echo
 
 INTERNAL_KEY=$(openssl rand -base64 32); echo "$INTERNAL_KEY"   # paste into both plists below
 ```
@@ -603,13 +603,8 @@ New-Item -ItemType Directory -Force C:\bee\data
 curl.exe -L -o C:\bee\data\model.onnx `
   "https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx"
 
-# Master password without persisting it to history.
-# (We use $securePwd to avoid clashing with PowerShell's automatic $PWD = current directory.)
-$securePwd = Read-Host -AsSecureString "Master password"
-$plainPwd = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-  [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePwd))
-C:\bee\cli\bmb.exe init --data C:\bee\data --name "MyWinNode" --password "$plainPwd"
-Remove-Variable plainPwd, securePwd
+# bmb asks for the master password without echo, so it is not in the history or the process list.
+C:\bee\cli\bmb.exe init --data C:\bee\data --name "MyWinNode"
 
 # Generate the shared key with a real CSPRNG (NOT Get-Random — it is not crypto-strong)
 $bytes = New-Object byte[] 32
@@ -672,7 +667,7 @@ In Development mode `BMB_INTERNAL_KEY` is not required — both processes auto-g
 2. **Log in.** If you initialized via CLI (`bmb init --name "X"`), the login is `X` and the password is the master password. If via the Web Setup form, the login is whatever you typed there.
 3. **AI agent token** (optional): Admin → Agents → Create. Copy the bearer token (shown **once**).
 4. **MCP in your AI client** (Claude Code / Cursor / Windsurf): add `bee-memory-bank` with `Authorization: Bearer bee_xxxxx`.
-5. **Add a second node** (optional): on the other machine, after `dotnet publish`, run `bmb join --remote https://first-node --password "MasterP" --name "OtherNode" --data ./data`. The new node downloads a signed encrypted snapshot, verifies it, and joins the sync mesh. If anything fails, `bmb join` says why, exits non-zero and rolls the new node back, so it can be run again (with a new join code if you used `--code`: a code is spent by the first attempt). If the process itself is killed half-way, delete the new node's data folder and start over.
+5. **Add a second node** (optional): on the other machine, after `dotnet publish`, run `bmb join --remote https://first-node --name "OtherNode" --data ./data` (it asks for the master password without echo; `--password-stdin` reads it from a pipe). The new node downloads a signed snapshot over TLS, verifies it, and joins the sync mesh. If anything fails, `bmb join` says why, exits non-zero and rolls the new node back, so it can be run again (with a new join code if you used `--code`: a code is spent by the first attempt). A failed join also asks the other computer to forget the new node (`POST /api/join/abort`, from 2.5.1). If that computer is older, or a reverse proxy in front of it does not forward the route, it keeps a never-synced member row: the message names it, and it should be revoked on that computer's Admin page because it holds back compaction. If the process itself is killed half-way, delete the new node's data folder and start over.
 6. **Keep a recovery key** (recommended): Admin → Security → **Issue new recovery key**, and store it offline. If the administrator password is ever forgotten, the Sign In page's **Forgot your password? Use a recovery key** sets a new one (or `bmb user reset-password --user NAME --recovery-key-stdin`). See [docs/account-recovery.md](docs/account-recovery.md).
 
 #### HTTPS Reverse Proxy
@@ -769,11 +764,11 @@ Tip: take a snapshot via Admin → Snapshots → Create before updating, in case
 To add a second node (e.g., a VPS) to sync with your first:
 
 ```bash
-./publish/cli/bmb join --remote https://first-node.example.com --password "your-master-password" --name "VPS-Node" --data /var/lib/beememorybank
+./publish/cli/bmb join --remote https://first-node.example.com --name "VPS-Node" --data /var/lib/beememorybank
 ```
 
 For a computer on your own network, use the join code that the other computer shows under **Admin → Nodes → Connect a device**
-instead of an address: `bmb join --code "bmb-join:?a=..." --password "your-master-password" --name "Laptop" --data ...`. The code
+instead of an address: `bmb join --code "bmb-join:?a=..." --name "Laptop" --data ...`. The code
 carries the address, a one-time token and the pin of that computer's certificate, so nothing has to be trusted first.
 
 ---

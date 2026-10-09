@@ -2,8 +2,8 @@
 
   <!--
     The macOS side of the desktop blind app: the implementations of the Blind.AppCore host seams (Keychain secrets, an atomic state file,
-    Application Support paths, power and network conditions, a per-user LaunchAgent, notifications, lifecycle). A plain class library: no
-    Avalonia, no UI. The native calls (Security, CoreFoundation, IOKit, libc) are P/Invoke declarations that are resolved the first time they
+    Application Support paths, power and network conditions, a per-user LaunchAgent; the Avalonia host brings its own
+    lifecycle and notifications). A plain class library: no Avalonia, no UI. The native calls (Security, CoreFoundation, IOKit, libc) are P/Invoke declarations that are resolved the first time they
     run, so the assembly compiles and its pure logic is tested on any OS; the native parts are exercised on a Mac.
     It references Blind.AppCore (and, through it, the shared libraries and the phone client) and the neutral Apple platform library
     (BeeMemoryBank.Platforms.Apple) and nothing else of the application: never the Vault, Hosting, the full Desktop or the Node (the boundary

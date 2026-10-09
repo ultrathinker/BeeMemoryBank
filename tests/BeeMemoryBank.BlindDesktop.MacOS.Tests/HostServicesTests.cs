@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindDesktop.MacOS.Tests;
 
 /// <summary>
-/// The adapters wired into Blind.AppCore the way the host wires them, with a fake Keychain and a temporary Application Support folder, so
+/// The seams wired into Blind.AppCore the way the host wires them (the host's own lifecycle replaced by a recording one), with a fake Keychain and a temporary Application Support folder, so
 /// that the seams are proved together with the core's own rules (fail closed, wipe order, secrets only in the Keychain) on any OS.
 /// </summary>
 public class HostServicesTests
@@ -25,7 +25,7 @@ public class HostServicesTests
             LoadAutostartImmediately = false,
         };
         var services = new ServiceCollection();
-        services.AddMacOsBlindApp(options);
+        services.AddSeamsAndCore(options);
         return services.BuildServiceProvider(validateScopes: true);
     }
 
@@ -41,9 +41,6 @@ public class HostServicesTests
         provider.GetRequiredService<IBlindStateStore>().Should().BeOfType<MacOsBlindStateStore>();
         provider.GetRequiredService<IBlindAutostart>().Should().BeOfType<MacOsBlindAutostart>()
             .Which.Should().BeSameAs(provider.GetRequiredService<MacOsBlindAutostart>());
-        provider.GetRequiredService<IBlindNotifications>().Should().BeOfType<MacOsBlindNotifications>();
-        provider.GetRequiredService<IBlindLifecycle>().Should().BeOfType<MacOsBlindLifecycle>()
-            .Which.Should().BeSameAs(provider.GetRequiredService<MacOsBlindLifecycle>());
         provider.GetRequiredService<BlindAppController>().Should().NotBeNull();
         // the older PhoneClient contracts forward to the same objects
         provider.GetRequiredService<IBlindPhoneKeys>().Should().BeSameAs(provider.GetRequiredService<IBlindSecretStore>());
@@ -58,28 +55,6 @@ public class HostServicesTests
 
         provider.GetService<IBlindScheduler>().Should().BeNull();
         provider.GetService<IBlindBackupExporter>().Should().BeNull();
-    }
-
-    [Fact]
-    public void TheLifecycle_UsesTheHostsScheduler_WhenThereIsOne()
-    {
-        using var root = new TempFolder();
-        var scheduler = new CountingScheduler();
-        var services = new ServiceCollection();
-        services.AddSingleton<IBlindScheduler>(scheduler);
-        services.AddMacOsBlindHost(new MacOsBlindHostOptions { ApplicationSupportRoot = root.Path, KeychainBackend = new FakeKeychainBackend() });
-        using var provider = services.BuildServiceProvider();
-
-        provider.GetRequiredService<IBlindLifecycle>().StopBackgroundWork();
-
-        scheduler.Cancelled.Should().Be(1);
-    }
-
-    private sealed class CountingScheduler : IBlindScheduler
-    {
-        public int Cancelled;
-        public void EnsureScheduled() { }
-        public void Cancel() => Cancelled++;
     }
 
     [Fact]
@@ -214,7 +189,7 @@ public class HostServicesTests
     }
 
     [Fact]
-    public async Task DisconnectAndWipe_ForgetsTheSecrets_TheState_AndTheDatabase_ThenReportsRestartNeeded()
+    public async Task DisconnectAndWipe_ForgetsTheSecrets_TheState_AndTheDatabase_ThenAsksTheHostToRestart()
     {
         using var root = new TempFolder();
         var keychain = new FakeKeychainBackend();
@@ -224,10 +199,7 @@ public class HostServicesTests
         await provider.GetRequiredService<BlindMobilePairing>().CreateIdentityAsync("Test Mac");
         var paths = provider.GetRequiredService<IBlindPaths>();
         File.Exists(paths.DatabasePath).Should().BeTrue();
-        var lifecycle = provider.GetRequiredService<MacOsBlindLifecycle>();
-        var restarts = 0;
-        lifecycle.RestartRequested += () => restarts++;
-        var token = lifecycle.JobToken;
+        var lifecycle = provider.GetRequiredService<RecordingLifecycle>();
         // host-level state the core does not know about, a copy of a damaged state file, an unrelated file in the folder, and the full app's folder
         provider.GetRequiredService<IBlindStateStore>().Set("bmb.blind.desktop.host_state", "present");
         var stateFile = Path.Combine(paths.DataDirectory, MacOsBlindStateStore.FileName);
@@ -248,14 +220,12 @@ public class HostServicesTests
         File.Exists(unrelated).Should().BeTrue("only the state store's own files go, not everything in the folder");
         File.ReadAllText(fullAppFile).Should().Be("the full app's file", "the full app's folders are never touched");
         new MacOsBlindStateStore(paths).Get("bmb.blind.desktop.host_state").Should().BeNull();
-        lifecycle.WipeWarning.Should().BeNull();
         keychain.Items.Should().BeEmpty();
         provider.GetRequiredService<BlindPhoneState>().NodeId.Should().BeNull();
         File.Exists(paths.DatabasePath).Should().BeFalse();
         Directory.GetFiles(paths.DataDirectory, "beememorybank.db*").Should().BeEmpty();
-        lifecycle.RestartNeeded.Should().BeTrue();
-        restarts.Should().Be(1);
-        token.IsCancellationRequested.Should().BeTrue("a job that was running when the wipe started is stopped");
+        lifecycle.Stopped.Should().BeGreaterThan(0, "the running work is stopped before anything is removed");
+        lifecycle.Restarted.Should().Be(1);
         Directory.Exists(paths.DataDirectory).Should().BeTrue("the app's own folder stays; only what the blind copy kept in it goes");
     }
 

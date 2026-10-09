@@ -167,7 +167,11 @@ public record JoinResponse(JoinRemoteIdentity RemoteNode, JoinKeySlot KeySlot, L
 
 public record JoinRemoteIdentity(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion);
 
-public record JoinWhitelistEntry(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false);
+// TlsTrust / TlsSpki: how this node reaches that peer (<c>pin</c> with the key's pin, or <c>public-ca</c>); absent = nothing recorded.
+// Optional on the wire: a node of an older version neither sends nor reads them, and the joiner then checks that peer the ordinary way.
+public record JoinWhitelistEntry(
+    Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false,
+    string? TlsTrust = null, string? TlsSpki = null);
 
 public record JoinKeySlot(
     string EncryptedMasterDekB64,

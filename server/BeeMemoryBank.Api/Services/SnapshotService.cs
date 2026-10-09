@@ -32,6 +32,9 @@ public partial class SnapshotService
 
     public string SnapshotsDir => Path.Combine(_dataPath, "snapshots");
 
+    /// <summary>The node's data folder: where its working copies of a join or a restore are made (<see cref="SnapshotStaging"/>).</summary>
+    public string DataPath => _dataPath;
+
     public SnapshotService(string dataPath, DbConnectionFactory connFactory,
         INodeIdentityRepository? nodeRepo = null, ILamportClock? clock = null,
         ILogger<SnapshotService>? logger = null,

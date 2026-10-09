@@ -50,18 +50,28 @@ public sealed class MacOsBlindAutostart : IBlindAutostart
     private readonly ICommandRunner _runner;
     private readonly Func<uint> _uid;
     private readonly Func<string, string?> _environment;
+    private readonly Func<string, bool> _fileExists;
+    private readonly string? _tempPath;
+    private readonly ILinkReader _links;
     private readonly object _gate = new();
 
     public MacOsBlindAutostart(MacOsBlindAutostartOptions? options = null)
         : this(options ?? new MacOsBlindAutostartOptions(), new ProcessCommandRunner(), static () => LibC.getuid(), Environment.GetEnvironmentVariable) { }
 
-    internal MacOsBlindAutostart(MacOsBlindAutostartOptions options, ICommandRunner runner, Func<uint> uid, Func<string, string?> environment)
+    /// <param name="fileExists">Whether a program file exists (tests have no real app to point at).</param>
+    /// <param name="tempPath">The temporary folder the policy refuses (null: the system's).</param>
+    /// <param name="links">How symbolic links are read for the policy (null: the file system's).</param>
+    internal MacOsBlindAutostart(MacOsBlindAutostartOptions options, ICommandRunner runner, Func<uint> uid, Func<string, string?> environment,
+        Func<string, bool>? fileExists = null, string? tempPath = null, ILinkReader? links = null)
     {
         if (!LaunchAgentPlist.IsValidLabel(options.Label)) throw new ArgumentException("The autostart label is not a valid label.", nameof(options));
         _options = options;
         _runner = runner;
         _uid = uid;
         _environment = environment;
+        _fileExists = fileExists ?? File.Exists;
+        _tempPath = tempPath;
+        _links = links ?? new FileSystemLinkReader();
     }
 
     public string Label => _options.Label;
@@ -75,8 +85,10 @@ public sealed class MacOsBlindAutostart : IBlindAutostart
 
     /// <summary>
     /// Whether the app starts at login (<see cref="IBlindAutostart.IsEnabled"/>): true when the plist exists and is this agent's (right
-    /// label, <c>RunAtLoad</c>, a program to start); false when there is none or it is not ours; null when the file is there but cannot be
-    /// read (a sharing or permission problem) - the screen then shows the toggle as unknown instead of guessing.
+    /// label, <c>RunAtLoad</c>), the program it starts exists, and that program is the one this copy would write now (the app has not been
+    /// moved since: a login item for a path that is gone starts nothing); false when there is none, it is not ours, or it points at a path
+    /// that is gone or at another copy; null when the file is there but cannot be read (a sharing or permission problem) - the screen then
+    /// shows the toggle as unknown instead of guessing.
     /// </summary>
     public bool? IsEnabled
     {
@@ -84,7 +96,13 @@ public sealed class MacOsBlindAutostart : IBlindAutostart
         {
             var info = Read(out var readable);
             if (!readable) return null;
-            return info is not null && info.Label == _options.Label && info.RunAtLoad && info.ProgramArguments.Count > 0;
+            if (info is null || info.Label != _options.Label || !info.RunAtLoad || info.ProgramArguments.Count == 0) return false;
+            if (!_fileExists(info.ProgramArguments[0])) return false;
+
+            // A copy that could not write a login item now (a development run, a quarantined copy) has nothing to compare with: any
+            // working plist of this label counts.
+            var expected = TryExpectedProgram();
+            return expected is null || info.ProgramArguments.SequenceEqual(expected);
         }
     }
 
@@ -110,7 +128,7 @@ public sealed class MacOsBlindAutostart : IBlindAutostart
 
     private MacOsAutostartResult Enable()
     {
-        var text = LaunchAgentPlist.Build(_options.Label, ProgramArguments);
+        var text = LaunchAgentPlist.Build(_options.Label, ResolveProgram());
         var path = PlistPath;
         var existing = File.Exists(path) ? File.ReadAllText(path) : null;
         var changed = !string.Equals(existing, text, StringComparison.Ordinal);
@@ -160,6 +178,27 @@ public sealed class MacOsBlindAutostart : IBlindAutostart
             readable = false;
             return null;
         }
+    }
+
+    /// <summary>
+    /// The program arguments to write; throws (and nothing is written) for a program that starts nothing the day after: a build or temporary
+    /// folder, the Gatekeeper App Translocation copy, the dotnet host, or a file that is not there.
+    /// </summary>
+    private IReadOnlyList<string> ResolveProgram()
+    {
+        var program = ProgramArguments;
+        if (program.Count == 0) throw new InvalidOperationException("There is no program to start at login.");
+        var refusal = ProgramLocationPolicy.Refusal(program[0], _tempPath, _links);
+        if (refusal is not null) throw new InvalidOperationException(refusal);
+        if (!_fileExists(program[0])) throw new InvalidOperationException($"The program '{program[0]}' does not exist, so it cannot be a login item.");
+        return program;
+    }
+
+    /// <summary>What this copy would write; null when it could not.</summary>
+    private IReadOnlyList<string>? TryExpectedProgram()
+    {
+        try { return ResolveProgram(); }
+        catch (Exception ex) when (ex is InvalidOperationException) { return null; }
     }
 
     private string Domain() => $"gui/{_uid()}";

@@ -10,7 +10,7 @@ namespace BeeMemoryBank.Media;
 public static class DependencyInjection
 {
     /// <summary>
-    /// Registers the ImageSharp-backed <see cref="IImageTranscoder"/>. REQUIRED wherever
+    /// Registers the SkiaSharp-backed <see cref="IImageTranscoder"/>. REQUIRED wherever
     /// <c>MediaService</c> can resolve: MediaService takes it as a non-optional constructor
     /// dependency, so a missing registration here fails at DI resolution rather than at first
     /// media upload. Hosts that do not resolve MediaService (Web proxy, plain CLI subcommands)
@@ -18,7 +18,7 @@ public static class DependencyInjection
     /// </summary>
     public static IServiceCollection AddImageTranscoder(this IServiceCollection services)
     {
-        services.TryAddSingleton<IImageTranscoder, ImageSharpImageTranscoder>();
+        services.TryAddSingleton<IImageTranscoder, SkiaImageTranscoder>();
         return services;
     }
 }

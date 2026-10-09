@@ -29,7 +29,8 @@ Mac app, the Windows service) answers this computer only by default: its front d
   itself, for existing setups; the setting then has nothing to change, and the card says so.
 - **Connect a device** is a temporary door instead of a permanent setting: port 5311 opens for 15
   minutes with a one-time token, serves only the few calls a join needs (not the web page, not MCP) and
-  closes by itself once the device has joined. It shows a **join code**: the address, the token and the
+  closes by itself once the device has joined (it stays up two more minutes, serving only the abort of a join that
+  then fails on the device, so the other computer can be told to forget it). It shows a **join code**: the address, the token and the
   pin of the node's certificate key. A phone pastes it under **Join**; another computer pastes it on its
   first-run page under **Connect to another device**, or runs `bmb join --code <code>`. The joiner sends
   the master password only to a server holding the pinned key, so no certificate has to be trusted first.
@@ -91,7 +92,7 @@ the API port, everything else goes to the Web port.
 |---|---|---|
 | `/mcp` | API (5300) | AI agents (Bearer `bee_` key) |
 | `/api/sync/*` | API (5300) | other nodes (signed sync handshake) |
-| `/api/join` | API (5300) | a node joining with the master password |
+| `/api/join`, `/api/join/abort` | API (5300) | a node joining with the master password, and the same node taking back the row of a join that failed on its side (without the second route the joiner can only tell its user which row to revoke) |
 | `/api/snapshots/restore/<id>/file` | API (5300) | a peer fetching the snapshot of a network-wide restore (sync-token authenticated) |
 | `/api/blind/replica` | API (5300) | a blind copy downloading its first package (sync-token authenticated) — only if blind copies call this node, see [below](#let-blind-copies-call-this-node) |
 | everything else | Web (5301) | browsers |
@@ -113,7 +114,7 @@ is not in the table. Then the (always public) login page is not exposed at all.
 
 ```
 bee.example.com {
-    @api path /mcp /mcp/* /api/sync/* /api/join /api/snapshots/restore/*/file /api/blind/replica
+    @api path /mcp /mcp/* /api/sync/* /api/join /api/join/abort /api/snapshots/restore/*/file /api/blind/replica
     handle @api {
         reverse_proxy 127.0.0.1:5300
     }
@@ -149,7 +150,7 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto https;
 
-    location ~ ^/(mcp($|/)|api/sync/|api/join$|api/snapshots/restore/[^/]+/file$|api/blind/replica$) {
+    location ~ ^/(mcp($|/)|api/sync/|api/join(/abort)?$|api/snapshots/restore/[^/]+/file$|api/blind/replica$) {
         proxy_pass http://127.0.0.1:5300;
         proxy_http_version 1.1;
         proxy_buffering off;                   # MCP streams responses
@@ -260,7 +261,7 @@ If you are behind CGNAT, or do not want a hole in the router, nothing needs to b
   ```yaml
   ingress:
     - hostname: bee.example.com
-      path: '^/(mcp($|/)|api/sync/|api/join$|api/snapshots/restore/[^/]+/file$|api/blind/replica$)'
+      path: '^/(mcp($|/)|api/sync/|api/join(/abort)?$|api/snapshots/restore/[^/]+/file$|api/blind/replica$)'
       service: http://127.0.0.1:5300
     - hostname: bee.example.com
       service: http://127.0.0.1:5301

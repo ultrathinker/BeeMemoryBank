@@ -10,8 +10,9 @@ namespace BeeMemoryBank.BlindDesktop.Windows;
 /// <see cref="WindowsBlindPaths.SecretsDirectory"/>; a key never goes into SQLite, the state file or the log.
 ///
 /// <para>Every blob is protected with its own entropy (the app, the format version and the secret's role), so a blob of one role
-/// cannot be opened as another one by swapping files. A blob that cannot be opened (tampered, truncated, made by another user or
-/// by a profile that was reset) reads as "no such secret": AppCore treats a missing key next to an existing identity as a reason
+/// cannot be opened as another one by swapping files. A blob that was read but cannot be opened (tampered, truncated, made by another
+/// user or by a profile that was reset) reads as "no such secret"; a blob that cannot be READ for now (held by another process, access
+/// denied) is an <see cref="IOException"/>, never "no such secret", so that a transient failure does not push the person toward a wipe. AppCore treats a missing key next to an existing identity as a reason
 /// to stop and offer "Disconnect and wipe", it never makes a replacement key over existing data.</para>
 /// </summary>
 public sealed class DpapiSecretStore(string secretsDirectory) : IBlindSecretStore
@@ -69,9 +70,12 @@ public sealed class DpapiSecretStore(string secretsDirectory) : IBlindSecretStor
         {
             var path = PathOf(role);
             if (!File.Exists(path)) return null;
+            // Only a file that is not there is "no such secret". A file that cannot be read for now (another process holds it, access
+            // denied) is a store that did not answer: the screen says so and changes nothing, instead of "key lost, wipe and pair again".
             try { blob = File.ReadAllBytes(path); }
-            catch (IOException) { return null; }
-            catch (UnauthorizedAccessException) { return null; }
+            catch (FileNotFoundException) { return null; }
+            catch (DirectoryNotFoundException) { return null; }
+            catch (UnauthorizedAccessException ex) { throw new IOException("The secret store did not answer: the file cannot be read (access denied).", ex); }
         }
 
         try

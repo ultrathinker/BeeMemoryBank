@@ -43,6 +43,14 @@ By default the data is in the Docker volume `bmb-data` (scoped to the compose pr
 before the first start. Either way the container runs as root, as the image built from source always did, so a host
 folder ends up owned by root.
 
+**One node per data folder.** The Api and the blind node lock the data folder (`.instance.lock` inside it) for as long as they run, and a
+second one on the same folder refuses to start (after waiting up to 15 seconds for a predecessor that is still shutting down):
+two nodes on one folder would write different events under one node id, and the mesh could not tell them apart. A container
+that is left running, a second `docker compose` project on the same volume, or a restore script that starts a node on the
+live folder all get that refusal. `bmb` commands do not take the lock and may run next to a node. The lock is a file lock: it
+works for a Docker volume, a bind mount and a local disk; a folder on a network share that two different computers mount
+(NFS, SMB) is not protected, so do not point two nodes at one.
+
 Switching an existing source deployment (`docker-compose.yml`, data in `./data`) to the image: put `BMB_DATA_PATH=./data` into
 `.env` first. Without it the image's compose file uses the volume, and the node opens empty on Setup while your bank sits
 untouched in `./data`. The volume is named after the compose project (the folder): renaming or moving the folder starts a
@@ -108,7 +116,8 @@ To switch assistants on for a default Docker node, uncomment the two marked line
 Only the following endpoints should be publicly accessible:
 - `/mcp` — MCP server (authentication via Bearer token at the application level)
 - `/api/sync` — synchronization between nodes (Ed25519)
-- `/api/join` — join protocol
+- `/api/join` and `/api/join/abort` — join protocol (the second one is how a node whose join failed takes back the row it left
+  here; a proxy that does not forward it only makes that node tell its user which row to revoke)
 - `/api/blind/replica` — only if blind copies (the Windows, macOS and Android blind apps) should be able to call this node
   (see "Blind copies can call this node" below)
 
@@ -116,7 +125,7 @@ Everything else (including `/api/articles`) should be restricted to trusted IPs 
 
 **How the application enforces this.** The node keeps its own list of what a caller without
 `BMB_INTERNAL_KEY` may reach — `PublicSurface` in the source, covering `/mcp`, `/api/sync/*`,
-`POST /api/join`, `GET /api/blind/replica`, the snapshot-file and restore-progress routes, `/health` and
+`POST /api/join`, `POST /api/join/abort`, `GET /api/blind/replica`, the snapshot-file and restore-progress routes, `/health` and
 `GET /api/version`.
 Anything else answers `404` to a keyless caller: not `403`, because "this endpoint exists but you may
 not use it" is itself worth knowing to someone probing your node. The web UI and the desktop tray
@@ -131,6 +140,9 @@ configuration was the only thing between them and the internet:
 - `GET /api/session/status` — leaks whether the vault is currently unlocked.
 - `POST /api/join` — master password grants mesh membership. This one is published on purpose; see the
   Trust Model section of [SECURITY.md](../SECURITY.md) for what a joined node can then do.
+- `POST /api/join/abort` — the same master password, to take back the row of a join that failed on the joining node
+  (it removes only the never-synced row of that attempt; see "Joining is authorised by the master password" in
+  [SECURITY.md](../SECURITY.md)). Published with `/api/join`, rate-limited like it.
 
 **Optional: guest accounts for other people.** Three more routes are public by design but forwarded by no
 shipped configuration: `POST /api/auth/remote-token`, `GET /api/folders/accessible` and
@@ -152,7 +164,7 @@ surface. Do not forward it from the proxy.
 
 **Keep the proxy path-filter anyway.** It is now the outer of two layers rather than the only one, and
 it is the layer that stops the request before it reaches the application at all. Restrict the API port
-to loopback and forward only `/mcp`, `/api/sync`, `/api/join`, `/api/blind/replica` (if you use blind copies) and
+to loopback and forward only `/mcp`, `/api/sync`, `/api/join`, `/api/join/abort`, `/api/blind/replica` (if you use blind copies) and
 `/api/snapshots/restore` over TLS.
 
 A node that receives a network-wide snapshot restore needs `GET /api/snapshots/restore/{id}/file`
@@ -169,7 +181,7 @@ certificate before it saves. Apache:
 
 ```apache
 # inside the VirtualHost, before "ProxyPass /": the API routes, then the Web UI
-ProxyPassMatch "^(/mcp(?:/.*)?|/api/sync/.*|/api/join|/api/snapshots/restore/[^/]+/file|/api/blind/replica)$" "http://127.0.0.1:5300$1"
+ProxyPassMatch "^(/mcp(?:/.*)?|/api/sync/.*|/api/join(?:/abort)?|/api/snapshots/restore/[^/]+/file|/api/blind/replica)$" "http://127.0.0.1:5300$1"
 ProxyPass / http://127.0.0.1:5301/
 ```
 

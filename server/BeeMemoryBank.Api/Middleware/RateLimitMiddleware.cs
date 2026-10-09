@@ -20,6 +20,8 @@ public class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddlewa
         // handler also keeps its own per-username and per-IP budget (RecoveryAccessState).
         "/api/session/recover-access",
         "/api/join",
+        // Same password check as the join, so the same budget (its own bucket: it is keyed by path).
+        "/api/join/abort",
         // Cross-instance token issuance — same brute-force risk as
         // /login but bypasses InternalKeyValidator entirely.
         "/api/auth/remote-token",

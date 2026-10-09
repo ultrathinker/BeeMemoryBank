@@ -141,8 +141,80 @@ public class LanJoinListenerTests : IAsyncLifetime
 
         (await EventuallyAsync(() => _listener.Current == null)).Should().BeTrue("a completed join ends the session");
         using var fresh = PinnedClient(session.SpkiPin);
-        await FluentActions.Awaiting(() => fresh.PostAsync("/api/sync/challenge", null))
-            .Should().ThrowAsync<HttpRequestException>("a finished join closes the LAN door");
+        (await fresh.PostAsync("/api/sync/challenge", null)).StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "a finished join serves nothing but the abort of a join that fails on the device");
+
+        _time.Advance(LanJoinListener.AbortGrace);
+        (await EventuallyAsync(() => DoorIsClosed(fresh).GetAwaiter().GetResult())).Should().BeTrue("the grace ends and the LAN door closes");
+    }
+
+    [Fact]
+    public async Task Abort_WithoutOrWithAWrongToken_IsRefused_AndNeverReachesTheApi()
+    {
+        await _listener.EnableAsync();
+        using var client = PinnedClient(SpkiPin.Of(_cert));
+
+        (await AbortAsync(client, token: null)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await AbortAsync(client, token: Base64UrlToken())).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await AbortAsync(client, token: "not base64!")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        _apiHits.Should().NotContain(h => h.Path == "/api/join/abort");
+    }
+
+    [Fact]
+    public async Task Abort_WithTheToken_IsForwarded_WithoutTheTokenOrTheCallersIdentity_AndDoesNotSpendTheCode()
+    {
+        var session = await _listener.EnableAsync();
+        using var client = PinnedClient(session.SpkiPin);
+
+        using (var abort = AbortRequest(session.Token))
+        {
+            abort.Headers.Add("X-Internal-Key", "forged");
+            (await client.SendAsync(abort)).StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+
+        _apiHits.Should().ContainSingle(h => h.Path == "/api/join/abort")
+            .Which.InternalKey.Should().BeNull("a LAN caller must never be able to claim to be the node");
+        (await JoinAsync(client, session.Token, RightPassword)).StatusCode.Should().Be(HttpStatusCode.OK,
+            "an abort says nothing about the code: it is still unspent");
+    }
+
+    [Fact]
+    public async Task Abort_StillWorksAfterTheSnapshotWasTaken_ForTheJoinThatFailedOnTheDevice()
+    {
+        var session = await _listener.EnableAsync();
+        using var client = PinnedClient(session.SpkiPin);
+        (await JoinAsync(client, session.Token, RightPassword)).EnsureSuccessStatusCode();
+        (await client.PostAsync("/api/sync/challenge", null)).EnsureSuccessStatusCode();
+        (await SnapshotAsync(client, StubBearerToken)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await EventuallyAsync(() => _listener.Current == null)).Should().BeTrue();
+
+        (await AbortAsync(client, session.Token)).StatusCode.Should().Be(HttpStatusCode.OK,
+            "the signature or the import failed on the device after the download: the host must still be told");
+        (await AbortAsync(client, Base64UrlToken())).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await JoinAsync(client, session.Token, RightPassword)).StatusCode.Should().Be(HttpStatusCode.Forbidden,
+            "the join door itself stays shut");
+    }
+
+    [Fact]
+    public async Task EnableAgain_DuringTheGraceOfAFinishedJoin_OpensANewSessionOnTheSamePort()
+    {
+        var first = await _listener.EnableAsync();
+        using (var client = PinnedClient(first.SpkiPin))
+        {
+            (await JoinAsync(client, first.Token, RightPassword)).EnsureSuccessStatusCode();
+            (await SnapshotAsync(client, StubBearerToken)).EnsureSuccessStatusCode();
+        }
+        (await EventuallyAsync(() => _listener.Current == null)).Should().BeTrue();
+
+        var second = await _listener.EnableAsync();
+
+        second.Token.Should().NotBe(first.Token);
+        using var next = PinnedClient(second.SpkiPin);
+        (await JoinAsync(next, second.Token, RightPassword)).StatusCode.Should().Be(HttpStatusCode.OK);
+        _time.Advance(LanJoinListener.AbortGrace);
+        await Task.Delay(200);
+        _listener.Current.Should().NotBeNull("the timer of the finished join's grace must not close the new session");
     }
 
     [Fact]
@@ -227,6 +299,21 @@ public class LanJoinListenerTests : IAsyncLifetime
         return client.SendAsync(req);
     }
 
+    private static HttpRequestMessage AbortRequest(string? token)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/join/abort") { Content = JsonContent.Create(new { masterPassword = RightPassword }) };
+        if (token != null) req.Headers.Add(LanJoinListener.TokenHeader, token);
+        return req;
+    }
+
+    private static Task<HttpResponseMessage> AbortAsync(HttpClient client, string? token) => client.SendAsync(AbortRequest(token));
+
+    private static async Task<bool> DoorIsClosed(HttpClient client)
+    {
+        try { await client.PostAsync("/api/sync/challenge", null); return false; }
+        catch (HttpRequestException) { return true; }
+    }
+
     private static Task<HttpResponseMessage> JoinAsync(HttpClient client, string? token, string password) =>
         client.SendAsync(JoinRequest(token, password));
 
@@ -256,6 +343,7 @@ public class LanJoinListenerTests : IAsyncLifetime
                 ? Results.Ok(new { joined = true })
                 : Results.Json(new { error = "Invalid master password" }, statusCode: 401);
         });
+        app.MapPost("/api/join/abort", () => Results.Ok(new { aborted = true, removed = true }));
         app.MapPost("/api/sync/challenge", () => Results.Ok(new { challenge = "c" }));
         app.MapPost("/api/sync/authenticate", () => Results.Ok(new { token = StubBearerToken }));
         // Like the real endpoint: only under the token authenticate issued.

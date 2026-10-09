@@ -46,6 +46,46 @@ public class DockerImageModelPinTests
     }
 
     [Fact]
+    public void TheImage_NamesTheDataFolderItself_SoABareDockerRunDoesNotSplitTheApiAndTheWebFront()
+    {
+        // The entrypoint runs the Api from /app and the Web front from /app/web, and both fall back to <cwd>/data without the variable
+        // (a bare `docker run` of 2.5.0 kept the web login keys in /app/web/data, outside the volume).
+        Regex.Match(Dockerfile, @"^ENV BMB_DATA_PATH=(\S+)\s*$", RegexOptions.Multiline).Groups[1].Value.Should().Be("/app/data");
+        RepoFile("docker-entrypoint.sh").Should().Contain("/app/data/.internal-key", "the entrypoint keeps its own files in the same folder");
+    }
+
+    public static IEnumerable<object[]> WorkflowsThatDownloadTheModel() =>
+        new[] { "build.yml", "build-mobile.yml", "release-windows.yml" }.Select(f => new object[] { f });
+
+    [Theory]
+    [MemberData(nameof(WorkflowsThatDownloadTheModel))]
+    public void TheWorkflows_DownloadTheModelFromTheImagesCommit_AndVerifyItsDigestOnEveryRun(string workflow)
+    {
+        var yaml = RepoFile(".github", "workflows", workflow);
+        var imageCommit = Regex.Match(Dockerfile, @"resolve/([0-9a-f]{40})/onnx/model_quantized\.onnx").Groups[1].Value;
+        imageCommit.Should().NotBeEmpty();
+
+        yaml.Should().NotContain("/resolve/main/", "a moving branch could change the model a release embeds");
+        Regex.Matches(yaml, @"https://huggingface\.co/\S+").Select(m => m.Value).Should().NotBeEmpty()
+            .And.OnlyContain(u => u.Contains($"/resolve/{imageCommit}/onnx/model_quantized.onnx"), "the same commit as the Dockerfile");
+        // The check is a step of its own, so a cache hit is verified too, and it names the digest the node expects.
+        var verify = Regex.Match(yaml.Replace("\r\n", "\n"), @"- name: Verify the ONNX model\n(?:(?!\n      - name:)[\s\S])*").Value;
+        verify.Should().Contain(EmbeddingModelWiring.BundledModelSha256);
+        verify.Should().NotContain("if:", "a cache hit is checked as well as a download");
+    }
+
+    [Fact]
+    public void EveryWorkflowAction_IsPinnedByCommit()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "BeeMemoryBank.slnx"))) dir = dir.Parent;
+        foreach (var file in Directory.GetFiles(Path.Combine(dir!.FullName, ".github", "workflows"), "*.yml"))
+            foreach (Match m in Regex.Matches(File.ReadAllText(file), @"^\s*-?\s*uses:\s*(\S+)", RegexOptions.Multiline))
+                if (!m.Groups[1].Value.StartsWith("./", StringComparison.Ordinal))
+                    m.Groups[1].Value.Should().MatchRegex(@"@[0-9a-f]{40}$", $"{Path.GetFileName(file)} uses {m.Groups[1].Value}");
+    }
+
+    [Fact]
     public void TheBuild_RunsOnTheBuildPlatform_AndPublishesForTheTargetOnly()
     {
         Dockerfile.Should().Contain("FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build");

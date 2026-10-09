@@ -12,9 +12,6 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Processing;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -57,7 +54,7 @@ public static partial class ChatEndpoints
             OpenRouterClient openRouter, ChatToolDispatcher dispatcher, SessionService session,
             ChatConversationRepository convoRepo, ChatMessageRepository msgRepo,
             ChatAttachmentRepository attachRepo, ChatDestructiveOpCounter destructiveCounter,
-            ILogger<Program> logger) =>
+            IImageTranscoder transcoder, ILogger<Program> logger) =>
         {
             ChatStreamRequest? req;
             try
@@ -189,7 +186,7 @@ public static partial class ChatEndpoints
             {
                 try
                 {
-                    visionDescription = await RunVisionDelegationAsync(repo, openRouter, logger, keys,
+                    visionDescription = await RunVisionDelegationAsync(repo, openRouter, transcoder, logger, keys,
                         effectiveVision!.ModelId, req.Message, attachments, ct);
                 }
                 catch (AllKeysExhaustedException ex)
@@ -296,7 +293,7 @@ public static partial class ChatEndpoints
                         var imgs = atts.Where(a => a.Kind == ChatAttachmentKind.UserUpload
                             && a.Blob is { Length: > 0 }).ToList();
                         if (imgs.Count > 0)
-                            m.ImageDataUrls = imgs.Select(a => BuildVisionDataUrl(a.Blob!, a.Mime)).ToList();
+                            m.ImageDataUrls = imgs.Select(a => BuildVisionDataUrl(transcoder, a.Blob!, a.Mime)).ToList();
                     }
                     convoMessages.Add(m);
                     // Attachment manifest: surface the ids of any image attachments on this message
@@ -361,7 +358,7 @@ public static partial class ChatEndpoints
                     }
                     catch (Exception ex) { logger.LogWarning(ex, "Failed to persist chat attachment"); }
                     if (textModelIsVision)
-                        imageDataUrls.Add(BuildVisionDataUrl(att.Bytes, att.Mime));
+                        imageDataUrls.Add(BuildVisionDataUrl(transcoder, att.Bytes, att.Mime));
                 }
                 if (imageDataUrls.Count > 0)
                     newUserTurn.ImageDataUrls = imageDataUrls;

@@ -29,13 +29,16 @@ public sealed record LanJoinSession(string Token, DateTimeOffset ExpiresAt, stri
 /// <c>/api/join</c> answered 409.
 ///
 /// <para>What it exposes is deliberately narrow: the four calls a join makes (<c>/api/join</c>, the
-/// challenge, authenticate, and the for-join snapshot), nothing else — no web UI, no MCP. And
-/// <c>/api/join</c> needs the session's one-time token from the join code in
-/// <see cref="TokenHeader"/>, so a device on the LAN that has not seen this screen cannot even try a
-/// password. The token is held by one attempt at a time and spent by the first join that succeeds.</para>
+/// challenge, authenticate, and the for-join snapshot) and the joiner's abort of a failed join
+/// (<c>/api/join/abort</c>), nothing else — no web UI, no MCP. And <c>/api/join</c> and its abort need
+/// the session's one-time token from the join code in <see cref="TokenHeader"/>, so a device on the LAN
+/// that has not seen this screen cannot even try a password. The token is held by one attempt at a time
+/// and spent by the first join that succeeds; the abort does not change its state.</para>
 ///
-/// <para>It turns itself off after <see cref="Lifetime"/>, or as soon as the device that joined has
-/// downloaded its snapshot — the last step of a join.</para>
+/// <para>It turns itself off after <see cref="Lifetime"/>. As soon as the device that joined has
+/// downloaded its snapshot — the last step of a join — the session is over, and only the abort stays
+/// reachable for <see cref="AbortGrace"/> more: what can still fail on the device after the download (the
+/// signature, the import) is the failure the abort exists for.</para>
 /// </summary>
 public sealed class LanJoinListener : IAsyncDisposable
 {
@@ -45,13 +48,18 @@ public sealed class LanJoinListener : IAsyncDisposable
     /// <summary>Request header carrying the join code's token on <c>POST /api/join</c>.</summary>
     public const string TokenHeader = BeeMemoryBank.Core.Models.JoinCode.TokenHeader;
 
+    /// <summary>How long after the joined device has its snapshot the door stays up for the abort of a join that failed on the device.</summary>
+    public static readonly TimeSpan AbortGrace = TimeSpan.FromMinutes(2);
+
     private const string JoinPath = "/api/join";
+    private const string AbortPath = "/api/join/abort";
     private const string SnapshotPath = "/api/sync/snapshot/for-join";
 
     // Everything a joining device calls, and nothing more.
     private static readonly (string Method, string Path)[] ExposedRoutes =
     [
         ("POST", JoinPath),
+        ("POST", AbortPath),
         ("POST", "/api/sync/challenge"),
         ("POST", "/api/sync/authenticate"),
         ("GET", SnapshotPath),
@@ -70,6 +78,7 @@ public sealed class LanJoinListener : IAsyncDisposable
     private LanJoinSession? _session;
     private byte[] _tokenBytes = [];
     private int _tokenState;
+    private int _finishing;   // 1 from the joined device's snapshot until the grace ends: only the abort is served
     private bool _disposed;   // guarded by _gate
 
     /// <param name="apiUrl">The Api child's loopback URL the joins are forwarded to.</param>
@@ -100,6 +109,8 @@ public sealed class LanJoinListener : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_session != null) return _session;
+            // The door of a finished join is still up for its abort: close it before a new session binds the same port.
+            if (Volatile.Read(ref _finishing) == 1) await CloseCoreAsync();
 
             var probe = _certificate()
                 ?? throw new InvalidOperationException("This node has no TLS certificate to serve the LAN listener with.");
@@ -137,17 +148,55 @@ public sealed class LanJoinListener : IAsyncDisposable
         try
         {
             if (only != null && !ReferenceEquals(only, _session)) return;
+            await CloseCoreAsync();
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Closes the listener and forgets the session; the caller holds <see cref="_gate"/>.</summary>
+    private async Task CloseCoreAsync()
+    {
+        _expiry?.Dispose();
+        _expiry = null;
+        _session = null;
+        Volatile.Write(ref _finishing, 0);
+        if (_app is { } app)
+        {
+            _app = null;
+            // Graceful: a snapshot still streaming to a device is let finish (bounded).
+            using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            try { await app.StopAsync(stopCts.Token); } catch (OperationCanceledException) { }
+            await app.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// The joined device has its snapshot: the session ends (the code is spent, <see cref="Current"/> is null) but the listener stays
+    /// up for <see cref="AbortGrace"/>, serving only the abort of a join that then fails on the device.
+    /// </summary>
+    private async Task FinishAsync(LanJoinSession session)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (!ReferenceEquals(session, _session)) return;
             _expiry?.Dispose();
-            _expiry = null;
             _session = null;
-            if (_app is { } app)
-            {
-                _app = null;
-                // Graceful: a snapshot still streaming to a device is let finish (bounded).
-                using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                try { await app.StopAsync(stopCts.Token); } catch (OperationCanceledException) { }
-                await app.DisposeAsync();
-            }
+            Volatile.Write(ref _finishing, 1);
+            var app = _app;
+            _expiry = _time.CreateTimer(_ => _ = CloseFinishedAsync(app), null, AbortGrace, Timeout.InfiniteTimeSpan);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task CloseFinishedAsync(WebApplication? app)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            // A late timer of a grace that a new session has replaced must not close that session.
+            if (app != null && ReferenceEquals(app, _app) && Volatile.Read(ref _finishing) == 1)
+                await CloseCoreAsync();
         }
         finally { _gate.Release(); }
     }
@@ -206,6 +255,17 @@ public sealed class LanJoinListener : IAsyncDisposable
             await ForwardJoinAsync(ctx, next);
             return;
         }
+        if (path.Equals(AbortPath, StringComparison.OrdinalIgnoreCase))
+        {
+            await ForwardAbortAsync(ctx, next);
+            return;
+        }
+        // The session is over (the device has its snapshot): nothing but the abort is served while the door waits out its grace.
+        if (Volatile.Read(ref _finishing) == 1)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
 
         var session = Current;
         await next();
@@ -216,7 +276,7 @@ public sealed class LanJoinListener : IAsyncDisposable
             && Volatile.Read(ref _tokenState) == (int)TokenState.Spent
             && session != null)
         {
-            _ = Task.Run(() => CloseAsync(session));
+            _ = Task.Run(() => FinishAsync(session));
         }
     }
 
@@ -252,9 +312,25 @@ public sealed class LanJoinListener : IAsyncDisposable
         }
     }
 
-    private bool TokenMatches(string presented)
+    /// <summary>
+    /// The abort of a failed join: it needs the code's token like the join, but changes nothing about it (the join may have spent it
+    /// already), and it is served after the session ended too, during the grace. What it may do is decided by the Api: the master
+    /// password, and only the never-synced row of that attempt.
+    /// </summary>
+    private async Task ForwardAbortAsync(HttpContext ctx, Func<Task> next)
     {
-        if (string.IsNullOrEmpty(presented) || Current == null) return false;
+        if (!TokenMatches(ctx.Request.Headers[TokenHeader].ToString(), allowFinishing: true))
+        {
+            await RefuseAsync(ctx, "This join code is not valid. Open Connect a device on the computer and use the code shown there.");
+            return;
+        }
+        await next();
+    }
+
+    private bool TokenMatches(string presented, bool allowFinishing = false)
+    {
+        if (string.IsNullOrEmpty(presented)) return false;
+        if (Current == null && !(allowFinishing && Volatile.Read(ref _finishing) == 1)) return false;
         byte[] bytes;
         try { bytes = Base64Url.DecodeFromChars(presented); }
         catch (FormatException) { return false; }

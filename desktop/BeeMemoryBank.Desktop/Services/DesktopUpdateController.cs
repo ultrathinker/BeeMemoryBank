@@ -1,7 +1,9 @@
 using System;
 using System.Threading;
+using System.IO;
 using System.Threading.Tasks;
 using Avalonia.Threading;
+using BeeMemoryBank.AppPaths;
 
 namespace BeeMemoryBank.Desktop.Services;
 
@@ -135,22 +137,20 @@ public sealed class DesktopUpdateController
     /// <summary>
     /// Restarts into the downloaded version. <paramref name="prepare"/> runs while the node is
     /// still up (the session handoff), then <paramref name="stopNode"/> so the database is closed
-    /// before Velopack swaps the files.
+    /// before Velopack swaps the files. When Velopack cannot apply the update, <paramref name="resumeNode"/>
+    /// starts the node again (the app stays up, serving the vault as before) and
+    /// <paramref name="onFailure"/> gets the reason in words; it is also written to the logs folder.
     /// </summary>
-    public async Task ApplyAndRestartAsync(Func<Task> prepare, Action stopNode, Action onFailure)
+    public Task ApplyAndRestartAsync(Func<Task> prepare, Action stopNode, Action resumeNode, Action<string> onFailure)
     {
-        if (ReadyVersion is null) return;
-        await prepare();
-        stopNode();
-        try
-        {
-            _updates.ApplyAndRestart();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Applying update failed: {ex.Message}");
-            onFailure();
-        }
+        if (ReadyVersion is null) return Task.CompletedTask;
+        return UpdateRestartSequence.RunAsync(prepare, stopNode, _updates.ApplyAndRestart, resumeNode, onFailure, LogToFile);
+    }
+
+    private static void LogToFile(string line)
+    {
+        Directory.CreateDirectory(BmbPaths.LogsDir);
+        File.AppendAllText(Path.Combine(BmbPaths.LogsDir, "velopack.log"), $"[{DateTime.UtcNow:O}] {line}{Environment.NewLine}");
     }
 
     private void ReportProgress(UpdateCheckProgress progress)
@@ -165,5 +165,42 @@ public sealed class DesktopUpdateController
     {
         StatusText = text;
         Changed?.Invoke(this, EventArgs.Empty);
+    }
+}
+
+/// <summary>The steps of "Restart to update", apart from Velopack and the window, so that the failure path can be tested.</summary>
+internal static class UpdateRestartSequence
+{
+    /// <param name="apply">Applies the downloaded update; on success the process ends and this never returns.</param>
+    /// <param name="log">Writes one line to the logs folder; a log that cannot be written never hides the failure.</param>
+    public static async Task RunAsync(Func<Task> prepare, Action stopNode, Action apply, Action resumeNode, Action<string> onFailure, Action<string> log)
+    {
+        await prepare();
+        stopNode();
+        try
+        {
+            apply();
+        }
+        catch (Exception ex)
+        {
+            var message = ex.Message;
+            TryLog(log, $"Applying the update failed ({ex.GetType().Name}): {ex.Message}");
+            try
+            {
+                resumeNode();
+            }
+            catch (Exception resumeError)
+            {
+                message += $" The node could not be started again either: {resumeError.Message} Close the app and open it again.";
+                TryLog(log, $"Starting the node again after the failed update failed ({resumeError.GetType().Name}): {resumeError.Message}");
+            }
+            onFailure(message);
+        }
+    }
+
+    private static void TryLog(Action<string> log, string line)
+    {
+        try { log(line); }
+        catch (Exception) { /* a log is not worth losing the report for */ }
     }
 }

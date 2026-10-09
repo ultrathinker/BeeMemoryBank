@@ -206,6 +206,94 @@ public class BlindRePairSyncTests : IAsyncLifetime
         (await PullPositionAsync(blindId)).Should().BeGreaterThanOrEqualTo(cp);
     }
 
+    [Fact]
+    public async Task ABlindNodeRemovedAndAddedAgain_StillSyncsBothWays()
+    {
+        await AddBlindNodeAsync();
+        var blindId = (await IdentityAsync(_blind)).NodeId;
+        (_hubId, _hubKey) = await TrustSuperadminOnBothAsync();
+        for (var i = 0; i < 5; i++)
+            await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), $"Phone {i}"));
+        await SyncAsync(blindId);
+        var pulled = await PullPositionAsync(blindId);
+        pulled.Should().BeGreaterThanOrEqualTo(5);
+
+        // Remove (what DELETE /api/whitelist/{id} does: only the row's status; positions stay).
+        using (var conn = _pc.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_whitelist SET status = 'R' WHERE node_id = @id COLLATE NOCASE", new { id = blindId.ToString() });
+
+        // While it is removed, a phone still pushes to the blind node.
+        var late = await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), "Phone while removed"));
+
+        await AddBlindNodeAsync(); // added again from a fresh code
+        var sync = () => SyncAsync(blindId);
+        await sync.Should().NotThrowAsync("a node that was removed and added again must sync again");
+        (await PullPositionAsync(blindId)).Should().NotBeNull();
+        var pcWhitelist = _pc.Services.GetRequiredService<IWhitelistRepository>();
+        (await pcWhitelist.GetByNodeIdAsync(late)).Should().NotBeNull("what the phone pushed while the node was removed must not be lost");
+    }
+
+    [Fact]
+    public async Task ABlindNodeRemovedAndAddedAgain_CanBeRescuedByTheReseedButton()
+    {
+        await AddBlindNodeAsync();
+        var blindId = (await IdentityAsync(_blind)).NodeId;
+        (_hubId, _hubKey) = await TrustSuperadminOnBothAsync();
+        for (var i = 0; i < 5; i++)
+            await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), $"Phone {i}"));
+        await SyncAsync(blindId);
+        using (var conn = _pc.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_whitelist SET status = 'R' WHERE node_id = @id COLLATE NOCASE", new { id = blindId.ToString() });
+        await ApplyOnBlindAsync(WhitelistAdd(_hubId, _hubKey, _lamport++, Guid.NewGuid(), "Phone while removed"));
+        await AddBlindNodeAsync();
+
+        var reseed = await _pcClient.PostAsync($"/api/blind-nodes/{blindId}/reseed", null);
+
+        reseed.StatusCode.Should().Be(HttpStatusCode.OK, "the Reseed button is the documented way out of a node that does not sync: " + await reseed.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>
+    /// A held position that the node's log has moved past (nothing can be pulled with it) must not survive a new pairing:
+    /// it is dropped, the add succeeds, and the next cycle adopts the new checkpoint as for any pairing.
+    /// </summary>
+    [Fact]
+    public async Task APairingAgain_DropsAPullPositionTheNodesLogHasMovedPast()
+    {
+        var (blindId, _) = await UsedBlindNodeAfterAReKeyAsync(revoked: false);
+        await _pc.Services.GetRequiredService<ISyncPositionRepository>().UpsertAsync(
+            new SyncPosition { RemoteNodeId = blindId, LastSequenceNum = 10, UpdatedAt = DateTime.UtcNow });
+
+        await AddBlindNodeAsync();
+
+        (await PullPositionAsync(blindId)).Should().BeNull("a cursor the log has moved past is of no use");
+        var sync = () => SyncAsync(blindId);
+        await sync.Should().NotThrowAsync();
+        (await PullPositionAsync(blindId)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ABlindNodeRemovedAndAddedAgain_StartsItsAlarmClocksOver()
+    {
+        await AddBlindNodeAsync();
+        var blindId = (await IdentityAsync(_blind)).NodeId;
+        var whitelist = _pc.Services.GetRequiredService<IWhitelistRepository>();
+        await whitelist.RecordProtocolVersionAsync(blindId, SyncProtocolVersion.Current, DateTime.UtcNow.AddDays(-30));
+        using (var conn = _pc.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync(
+                "UPDATE tbl_whitelist SET status = 'R', created_at = @old, deleted_at = @old WHERE node_id = @id COLLATE NOCASE",
+                new { id = blindId.ToString(), old = DateTime.UtcNow.AddDays(-30) });
+
+        var before = DateTime.UtcNow.AddSeconds(-5);
+        await AddBlindNodeAsync();
+
+        var row = (await whitelist.GetByNodeIdAsync(blindId))!;
+        row.Status.Should().Be("A");
+        row.CreatedAt.Should().BeAfter(before, "a node that is added again is judged from the day it was added again");
+        row.DeletedAt.Should().BeNull();
+        row.LastProtocolSeenAt.Should().BeNull("the contact of the earlier pairing says nothing about this one");
+        row.LastProtocolVersion.Should().BeNull();
+    }
+
     // ------------------------------------------------------------------ helpers (as in BlindPairingSeedTests)
 
     /// <summary>The scheduler's and the reseed's entry: the full node's sync with one peer.</summary>

@@ -159,4 +159,109 @@ public sealed class AtomicJsonStateStoreTests
         new AtomicJsonStateStore(path).Set("a", "b");
         File.Exists(path).Should().BeTrue();
     }
+
+    [Fact]
+    public void AFileHeldForAMoment_IsNotAnEmptyState_AndTheNextWriteDoesNotDestroyIt()
+    {
+        var path = NewPath();
+        new AtomicJsonStateStore(path).Set("bmb.blind.node_id", "n-1");
+        new AtomicJsonStateStore(path).Set("bmb.blind.name", "Office PC");
+
+        var store = new AtomicJsonStateStore(path, readRetryDelay: TimeSpan.Zero);
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) // an antivirus or a sync client has it open
+        {
+            var read = () => store.Get("bmb.blind.node_id");
+            read.Should().Throw<IOException>("a file that cannot be read for now is not an empty state");
+            var write = () => store.Set("last sync", "x");
+            write.Should().Throw<IOException>("nothing may be written over a state that was never read");
+        }
+
+        store.Get("bmb.blind.node_id").Should().Be("n-1", "once the file is free the store reads it, the failure was not remembered");
+        store.Set("last sync", "x");
+        var again = new AtomicJsonStateStore(path);
+        again.Get("bmb.blind.node_id").Should().Be("n-1");
+        again.Get("bmb.blind.name").Should().Be("Office PC");
+        again.Get("last sync").Should().Be("x");
+    }
+
+    [Fact]
+    public void AFileHeldOnlyBrieflyAtStart_IsReadAfterAShortWait()
+    {
+        var path = NewPath();
+        new AtomicJsonStateStore(path).Set("bmb.blind.node_id", "n-1");
+        var holder = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        // The release runs on a thread of its own that is known to be running before the read starts: a thread-pool continuation can wait
+        // for CPU longer than the whole retry window of the read, which blocks the very thread the pool would need.
+        using var running = new ManualResetEventSlim();
+        var releaser = new Thread(() =>
+        {
+            running.Set();
+            Thread.Sleep(150);
+            holder.Dispose();
+        }) { IsBackground = true };
+        releaser.Start();
+        running.Wait();
+
+        var store = new AtomicJsonStateStore(path, readRetryDelay: TimeSpan.FromMilliseconds(100));
+
+        try
+        {
+            store.Get("bmb.blind.node_id").Should().Be("n-1");
+            store.WasUnreadable.Should().BeFalse();
+        }
+        finally
+        {
+            releaser.Join();
+        }
+    }
+
+    [Fact]
+    public void ADamagedFile_IsKeptAsACopy_BeforeTheNextWriteReplacesIt()
+    {
+        var path = NewPath();
+        File.WriteAllText(path, "{\"a\":");
+
+        var store = new AtomicJsonStateStore(path);
+        store.WasUnreadable.Should().BeTrue();
+        store.Set("fresh", "1");
+
+        var copy = Directory.GetFiles(Path.GetDirectoryName(path)!, "state.json.damaged-*").Should().ContainSingle().Subject;
+        File.ReadAllText(copy).Should().Be("{\"a\":", "what was there is not lost to a person who wants to look at it");
+        new AtomicJsonStateStore(path).Get("fresh").Should().Be("1");
+    }
+
+    [Fact]
+    public void Erase_RemovesTheDamagedCopiesToo()
+    {
+        var path = NewPath();
+        File.WriteAllText(path, "not json");
+        var store = new AtomicJsonStateStore(path);
+        store.Set("fresh", "1");
+        Directory.GetFiles(Path.GetDirectoryName(path)!, "state.json.damaged-*").Should().ContainSingle();
+
+        store.Erase();
+
+        Directory.GetFiles(Path.GetDirectoryName(path)!).Should().BeEmpty("nothing of the blind copy remains after the wipe");
+    }
+
+    [Fact]
+    public void AWriteThatFails_LeavesTheStateAsItWas()
+    {
+        var path = NewPath();
+        var store = new AtomicJsonStateStore(path);
+        store.Set("k", "old");
+
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None)) // the replace of the file fails
+        {
+            var set = () => store.Set("k", "new");
+            set.Should().Throw<Exception>();
+            var remove = () => store.Set("k", null);
+            remove.Should().Throw<Exception>();
+        }
+
+        store.Get("k").Should().Be("old", "memory must not run ahead of the disk: a restart would lose it");
+        new AtomicJsonStateStore(path).Get("k").Should().Be("old");
+        store.Set("k", "new");
+        new AtomicJsonStateStore(path).Get("k").Should().Be("new");
+    }
 }

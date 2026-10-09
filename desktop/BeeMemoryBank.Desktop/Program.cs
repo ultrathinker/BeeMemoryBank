@@ -13,6 +13,12 @@ class Program
 
     private static Mutex? _singleInstanceMutex;
 
+    /// <summary>
+    /// What a second start raises to make this copy show its window; read by the application once the main window exists. Null until this
+    /// copy has taken the single-instance mutex.
+    /// </summary>
+    internal static Services.ActivationSignal? Activation { get; private set; }
+
     // Initialization code. Don't use any Avalonia, third-party APIs or any
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
     // yet and stuff might break.
@@ -57,10 +63,12 @@ class Program
 
         if (!isNewInstance)
         {
-            // Another instance is already running; exit immediately.
+            // Another instance is already running: ask it to show its window (it is usually hidden in the tray), then exit.
+            Services.ActivationSignal.SignalRunningInstance();
             return;
         }
 
+        Activation = Services.ActivationSignal.Create();
         try
         {
             BuildAvaloniaApp()
@@ -74,6 +82,7 @@ class Program
             }
             catch { }
             _singleInstanceMutex.Dispose();
+            Activation.Dispose();
         }
     }
 

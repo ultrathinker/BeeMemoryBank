@@ -39,6 +39,9 @@
     <!-- The assembly-boundary scanner (BMB-99): one source in tests/shared, linked into every project that proves a boundary. -->
     <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
     <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+    <!-- The fake host of the join tests (a signed for-join snapshot of an empty vault), as the CLI tests use it: one source. -->
+    <Compile Include="..\BeeMemoryBank.Cli.Tests\FakeJoinHost.cs" Link="Shared\CliFakeJoinHost.cs" />
+    <Compile Include="..\BeeMemoryBank.Cli.Tests\RecordingJoinHost.cs" Link="Shared\CliRecordingJoinHost.cs" />
   </ItemGroup>
 
 </Project>

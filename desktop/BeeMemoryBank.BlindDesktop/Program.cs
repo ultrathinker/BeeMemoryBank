@@ -12,6 +12,14 @@ internal static class Program
 
     internal static StartupState? Startup { get; private set; }
 
+    /// <summary>
+    /// How long a second start waits, after asking the running copy to show its window, for that copy to let go of the one-copy guard.
+    /// A copy that is quitting (stopping its work, up to a minute when a job does not pause) never shows the window and then releases
+    /// the guard; the second start then becomes the app instead of ending with nothing running. A copy that stays up keeps the guard,
+    /// and the second start ends after this wait (no window, no visible effect).
+    /// </summary>
+    internal static readonly TimeSpan DefaultHandOverWait = TimeSpan.FromSeconds(5);
+
     [STAThread]
     public static int Main(string[] args)
     {
@@ -32,10 +40,10 @@ internal static class Program
     /// Everything <see cref="Main"/> does except the process-wide handlers and the UI itself, with the three things a test must replace
     /// (the platform, the UI, the output) passed in. Returns the exit code: 0 for a normal end or for a second start that handed over to
     /// the running copy, 1 for a start that cannot go on (written to the error log), 2 for a command line that is refused (written to
-    /// <paramref name="stderr"/>).
+    /// <paramref name="stderr"/>). <paramref name="handOverWait"/> is <see cref="DefaultHandOverWait"/> when null.
     /// </summary>
     internal static int Run(string[] args, TextWriter stdout, TextWriter stderr, Func<string?, IBlindDesktopPlatform> createPlatform,
-        Func<string[], int> startUi)
+        Func<string[], int> startUi, TimeSpan? handOverWait = null)
     {
         var options = StartupOptions.Parse(args);
         if (options.SelfCheck)
@@ -99,15 +107,25 @@ internal static class Program
             return 1;
         }
 
-        // One blind app per user and data folder. A second start asks the first one to show its window and ends at once.
+        // One blind app per user and data folder. A second start asks the first one to show its window and ends - unless the first one
+        // is quitting and lets go of the guard within the wait: then this start is the app.
+        if (instance is null)
+        {
+            platform.SignalRunningInstance();
+            try
+            {
+                instance = WaitForTheGuard(platform, handOverWait ?? DefaultHandOverWait);
+            }
+            catch (Exception ex)
+            {
+                ReportFatal("The data folder cannot be used.", ex);
+                return 1;
+            }
+            if (instance is null) return 0;
+        }
+
         using (instance)
         {
-            if (instance is null)
-            {
-                platform.SignalRunningInstance();
-                return 0;
-            }
-
             Startup = new StartupState(options, platform, instance);
             try
             {
@@ -119,6 +137,17 @@ internal static class Program
                 return 1;
             }
         }
+    }
+
+    private static IInstanceGuard? WaitForTheGuard(IBlindDesktopPlatform platform, TimeSpan wait)
+    {
+        var until = DateTime.UtcNow + wait;
+        while (DateTime.UtcNow < until)
+        {
+            Thread.Sleep(TimeSpan.FromMilliseconds(100));
+            if (platform.TryAcquireInstance() is { } guard) return guard;
+        }
+        return null;
     }
 
     private static int StartAvalonia(string[] args) =>

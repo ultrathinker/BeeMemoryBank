@@ -87,6 +87,14 @@ public partial class UpdateWindow : Window
             progress: -1, primary: null, secondary: null);
     }
 
+    /// <summary>The update could not be applied: the app keeps running its current version; "Try again" applies it once more.</summary>
+    public void ShowApplyFailed(string reason)
+    {
+        Show(Mode.Ready, "The update could not be applied",
+            reason + "\n\nBee Memory Bank keeps running the current version and its node is running again. You can try again, or install the new version with Setup.exe.",
+            progress: null, primary: "Try again", secondary: "Close");
+    }
+
     private void ShowChecking(UpdateCheckProgress? progress)
     {
         if (progress?.FoundVersion is { } version)

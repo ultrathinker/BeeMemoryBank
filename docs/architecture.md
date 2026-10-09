@@ -40,11 +40,12 @@ dotnet publish server/BeeMemoryBank.Api/ -c Release -o publish/api
 dotnet publish server/BeeMemoryBank.Web/ -c Release -o publish/web
 dotnet publish server/BeeMemoryBank.Cli/ -c Release -o publish/cli
 
-# Option A: New network
-bmb init --data /var/lib/beememorybank --name "MyNode" --password "..."
+# Option A: New network (the password is asked for; or --password-stdin reads its first line from stdin.
+# --password "..." still works, but sits in the process list and the shell history)
+bmb init --data /var/lib/beememorybank --name "MyNode"
 
-# Option B: Join an existing network
-bmb join --remote https://bmb.example.com --password "..." --name "MyNode" --data /var/lib/beememorybank
+# Option B: Join an existing network (same: asked for, or --password-stdin)
+bmb join --remote https://bmb.example.com --name "MyNode" --data /var/lib/beememorybank
 
 # Run (two processes)
 BMB_DATA_PATH=/var/lib/beememorybank ASPNETCORE_URLS=http://localhost:5300 ./BeeMemoryBank.Api
@@ -71,7 +72,7 @@ server/
 │   └── CliActorProvider     — IActorProvider for CLI (actor_type = "cli")
 │
 libs/
-├── BeeMemoryBank.Core/      — Domain kernel. No ONNX, mDNS, DPAPI, ImageSharp.
+├── BeeMemoryBank.Core/      — Domain kernel. No ONNX, mDNS, DPAPI, image library.
 │   ├── Models/              — Article, Comment, Agent, Folder, FolderInfo, Media, NodeIdentity, AuditLog,
 │   │                          ArticleVersion, FolderAclEntry...
 │   │                          (models in BeeMemoryBank.Core/Models/)
@@ -96,10 +97,10 @@ libs/
 │   ├── Tls/                  — LocalCaService (Windows trust store + DPAPI leaf/CA keys), CertificateKeyStorageFlags
 │   └── DependencyInjection    — AddMdnsBrowser / AddMdnsAnnouncer
 │
-├── BeeMemoryBank.Media/     — ImageSharp transcoder + AddImageTranscoder(). Carved out of
+├── BeeMemoryBank.Media/     — SkiaSharp image transcoder + AddImageTranscoder(). Carved out of
 │                                Infrastructure so consumers that only need transcoding (Mobile, Api)
 │                                do not pull mDNS / DPAPI through the larger project.
-│   └── ImageSharpImageTranscoder (the only consumer of the IImageTranscoder interface)
+│   └── SkiaImageTranscoder (the only implementation of the IImageTranscoder interface; see docs/adr/0008-image-library-skiasharp.md)
 │
 ├── BeeMemoryBank.Crypto/    — Cryptographic primitives (~450 LOC)
 │   └── AesGcmHelper, MasterKeyManager, DekManager, Ed25519Signer, KeyDerivation, ArticleEncryptor,
@@ -135,7 +136,7 @@ mobile/
 Core ← Crypto
 Core ← Search
 Core ← Embeddings   (Embeddings owns IEmbeddingGenerator's concrete impl + ProjectionMatrix + HybridSearchService; Core stays free of ONNX/Tokenizers)
-Core ← Infrastructure  (Infrastructure owns the mDNS/ImageSharp/DPAPI/firewall/local-CA surface; Core stays free of all of those)
+Core ← Infrastructure  (Infrastructure owns the mDNS/DPAPI/firewall/local-CA surface; Core stays free of all of those)
 Core, Embeddings, Infrastructure, Storage, Crypto ← Sync
 Core, Embeddings, Infrastructure, Storage, Crypto, Sync ← Api
 Core, Embeddings, Infrastructure, Storage, Sync ← Cli
@@ -143,7 +144,7 @@ Core, Embeddings, Infrastructure ← Web
 Core, Embeddings, Infrastructure, Storage, Crypto, Sync ← Mobile
 ```
 
-No circular dependencies. After wave 2 A2 Core no longer references ONNX, mDNS, DPAPI, ImageSharp or Makaretu.Dns.Multicast — every consumer that needs them now depends on Embeddings (for ONNX/Tokenizers) or Infrastructure (for the rest), keeping the kernel light.
+No circular dependencies. After wave 2 A2 Core no longer references ONNX, mDNS, DPAPI, an image library or Makaretu.Dns.Multicast — every consumer that needs them now depends on Embeddings (for ONNX/Tokenizers) or Infrastructure (for the rest), keeping the kernel light.
 
 ## Node Topology
 

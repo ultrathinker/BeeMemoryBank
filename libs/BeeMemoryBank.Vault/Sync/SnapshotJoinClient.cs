@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Data.Sqlite;
@@ -30,17 +31,21 @@ public class SnapshotJoinClient
     private readonly DbConnectionFactory _connFactory;
     private readonly string _dataDir;
     private readonly ILogger<SnapshotJoinClient> _logger;
+    private readonly TimeSpan _requestTimeout;
 
+    /// <param name="requestTimeout">How long the challenge and the authentication may each take (<see cref="JoinHttp.RequestTimeout"/> by default).</param>
     public SnapshotJoinClient(
         HttpClient http,
         DbConnectionFactory connFactory,
         string dataDir,
-        ILogger<SnapshotJoinClient> logger)
+        ILogger<SnapshotJoinClient> logger,
+        TimeSpan? requestTimeout = null)
     {
         _http = http;
         _connFactory = connFactory;
         _dataDir = dataDir;
         _logger = logger;
+        _requestTimeout = requestTimeout ?? JoinHttp.RequestTimeout;
     }
 
     /// <summary>
@@ -61,7 +66,7 @@ public class SnapshotJoinClient
         remoteUrl = remoteUrl.TrimEnd('/');
 
         _logger.LogInformation("Requesting auth challenge from {Remote}", remoteUrl);
-        var challengeResp = await _http.PostAsync($"{remoteUrl}/api/sync/challenge", null, ct);
+        var challengeResp = await JoinHttp.BoundAsync(t => _http.PostAsync($"{remoteUrl}/api/sync/challenge", null, t), ct, _requestTimeout);
         challengeResp.EnsureSuccessStatusCode();
         var challenge = await challengeResp.Content.ReadFromJsonAsync<ChallengeResponseDto>(JsonOpts, ct)
             ?? throw new InvalidOperationException("Empty challenge response");
@@ -83,14 +88,14 @@ public class SnapshotJoinClient
             .ToArray();
         var challengeSig = Ed25519Signer.Sign(localPrivateKey, challengePayload);
 
-        var authResp = await _http.PostAsJsonAsync($"{remoteUrl}/api/sync/authenticate",
+        var authResp = await JoinHttp.BoundAsync(t => _http.PostAsJsonAsync($"{remoteUrl}/api/sync/authenticate",
             new
             {
                 NodeId = localNodeId,
                 ChallengeB64 = challenge.Challenge,
                 SignatureB64 = Convert.ToBase64String(challengeSig),
                 ProtocolVersion = SyncProtocolVersion.Current
-            }, JsonOpts, ct);
+            }, JsonOpts, t), ct, _requestTimeout);
         authResp.EnsureSuccessStatusCode();
         var authToken = (await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts, ct))?.Token
             ?? throw new InvalidOperationException("Empty auth response");
@@ -99,16 +104,17 @@ public class SnapshotJoinClient
         using var snapReq = new HttpRequestMessage(HttpMethod.Get, $"{remoteUrl}/api/sync/snapshot/for-join");
         snapReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", authToken);
 
-        // HttpClient.Timeout — 100 s by default, and nothing overrides it on the mobile client —
-        // covers the WHOLE SendAsync while the completion option is ResponseContentRead: headers
-        // AND the entire body. A join snapshot is the whole vault (easily ~100 MB), so on any link
-        // slower than roughly 1 MB/s the download would be killed mid-transfer, AFTER the key
-        // exchange has already succeeded — leaving a half-provisioned node row on the server and
-        // telling the user nothing useful ("net_http_request_timedout, 100").
+        // HttpClient.Timeout — 100 s by default — covers the WHOLE SendAsync while the completion option
+        // is ResponseContentRead: headers AND the entire body. A join snapshot is the whole vault (easily
+        // ~100 MB), so on any link slower than roughly 1 MB/s the download would be killed mid-transfer,
+        // AFTER the key exchange has already succeeded — leaving a half-provisioned node row on the server
+        // and telling the user nothing useful ("net_http_request_timedout, 100").
         //
-        // ResponseHeadersRead scopes HttpClient.Timeout to the header phase; the body copy is then
-        // bounded by the token below instead — still bounded, so a genuinely stalled transfer
-        // cannot hang forever, but by a limit that suits a large download rather than a request.
+        // ResponseHeadersRead scopes it to the header phase; the token below then bounds the wait for the
+        // headers AND the body copy by a limit that suits a large download rather than a request. The wait
+        // for the headers is the host BUILDING the snapshot (it sends nothing before the archive and its
+        // signature exist), which on a big vault takes minutes: a 30 s client timeout failed such joins
+        // although nothing was wrong. A client of JoinHttp has no timeout of its own, for this reason.
         using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         downloadCts.CancelAfter(SnapshotDownloadTimeout);
         ct = downloadCts.Token;
@@ -120,7 +126,9 @@ public class SnapshotJoinClient
             ?? throw new InvalidOperationException("Missing X-BMB-Snapshot-Signature header");
         var signature = Convert.FromBase64String(signatureB64);
 
-        var tempTarGz = Path.Combine(Path.GetTempPath(), $"bmb-mobile-join-{Guid.NewGuid():N}.tar.gz");
+        // In the data folder, owner-only from the first byte (SnapshotStaging): the archive is the vault as the host has it, database in
+        // clear, and the OS temp folder is readable by other accounts of a shared machine and keeps what a kill leaves there.
+        var tempTarGz = SnapshotStaging.NewArchive(_dataDir);
         try
         {
             await using (var fs = File.Create(tempTarGz))
@@ -163,10 +171,9 @@ public class SnapshotJoinClient
         var cpSeq = manifestDoc.RootElement.GetProperty("cpSequenceNum").GetInt64();
         var lamportTs = manifestDoc.RootElement.GetProperty("lamportTsAtCp").GetInt64();
 
-        var tempDir = Path.Combine(Path.GetTempPath(), $"bmb-mobile-join-restore-{Guid.NewGuid():N}");
+        var tempDir = SnapshotStaging.NewDirectory(_dataDir);
         try
         {
-            Directory.CreateDirectory(tempDir);
             await ExtractTarGzAsync(tarGzPath, tempDir, ct);
             await VerifyManifestFileHashesAsync(tempDir);
 
@@ -202,7 +209,7 @@ public class SnapshotJoinClient
     private static void TryDeleteTemp(Action delete)
     {
         try { delete(); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* left in the temp folder, which the OS sweeps */ }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* left in the staging folder, which the next start sweeps */ }
     }
 
     private void ImportTablesFromAttachedDb(string extractedDbPath)
@@ -217,9 +224,8 @@ public class SnapshotJoinClient
 
         // ATTACH DATABASE doesn't accept bound parameters for the path, so we have to
         // interpolate. SQLite single-quote literals are escaped by doubling the quote;
-        // mirror SnapshotService.RestoreForJoinAsync. extractedDbPath comes from
-        // Path.GetTempPath()/Path.GetTempFileName() — typically safe, but $TMPDIR is
-        // user-controlled and could contain a quote.
+        // mirror SnapshotService.RestoreForJoinAsync. extractedDbPath is under the data
+        // folder, which is user-chosen and could contain a quote.
         var safeAttachPath = extractedDbPath.Replace("'", "''");
         using var attachCmd = conn.CreateCommand();
         attachCmd.CommandText = $"ATTACH DATABASE '{safeAttachPath}' AS snap";

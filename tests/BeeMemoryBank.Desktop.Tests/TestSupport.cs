@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using BeeMemoryBank.Desktop.MacOS;
+using BeeMemoryBank.Platforms.Apple.LaunchAgents;
 using Xunit;
 
 namespace BeeMemoryBank.Desktop.Tests;

@@ -25,7 +25,7 @@ fi
 # Do NOT "harden" this to 127.0.0.1: Docker's published-port DNAT arrives on the container's
 # bridge interface, not its loopback, so a loopback-only bind silently breaks every deployment
 # that publishes this port on purpose — including the reverse-proxied one where Apache/Nginx
-# path-filters to /mcp, /api/sync, /api/join and forwards to a host-loopback-bound mapping
+# path-filters to /mcp, /api/sync, /api/join, /api/join/abort and forwards to a host-loopback-bound mapping
 # (`127.0.0.1:5004:5300`). Bind the port on the HOST side to control exposure.
 ASPNETCORE_URLS=http://0.0.0.0:5300 \
     dotnet /app/api/BeeMemoryBank.Api.dll &

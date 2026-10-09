@@ -7,7 +7,6 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Media;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
-using SixLabors.ImageSharp;
 
 namespace BeeMemoryBank.Core.Tests;
 
@@ -59,7 +58,7 @@ public class BeeImportServiceTests : IAsyncLifetime
         Directory.CreateDirectory(TempMediaDir);
         MediaService = new MediaService(mediaRepo, articleRepo, Session, nodeRepo,
             new NullLamportClock(), new NullEventLogger(),
-            new MediaStorageOptions(TempMediaDir), Factory, new ImageSharpImageTranscoder());
+            new MediaStorageOptions(TempMediaDir), Factory, new SkiaImageTranscoder());
 
         ImportService = new BeeImportService(ArticleService, MediaService, folderRepo, nodeRepo);
 
@@ -108,10 +107,7 @@ public class BeeImportServiceTests : IAsyncLifetime
 
     private static byte[] CreateMinimalPng()
     {
-        using var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(1, 1);
-        using var ms = new MemoryStream();
-        image.SaveAsPng(ms);
-        return ms.ToArray();
+        return ImageFixtures.Png(1, 1);
     }
 
     [Fact]

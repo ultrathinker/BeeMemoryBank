@@ -76,7 +76,7 @@ public class McpToolsTests : IAsyncLifetime
         // (media has no .enc file any more); bee_get_file reads the bytes back.
         var blobRepo = _blobs = new CountingBlobRepository(new BlobRepository(_factory));
         var mediaEventLogger = new EventLogger(nodeRepo, new EventLogRepository(_factory), clock, new NullActorProvider(), new SyncTrigger(), _session, blobRepo);
-        _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, mediaEventLogger, mediaOptions, _factory, new ImageSharpImageTranscoder(), blobRepo: blobRepo);
+        _mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, mediaEventLogger, mediaOptions, _factory, new SkiaImageTranscoder(), blobRepo: blobRepo);
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, _factory);
         _indexBuilder = new IndexBuilder();
@@ -102,7 +102,7 @@ public class McpToolsTests : IAsyncLifetime
             .BuildServiceProvider());
         _searchTools = new BeeSearchTools(_searchService, hybridSearchService, responseManager, _session);
         var folderSvc = new FolderService(folderRepo, articleRepo, nodeRepo, clock, new NullEventLogger(), folderAccessService, scopeHolder);
-        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, _mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo), folderAccessService, new HttpContextAccessor());
+        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, _mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo), folderAccessService, new HttpContextAccessor(), new SkiaImageTranscoder());
         var copySvc = new CopyService(_articleService, folderSvc, _mediaService, articleRepo, folderRepo, conceptTagService, scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, scopeHolder, NullLogger<BeeWriteTools>.Instance, responseManager);
         _uploadTools = new BeeUploadTools(_articleService, _mediaService, _session, responseManager);
@@ -1310,6 +1310,33 @@ public class McpToolsTests : IAsyncLifetime
             await GetFile(("articleId", articleId), ("fileName", "no-such-name.pdf")),
         })
             ErrorOf(blocks).Should().Contain("password-protected").And.Contain("web or mobile UI");
+    }
+
+    // A noise picture: JPEG cannot make it small, so the size limit of bee_get_image has to bite.
+    private static byte[] NoiseJpeg(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+        new Random(5).NextBytes(pixels);
+        for (var i = 3; i < pixels.Length; i += 4) pixels[i] = 255;
+        using var bitmap = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(width, height, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Opaque));
+        System.Runtime.InteropServices.Marshal.Copy(pixels, 0, bitmap.GetPixels(), pixels.Length);
+        using var image = SkiaSharp.SKImage.FromBitmap(bitmap);
+        return image.Encode(SkiaSharp.SKEncodedImageFormat.Jpeg, 95).ToArray();
+    }
+
+    [Fact]
+    public async Task BeeGetImage_ImageOverTheSizeLimit_IsShrunkToFitAsAJpeg()
+    {
+        var article = await _articleService.CreateAsync("Big Image Host", "/Files", [], "body");
+        var image = await _mediaService.CreateAsync("noise.jpg", "image/jpeg", NoiseJpeg(900, 600), article.Id);
+        image.FileSize.Should().BeGreaterThan(300 * 1024);
+
+        var blocks = await McpToolInvoker.CallAsync(_readTools, "bee_get_image", ("id", image.Id), ("maxSizeKb", 100));
+
+        var block = blocks.OfType<ImageContentBlock>().Should().ContainSingle().Subject;
+        block.MimeType.Should().Be("image/jpeg");
+        block.DecodedData.Length.Should().BeLessThanOrEqualTo(100 * 1024);
+        block.DecodedData.ToArray().Take(3).Should().Equal(0xFF, 0xD8, 0xFF);
     }
 
     [Fact]

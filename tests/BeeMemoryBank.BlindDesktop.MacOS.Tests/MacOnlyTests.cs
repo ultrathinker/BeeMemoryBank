@@ -230,56 +230,6 @@ public class ProcessRunnerMacTests
     }
 }
 
-/// <summary>AppleScript escaping against the real AppleScript parser: the script only RETURNS the text, so nothing is shown on the screen.</summary>
-public class AppleScriptMacTests
-{
-    [MacOnlyFact]
-    public void TheQuotedLiteral_IsReadBackByAppleScriptAsTheSameText()
-    {
-        string[] texts =
-        [
-            "Backup 42 %",
-            "say \"hi\"",
-            "back\\slash and \\\" mixed",
-            "\" & (do shell script \"echo pwned\") & \"",
-            "caf" + (char)0xE9 + " " + char.ConvertFromUtf32(0x1F41D),
-        ];
-        foreach (var text in texts)
-        {
-            var script = "return " + AppleScriptText.Quote(text);
-
-            var result = new ProcessCommandRunner().Run(MacTools.Osascript, ["-e", script], TimeSpan.FromSeconds(20));
-
-            result.Succeeded.Should().BeTrue(result.StandardError + " for " + text);
-            result.StandardOutput.TrimEnd('\n').Should().Be(text);
-        }
-    }
-
-    [MacOnlyFact]
-    public void TheNotificationStatement_CompilesInAppleScript_WithoutBeingRun()
-    {
-        // osacompile only compiles (nothing is executed and nothing is shown on the screen): the statement the notifier builds is valid.
-        using var folder = new TempFolder();
-        var hostile = "\" & (do shell script \"x\") & \"";
-        foreach (var (title, body) in new[] { ("Backup", "42 %"), (hostile, hostile) })
-        {
-            var script = AppleScriptText.DisplayNotification(title, body);
-
-            var result = new ProcessCommandRunner().Run("/usr/bin/osacompile", ["-o", folder.File("n.scpt"), "-e", script], TimeSpan.FromSeconds(20));
-
-            result.Succeeded.Should().BeTrue(result.StandardError + " :: " + script);
-        }
-    }
-
-    [MacOnlyFact]
-    public void ControlCharacters_AreFlattenedToSpaces_ByTheQuote()
-    {
-        var result = new ProcessCommandRunner().Run(MacTools.Osascript, ["-e", "return " + AppleScriptText.Quote("one\ntwo\rthree")], TimeSpan.FromSeconds(20));
-
-        result.StandardOutput.TrimEnd('\n').Should().Be("one two three");
-    }
-}
-
 /// <summary>
 /// The real launchd: a TEST label, a plist in a folder of the test's own (not ~/Library/LaunchAgents), a program that does nothing
 /// (`/usr/bin/true`), bootstrapped into gui/&lt;uid&gt; and booted out again. The test always removes its label and its folder.

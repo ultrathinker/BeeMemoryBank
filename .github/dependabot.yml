@@ -30,7 +30,7 @@ updates:
       # Patch and minor updates are worth automating; major ones are API-breaking by definition
       # and every one of them needs its own change, its own test run and a human deciding it is
       # worth the churn (Test.Sdk 18, coverlet 10, xunit.runner 4, ModelContextProtocol 2,
-      # ImageSharp 4, Markdig 1.x, SQLitePCLRaw 3 are all sitting there for exactly that reason).
+      # SkiaSharp 4, Markdig 1.x, SQLitePCLRaw 3 are all sitting there for exactly that reason).
       # Left on, they reopen weekly and nobody merges them, which is how the previous backlog of
       # stale pull requests happened. Run `dotnet list package --outdated` to see them.
       #

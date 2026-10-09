@@ -107,6 +107,7 @@ public class BlindNodeCompositionTests
     [InlineData("ModelContextProtocol.AspNetCore")]
     [InlineData("Microsoft.ML.OnnxRuntime")]
     [InlineData("SixLabors.ImageSharp")]
+    [InlineData("SkiaSharp")]
     [InlineData("Velopack")]
     [InlineData("Makaretu.Dns.Multicast")]
     public void TheHostDoesNotReferenceAnythingOfAFullNode(string forbidden)

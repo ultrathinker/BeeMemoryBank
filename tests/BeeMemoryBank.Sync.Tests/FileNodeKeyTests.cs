@@ -138,6 +138,38 @@ public sealed class FileNodeKeyTests : IDisposable
         Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty("the loser's temp file is not left behind");
     }
 
+    /// <summary>
+    /// BMB-188: the test above failed on Linux in CI. There <c>File.Move(overwrite: false)</c> checks that the target
+    /// is missing and then renames, which replaces: two starts that both passed the check both renamed, the second over
+    /// the first, and the first went on with an identity that was not in the file. More starts at once than two make
+    /// that window easy to hit; every one of them must end up with the key in the file.
+    /// </summary>
+    [Fact]
+    public void ManyFirstStartsAtOnce_AllGetTheKeyThatIsInTheFile()
+    {
+        const int rounds = 100, starts = 4;
+        for (var round = 0; round < rounds; round++)
+        {
+            var key = new FileNodeKey(Path.Combine(_dir, $"crowd-{round}.key"));
+            using var barrier = new Barrier(starts);
+            var results = new (byte[] PublicKey, bool Created)[starts];
+
+            var tasks = Enumerable.Range(0, starts).Select(i => Task.Factory.StartNew(() =>
+            {
+                barrier.SignalAndWait();
+                var pub = new FileNodeKey(key.Path).LoadOrCreate(out var created);
+                results[i] = (pub, created);
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+            Task.WaitAll(tasks, TimeSpan.FromSeconds(30)).Should().BeTrue();
+
+            foreach (var result in results)
+                key.Matches(result.PublicKey).Should().BeTrue($"round {round}: every start returns the key that is in the file");
+            results.Count(r => r.Created).Should().Be(1, $"round {round}: exactly one start created the key");
+        }
+
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty("no loser's temp file is left behind");
+    }
+
     [Fact]
     public void Create_LeavesTheSeedOnlyUnderTheFinalName()
     {

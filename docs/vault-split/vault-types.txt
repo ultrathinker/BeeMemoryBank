@@ -152,6 +152,9 @@ BeeMemoryBank.Sync.DekRotation.RewrapTally
 BeeMemoryBank.Sync.DependencyInjection
 BeeMemoryBank.Sync.DependencyInjection+NoOpRestoreInitiator
 BeeMemoryBank.Sync.EventLogger
+BeeMemoryBank.Sync.JoinAbortClient
+BeeMemoryBank.Sync.JoinAbortOutcome
+BeeMemoryBank.Sync.JoinTls
 BeeMemoryBank.Sync.LazySlotRewrapService
 BeeMemoryBank.Sync.PendingIndexProcessor
 BeeMemoryBank.Sync.Recovery.AnchorVerification

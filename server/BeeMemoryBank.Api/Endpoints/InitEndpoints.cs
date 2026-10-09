@@ -161,7 +161,9 @@ public static class InitEndpoints
                 // authentication and the snapshot alike, so no step can go to an unpinned server.
                 using var pinnedHttp = code != null ? JoinHttp.CreateClient(code.SpkiPin) : null;
                 var http = pinnedHttp ?? httpClientFactory.CreateClient(SyncEndpoints.NoRedirectClientName);
-                http.Timeout = TimeSpan.FromSeconds(30);
+                // No timeout of the client: each request of the key exchange is bounded below (30 s), and the snapshot request, whose first
+                // header comes only after the host has built the whole snapshot, by its own 30-minute budget.
+                http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
 
                 var joinRequest = new
                 {
@@ -172,6 +174,24 @@ public static class InitEndpoints
                     apiAddress = (string?)null
                 };
 
+                // The host writes this node's row as soon as it accepts the join. From there on a failure leaves that row behind unless the host
+                // is told (POST /api/join/abort). Best effort: a host or proxy that does not know the route, or does not answer, keeps the
+                // sentence that names the row, and nothing here replaces the error that made the join fail. The sentence is returned to be
+                // added to that error; rowCertain is false when the join never got an answer, so the host may or may not have written the row.
+                var hostTold = false;
+                async Task<string> AbortNoteAsync(bool rowCertain = true)
+                {
+                    hostTold = true;
+                    var outcome = await BeeMemoryBank.Sync.JoinAbortClient.TryAbortAsync(http, remoteBase, req.Password, nodeId, publicKey, code?.Token);
+                    if (BeeMemoryBank.Sync.JoinAbortClient.HostForgot(outcome))
+                        return $"The other computer was told and no longer lists this node ('{req.DisplayName}').";
+                    return rowCertain
+                        ? $"The other computer still lists this node ('{req.DisplayName}') as a member that has never synced: revoke it there " +
+                          "(Admin page, Nodes), or it holds back compaction of that computer's event log."
+                        : $"If the other computer recorded this node ('{req.DisplayName}') before the connection failed, it lists it as a member that has never synced: " +
+                          "revoke it there (Admin page, Nodes), or it holds back compaction of that computer's event log.";
+                }
+
                 HttpResponseMessage response;
                 try
                 {
@@ -181,12 +201,13 @@ public static class InitEndpoints
                     };
                     // The one-time token of the code: without it the other computer's join door refuses before it looks at a password.
                     if (code?.Token != null) joinMessage.Headers.Add(BeeMemoryBank.Core.Models.JoinCode.TokenHeader, code.Token);
-                    response = await http.SendAsync(joinMessage);
+                    response = await JoinHttp.BoundAsync(t => http.SendAsync(joinMessage, t), ctx.RequestAborted);
                 }
                 catch (HttpRequestException ex) when (code != null)
                 {
                     return Results.Json(
-                        new ErrorResponse(BeeMemoryBank.Core.Models.JoinCode.DescribeConnectionFailure(ex)),
+                        new ErrorResponse(BeeMemoryBank.Core.Models.JoinCode.DescribeConnectionFailure(ex)
+                            + (BeeMemoryBank.Sync.JoinAbortClient.MayHaveReachedHost(ex) ? " " + await AbortNoteAsync(rowCertain: false) : "")),
                         statusCode: 502);
                 }
                 catch (HttpRequestException ex) when (ex.HttpRequestError == HttpRequestError.SecureConnectionError)
@@ -201,7 +222,9 @@ public static class InitEndpoints
                 catch (Exception ex)
                 {
                     return Results.Json(
-                        new ErrorResponse($"Cannot reach remote node: {ex.Message}"),
+                        new ErrorResponse($"Cannot reach remote node: {ex.Message}"
+                            + (ex is HttpRequestException unanswered && BeeMemoryBank.Sync.JoinAbortClient.MayHaveReachedHost(unanswered)
+                                ? " " + await AbortNoteAsync(rowCertain: false) : "")),
                         statusCode: 502);
                 }
 
@@ -213,191 +236,226 @@ public static class InitEndpoints
                     // Through a code the other computer is the pinned one, and its door says why in a sentence made for the person
                     // ("not valid", "already used"); show that. Otherwise only the status, as before.
                     var doorSaid = code != null ? BeeMemoryBank.Core.Models.JoinCode.ReadDoorError(errorBody) : null;
+                    // A server-side failure (a proxy that gave up while the host went on) may have come after the host wrote the row.
+                    var rejectedNote = (int)response.StatusCode >= 500 ? " " + await AbortNoteAsync(rowCertain: false) : "";
                     return Results.Json(
-                        new ErrorResponse(doorSaid ?? $"Remote node rejected the join request (HTTP {(int)response.StatusCode})"),
+                        new ErrorResponse((doorSaid ?? $"Remote node rejected the join request (HTTP {(int)response.StatusCode})") + rejectedNote),
                         statusCode: 502);
                 }
 
-                var joinResponse = await response.Content.ReadFromJsonAsync<JoinResponseDto>(JsonOptions);
-                if (joinResponse == null)
-                    return Results.Json(new ErrorResponse("Empty response from remote node"), statusCode: 502);
-
-                if (joinResponse.RemoteNode.ProtocolVersion > BeeMemoryBank.Sync.SyncProtocolVersion.Current)
-                {
-                    return Results.Json(
-                        new ErrorResponse($"Cannot join: remote node protocol version ({joinResponse.RemoteNode.ProtocolVersion}) is higher than local version ({BeeMemoryBank.Sync.SyncProtocolVersion.Current})"),
-                        statusCode: 400);
-                }
-                // An older peer accepts events a blind node authored (SyncProtocolVersion.MinPeer),
-                // so its snapshot and log are no ground to build this node on.
-                if (!BeeMemoryBank.Sync.SyncProtocolVersion.IsCompatiblePeer(joinResponse.RemoteNode.ProtocolVersion))
-                {
-                    return Results.Json(
-                        new ErrorResponse($"Cannot join: remote node protocol version ({joinResponse.RemoteNode.ProtocolVersion}) is below {BeeMemoryBank.Sync.SyncProtocolVersion.MinPeer}; update it first"),
-                        statusCode: 400);
-                }
-
-                var slot = joinResponse.KeySlot;
-                var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
-                var remoteIv = Convert.FromBase64String(slot.IvB64);
-                var remoteSalt = Convert.FromBase64String(slot.SaltB64);
-
-                // The peer chose these numbers; a hostile or broken one must not make this node
-                // allocate gigabytes before the fake wrapped DEK can even be rejected.
+                // From the host's answer on, the host holds this node's row, so any failure before the snapshot step (an answer that
+                // cannot be read or lacks a part, a field that is not base64, a local write that throws) must take that row back as well.
+                // The checks inside that already told the host answer in their own words, and the busy-KDF one lets its 503 through.
+                JoinResponseDto joinResponse;
+                JoinRemoteNodeDto remote;
+                byte[] masterDek = [];
                 try
                 {
-                    KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
-                }
-                catch (System.Security.Cryptography.CryptographicException ex)
-                {
-                    return Results.Json(new ErrorResponse($"Cannot join: the remote node sent an invalid key slot. {ex.Message}"), statusCode: 400);
-                }
+                    var answer = await response.Content.ReadFromJsonAsync<JoinResponseDto>(JsonOptions);
+                    if (answer == null)
+                        return Results.Json(new ErrorResponse("Empty response from remote node. " + await AbortNoteAsync()), statusCode: 502);
+                    if (answer.RemoteNode == null || answer.KeySlot == null)
+                        throw new InvalidOperationException("The answer of the remote node is incomplete.");
+                    joinResponse = answer;
 
-                byte[] masterDek;
-                try
-                {
-                    var remoteKek = KeyDerivation.DeriveKek(req.Password, remoteSalt,
-                        slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
-                    masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, remoteIv, remoteKek);
-                }
-                catch (KdfBusyException)
-                {
-                    throw; // "busy, retry" (503), not "wrong password"
-                }
-                catch
-                {
-                    return Results.Json(
-                        new ErrorResponse("Could not decrypt Master DEK — wrong password?"),
-                        statusCode: 400);
-                }
+                    if (joinResponse.RemoteNode.ProtocolVersion > BeeMemoryBank.Sync.SyncProtocolVersion.Current)
+                    {
+                        return Results.Json(
+                            new ErrorResponse($"Cannot join: remote node protocol version ({joinResponse.RemoteNode.ProtocolVersion}) is higher than local version ({BeeMemoryBank.Sync.SyncProtocolVersion.Current}). "
+                                + await AbortNoteAsync()),
+                            statusCode: 400);
+                    }
+                    // An older peer accepts events a blind node authored (SyncProtocolVersion.MinPeer),
+                    // so its snapshot and log are no ground to build this node on.
+                    if (!BeeMemoryBank.Sync.SyncProtocolVersion.IsCompatiblePeer(joinResponse.RemoteNode.ProtocolVersion))
+                    {
+                        return Results.Json(
+                            new ErrorResponse($"Cannot join: remote node protocol version ({joinResponse.RemoteNode.ProtocolVersion}) is below {BeeMemoryBank.Sync.SyncProtocolVersion.MinPeer}; update it first. "
+                                + await AbortNoteAsync()),
+                            statusCode: 400);
+                    }
 
-                var localSalt = KeyDerivation.GenerateSalt();
-                var localKek = KeyDerivation.DeriveKek(req.Password, localSalt);
-                var (localEncryptedDek, localIv) = MasterKeyManager.WrapMasterDek(masterDek, localKek);
+                    var slot = joinResponse.KeySlot;
+                    var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
+                    var remoteIv = Convert.FromBase64String(slot.IvB64);
+                    var remoteSalt = Convert.FromBase64String(slot.SaltB64);
 
-                var now = DateTime.UtcNow;
-
-                // Encrypt the Ed25519 seed with master DEK before persisting (v=1).
-                // Note: the raw privateKey is kept on the stack until the challenge-response
-                // handshake below is done; cleared at the end of the unlock try/finally.
-                var (wrappedPk, pkIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
-
-                var identity = new NodeIdentity
-                {
-                    NodeId = nodeId,
-                    DisplayName = req.DisplayName,
-                    Ed25519PublicKey = publicKey,
-                    Ed25519PrivateKey = wrappedPk,
-                    Ed25519PrivateKeyIV = pkIv,
-                    Ed25519PrivateKeyV = 1,
-                    InitialSyncCompleted = false,
-                    CreatedAt = now
-                };
-                await nodeRepo.CreateAsync(identity);
-
-                var localSlot = new MasterKeyStore
-                {
-                    SlotType = "user",
-                    EncryptedMasterDek = localEncryptedDek,
-                    IV = localIv,
-                    Salt = localSalt,
-                    ArgonMemory = CryptoConstants.DefaultArgonMemory,
-                    ArgonIterations = CryptoConstants.DefaultArgonIterations,
-                    ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
-                    CreatedAt = now
-                };
-                var localSlotId = await keySlotRepo.CreateAsync(localSlot);
-
-                var user = new User
-                {
-                    Username = req.AdminUsername.Trim(),
-                    DisplayName = req.AdminUsername.Trim(),
-                    PasswordHash = UserService.HashPassword(req.Password),
-                    Role = UserRoles.Superadmin,
-                    KeySlotId = localSlotId,
-                    IsActive = true,
-                    CreatedAt = now
-                };
-                await userRepo.CreateAsync(user);
-
-                var sentinel = MasterKeyManager.ComputeSentinel(masterDek);
-                await nodeRepo.StoreSentinelAsync(sentinel);
-
-                using (var conn = dbConnFactory.CreateConnection())
-                {
-                    using var cmd = conn.CreateCommand();
-                    cmd.CommandText = @"
-                        INSERT OR IGNORE INTO tbl_migration_marker (key, value, set_at)
-                        VALUES (@k, '1', @ts)";
-                    var p1 = cmd.CreateParameter();
-                    p1.ParameterName = "k";
-                    p1.Value = "legacy_password_unified";
-                    cmd.Parameters.Add(p1);
-                    var p2 = cmd.CreateParameter();
-                    p2.ParameterName = "ts";
-                    p2.Value = DateTime.UtcNow.ToString("O");
-                    cmd.Parameters.Add(p2);
-                    cmd.ExecuteNonQuery();
-                }
-
-                Array.Clear(masterDek);
-
-                foreach (var entry in joinResponse.Whitelist ?? [])
-                {
-                    if (entry.NodeId == nodeId) continue;
-                    if (entry.NodeId == joinResponse.RemoteNode.NodeId) continue;
+                    // The peer chose these numbers; a hostile or broken one must not make this node
+                    // allocate gigabytes before the fake wrapped DEK can even be rejected.
+                    try
+                    {
+                        KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+                    }
+                    catch (System.Security.Cryptography.CryptographicException ex)
+                    {
+                        return Results.Json(new ErrorResponse($"Cannot join: the remote node sent an invalid key slot. {ex.Message} " + await AbortNoteAsync()), statusCode: 400);
+                    }
 
                     try
                     {
-                        var existing = await whitelistRepo.GetByNodeIdAsync(entry.NodeId);
-                        if (existing != null) continue;
-
-                        await whitelistRepo.CreateAsync(new WhitelistEntry
-                        {
-                            NodeId = entry.NodeId,
-                            DisplayName = entry.DisplayName,
-                            Ed25519PublicKey = Convert.FromBase64String(entry.Ed25519PublicKeyB64),
-                            ApiAddress = entry.ApiAddress,
-                            Status = "A",
-                            CreatedAt = now,
-                            UpdatedAt = now,
-                            // Propagate IsSuperadmin from the bootstrap node's whitelist so this
-                            // new node knows which transitively-discovered peers are Superadmins.
-                            // Without this, every other Superadmin in the cluster would be demoted
-                            // to plain peer locally → their whitelist_*/hard_delete/restore_network
-                            // events would be rejected once a 3rd node joins.
-                            IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin)
-                        });
+                        var remoteKek = KeyDerivation.DeriveKek(req.Password, remoteSalt,
+                            slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism);
+                        masterDek = MasterKeyManager.UnwrapMasterDek(encryptedMasterDek, remoteIv, remoteKek);
                     }
-                    catch (Exception ex)
+                    catch (KdfBusyException)
                     {
-                        logger.LogWarning(ex, "Failed to import whitelist entry for node {NodeId}", entry.NodeId);
+                        await AbortNoteAsync();
+                        throw; // "busy, retry" (503), not "wrong password"
                     }
+                    catch
+                    {
+                        return Results.Json(
+                            new ErrorResponse("Could not decrypt Master DEK — wrong password? " + await AbortNoteAsync()),
+                            statusCode: 400);
+                    }
+
+                    var localSalt = KeyDerivation.GenerateSalt();
+                    var localKek = KeyDerivation.DeriveKek(req.Password, localSalt);
+                    var (localEncryptedDek, localIv) = MasterKeyManager.WrapMasterDek(masterDek, localKek);
+
+                    var now = DateTime.UtcNow;
+
+                    // Encrypt the Ed25519 seed with master DEK before persisting (v=1).
+                    // Note: the raw privateKey is kept on the stack until the challenge-response
+                    // handshake below is done; cleared at the end of the unlock try/finally.
+                    var (wrappedPk, pkIv) = NodeIdentityVault.EncryptPrivateKey(privateKey, masterDek, nodeId);
+
+                    var identity = new NodeIdentity
+                    {
+                        NodeId = nodeId,
+                        DisplayName = req.DisplayName,
+                        Ed25519PublicKey = publicKey,
+                        Ed25519PrivateKey = wrappedPk,
+                        Ed25519PrivateKeyIV = pkIv,
+                        Ed25519PrivateKeyV = 1,
+                        InitialSyncCompleted = false,
+                        CreatedAt = now
+                    };
+                    await nodeRepo.CreateAsync(identity);
+
+                    var localSlot = new MasterKeyStore
+                    {
+                        SlotType = "user",
+                        EncryptedMasterDek = localEncryptedDek,
+                        IV = localIv,
+                        Salt = localSalt,
+                        ArgonMemory = CryptoConstants.DefaultArgonMemory,
+                        ArgonIterations = CryptoConstants.DefaultArgonIterations,
+                        ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
+                        CreatedAt = now
+                    };
+                    var localSlotId = await keySlotRepo.CreateAsync(localSlot);
+
+                    var user = new User
+                    {
+                        Username = req.AdminUsername.Trim(),
+                        DisplayName = req.AdminUsername.Trim(),
+                        PasswordHash = UserService.HashPassword(req.Password),
+                        Role = UserRoles.Superadmin,
+                        KeySlotId = localSlotId,
+                        IsActive = true,
+                        CreatedAt = now
+                    };
+                    await userRepo.CreateAsync(user);
+
+                    var sentinel = MasterKeyManager.ComputeSentinel(masterDek);
+                    await nodeRepo.StoreSentinelAsync(sentinel);
+
+                    using (var conn = dbConnFactory.CreateConnection())
+                    {
+                        using var cmd = conn.CreateCommand();
+                        cmd.CommandText = @"
+                            INSERT OR IGNORE INTO tbl_migration_marker (key, value, set_at)
+                            VALUES (@k, '1', @ts)";
+                        var p1 = cmd.CreateParameter();
+                        p1.ParameterName = "k";
+                        p1.Value = "legacy_password_unified";
+                        cmd.Parameters.Add(p1);
+                        var p2 = cmd.CreateParameter();
+                        p2.ParameterName = "ts";
+                        p2.Value = DateTime.UtcNow.ToString("O");
+                        cmd.Parameters.Add(p2);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    Array.Clear(masterDek);
+
+                    foreach (var entry in joinResponse.Whitelist ?? [])
+                    {
+                        if (entry.NodeId == nodeId) continue;
+                        if (entry.NodeId == joinResponse.RemoteNode.NodeId) continue;
+
+                        try
+                        {
+                            var existing = await whitelistRepo.GetByNodeIdAsync(entry.NodeId);
+                            if (existing != null) continue;
+
+                            // The key the host dials this peer by (see JoinTls); a pin that is not a pin leaves the peer out, not unpinned.
+                            if (!BeeMemoryBank.Sync.JoinTls.TryInherit(entry.TlsTrust, entry.TlsSpki, out var tlsTrust, out var tlsSpki))
+                            {
+                                logger.LogWarning("Not importing peer {NodeId}: the host sent a TLS pin that is not a pin.", entry.NodeId);
+                                continue;
+                            }
+
+                            await whitelistRepo.CreateAsync(new WhitelistEntry
+                            {
+                                NodeId = entry.NodeId,
+                                DisplayName = entry.DisplayName,
+                                Ed25519PublicKey = Convert.FromBase64String(entry.Ed25519PublicKeyB64),
+                                ApiAddress = entry.ApiAddress,
+                                Status = "A",
+                                CreatedAt = now,
+                                UpdatedAt = now,
+                                // Propagate IsSuperadmin from the bootstrap node's whitelist so this
+                                // new node knows which transitively-discovered peers are Superadmins.
+                                // Without this, every other Superadmin in the cluster would be demoted
+                                // to plain peer locally → their whitelist_*/hard_delete/restore_network
+                                // events would be rejected once a 3rd node joins.
+                                IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin),
+                                TlsTrust = tlsTrust,
+                                TlsSpki = tlsSpki
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Failed to import whitelist entry for node {NodeId}", entry.NodeId);
+                        }
+                    }
+
+                    remote = joinResponse.RemoteNode;
+                    await whitelistRepo.CreateAsync(new WhitelistEntry
+                    {
+                        NodeId = remote.NodeId,
+                        DisplayName = remote.DisplayName,
+                        Ed25519PublicKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64),
+                        ApiAddress = remoteBase,
+                        Status = "A",
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                        // The host just proved it holds the master password by handing over a slot it
+                        // opens, and it records this node as a superadmin for the same reason
+                        // (JoinAuthority, BMB-42).
+                        IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId),
+                        // The key the code pinned is the key this node dials it by from now on (SpkiPinRegistry): its certificate comes
+                        // from its own local CA, which no ordinary check here trusts, so the later sync would otherwise fail.
+                        TlsSpki = code?.SpkiPin
+                    });
+                }
+                catch (Exception ex) when (!hostTold)
+                {
+                    Array.Clear(privateKey);
+                    Array.Clear(masterDek);
+                    logger.LogError(ex, "The answer of the remote node could not be used after the key exchange. Node is in partial state.");
+                    return Results.Json(
+                        new ErrorResponse($"The join could not be completed: {ex.Message} " + await AbortNoteAsync()),
+                        statusCode: 500);
                 }
 
-                var remote = joinResponse.RemoteNode;
-                await whitelistRepo.CreateAsync(new WhitelistEntry
-                {
-                    NodeId = remote.NodeId,
-                    DisplayName = remote.DisplayName,
-                    Ed25519PublicKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64),
-                    ApiAddress = remoteBase,
-                    Status = "A",
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                    // The host just proved it holds the master password by handing over a slot it
-                    // opens, and it records this node as a superadmin for the same reason
-                    // (JoinAuthority, BMB-42).
-                    IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId),
-                    // The key the code pinned is the key this node dials it by from now on (SpkiPinRegistry): its certificate comes
-                    // from its own local CA, which no ordinary check here trusts, so the later sync would otherwise fail.
-                    TlsSpki = code?.SpkiPin
-                });
 
                 try
                 {
-                    var challengeResp = await http.PostAsync(
-                        $"{remoteBase}/api/sync/challenge", null);
+                    var challengeResp = await JoinHttp.BoundAsync(
+                        t => http.PostAsync($"{remoteBase}/api/sync/challenge", null, t), ctx.RequestAborted);
                     challengeResp.EnsureSuccessStatusCode();
                     var challenge = await challengeResp.Content.ReadFromJsonAsync<ChallengeResponseDto>(JsonOptions)
                         ?? throw new InvalidOperationException("No challenge from remote");
@@ -416,7 +474,7 @@ public static class InitEndpoints
                     var challengeSig = Ed25519Signer.Sign(privateKey, challengePayload);
                     Array.Clear(privateKey);
 
-                    var authResp = await http.PostAsJsonAsync(
+                    var authResp = await JoinHttp.BoundAsync(t => http.PostAsJsonAsync(
                         $"{remoteBase}/api/sync/authenticate",
                         new
                         {
@@ -424,7 +482,7 @@ public static class InitEndpoints
                             ChallengeB64 = challenge.Challenge,
                             SignatureB64 = Convert.ToBase64String(challengeSig),
                             ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
-                        }, JsonOptions);
+                        }, JsonOptions, t), ctx.RequestAborted);
                     authResp.EnsureSuccessStatusCode();
                     var authToken = (await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOptions))?.Token
                         ?? throw new InvalidOperationException("No token from remote");
@@ -434,7 +492,12 @@ public static class InitEndpoints
                     snapReq.Headers.Authorization =
                         new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken);
 
-                    var snapResp = await http.SendAsync(snapReq);
+                    // The host builds the whole snapshot before it sends the first header, which takes minutes on a big vault; the 30-minute
+                    // budget covers that wait and the body (as in SnapshotJoinClient), and the headers are read first so it is not
+                    // spent on the body twice over.
+                    using var snapBudget = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+                    snapBudget.CancelAfter(TimeSpan.FromMinutes(30));
+                    var snapResp = await http.SendAsync(snapReq, HttpCompletionOption.ResponseHeadersRead, snapBudget.Token);
                     snapResp.EnsureSuccessStatusCode();
 
                     var signatureB64 = snapResp.Headers.GetValues("X-BMB-Snapshot-Signature").FirstOrDefault()
@@ -444,11 +507,12 @@ public static class InitEndpoints
                     var cpSeqHeader = snapResp.Headers.GetValues("X-BMB-Snapshot-CP-Seq").FirstOrDefault();
                     logger.LogInformation("Downloading snapshot for join (CP={Cp})", cpSeqHeader);
 
-                    var tempTarGz = Path.Combine(Path.GetTempPath(), $"bmb-join-{Guid.NewGuid():N}.tar.gz");
+                    // In the data folder and owner-only, not the OS temp folder: the archive is the vault as the host has it, database in clear.
+                    var tempTarGz = BeeMemoryBank.Core.IO.SnapshotStaging.NewArchive(snapshotService.DataPath);
                     try
                     {
                         await using (var fs = File.Create(tempTarGz))
-                            await snapResp.Content.CopyToAsync(fs);
+                            await snapResp.Content.CopyToAsync(fs, snapBudget.Token);
 
                         var producerPubKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64);
                         var (cpSeq, lamportTs) = await snapshotService.RestoreForJoinAsync(
@@ -472,7 +536,8 @@ public static class InitEndpoints
                     logger.LogError(ex, "Snapshot join failed after key setup. Node is in partial state.");
                     return Results.Json(
                         new ErrorResponse(
-                            $"Key exchange succeeded but snapshot import failed: {ex.Message}. Node may need wipe & retry."),
+                            $"Key exchange succeeded but snapshot import failed: {ex.Message}. Node may need wipe & retry. " +
+                            await AbortNoteAsync()),
                         statusCode: 500);
                 }
 
@@ -530,7 +595,9 @@ public static class InitEndpoints
         string DisplayName,
         string Ed25519PublicKeyB64,
         string? ApiAddress,
-        bool IsSuperadmin = false);
+        bool IsSuperadmin = false,
+        string? TlsTrust = null,
+        string? TlsSpki = null);
 
     private sealed record JoinKeySlotDto(
         string EncryptedMasterDekB64,

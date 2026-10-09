@@ -67,6 +67,14 @@ ADD --chmod=0644 --checksum=sha256:f80102d3f2a1229f387d3c81909990d8945513e347b0e
 COPY docker-entrypoint.sh .
 RUN chmod +x docker-entrypoint.sh
 
+# The notices of the image library (SkiaSharp and the native libraries it carries): their licences ask for them to travel with the binaries.
+COPY THIRD-PARTY-NOTICES.txt ./
+
+# The data folder of every process in the container, `docker exec ... bmb` included. The compose files set it too; without it a bare
+# `docker run` split the node in two: the Api works in /app/data (the entrypoint runs it from /app) and the Web front in /app/web/data
+# (it runs from /app/web), so the web login keys went to a folder that is not the volume and were lost with the container.
+ENV BMB_DATA_PATH=/app/data
+
 # Only the Web port. The Api port 5300 (/mcp, sync, an endpoint that checks the master password) is deliberately not
 # EXPOSEd, so `docker run -P` and the port dialogs of NAS and container GUIs do not offer it. Publish it on purpose, on the
 # host's loopback, when an assistant on this computer needs it (docker-compose.yml shows how).

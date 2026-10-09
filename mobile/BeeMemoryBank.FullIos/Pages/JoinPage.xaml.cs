@@ -52,8 +52,8 @@ public partial class JoinPage : ContentPage
         _ = ShowStepsAsync(steps.Token);
         try
         {
-            await Task.Run(() => _vault.JoinAsync(name, code, password));
-            PasswordEntry.Text = "";
+            // The field is emptied whatever the join ends in (SecretFields), not just when it works.
+            await SecretFields.RunAsync(() => Task.Run(() => _vault.JoinAsync(name, code, password)), () => PasswordEntry.Text = "");
             await _flow.OfferQuickUnlockAsync(this);
             _flow.ShowMain();
         }

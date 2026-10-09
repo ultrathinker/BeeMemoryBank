@@ -81,16 +81,11 @@ public partial class UnlockPage : ContentPage
         SetBusy(true);
         try
         {
-            if (await Task.Run(() => _vault.UnlockAsync(password)))
-            {
-                PasswordEntry.Text = "";
+            // The field is emptied whatever the unlock ends in (SecretFields): opened, refused, or an exception.
+            if (await SecretFields.RunAsync(() => Task.Run(() => _vault.UnlockAsync(password)), () => PasswordEntry.Text = ""))
                 _flow.ShowMain();
-            }
             else
-            {
-                PasswordEntry.Text = "";
                 ShowError("Wrong password.");
-            }
         }
         catch (Exception ex)
         {

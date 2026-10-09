@@ -37,6 +37,9 @@ public partial class App : Application
 
         try
         {
+            // What a join killed half-way left in the staging folder (the downloaded archive, the extracted database): removed at the next start.
+            BeeMemoryBank.Core.IO.SnapshotStaging.Sweep(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+
             await _migrationRunner.RunMigrationsAsync();
             await _folderBootstrapper.RunIfNeededAsync();
 

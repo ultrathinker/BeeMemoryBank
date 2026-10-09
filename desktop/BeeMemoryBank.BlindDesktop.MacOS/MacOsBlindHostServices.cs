@@ -55,33 +55,10 @@ public sealed class MacOsBlindHostOptions
 public static class MacOsBlindHostServices
 {
     /// <summary>
-    /// Registers, as singletons and only where the host has not registered its own: <see cref="IBlindPaths"/>, <see cref="IBlindSecretStore"/>
-    /// (Keychain), <see cref="IBlindStateStore"/> (atomic file),
-    /// <see cref="IBlindAutostart"/> (LaunchAgent), <see cref="IBlindNotifications"/> and <see cref="IBlindLifecycle"/>, and each concrete
-    /// type too (for <c>MacOsBlindAutostart.IsEnabled</c>, <c>MacOsBlindLifecycle.RestartRequested</c>, the conditions' reasons).
-    /// Not registered: <see cref="IBlindScheduler"/> (the host's in-process timer loop; the lifecycle uses it when it is there) and
-    /// <see cref="IBlindBackupExporter"/> (the host's save-file picker). Nothing native is touched until a seam is first used.
-    /// </summary>
-    public static IServiceCollection AddMacOsBlindHost(this IServiceCollection services, MacOsBlindHostOptions? options = null)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        options ??= new MacOsBlindHostOptions();
-        services.AddMacOsBlindSeams(options);
-
-        services.TryAddSingleton<MacOsBlindNotifications>();
-        services.TryAddSingleton<IBlindNotifications>(sp => sp.GetRequiredService<MacOsBlindNotifications>());
-
-        services.TryAddSingleton<MacOsBlindLifecycle>(sp => new MacOsBlindLifecycle(sp.GetService<IBlindScheduler>(), sp.GetService<IBlindStateStore>() as MacOsBlindStateStore));
-        services.TryAddSingleton<IBlindLifecycle>(sp => sp.GetRequiredService<MacOsBlindLifecycle>());
-
-        return services;
-    }
-
-    /// <summary>
-    /// Only the seams that depend on macOS and that every macOS host needs: <see cref="IBlindPaths"/>, <see cref="IBlindSecretStore"/> (Keychain),
-    /// <see cref="IBlindStateStore"/> and <see cref="IBlindAutostart"/>. A host that has its own
-    /// lifecycle, notifications and scheduler (the Avalonia app) uses this one; <see cref="AddMacOsBlindHost"/> adds the lifecycle and the
-    /// notifier to it. Nothing native is touched until a seam is first used.
+    /// Registers, as singletons and only where the host has not registered its own, the seams that depend on macOS: <see cref="IBlindPaths"/>,
+    /// <see cref="IBlindSecretStore"/> (Keychain), <see cref="IBlindStateStore"/> (atomic file) and <see cref="IBlindAutostart"/>
+    /// (LaunchAgent), and each concrete type too (for <c>MacOsBlindAutostart.IsEnabled</c>). The host (the Avalonia app) brings its own
+    /// lifecycle, notifications, scheduler and backup exporter. Nothing native is touched until a seam is first used.
     /// </summary>
     public static IServiceCollection AddMacOsBlindSeams(this IServiceCollection services, MacOsBlindHostOptions? options = null)
     {
@@ -108,14 +85,5 @@ public static class MacOsBlindHostServices
         services.TryAddSingleton<IBlindAutostart>(sp => sp.GetRequiredService<MacOsBlindAutostart>());
 
         return services;
-    }
-
-    /// <summary>The adapters above plus Blind.AppCore's composition, both on the same data folder.</summary>
-    public static IServiceCollection AddMacOsBlindApp(this IServiceCollection services, MacOsBlindHostOptions? options = null, TimeProvider? time = null)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        options ??= new MacOsBlindHostOptions();
-        services.AddMacOsBlindHost(options);
-        return BlindMobileServices.AddBlindAppCore(services, new BlindAppOptions(options.Paths.DataDirectory, options.Paths.DatabasePath, time));
     }
 }

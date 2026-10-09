@@ -414,7 +414,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
         Directory.CreateDirectory(to);
         foreach (var f in Directory.EnumerateFiles(from))
         {
-            if (f.EndsWith("-shm") || f.EndsWith("-wal") || Path.GetFileName(f) == "node.lock") continue;
+            if (f.EndsWith("-shm") || f.EndsWith("-wal") || Path.GetFileName(f) is "node.lock" or ".instance.lock") continue; // lock files of the live node, not data
             File.Copy(f, Path.Combine(to, Path.GetFileName(f)));
         }
         foreach (var dir in Directory.EnumerateDirectories(from)) CopyTree(dir, Path.Combine(to, Path.GetFileName(dir)));

@@ -55,16 +55,30 @@ public class FullIosSourceTests
         store.Should().NotContain("AfterFirstUnlock").And.NotContain("Always");
     }
 
+    // The join by code recording the code's pin on the node's row is tested by running the join: JoinByCodePinTests.
+
     [Fact]
-    public void TheJoinByCode_RecordsTheCodesPin_OnTheRemoteNodesRow()
+    public void EveryPageThatReadsAPasswordField_EmptiesItThroughSecretFields_NotOnlyOnSuccess()
     {
-        // The Android app's join, linked into the iPhone app: the node joined by code is dialled on the key the code pinned, as the
-        // desktop setup (InitEndpoints) and `bmb join --code` record it. Without it the first sync after the join fails the ordinary
-        // certificate check (the node's key is self-signed); the simulator end-to-end run shows the sync succeeding with it.
-        var join = File.ReadAllText(Path.Combine(FullIosBoundaryTests.RepoRoot(), "mobile", "BeeMemoryBank.Mobile", "Services", "NodeSetupService.cs"));
-        var remoteRow = join[join.IndexOf("var remote = joinResponse.RemoteNode;", StringComparison.Ordinal)..];
-        remoteRow = remoteRow[..remoteRow.IndexOf("});", StringComparison.Ordinal)];
-        remoteRow.Should().Contain("TlsSpki = code?.SpkiPin");
+        // SecretFieldsTests holds what the helper does on every way out; this holds that the screens go through it (the controls are
+        // iOS-only, so the pages themselves cannot run here). A page that read a field and cleared it by hand on its success path is the defect.
+        var read = 0;
+        foreach (var file in Directory.GetFiles(App("Pages"), "*.xaml.cs"))
+        {
+            var source = File.ReadAllText(file);
+            var name = Path.GetFileName(file);
+            foreach (var field in new[] { "PasswordEntry", "PassphraseEntry", "RepeatEntry" })
+            {
+                if (!Regex.IsMatch(source, field + @"\.Text\s*(\?\?|,|\))|=\s*" + field + @"\.Text")) continue;
+                read++;
+                source.Should().Contain("SecretFields.RunAsync", $"{name} reads {field}");
+                source.Should().Contain(field + @".Text = """"", $"{name} empties {field}");
+                // Not as a statement of its own after the awaited work, where an exception skips it: only as the helper's clear action.
+                Regex.IsMatch(source, @"^\s*" + field + @"\.Text = (\w+\.Text = )?"""";", RegexOptions.Multiline)
+                    .Should().BeFalse($"{name} empties {field} as a statement of its own, which an exception skips");
+            }
+        }
+        read.Should().BeGreaterThanOrEqualTo(4, "the join, create, unlock and protected-note screens");
     }
 
     [Fact]

@@ -196,6 +196,16 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
             new { nodeId, protocolVersion, seenAt });
     }
 
+    public async Task ResetLocalBookkeepingAsync(Guid nodeId, DateTime now)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_whitelist
+              SET created_at = @now, deleted_at = NULL, last_protocol_version = NULL, last_protocol_seen_at = NULL
+              WHERE node_id = @nodeId COLLATE NOCASE",
+            new { nodeId, now });
+    }
+
     public async Task<bool> GetAutoAcceptRestoreAsync(string nodeId)
     {
         if (BlindNodeId.IsBlind(nodeId)) return false; // see Normalized

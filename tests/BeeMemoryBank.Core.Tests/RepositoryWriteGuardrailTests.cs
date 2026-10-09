@@ -136,6 +136,9 @@ public class RepositoryWriteGuardrailTests
         new("server/BeeMemoryBank.Api/Endpoints/JoinEndpoints.cs", "IWhitelistRepository", "UpdateAsync",
             "Re-join with the same key: updates DisplayName/ApiAddress WITHOUT publishing a whitelist_update event first, unlike the sibling create-branch three lines below and unlike WhitelistEndpoints' own /address handler. " +
             "The re-join branch now publishes a whitelist_update first and stamps the row with that version; the direct write is what applies it locally."),
+        new("server/BeeMemoryBank.Api/Endpoints/JoinEndpoints.cs", "IWhitelistRepository", "RevokeAsync",
+            "POST /api/join/abort takes back the row of a failed join: publishes eventLogger.LogWhitelistRevokeAsync FIRST and stamps the returned version before revoking, exactly the discipline this guardrail wants."),
+        new("server/BeeMemoryBank.Api/Endpoints/JoinEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
 
         // ── Node-local settings: tbl_node_identity holds this node's own configuration, and every
         // one of these is documented on INodeIdentityRepository as never synced (each node brands,

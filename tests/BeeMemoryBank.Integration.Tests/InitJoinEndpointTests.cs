@@ -86,6 +86,11 @@ public class InitJoinEndpointTests : IAsyncLifetime
             whitelistEntry.IsSuperadmin.Should().BeTrue();
         }
 
+        // Review revsrv F10: the archive the join downloaded was made in the joiner's data folder (owner-only), and is gone.
+        var staging = BeeMemoryBank.Core.IO.SnapshotStaging.DirIn(nodeB.DataPath);
+        Directory.Exists(staging).Should().BeTrue("the downloaded archive is staged in the data folder, not in the OS temp folder");
+        Directory.GetFileSystemEntries(staging).Should().BeEmpty("the archive and the extracted database are removed once the join is done");
+
         // The snapshot pulled as part of the join actually carried NodeA's content across.
         await UnlockAsync(clientB, MasterPassword);
         var getArticleResp = await clientB.GetAsync($"/api/articles/{articleId}");

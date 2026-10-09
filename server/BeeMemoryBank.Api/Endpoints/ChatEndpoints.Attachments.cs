@@ -12,9 +12,6 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Processing;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -74,25 +71,13 @@ public static partial class ChatEndpoints
     /// <summary>Builds the egress vision data URL for an image, downscaling to
     /// <see cref="VisionMaxDimension"/> on the longest side and re-encoding as JPEG q85 to keep the
     /// OpenRouter payload reasonable (a simple max-dimension resize is enough).
-    /// Reuses ImageSharp (already a Core dependency). Falls back to the original bytes (as a data
-    /// URL) if ImageSharp cannot load/encode them.</summary>
-    private static string BuildVisionDataUrl(byte[] blob, string mime)
+    /// Goes through the image transcoder (the product's one image library). Falls back to the original
+    /// bytes (as a data URL) if the transcoder cannot load/encode them.</summary>
+    internal static string BuildVisionDataUrl(IImageTranscoder transcoder, byte[] blob, string mime)
     {
         try
         {
-            using var image = Image.Load(blob);
-            var w = image.Width;
-            var h = image.Height;
-            if (w > VisionMaxDimension || h > VisionMaxDimension)
-            {
-                var scale = (double)VisionMaxDimension / Math.Max(w, h);
-                w = Math.Max(1, (int)Math.Round(w * scale));
-                h = Math.Max(1, (int)Math.Round(h * scale));
-                image.Mutate(ctx => ctx.Resize(w, h));
-            }
-            using var ms = new MemoryStream();
-            image.SaveAsJpeg(ms, new JpegEncoder { Quality = 85 });
-            return "data:image/jpeg;base64," + Convert.ToBase64String(ms.ToArray());
+            return "data:image/jpeg;base64," + Convert.ToBase64String(transcoder.DownscaleJpeg(blob, VisionMaxDimension));
         }
         catch
         {
@@ -107,11 +92,11 @@ public static partial class ChatEndpoints
     /// on a no-content response, returns a placeholder so the text model has something to work
     /// with.</summary>
     private static async Task<string> RunVisionDelegationAsync(
-        ChatSettingsRepository repo, OpenRouterClient openRouter, ILogger logger,
+        ChatSettingsRepository repo, OpenRouterClient openRouter, IImageTranscoder transcoder, ILogger logger,
         IReadOnlyList<KeyMaterial> keys, string visionModelId, string userMessage,
         List<(byte[] Bytes, string Mime)> images, CancellationToken ct)
     {
-        var dataUrls = images.Select(i => BuildVisionDataUrl(i.Bytes, i.Mime)).ToList();
+        var dataUrls = images.Select(i => BuildVisionDataUrl(transcoder, i.Bytes, i.Mime)).ToList();
         var visionMessages = new List<ChatToolMessage>
         {
             new()

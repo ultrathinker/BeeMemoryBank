@@ -13,6 +13,7 @@ internal sealed class SingleInstanceGuard : IInstanceGuard
     private readonly Mutex _mutex;
     private readonly EventWaitHandle _activate;
     private RegisteredWaitHandle? _listener;
+    private int _disposed;
 
     private SingleInstanceGuard(Mutex mutex, EventWaitHandle activate)
     {
@@ -70,8 +71,10 @@ internal sealed class SingleInstanceGuard : IInstanceGuard
         }, null, Timeout.Infinite, executeOnlyOnce: false);
     }
 
+    /// <summary>Releases the guard. Quit does it as soon as the work is stopped, and <c>Main</c> does it again at the end: the second call does nothing.</summary>
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _listener?.Unregister(null);
         _activate.Dispose();
         try { _mutex.ReleaseMutex(); }

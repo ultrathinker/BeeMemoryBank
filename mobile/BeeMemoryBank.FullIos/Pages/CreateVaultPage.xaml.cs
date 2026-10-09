@@ -34,8 +34,9 @@ public partial class CreateVaultPage : ContentPage
         try
         {
             // Off the main thread: the Argon2id derivations take seconds on a phone and the screen must keep moving.
-            var recoveryKey = await Task.Run(() => _vault.CreateAsync(name, password));
-            PasswordEntry.Text = RepeatEntry.Text = "";
+            // Both fields are emptied whatever the creation ends in (SecretFields), not just when it works.
+            var recoveryKey = await SecretFields.RunAsync(
+                () => Task.Run(() => _vault.CreateAsync(name, password)), () => PasswordEntry.Text = "", () => RepeatEntry.Text = "");
             _flow.ShowRecoveryKey(recoveryKey, firstTime: true);
         }
         catch (Exception ex)

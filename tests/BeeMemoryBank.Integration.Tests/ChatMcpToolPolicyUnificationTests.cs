@@ -65,7 +65,7 @@ public class ChatMcpToolPolicyUnificationTests : IAsyncLifetime
         var conceptTagRepo = new ConceptTagRepository(_factory, scopeHolder);
         var conceptTagService = new ConceptTagService(conceptTagRepo, new FakeEmbeddingGenerator(), new NullEventLogger());
         var mediaOptions = new MediaStorageOptions(Path.GetTempPath());
-        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions, _factory, new ImageSharpImageTranscoder());
+        var mediaService = new MediaService(mediaRepo, articleRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaOptions, _factory, new SkiaImageTranscoder());
 
         _articleService = new ArticleService(articleRepo, bodyRepo, _session, nodeRepo, clock, new NullEventLogger(), mediaRepo, folderRepo, versionRepo, new NullActorProvider(), conceptTagService, _factory);
         var indexBuilder = new IndexBuilder();
@@ -91,7 +91,7 @@ public class ChatMcpToolPolicyUnificationTests : IAsyncLifetime
             .AddScoped<IFolderRepository>(_ => folderRepo)
             .BuildServiceProvider());
 
-        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo), folderAccessService, httpContextAccessor);
+        _readTools = new BeeReadTools(_articleService, versionRepo, _session, responseManager, mediaService, mediaRepo, conceptTagRepo, new ArticleDiffService(), new TreeService(articleRepo, folderRepo), folderAccessService, httpContextAccessor, new SkiaImageTranscoder());
 
         _chatDataDir = Path.Combine(Path.GetTempPath(), "bmb_chat_parity_" + Guid.NewGuid().ToString("N"));
         _chatFactory = new ChatDbConnectionFactory(_chatDataDir);

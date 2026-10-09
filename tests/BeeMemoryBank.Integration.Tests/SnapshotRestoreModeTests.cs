@@ -83,6 +83,20 @@ public class SnapshotRestoreModeTests : IAsyncLifetime
         refusal.Should().ContainSingle("the refusal is on the record").Which.Details.Should().Contain($"Mode={mode}");
     }
 
+    /// <summary>Review revsrv F10: the restore extracts the whole backup database (key slots, password hashes) while it works.</summary>
+    [Fact]
+    public async Task ARestore_WorksInTheDataFoldersStagingFolder_NotTheOsTempFolder_AndLeavesNothingThere()
+    {
+        var fileName = await CreateSnapshotAsync();
+
+        var resp = await PostRestoreAsync(_client, new { fileName, masterPassword = Password, createBackupFirst = false, mode = "keep-identity" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        var staging = BeeMemoryBank.Core.IO.SnapshotStaging.DirIn(_node.DataPath);
+        Directory.Exists(staging).Should().BeTrue("the extraction folder is made there");
+        Directory.GetFileSystemEntries(staging).Should().BeEmpty("the extracted database is removed once the restore is done");
+    }
+
     [Fact]
     public async Task AStandaloneRestore_IsNamedInTheAuditLog_AndSaysWhichNodeItBecame()
     {

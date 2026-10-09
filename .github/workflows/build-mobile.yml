@@ -80,14 +80,20 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx
-          key: onnx-multilingual-e5-small-v1
+          key: onnx-multilingual-e5-small-761b726-mobile
 
       - name: Download ONNX model (cache miss only)
         if: steps.onnx-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p mobile/BeeMemoryBank.Mobile/Resources/Raw
-          curl -L -o mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx \
-            https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx
+          curl -fL --retry 3 -o mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx \
+            https://huggingface.co/Xenova/multilingual-e5-small/resolve/761b726dd34fb83930e26aab4e9ac3899aa1fa78/onnx/model_quantized.onnx
+
+      # The model is a commit of the Hugging Face repository (not `main`) and its SHA-256 is checked on EVERY run, a cache hit
+      # included: what the build embeds is exactly the file the Dockerfile and EmbeddingModelWiring.BundledModelSha256 name.
+      # Core.Tests (DockerImageModelPinTests) keeps the three in step.
+      - name: Verify the ONNX model
+        run: echo "f80102d3f2a1229f387d3c81909990d8945513e347b0eab049f7de3c6f98c193  mobile/BeeMemoryBank.Mobile/Resources/Raw/model.onnx" | sha256sum -c -
 
       - name: Restore mobile dependencies
         run: dotnet restore mobile/BeeMemoryBank.Mobile/BeeMemoryBank.Mobile.csproj
@@ -162,7 +168,7 @@ jobs:
           APK_PATH=$(find mobile/BeeMemoryBank.BlindMobile/bin/Release/net10.0-android -name "*.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then echo "APK not found!"; exit 1; fi
           echo "Found APK: $APK_PATH"
-          if unzip -l "$APK_PATH" | grep -Ei "model\.onnx|Microsoft\.ML\.OnnxRuntime|Microsoft\.ML\.Tokenizers|BeeMemoryBank\.Embeddings|BeeMemoryBank\.Media|BeeMemoryBank\.Vault|SixLabors\.ImageSharp|Indiko\.Maui|Markdig"; then
+          if unzip -l "$APK_PATH" | grep -Ei "model\.onnx|Microsoft\.ML\.OnnxRuntime|Microsoft\.ML\.Tokenizers|BeeMemoryBank\.Embeddings|BeeMemoryBank\.Media|BeeMemoryBank\.Vault|SixLabors\.ImageSharp|SkiaSharp|Indiko\.Maui|Markdig"; then
             echo "ERROR: Forbidden asset found in Blind APK!"
             exit 1
           fi

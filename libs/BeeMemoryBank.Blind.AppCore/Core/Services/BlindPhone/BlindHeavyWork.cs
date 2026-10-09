@@ -95,7 +95,8 @@ public sealed class BlindHeavyWork(
         }
         catch (Exception ex) when (ex is IOException or HttpRequestException or InvalidDataException)
         {
-            return NoteFailure(kind, title, ex.Message);
+            // The reason with its inner causes: the HTTP stack's own text ("An error occurred while sending the request.") hides what failed.
+            return NoteFailure(kind, title, BeeMemoryBank.BlindMobile.Services.Blind.BlindRunReport.Reason(ex));
         }
     }
 

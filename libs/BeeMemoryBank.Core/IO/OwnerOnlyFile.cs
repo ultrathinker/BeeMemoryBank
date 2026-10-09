@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
@@ -67,6 +68,34 @@ public static class OwnerOnlyFile
     }
 
     /// <summary>
+    /// Creates the new folder <paramref name="path"/> for its owner only, the folder counterpart of <see cref="CreateNew"/>: mode 0700 from creation
+    /// on Linux and macOS; on Windows a protected DACL as above, set to be inherited, so every file that is written into it (an archive extracted
+    /// there) is owner-only too. Fails if the folder exists: an existing folder's permissions are not ours to judge.
+    /// </summary>
+    public static void CreateDirectory(string path) => CreateDirectory(path, VolumeKeepsAcls);
+
+    internal static void CreateDirectory(string path, Func<string, bool> volumeKeepsAcls)
+    {
+        if (Directory.Exists(path)) throw new IOException($"{path} already exists.");
+        if (!OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            return;
+        }
+
+        var info = Directory.CreateDirectory(path);
+        try
+        {
+            if (volumeKeepsAcls(path)) info.SetAccessControl(TightenedFolder(info.GetAccessControl()));
+        }
+        catch
+        {
+            try { info.Delete(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* empty and ours; the start sweeps it */ }
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Whether the volume <paramref name="path"/> is on keeps an ACL per file: false for the FAT family (FAT, FAT32, exFAT), true for
     /// everything else, and when the volume cannot be told (a network path): then the ACL step runs, and fails the way it did before.
     /// </summary>
@@ -89,9 +118,9 @@ public static class OwnerOnlyFile
     /// <summary>
     /// Writes <paramref name="content"/> as the new file <paramref name="path"/>: into a random-named temp file beside
     /// it (<see cref="CreateNew"/>), flushed to the disk, read back and compared, and only then renamed onto the final
-    /// name, without replacing anything. The final name therefore appears complete or not at all: a crash, a full
-    /// volume or a power cut leaves at most a temp file, which is removed when the write fails in-process. A rename
-    /// within the folder keeps the temp file's owner-only permissions.
+    /// name, without replacing anything (<see cref="MoveNoReplace"/>). The final name therefore appears complete or not
+    /// at all: a crash, a full volume or a power cut leaves at most a temp file, which is removed when the write fails
+    /// in-process. A rename within the folder keeps the temp file's owner-only permissions.
     /// </summary>
     /// <param name="beforeRename">Test seam: called with the temp path once it holds the checked bytes.</param>
     /// <exception cref="IOException">Something already exists at <paramref name="path"/> (another start won), or the
@@ -127,7 +156,7 @@ public static class OwnerOnlyFile
             }
 
             beforeRename?.Invoke(temp);
-            File.Move(temp, path, overwrite: false);
+            MoveNoReplace(temp, path);
         }
         catch
         {
@@ -135,6 +164,46 @@ public static class OwnerOnlyFile
             throw;
         }
     }
+
+    /// <summary>
+    /// Renames <paramref name="from"/> to <paramref name="to"/> only if nothing is at <paramref name="to"/>, in one
+    /// atomic step: of several callers racing for the same name exactly one succeeds, the others get an
+    /// <see cref="IOException"/>, and what the winner put there is never replaced.
+    ///
+    /// <para>Not <c>File.Move(overwrite: false)</c> on Linux and macOS (BMB-188): there .NET checks that the target is
+    /// missing (lstat) and then calls rename(2), which replaces whatever appeared in between. Two first starts of a blind
+    /// node both passed the check and both renamed, and the first went on with an identity that was no longer in its file.
+    /// link(2) creates the new name only if nothing has it, a dangling symlink included (which it never follows), and the
+    /// temp name is removed after it. On Windows, File.Move without overwrite is MoveFileEx without
+    /// MOVEFILE_REPLACE_EXISTING, which is already that step.</para>
+    ///
+    /// <para>A volume without hard links (FAT, exFAT, some network shares) refuses link(2) with another error. There the
+    /// rename falls back to File.Move, which behaves as before: correct except in that race.</para>
+    /// </summary>
+    /// <exception cref="IOException">Something already exists at <paramref name="to"/>.</exception>
+    public static void MoveNoReplace(string from, string to)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            File.Move(from, to, overwrite: false);
+            return;
+        }
+
+        if (link(from, to) == 0)
+        {
+            // The bytes are under the final name now; the temp name is a second name of the same file.
+            File.Delete(from);
+            return;
+        }
+        if (Marshal.GetLastPInvokeError() == EExist)
+            throw new IOException($"{to} already exists; it was not replaced.");
+        File.Move(from, to, overwrite: false);
+    }
+
+    private const int EExist = 17; // the same on Linux and macOS
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int link([MarshalAs(UnmanagedType.LPUTF8Str)] string existing, [MarshalAs(UnmanagedType.LPUTF8Str)] string created);
 
     /// <summary>
     /// Repairs an existing secret's permissions in place (Windows; elsewhere the mode set at creation is the rule, and
@@ -237,6 +306,25 @@ public static class OwnerOnlyFile
         }
         foreach (var sid in new[] { CurrentUser(), new SecurityIdentifier(SystemSid) })
             result.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, AccessControlType.Allow));
+        return result;
+    }
+
+    /// <summary><see cref="Tightened"/> for a folder: the same entries, inherited by what is created inside.</summary>
+    [SupportedOSPlatform("windows")]
+    private static DirectorySecurity TightenedFolder(DirectorySecurity current)
+    {
+        const InheritanceFlags Inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        var result = new DirectorySecurity();
+        result.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        foreach (FileSystemAccessRule rule in current.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+        {
+            if (rule.AccessControlType == AccessControlType.Allow && BroadSids.Contains(rule.IdentityReference.Value))
+                continue;
+            result.AddAccessRule(new FileSystemAccessRule(
+                rule.IdentityReference, rule.FileSystemRights, Inherit, PropagationFlags.None, rule.AccessControlType));
+        }
+        foreach (var sid in new[] { CurrentUser(), new SecurityIdentifier(SystemSid) })
+            result.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, Inherit, PropagationFlags.None, AccessControlType.Allow));
         return result;
     }
 

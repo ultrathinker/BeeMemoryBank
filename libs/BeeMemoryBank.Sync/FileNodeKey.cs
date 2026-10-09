@@ -53,7 +53,8 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
     /// keeps for this node, and nothing an operator can do afterwards repairs that.</para>
     ///
     /// <para>Two starts that both find no file (review A2-d) do not both win: the new seed is
-    /// renamed into place without replacing anything, and the start whose rename finds the other's
+    /// renamed into place without replacing anything, in one atomic step on every platform
+    /// (<see cref="OwnerOnlyFile.MoveNoReplace"/>), and the start whose rename finds the other's
     /// seed there takes that one. Only a file that exists but holds no seed is replaced.</para>
     /// </summary>
     public byte[] LoadOrCreate(out bool created)
@@ -190,7 +191,10 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
                 throw new IOException(
                     $"Node identity key {Path} appeared while a new one was being written; keeping the one on disk.");
 
-            File.Move(temp, Path, overwrite: replaceExisting);
+            // Not File.Move(overwrite: false): on Linux and macOS that checks and then renames, which replaces, so two
+            // first starts both "won" and one kept an identity that was not in the file (BMB-188).
+            if (replaceExisting) File.Move(temp, Path, overwrite: true);
+            else OwnerOnlyFile.MoveNoReplace(temp, Path);
         }
         catch when (tempCreated)
         {

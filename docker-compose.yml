@@ -13,7 +13,7 @@ services:
     # since Docker's port publishing writes iptables/nftables DNAT rules directly. Web reaches the
     # API over the container's own network namespace, so nothing internal changes.
     # If you need the sync/join endpoints reachable from another node, put a reverse proxy in front
-    # that path-filters to /mcp, /api/sync, /api/join (and /api/blind/replica for blind copies) and publish the port bound to the HOST's
+    # that path-filters to /mcp, /api/sync, /api/join, /api/join/abort (and /api/blind/replica for blind copies) and publish the port bound to the HOST's
     # loopback ("127.0.0.1:5004:5300") — see docs/deployment.md. Control exposure on the host side:
     # do NOT try to harden this by binding the API process to 127.0.0.1 inside the container, which
     # would break exactly that reverse-proxied setup (see docker-entrypoint.sh).

@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- mDNS / DPAPI surface. ImageSharp and AddImageTranscoder moved to
+    <!-- mDNS / DPAPI surface. The image library and AddImageTranscoder moved to
          BeeMemoryBank.Media so consumers that only need image transcoding (the Mobile MAUI
          app) don't pull in any of these packages. -->
     <PackageReference Include="Makaretu.Dns.Multicast" />
