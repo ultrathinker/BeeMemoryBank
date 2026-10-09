@@ -37,7 +37,8 @@ public sealed class ChatDbConnectionFactory : IDisposable
         var connection = new SqliteConnection(_connectionString);
         connection.Open();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;";
+        // temp_store=FILE: see DbConnectionFactory (the native SQLite defaults to in-memory temp data since 2.5.3).
+        cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA temp_store=FILE;";
         cmd.ExecuteNonQuery();
         return connection;
     }

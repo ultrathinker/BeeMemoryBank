@@ -464,7 +464,7 @@ check_app() {
   fi
 
   # native libraries of the products
-  for rel in libAvaloniaNative.dylib libSkiaSharp.dylib libHarfBuzzSharp.dylib api/libe_sqlite3.dylib api/libonnxruntime.dylib api/libSkiaSharp.dylib; do
+  for rel in libAvaloniaNative.dylib libSkiaSharp.dylib libHarfBuzzSharp.dylib api/libsqlite3mc.dylib api/libonnxruntime.dylib api/libSkiaSharp.dylib; do
     [ -f "$MACOS/$rel" ] || bad "missing: Contents/MacOS/$rel"
   done
 

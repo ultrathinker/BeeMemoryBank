@@ -120,7 +120,11 @@ public class DbConnectionFactory : IDbConnectionFactory, IDisposable
     private static void Initialize(SqliteConnection connection)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;";
+        // temp_store=FILE: the native SQLite is SQLite3 Multiple Ciphers since 2.5.3, compiled with SQLITE_TEMP_STORE=2 (temp data in
+        // memory unless asked otherwise); the stock build before it used files. An in-place VACUUM or a big sort would keep the whole
+        // database in RAM (VACUUM of a vault that shrinks from 351 to 175 MiB: 257 MiB peak working set, 57 MiB with FILE; measured),
+        // so the factory asks for the old behaviour.
+        cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA temp_store=FILE;";
         cmd.ExecuteNonQuery();
         connection.CreateFunction("unicode_contains", (string? text, string? search) =>
             text != null && search != null && text.Contains(search, StringComparison.OrdinalIgnoreCase));

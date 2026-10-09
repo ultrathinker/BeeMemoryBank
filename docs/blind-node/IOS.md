@@ -94,7 +94,7 @@ scripts/build-ios-blind.sh ipa Release          # signed .ipa for App Store Conn
 
 After a change of a trimming setting (such as `UseSystemResourceKeys`), build a device app from a fresh `obj/`: the SDK's incremental
 build compiles the changed assemblies ahead of time again, but not those the trimmer copies unchanged (`Konscious.*`,
-`SQLitePCLRaw.lib.e_sqlite3.ios`), and the app then stops at launch with "Failed to load AOT module ... out of date".
+the SQLitePCLRaw and SQLite3MC assemblies), and the app then stops at launch with "Failed to load AOT module ... out of date".
 
 The signing identity, the profile and the Apple team never go into the repository: they come from the environment. A wildcard team profile
 is enough (the app uses no capability a wildcard profile cannot carry: background modes, local notifications and its own Keychain group need

@@ -22,7 +22,7 @@ BeeMemoryBank is a knowledge base for individuals and teams, with end-to-end enc
 | Language | C# / .NET 10.0 | Unified stack with other projects |
 | API | ASP.NET Core Minimal APIs | Lightweight, no controllers, sufficient for REST + MCP |
 | Web UI | Razor Pages | Server-side rendering, simple deployment |
-| Database | SQLite | Embedded, zero-config, `VACUUM INTO` for snapshots |
+| Database | SQLite (the SQLite3 Multiple Ciphers build, used without a key: plain SQLite files, [docs/sqlite-engine.md](sqlite-engine.md)) | Embedded, zero-config, `VACUUM INTO` for snapshots |
 | ORM | Dapper | Explicit SQL, full control, micro-ORM |
 | Body encryption | AES-256-GCM | Authenticated encryption — both confidentiality and integrity |
 | Event signatures | Ed25519 (BouncyCastle) | Fast signatures, small keys (32 bytes), tamper-proof sync |
@@ -174,7 +174,7 @@ This is a deliberate design choice. It rules out partial-sync topologies (a work
 | Batched content search | Full-text body search decrypts articles in batches of 50, not all at once — controls memory usage at scale |
 | Two processes (API + Web) | Web is a stateless proxy, can be replaced or removed. API is the sole data owner |
 | Sentinel value | AES-GCM("BeeMemoryBank", masterDEK) — verifies DEK compatibility before synchronization |
-| Event actor tracking | Every event is tagged with actor_type (web/agent/cli) for auditing; `via_agent_name` records which agent initiated the request (NULL for direct human actions) |
+| Event actor tracking | Every event is tagged with actor_type (web/agent/cli) for auditing; `via_agent_name` records which agent initiated the request (NULL for direct human actions). These fields (with `entity_id`) are local-only: stripped from everything the node serves or pushes (2.5.2), so actor metadata never crosses the network |
 | Agent ownership | Every agent has `owner_user_id NOT NULL` (FK → tbl_user, ON DELETE RESTRICT). Agents inherit their owner's effective folder restrictions — the owner's role rules and their own per-user rules. MCP ACL calls use `owner_user_id`, not `agent_id`. |
 | Agent auto-unlock is superadmin-only | Only an agent owned by a superadmin carries a wrapped Master DEK and can auto-unlock a locked node (`Agent.CanAutoUnlock`, see docs/encryption.md's Agent section) — a non-superadmin's agent authenticates and works normally whenever the vault is already unlocked, but cannot unlock it itself, closing what used to be a de-facto whole-vault key hidden behind a folder-scoped ACL |
 | tbl_folder instead of tree_path parsing | Folders as first-class entities with CRUD, synchronization, and Lamport timestamps |

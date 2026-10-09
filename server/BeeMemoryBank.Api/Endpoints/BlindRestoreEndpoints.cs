@@ -4,6 +4,7 @@ using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Sync;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -18,7 +19,7 @@ public sealed record BlindClaimResponse(Guid BlindNodeId, string DisplayName, st
 /// Who the restored node trusts and how far it has pulled come from the package's signed
 /// blind-manifest.json, not from here.
 /// </summary>
-public sealed record BlindRestoreEvents(List<SyncEvent> Events);
+public sealed record BlindRestoreEvents(IReadOnlyList<SyncEvent> Events);
 
 /// <summary>
 /// Restore from a blind node (plan 6.7). Only a node in the blind role answers; everywhere else these
@@ -88,7 +89,11 @@ public static class BlindRestoreEndpoints
             if (!await codes.ValidateAsync(ctx.Request.Headers[RestoreCodeHeader].FirstOrDefault()))
                 return Results.Unauthorized();
 
-            return Results.Ok(new BlindRestoreEvents(await eventLog.GetAllAfterSequenceAsync(0, MaxEvents)));
+            // Wire hygiene: this node's stored events carry actor fields and transported entity
+            // ids locally; a restoring device re-derives both, so they do not travel (SyncWire).
+            return Results.Json(
+                new BlindRestoreEvents(SyncWire.Strip(await eventLog.GetAllAfterSequenceAsync(0, MaxEvents))),
+                SyncWire.Options);
         }).WithMetadata(new SkipInternalKey()).WithTags("BlindRestore");
 
         // POST /api/blind/claim — the restored device becomes this blind node's superadmin, locally:

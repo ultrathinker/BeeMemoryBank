@@ -67,7 +67,8 @@ ADD --chmod=0644 --checksum=sha256:f80102d3f2a1229f387d3c81909990d8945513e347b0e
 COPY docker-entrypoint.sh .
 RUN chmod +x docker-entrypoint.sh
 
-# The notices of the image library (SkiaSharp and the native libraries it carries): their licences ask for them to travel with the binaries.
+# The notices of the image library (SkiaSharp and the native libraries it carries) and of the database engine (SQLite3 Multiple Ciphers,
+# MIT): their licences ask for them to travel with the binaries.
 COPY THIRD-PARTY-NOTICES.txt ./
 
 # The data folder of every process in the container, `docker exec ... bmb` included. The compose files set it too; without it a bare

@@ -30,12 +30,21 @@ public partial class EventApplier
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Failed to regenerate embedding for renamed concept tag '{NewName}'", p.NewName);
+                // Tag names stay out of these lines (the tag name IS the identifier for tags, and
+                // the log runs on blind nodes too) — the event id names the event instead. The
+                // exception object stays out as well: a provider renders its message after the
+                // template, and the generator's and repository's messages carry the tag name.
+                // The type alone says which leg failed.
+                logger.LogWarning("Event {EventId}: failed to regenerate the embedding of a renamed concept tag ({ExceptionType})",
+                    evt.EventId, ex.GetType().Name);
             }
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException)
         {
-            logger.LogWarning(ex, "Skipping concept_tag_rename: concept '{OldName}' not found or already renamed", p.OldName);
+            // The exception is dropped deliberately: the repository's message is
+            // "Concept tag '<name>' not found" — the name must not reach the logger, whose
+            // providers render attached exceptions in plaintext.
+            logger.LogWarning("Event {EventId}: skipping concept_tag_rename, the old concept was not found or already renamed", evt.EventId);
         }
     }
 
@@ -46,9 +55,10 @@ public partial class EventApplier
         {
             await conceptTagRepo.MergeAsync(p.Source, p.Target);
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException)
         {
-            logger.LogWarning(ex, "Skipping concept_tag_merge: source '{Source}' not found or already merged", p.Source);
+            // Exception dropped: its message names the tag (see the rename catch above).
+            logger.LogWarning("Event {EventId}: skipping concept_tag_merge, the source concept was not found or already merged", evt.EventId);
         }
     }
 
@@ -59,9 +69,10 @@ public partial class EventApplier
         {
             await conceptTagRepo.DeleteAsync(p.Name);
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException)
         {
-            logger.LogWarning(ex, "Skipping concept_tag_delete: concept '{Name}' not found or already deleted", p.Name);
+            // Exception dropped: its message names the tag (see the rename catch above).
+            logger.LogWarning("Event {EventId}: skipping concept_tag_delete, the concept was not found or already deleted", evt.EventId);
         }
     }
 

@@ -13,8 +13,17 @@
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <!-- The stock SQLite 2.5.1 and older nodes shipped, as a native file only (this package carries no SQLitePCLRaw provider, so
+         there is still one provider in the process: SQLite3 Multiple Ciphers). Engine/StockSqlite.cs loads it to prove that a
+         database written by the current engine opens on the old one and back. Test project only; no product project references it. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A vault written by the 2.5.1 tree on the stock engine; Fixtures/README.md says how it was made. -->
+    <None Include="Fixtures\plain-2.5.1.sqlite" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

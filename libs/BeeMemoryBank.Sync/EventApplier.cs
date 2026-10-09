@@ -138,10 +138,13 @@ public partial class EventApplier(
         {
             // Not an error: an older peer may legitimately have computed this differently, and the
             // derived value is authoritative either way. Worth a line in the log, because a
-            // mismatch is also exactly what tampering looks like.
+            // mismatch is also exactly what tampering looks like. The values stay out of the line:
+            // for folders the entity id is the folder path, and the log travels with the applier —
+            // a blind node included, where it would sit in plaintext next to a database that
+            // cannot read it.
             logger.LogWarning(
-                "Event {EventId} ({Type}) from {NodeId} carried entity id {Transported}, using derived {Derived}",
-                evt.EventId, evt.EventType, evt.NodeId, transportedEntityId, evt.EntityId ?? "(none)");
+                "Event {EventId} ({Type}) from {NodeId} carried a foreign entity id; using the derived one",
+                evt.EventId, evt.EventType, evt.NodeId);
         }
 
         // Hard-delete gate: if entity was hard-deleted at this or later timestamp, skip.
@@ -150,7 +153,10 @@ public partial class EventApplier(
         {
             if (await eventLogRepo.IsHardDeletedAsync(identifier, evt.LamportTs))
             {
-                logger.LogWarning("Event {EventId} refers to hard-deleted entity {Identifier}, skipping", evt.EventId, identifier);
+                // The identifier is not printed: for folders it is the path, and this line runs
+                // wherever the applier runs — plaintext logs on a blind node included.
+                logger.LogWarning("Event {EventId} ({Type}) refers to a hard-deleted entity, skipping",
+                    evt.EventId, evt.EventType);
                 return EventApplyResult.SilentlyDropped;
             }
         }

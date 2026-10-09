@@ -67,6 +67,26 @@ No sync protocol change (still 3) and no database migration. The join response g
   message (HTTP 400) before it is decoded, instead of an error. Only JPEG, PNG, GIF, WebP and BMP (and SVG and animated GIF untouched) reach the decoder.
   The full-node server grows by 9 to 14 MB (the native library). `THIRD-PARTY-NOTICES.txt` is added (and copied into the Docker image).
 
+### Changed
+
+#### 2.5.2 (2026-10-09)
+
+No sync protocol change (still 3) and no database format change: every database stays a plain SQLite file — 2.5.1 opens what 2.5.2 writes and the reverse.
+Two things land together: the database engine is now SQLite3 Multiple Ciphers (MIT), in preparation for encryption at rest, and four places where private
+metadata could leave a node are closed. Peers of 2.0.x to 2.5.1 keep syncing and joining with 2.5.2 in both directions.
+
+- **The database engine is now SQLite3 Multiple Ciphers** (SQLite 3.53.4, MIT licence) on every platform: Windows, Linux (x64 and arm64 images), macOS,
+  Android and iOS. No key is set: the files stay plain SQLite. The Android apps no longer exclude native SQLite assets; they carry the engine's own
+  library for each ABI. SQLite temp data stays in files, as before, so large `VACUUM`s do not use more memory. The notices of the new engine are in
+  `THIRD-PARTY-NOTICES.txt`, which both Docker images now ship.
+- **Actor metadata no longer leaves a node.** The actor type and name, the initiating agent's name and an event's entity id are local-only: sync events
+  served, pushed and handed to a blind restore client carry none of these fields, and neither do the standing events of a blind replica package.
+- **The join-snapshot endpoint (`GET /api/sync/snapshot/for-join`) answers 403 to blind nodes**; a blind node never had a legitimate use for it. Full
+  joiners are unaffected.
+- **Blind packages strip concept-tag embeddings and their model version too** (article embedding projections were already stripped).
+- **Sync applier log lines identify events by id only** — no article titles, folder paths, tag names or actor names reach plaintext logs, including through
+  the text of the errors the applier logs.
+
 ### Removed
 
 #### 2.2.0: the Internet Access wizard, Let's Encrypt and DDNS are gone (2026-10-05)

@@ -22,7 +22,7 @@
   <ItemGroup>
     <PackageReference Include="Dapper" />
     <PackageReference Include="DiffPlex" />
-    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Http" />

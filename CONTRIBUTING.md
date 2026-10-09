@@ -5,7 +5,7 @@ Thank you for your interest in contributing to BeeMemoryBank! This document will
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- SQLite (bundled with the project via `Microsoft.Data.Sqlite`)
+- SQLite (bundled with the project: `Microsoft.Data.Sqlite.Core` plus the native SQLite3 Multiple Ciphers library from `SQLite3MC.PCLRaw.bundle`; see [docs/sqlite-engine.md](docs/sqlite-engine.md))
 
 ## Getting Started
 

@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
 /// Throwaway-style probe (kept as a permanent guard) that confirms the bundled
-/// SQLitePCLRaw.lib.e_sqlite3 native build used by DbConnectionFactory ships with
+/// native SQLite build used by DbConnectionFactory (SQLite3 Multiple Ciphers, SQLite3MC.PCLRaw.bundle) ships with
 /// the FTS5 extension compiled in. WP-06 requires this be verified before any
 /// FTS5 migration is written. If this test ever fails on a given platform, FTS5
 /// is genuinely unavailable and the whole FTS5 search story must be reconsidered.

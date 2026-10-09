@@ -54,7 +54,8 @@
     <PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModelSavedState.Android" />
     <PackageReference Include="Xamarin.AndroidX.SavedState.SavedState.Ktx" />
     <PackageReference Include="QRCoder" />
-    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" ExcludeAssets="native;runtime" />
+    <!-- The native SQLite (SQLite3MC.PCLRaw.bundle, through BeeMemoryBank.Storage) ships libsqlite3mc.so for every Android ABI
+         itself: no exclusion is needed (see the ordinary app's project for the story of the old engine's glibc library). -->
   </ItemGroup>
 
   <ItemGroup>

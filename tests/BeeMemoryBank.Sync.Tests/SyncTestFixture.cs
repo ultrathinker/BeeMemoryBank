@@ -96,8 +96,15 @@ public abstract class SyncTestFixture : IAsyncLifetime
             new FakeEmbeddingGenerator(), HardDeleteService, null,
             replayShieldRepo, restoreEventStateRepo, CreateRestoreInitiator(),
             dekRotationStateRepo, new NullDekRotationApplier(), folderAccess, Factory, new BlobRepository(Factory),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance);
+            CreateApplierLogger());
     }
+
+    /// <summary>
+    /// The logger the applier is built with. A test that asserts on the applier's own log lines
+    /// overrides this to capture them.
+    /// </summary>
+    protected virtual Microsoft.Extensions.Logging.ILogger<EventApplier> CreateApplierLogger()
+        => Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance;
 
     /// <summary>
     /// The restore initiator the applier is built with. A test that drives the auto-accept dispatch

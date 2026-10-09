@@ -1,9 +1,11 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
 using Dapper;
 using Microsoft.Data.Sqlite;
@@ -20,6 +22,9 @@ namespace BeeMemoryBank.Integration.Tests;
 public class BlindPackageTests : IAsyncLifetime
 {
     private const string Password = "blindPackagePw1!";
+    private const string CanaryActorName = "Canary Actor Name";
+    private const string CanaryAgentName = "Canary Agent Name";
+    private const string CanaryPath = "/Canary/Secret/Path";
     private readonly BmbWebApplicationFactory _full = new();
     private string _extractDir = null!;
 
@@ -100,6 +105,79 @@ public class BlindPackageTests : IAsyncLifetime
 
         raw.AsSpan().IndexOf(sentinel).Should().Be(-1, "the projection must not survive in any page of the packaged database");
         sidecars.Should().BeEmpty("the package is one self-contained database file");
+    }
+
+    /// <summary>
+    /// A0 wire hygiene (brief P1-A0): concept-tag embeddings are derived from the plaintext tag name,
+    /// exactly what the article projections are derived from, and travel with their model version —
+    /// a blind node must hold neither.
+    /// </summary>
+    [Fact]
+    public async Task Package_HasNoTagEmbeddings()
+    {
+        var sentinel = System.Text.Encoding.ASCII.GetBytes("BMB-TAG-EMBEDDING-SENTINEL-9a2c41be-do-not-ship");
+        var embedding = Enumerable.Repeat(sentinel, 200).SelectMany(b => b).ToArray();
+        using (var conn = _full.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync(
+                "INSERT INTO tbl_concept_tag (name, embedding, embedding_model_version) VALUES ('canary tag', @e, 'test-model-v1')",
+                new { e = embedding });
+
+        using var scope = _full.Services.CreateScope();
+        var package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
+            .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: true);
+        var extracted = await _full.Services.GetRequiredService<SnapshotService>()
+            .ExtractVerifiedAsync(package.FilePath, _extractDir);
+
+        using var db = new SqliteConnection($"Data Source={extracted.DatabasePath};Pooling=False");
+        (await db.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM tbl_concept_tag WHERE embedding IS NOT NULL OR embedding_model_version IS NOT NULL"))
+            .Should().Be(0, "an embedding says something about the plaintext and must not reach a blind node");
+        (await File.ReadAllBytesAsync(extracted.DatabasePath)).AsSpan().IndexOf(sentinel).Should().Be(-1,
+            "nor may any byte of it survive in a page of the packaged database");
+    }
+
+    /// <summary>
+    /// A0 wire hygiene, review round: the standing events ride in blind-manifest.json, serialized
+    /// with the manifest's own options — not through SyncWire — so a legacy entity_id on a stored
+    /// row would be relayed and the four envelope keys would appear as explicit nulls even where
+    /// nothing was selected into them. The envelope may not leave the node here either.
+    /// </summary>
+    [Fact]
+    public async Task Package_Manifest_CarriesNoEnvelopeFields()
+    {
+        var self = (await _full.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
+        // A standing whitelist event about this node, carrying the canary envelope values a real
+        // row can hold. Nothing applies it here, so the signature is a placeholder.
+        using (var scope = _full.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<IEventLogRepository>().AppendIfNotExistsAsync(new SyncEvent
+            {
+                EventId = Guid.NewGuid(), NodeId = self.NodeId, LamportTs = 1,
+                EventType = EventTypes.WhitelistAdd,
+                Payload = JsonSerializer.Serialize(new { node_id = self.NodeId.ToString() }),
+                ProtocolVersion = SyncProtocolVersion.Current, CreatedAt = DateTime.UtcNow,
+                Signature = new byte[64],
+            });
+        }
+        using (var conn = _full.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync(
+                "UPDATE tbl_event SET actor_type = @t, actor_name = @n, via_agent_name = @a, entity_id = @e",
+                new { t = "web", n = CanaryActorName, a = CanaryAgentName, e = CanaryPath });
+
+        using var build = _full.Services.CreateScope();
+        var package = await build.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
+            .BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: true);
+        await _full.Services.GetRequiredService<SnapshotService>().ExtractVerifiedAsync(package.FilePath, _extractDir);
+        var manifestBytes = await File.ReadAllBytesAsync(Path.Combine(_extractDir, BlindManifest.FileName));
+
+        var manifest = BlindManifest.Parse(manifestBytes);
+        manifest.Standing.Should().NotBeEmpty("the canary rides in a standing event about the producer");
+        manifest.Standing.Should().OnlyContain(e => e.EntityId == null && e.ActorType == null
+            && e.ActorName == null && e.ViaAgentName == null);
+        var json = System.Text.Encoding.UTF8.GetString(manifestBytes);
+        json.Should().NotContain(CanaryActorName).And.NotContain(CanaryAgentName).And.NotContain(CanaryPath);
+        foreach (var key in new[] { "entityId", "EntityId", "actorType", "ActorType", "actorName", "ActorName", "viaAgentName", "ViaAgentName" })
+            json.Should().NotContain($"\"{key}\"", "the manifest's own serialization must not carry the envelope either");
     }
 
     /// <summary>

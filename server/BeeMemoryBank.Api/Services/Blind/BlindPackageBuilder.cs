@@ -61,7 +61,7 @@ public sealed class BlindPackageBuilder(
             .ToList();
 
         var manifest = new BlindManifest(BlindManifest.CurrentFormat, seedId, self.NodeId, cp, includesUpTo,
-            DateTime.UtcNow, peers, pulled, await StandingEventsAsync(self.NodeId));
+            DateTime.UtcNow, peers, pulled, SyncWire.Strip(await StandingEventsAsync(self.NodeId)));
 
         var info = await snapshots.CreateAsync(
             filterSecrets: true, sign: true, cpSequenceNum: cp, encryptDb: false,
@@ -117,14 +117,19 @@ public sealed class BlindPackageBuilder(
 
     /// <summary>
     /// Plan 3.6: an embedding projection is derived from the article's plaintext, so it says
-    /// something about the content — which is exactly what a blind node must not hold.
+    /// something about the content — which is exactly what a blind node must not hold. A
+    /// concept-tag embedding is the same derivation from the tag's name (release 2.5.2), and its
+    /// model version identifies the model that produced it. Both run before the final compaction,
+    /// so the updated-away bytes do not survive in free pages.
     /// </summary>
     private static void NullEmbeddingProjections(string dbPath)
     {
         using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False");
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE tbl_article SET embedding_projection = NULL";
+        cmd.CommandText =
+            "UPDATE tbl_article SET embedding_projection = NULL; " +
+            "UPDATE tbl_concept_tag SET embedding = NULL, embedding_model_version = NULL;";
         cmd.ExecuteNonQuery();
     }
 }

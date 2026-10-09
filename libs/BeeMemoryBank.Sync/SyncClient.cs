@@ -1,5 +1,6 @@
 ﻿using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -29,7 +30,12 @@ public class SyncClient(
     BlindState? blindState = null,
     IRemoteSentinelVerifier? sentinelVerifier = null)
 {
-    private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
+    // WhenWritingNull: the push body is written through this too, and the stripped envelope
+    // fields (SyncWire.Strip) must vanish from the wire, not ride along as explicit nulls.
+    private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     /// <summary>
     /// A full node's sync with one whitelisted peer (the scheduler's cycle, and the reseed's pull): <see cref="SyncWithAsync"/>,
@@ -552,7 +558,9 @@ public class SyncClient(
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/sync/events");
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-        req.Content = JsonContent.Create(events, options: JsonOpts);
+        // Wire hygiene: the actor fields and the transported entity id are local metadata — no
+        // receiver reads them (the applier overwrites/re-derives both), so they stay here.
+        req.Content = JsonContent.Create(SyncWire.Strip(events), options: JsonOpts);
 
         var resp = await http.SendAsync(req, ct);
         // Report 413 as data instead of throwing, so the caller (PushChunkWithSplitAsync) can

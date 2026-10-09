@@ -63,16 +63,11 @@
     <PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModelSavedState.Android" />
     <PackageReference Include="Xamarin.AndroidX.SavedState.SavedState.Ktx" />
     <PackageReference Include="Markdig" />
-    <!-- BeeMemoryBank.Storage references SQLitePCLRaw.lib.e_sqlite3 directly, to force the native
-         SQLite above the vulnerable 2.1.11 (CVE-2025-6965). That package ships desktop RIDs only
-         — the Android build lives in the separate SQLitePCLRaw.lib.e_sqlite3.android AAR — but
-         the RID graph lets android-arm64 fall back to linux-arm64, so without this line NuGet
-         hands this app a GLIBC libe_sqlite3.so (NEEDED: libc.so.6, ld-linux-aarch64.so.1). It
-         wins the packaging race, the correct AAR copy is dropped as a duplicate (warning XA4301),
-         and the app dies on launch with a TypeInitializationException out of
-         Microsoft.Data.Sqlite.SqliteConnection — dlopen cannot resolve glibc on bionic. The
-         managed assets are still wanted; only the native ones are wrong here. -->
-    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" ExcludeAssets="native;runtime" />
+    <!-- The native SQLite is SQLite3MC.PCLRaw.bundle, referenced by BeeMemoryBank.Storage: its package carries libsqlite3mc.so for
+         android-arm, android-arm64, android-x64 and android-x86 (runtimes/<rid>/native), which .NET for Android packs into the APK.
+         Nothing to exclude here: the glibc libe_sqlite3.so that the old engine's package handed this app through the RID fallback
+         (linux-arm64 for android-arm64, NEEDED libc.so.6, a launch crash on bionic) has no counterpart any more, because the new
+         package has android RIDs of its own. tests/BeeMemoryBank.BlindMobile.Tests/NativeSqliteAssetsTests reads the resolved graph of both apps. -->
   </ItemGroup>
 
   <ItemGroup>

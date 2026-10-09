@@ -265,7 +265,10 @@ public static class SyncEndpoints
             if (events.Count > 0)
                 await pushPositionRepo.UpdatePositionAsync(nodeId, events[^1].SequenceNum);
 
-            return Results.Ok(events);
+            // Wire hygiene: the envelope fields no receiver reads (actorType, actorName,
+            // viaAgentName, entity_id — unsigned and overwritten or re-derived on every apply)
+            // never leave the node. See SyncWire.
+            return Results.Json(SyncWire.Strip(events), SyncWire.Options);
         }).WithTags("Sync");
 
         // ─── Snapshot for join ──────────────────────────────────────────────────
@@ -289,6 +292,13 @@ public static class SyncEndpoints
 
             if (await AuthenticatePeerAsync(ctx, store) is not { } requesterNodeId)
                 return Results.Unauthorized();
+
+            // A blind requester gets nothing here even when whitelisted: the join snapshot is a
+            // full node's starting vault, and a blind node holds no key for it and no use for it —
+            // its packages are the blind ones (/api/blind/replica, /api/blind/restore). Checked
+            // before the snapshot build, which needs an unlocked session to sign.
+            if (BlindNodeId.IsBlind(requesterNodeId))
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
 
             if (invisibleMode.IsInvisible)
                 return Results.StatusCode(503);

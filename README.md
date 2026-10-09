@@ -997,7 +997,7 @@ This project is licensed under the [GNU Affero General Public License v3.0](LICE
 Built with these excellent open-source projects:
 
 - [.NET](https://dotnet.microsoft.com/) and [ASP.NET Core](https://github.com/dotnet/aspnetcore)
-- [SQLite](https://sqlite.org/) via [Microsoft.Data.Sqlite](https://github.com/dotnet/efcore)
+- [SQLite](https://sqlite.org/) in the [SQLite3 Multiple Ciphers](https://github.com/utelle/SQLite3MultipleCiphers) build (MIT; used without a key, the database files stay plain SQLite), through [Microsoft.Data.Sqlite](https://github.com/dotnet/efcore)
 - [Dapper](https://github.com/DapperLib/Dapper) micro-ORM
 - [BouncyCastle](https://www.bouncycastle.org/) for Ed25519 signatures
 - [Konscious.Security.Cryptography](https://github.com/kmaragon/Konscious.Security.Cryptography) for Argon2id

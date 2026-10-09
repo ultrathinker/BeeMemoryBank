@@ -17,6 +17,8 @@ TestResults/
 data/
 *.db
 *.db-journal
+*.sqlite-shm
+*.sqlite-wal
 
 ## ONNX model (large binary, download separately — see docs/deployment.md)
 *.onnx

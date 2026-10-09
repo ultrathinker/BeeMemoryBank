@@ -450,6 +450,7 @@ BeeMemoryBank.Sync BeeMemoryBank.Sync.SyncProtocolVersion
 BeeMemoryBank.Sync BeeMemoryBank.Sync.SyncScheduler
 BeeMemoryBank.Sync BeeMemoryBank.Sync.SyncScheduler+Paused
 BeeMemoryBank.Sync BeeMemoryBank.Sync.SyncTrigger
+BeeMemoryBank.Sync BeeMemoryBank.Sync.SyncWire
 BeeMemoryBank.Sync BeeMemoryBank.Sync.UnreachablePeers
 BeeMemoryBank.Sync BeeMemoryBank.Sync.WhitelistAddPayload
 BeeMemoryBank.Sync BeeMemoryBank.Sync.WhitelistRevokePayload

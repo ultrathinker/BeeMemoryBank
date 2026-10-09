@@ -117,11 +117,12 @@ NodeB → NodeA: GET /api/sync/events?afterSequence=N
 
 NodeA → NodeB: [
   { sequenceNum: N+1, eventId: "guid", nodeId: "node-a-id", lamportTs: 2089,
-    eventType: "article_create", payload: "{...}", signature: "base64",
-    actorType: "web", actorName: null, viaAgentId: null },
+    eventType: "article_create", payload: "{...}", signature: "base64" },
   ...
 ]  (up to 1000 events per request)
 ```
+
+**The actor fields never leave the node (2.5.2).** The example above has no `actorType`/`actorName`/`viaAgentName`/`entityId` on purpose: those are local metadata, and everything a node serves or pushes goes through `SyncWire.Strip`, which nulls them so the keys are absent from the JSON entirely. None of the four is covered by the event signature, so nothing on the wire needed them: a receiver stamps the actor fields from its own whitelist row and derives the entity id from the signed fields (see `EventEntityId`). Older peers read the missing keys as null, so 2.5.2 nodes keep syncing with 2.0.x–2.5.1 in both directions.
 
 ### Step 3: Applying Events
 
@@ -273,6 +274,8 @@ Every event contains `actor_type` and `actor_name`:
 - `actor_type = "cli"` — via CLI
 
 Implementation: `IActorProvider` with two implementations — `HttpActorProvider` (API, from HTTP context) and `CliActorProvider` (CLI).
+
+**Wire hygiene (2.5.2).** `actor_type`, `actor_name`, `via_agent_name` and `entity_id` stay on the node that authored the event. They are local metadata — read by this node's own surfaces (event history, audit UI) — are not part of the signed payload, and are stripped from the sync event stream (pull, push, blind-restore) by `SyncWire.Strip`, so they never cross the network. The applier log keeps the same discipline: its lines name event ids, never titles, paths, tag names or actor names, because the log travels with nodes whose plaintext it must not leak (blind nodes especially).
 
 ## Lamport Clock — Logical Time
 

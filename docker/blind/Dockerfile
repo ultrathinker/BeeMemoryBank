@@ -67,6 +67,8 @@ COPY --from=build /app/api ./api/
 COPY --from=build /app/console ./console/
 COPY --from=build /app/cli ./cli/
 COPY docker/blind/entrypoint.sh .
+# The notices of the database engine (SQLite3 Multiple Ciphers, MIT): its licence asks for them to travel with the binaries.
+COPY THIRD-PARTY-NOTICES.txt ./
 RUN chmod +x entrypoint.sh \
     && printf '#!/bin/sh\nexec dotnet /app/cli/bmb.dll "$@"\n' > /usr/local/bin/bmb \
     && chmod 0755 /usr/local/bin/bmb

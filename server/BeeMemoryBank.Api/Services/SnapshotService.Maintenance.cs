@@ -214,7 +214,9 @@ public partial class SnapshotService
     private static void Compact(SqliteConnection conn)
     {
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA journal_mode = DELETE; VACUUM;";
+        // temp_store=FILE: VACUUM builds its copy in the temp store, which defaults to memory in the current native SQLite
+        // (SQLite3 Multiple Ciphers); the restored archive can be as large as the vault.
+        cmd.CommandText = "PRAGMA temp_store = FILE; PRAGMA journal_mode = DELETE; VACUUM;";
         cmd.ExecuteNonQuery();
     }
 

@@ -34,7 +34,15 @@ public sealed record BlindManifest(
     public const string FileName = "blind-manifest.json";
     public const string CurrentFormat = "bmb-blind-package-v1";
 
-    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    // Null keys are omitted, not written as nulls: the standing events carry the sync envelope,
+    // and the envelope's keys must be absent from a package the way they are absent from the
+    // sync endpoints (SyncWire) — the manifest's JSON is the wire shape here. Readers of every
+    // version deserialize with tolerant defaults, where a missing key is its null.
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     public byte[] ToBytes() => JsonSerializer.SerializeToUtf8Bytes(this, Json);
 

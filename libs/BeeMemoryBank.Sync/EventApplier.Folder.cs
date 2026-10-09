@@ -154,9 +154,12 @@ public partial class EventApplier
         await articleRepo.DetachToRootUnscopedAsync(attached.Where(a => !outlive.Contains(a.Id)).Select(a => a.Id).ToList());
         if (outlive.Count > 0 || (await folderRepo.ListIdsByPathPrefixAsync(folder.Path)).Count > 0)
         {
+            // The path is not printed — this line runs wherever the applier runs, plaintext logs
+            // on a blind node included. The event id names the delete; the folder is findable by
+            // anyone who can read the local database.
             logger.LogInformation(
-                "FolderDelete {Path} not applied: {Count} article(s) edited after the delete still live in it, or a subfolder does",
-                folder.Path, outlive.Count);
+                "FolderDelete {EventId} not applied: {Count} article(s) edited after the delete still live in it, or a subfolder does",
+                evt.EventId, outlive.Count);
             return;
         }
         await folderRepo.SoftDeleteAsync(folder.Id, p.DeletedAt);

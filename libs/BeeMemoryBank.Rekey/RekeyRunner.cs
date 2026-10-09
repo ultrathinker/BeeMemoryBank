@@ -331,6 +331,7 @@ public static class RekeyRunner
     private static async Task ScrubAsync(SqliteConnection conn, string file)
     {
         await conn.ExecuteAsync("PRAGMA secure_delete = ON");
+        await conn.ExecuteAsync("PRAGMA temp_store = FILE"); // VACUUM's copy goes to files, not RAM (the native SQLite defaults to memory)
         await conn.ExecuteAsync("VACUUM");
         var (busy, _, _) = await conn.QuerySingleAsync<(long, long, long)>("PRAGMA wal_checkpoint(TRUNCATE)");
         if (busy != 0) throw new InvalidOperationException($"The WAL checkpoint of {file} could not complete.");
