@@ -27,7 +27,16 @@ peer's sync position:
 
 `SAFETY_MARGIN = 1000`. If the node has no active peers, `safe_cp = head_seq - SAFETY_MARGIN`.
 
-Compaction refuses to run if `safe_cp ≤ current_min_seq` ("nothing to compact").
+Compaction refuses to run if `safe_cp ≤ current_min_seq` ("nothing to compact"). It also refuses (409) while the
+node holds events it received but has not applied yet (metadata encryption: a sealed event that arrived while the vault
+was locked, or before its key; see [sync.md](sync.md#held-events-received-and-applied)): cutting the log below them
+would lose them. Unlock the node and wait until they are applied.
+
+Once metadata encryption is switched on (2.6.0), compaction is also refused while the node holds
+sealed events that still wait to be applied — a locked node that has been receiving traffic relays
+it but cannot safely compact, because its tables lag behind its event log. The refusal is HTTP 409;
+the node's status says how many changes wait ("N changes wait for unlock"), and compaction becomes
+possible again at the next unlock.
 
 ## What happens on compact
 
@@ -82,3 +91,21 @@ The Admin page shows an "Event Log & Compaction" section with:
 - **Warnings**: e.g. peer position too close to head
 - **Compact button**: with preview info and confirmation dialog
 - **Compaction history**: expandable table of all `snapshot_checkpoint` events showing CP, events removed, snapshot file, timestamp, and chain link
+
+## Blind nodes: local trim
+
+A blind node authors no event, so it cannot publish a `snapshot_checkpoint`. It trims its own log instead
+(`BlindLogTrimmer`, every 6 hours, and once after each baseline it adopts; the rule is
+`BaselineStore.TrimLogAsync`): rows go up to the highest sequence that
+
+- every active peer has **reported** reading from it (its own report, never what was merely served to it; a peer that never
+  reported keeps the log whole), and
+- the newest state anchor covers (no anchor: nothing goes).
+
+The cut is recorded in `tbl_compaction_log`, so a peer asking below it gets the same 410 as above.
+
+**After the metadata activation** (Step A, docs/design/step-a-spec.md 9.5) a third bound applies: the cut never passes what the
+blind node's current sealed baseline covers of its own log (`tbl_baseline.local_cut`). Until the node has adopted its first
+format-2 baseline nothing is trimmed at all - the sealed deltas are then the only copy of that content on the node. A newer
+baseline (sent by a superadmin full node, or adopted on a phone) moves the bound forward. Before the activation the rule is
+exactly the one above.

@@ -19,6 +19,8 @@
                 <Label Text="Recovery" Style="{StaticResource Section}" />
                 <Button Text="Make a new recovery key" Style="{StaticResource Secondary}" Clicked="OnNewRecoveryKey" />
                 <Label Style="{StaticResource Muted}" Text="Recovery keys made earlier keep working. Make a new one if a copy was lost or seen by someone." />
+                <Label x:Name="EncryptionSection" Text="Database" Style="{StaticResource Section}" IsVisible="False" />
+                <Button x:Name="EncryptionButton" Text="Encrypt this iPhone's database" Style="{StaticResource Secondary}" Clicked="OnEncryption" IsVisible="False" />
                 <Label Text="About" Style="{StaticResource Section}" />
                 <Label x:Name="AboutLabel" Style="{StaticResource Muted}" />
             </VerticalStackLayout>

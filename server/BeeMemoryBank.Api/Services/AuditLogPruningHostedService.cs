@@ -41,6 +41,9 @@ public class AuditLogPruningHostedService : BackgroundService
 
         do
         {
+            // A sealed node with a closed database has no audit table to prune (docs/design/step-b-spec.md 5.5).
+            await _scopeFactory.WaitUsableAsync(stoppingToken);
+
             try
             {
                 var retention = RetentionDays;
@@ -77,6 +80,10 @@ public class AuditLogPruningHostedService : BackgroundService
                 {
                     _logger.LogInformation("Audit log pruning: no rows to prune");
                 }
+            }
+            catch (VaultSealedException)
+            {
+                _logger.LogDebug("Audit log pruning stopped: the database was closed.");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

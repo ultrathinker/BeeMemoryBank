@@ -171,7 +171,10 @@ public static class InitEndpoints
                     nodeId,
                     displayName = req.DisplayName,
                     ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
-                    apiAddress = (string?)null
+                    apiAddress = (string?)null,
+                    // A fresh node has applied no activation: it declares 3 and says what it can read (docs/design/step-a-spec.md 5.1, 11).
+                    protocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current,
+                    capabilities = BeeMemoryBank.Sync.Metadata.MetadataCapabilities.Advertised
                 };
 
                 // The host writes this node's row as soon as it accepts the join. From there on a failure leaves that row behind unless the host
@@ -249,6 +252,8 @@ public static class InitEndpoints
                 JoinResponseDto joinResponse;
                 JoinRemoteNodeDto remote;
                 byte[] masterDek = [];
+                // The DEK the snapshot is opened with after activation (spec 11): a copy, kept from the unwrap to the end of the import.
+                byte[] snapshotDek = [];
                 try
                 {
                     var answer = await response.Content.ReadFromJsonAsync<JoinResponseDto>(JsonOptions);
@@ -258,10 +263,10 @@ public static class InitEndpoints
                         throw new InvalidOperationException("The answer of the remote node is incomplete.");
                     joinResponse = answer;
 
-                    if (joinResponse.RemoteNode.ProtocolVersion > BeeMemoryBank.Sync.SyncProtocolVersion.Current)
+                    if (joinResponse.RemoteNode.ProtocolVersion > BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol)
                     {
                         return Results.Json(
-                            new ErrorResponse($"Cannot join: remote node protocol version ({joinResponse.RemoteNode.ProtocolVersion}) is higher than local version ({BeeMemoryBank.Sync.SyncProtocolVersion.Current}). "
+                            new ErrorResponse($"Cannot join: remote node protocol version ({joinResponse.RemoteNode.ProtocolVersion}) is higher than local version ({BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol}). "
                                 + await AbortNoteAsync()),
                             statusCode: 400);
                     }
@@ -378,6 +383,7 @@ public static class InitEndpoints
                         cmd.ExecuteNonQuery();
                     }
 
+                    snapshotDek = (byte[])masterDek.Clone();
                     Array.Clear(masterDek);
 
                     foreach (var entry in joinResponse.Whitelist ?? [])
@@ -445,6 +451,7 @@ public static class InitEndpoints
                 {
                     Array.Clear(privateKey);
                     Array.Clear(masterDek);
+                    Array.Clear(snapshotDek);
                     logger.LogError(ex, "The answer of the remote node could not be used after the key exchange. Node is in partial state.");
                     return Results.Json(
                         new ErrorResponse($"The join could not be completed: {ex.Message} " + await AbortNoteAsync()),
@@ -481,7 +488,8 @@ public static class InitEndpoints
                             NodeId = nodeId,
                             ChallengeB64 = challenge.Challenge,
                             SignatureB64 = Convert.ToBase64String(challengeSig),
-                            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
+                            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current,
+                            Capabilities = BeeMemoryBank.Sync.Metadata.MetadataCapabilities.Advertised
                         }, JsonOptions, t), ctx.RequestAborted);
                     authResp.EnsureSuccessStatusCode();
                     var authToken = (await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOptions))?.Token
@@ -515,8 +523,11 @@ public static class InitEndpoints
                             await snapResp.Content.CopyToAsync(fs, snapBudget.Token);
 
                         var producerPubKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64);
+                        // A host that encrypts its metadata (protocol 4) sends the database sealed under the DEK this node just unwrapped;
+                        // a plain archive from it is refused.
                         var (cpSeq, lamportTs) = await snapshotService.RestoreForJoinAsync(
-                            tempTarGz, sigBytes, producerPubKey);
+                            tempTarGz, sigBytes, producerPubKey, snapshotDek,
+                            requireEncrypted: joinResponse.RemoteNode.ProtocolVersion >= BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol);
 
                         // Pull position at the checkpoint, clock past the imported rows (durably), initial sync done:
                         // the same tail as bmb join.
@@ -539,6 +550,10 @@ public static class InitEndpoints
                             $"Key exchange succeeded but snapshot import failed: {ex.Message}. Node may need wipe & retry. " +
                             await AbortNoteAsync()),
                         statusCode: 500);
+                }
+                finally
+                {
+                    Array.Clear(snapshotDek);
                 }
 
                 return Results.Ok(new { success = true });
@@ -567,6 +582,12 @@ public static class InitEndpoints
             try
             {
                 var result = await resetService.ResetAsync(req.MasterPassword, initiatedBy, ctx.RequestAborted);
+                // A sealed node is a plain, empty node with no database file now (docs/design/step-b-spec.md 13.1): the schema is made again for Setup.
+                if (result.Outcome == NodeResetOutcome.Done && result.WasSealed)
+                {
+                    await Startup.ApiStartWork.RunMigrationsAsync(ctx.RequestServices);
+                    await Startup.ApiStartWork.InitializeChatAsync(ctx.RequestServices);
+                }
                 return result.Outcome switch
                 {
                     NodeResetOutcome.NotInitialized =>

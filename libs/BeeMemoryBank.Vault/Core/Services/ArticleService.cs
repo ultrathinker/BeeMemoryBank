@@ -35,6 +35,7 @@ public partial class ArticleService(
         // see TreePathCanonicalizer for rationale.
         treePath = TreePathCanonicalizer.Canonicalize(treePath);
 
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var masterDek = session.GetMasterDek();
         Guid articleId = Guid.NewGuid();
         byte[] ciphertext, iv, encryptedDek, dekIv;
@@ -133,6 +134,13 @@ public partial class ArticleService(
 
     /// <summary>Returns metadata without decrypting the body. Pass includeDeleted:true to also
     /// return soft-deleted articles (still subject to folder-scope access checks).</summary>
+    /// <summary>
+    /// One authoring scope for an operation made of several writes (an import, a copy): refused up front, before anything is written,
+    /// while the new metadata key of a DEK rotation is not published, and held until it ends so the rotation cannot commit between
+    /// its steps. The single writes inside it enter their own scope, which is reentrant. See <see cref="IEventLogger.BeginAuthoringAsync"/>.
+    /// </summary>
+    public ValueTask<IDisposable> BeginAuthoringAsync() => eventLogger.BeginAuthoringAsync();
+
     public Task<Article?> GetMetadataAsync(Guid id, bool includeDeleted = false) => articleRepo.GetByIdAsync(id, includeDeleted);
 
     /// <summary>Decrypts and returns the article body. Requires an unlocked session.</summary>
@@ -189,6 +197,8 @@ public partial class ArticleService(
         bool updateHint = false,
         bool suppressVersion = false)
     {
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var _ = await ArticleWriteLock.AcquireAsync(id);
         await UpdateCoreAsync(id, title, treePath, tags, plaintext, protectionHint, updateHint, suppressVersion);
     }
@@ -420,6 +430,8 @@ public partial class ArticleService(
     /// <returns>The new body length, for the caller's confirmation message.</returns>
     public async Task<int> AppendAsync(Guid id, string text)
     {
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var _ = await ArticleWriteLock.AcquireAsync(id);
         var content = await GetContentAsync(id);
         var newContent = content + "\n\n" + text;
@@ -431,6 +443,8 @@ public partial class ArticleService(
     /// <returns>The new body length.</returns>
     public async Task<int> PrependAsync(Guid id, string text)
     {
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var _ = await ArticleWriteLock.AcquireAsync(id);
         var content = await GetContentAsync(id);
         var newContent = text + "\n\n" + content;
@@ -448,6 +462,8 @@ public partial class ArticleService(
     /// </returns>
     public async Task<int> ReplaceInAsync(Guid id, string search, string replace)
     {
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var _ = await ArticleWriteLock.AcquireAsync(id);
         var content = await GetContentAsync(id);
 
@@ -466,6 +482,8 @@ public partial class ArticleService(
     /// <summary>Soft-deletes an article.</summary>
     public async Task DeleteAsync(Guid id)
     {
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var _ = await ArticleWriteLock.AcquireAsync(id);
 
         using (var conn = connFactory.CreateConnection())
@@ -510,6 +528,7 @@ public partial class ArticleService(
 
     public async Task<int> DeleteByPathAsync(string path)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var articles = await articleRepo.ListAsync(path);
         foreach (var article in articles)
             await DeleteAsync(article.Id);
@@ -548,6 +567,7 @@ public partial class ArticleService(
     {
         var ids = mediaIds.Where(g => g != Guid.Empty).Distinct().ToList();
         if (ids.Count == 0) return [];
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var target = await articleRepo.GetByIdAsync(articleId);
         if (target is null or { Protected: true }) return [];
 

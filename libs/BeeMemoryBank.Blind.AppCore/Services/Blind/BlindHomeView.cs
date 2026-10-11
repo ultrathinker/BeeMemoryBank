@@ -15,7 +15,7 @@ public sealed record BlindHomeView(
     string? PairingCode, bool ShowPairingCode, string PairingMessage, bool CanConnect, bool CanRePair,
     bool CanSyncNow, bool CanBackupNow, string BackupNowText, bool CanSaveTo,
     string? KeyLostText, string? KeyStoreText, string? StartErrorText,
-    int ScheduleIndex, string Backups, string Log)
+    int ScheduleIndex, string Backups, string Log, string Store = "")
 {
     public static readonly BlindBackupSchedule[] Schedules = [BlindBackupSchedule.Off, BlindBackupSchedule.Daily, BlindBackupSchedule.Weekly];
 
@@ -24,9 +24,12 @@ public sealed record BlindHomeView(
 
     /// <param name="status">The controller's status.</param>
     /// <param name="pairingCode">The controller's <see cref="IBlindAppController.PairingCode"/> (only asked for while an answer is awaited).</param>
+    /// <param name="store">What <see cref="BlindStoreStats.GetAsync"/> last answered; null is "unknown" (see <see cref="StoreText"/>).</param>
+    /// <param name="now">The time the age of the restore point is told against; the clock when not given.</param>
     /// <param name="backupRunning">True while a first load or backup runs in the foreground service or the scheduled worker (<see cref="BlindActivity"/>):
     /// "Back up now" is then off and says so, so that a second tap cannot start a second service job.</param>
-    public static BlindHomeView Build(BlindAppStatus status, string? pairingCode, bool backupRunning)
+    public static BlindHomeView Build(
+        BlindAppStatus status, string? pairingCode, bool backupRunning, BlindStoreInfo? store = null, DateTimeOffset? now = null)
     {
         var keyStoreDown = status.KeyStoreUnavailable is not null;
         var job = status.ActiveJob is not null
@@ -66,17 +69,35 @@ public sealed record BlindHomeView(
             Backups: status.Backups.Count == 0
                 ? "No backups on the phone yet."
                 : string.Join("\n", status.Backups.Select(b => $"{b.Name}  ({b.Size / 1024} KiB)")),
-            Log: string.Join("\n", status.RecentLog.Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.Message}")));
+            Log: string.Join("\n", status.RecentLog.Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.Message}")),
+            Store: StoreText(store, status, now ?? DateTimeOffset.UtcNow));
     }
 
     /// <summary>
-    /// The "notes" line of a screen, from <see cref="BlindReplicaStats.CountNotesAsync"/>: before the first load the copy holds nothing yet,
-    /// and a count that could not be read is "unknown", never 0.
+    /// The "store" line of a screen (docs/design/step-a-spec.md 10.2), from <see cref="BlindStoreStats.GetAsync"/>: the age of the restore point, the
+    /// changes held since it, the bytes stored - never a note count. Before the first load the copy holds nothing yet, and a summary that could not
+    /// be read is "unknown", never zero.
     /// </summary>
-    public static string NotesText(long? count, BlindAppStatus status) =>
-        !status.InitialLoadDone ? "Notes in this copy: none yet (the first load is not done)."
-        : count is { } n ? $"Notes in this copy: {n}."
-        : "Notes in this copy: unknown (the database could not be read just now).";
+    public static string StoreText(BlindStoreInfo? store, BlindAppStatus status, DateTimeOffset now)
+    {
+        if (!status.InitialLoadDone) return "Restore point: none yet (the first load is not done).";
+        if (store is null) return "Restore point: unknown (the database could not be read just now).";
+        var point = store.RestorePointAt is { } created
+            ? $"made {Ago(now - new DateTimeOffset(DateTime.SpecifyKind(created, DateTimeKind.Utc)))}"
+            : "none yet";
+        return $"Restore point: {point}. Changes since: {store.ChangesSince}. Stored: {Size(store.StoredBytes)}.";
+    }
+
+    private static string Ago(TimeSpan age) =>
+        age < TimeSpan.FromMinutes(1) ? "just now"
+        : age < TimeSpan.FromHours(1) ? $"{(int)age.TotalMinutes} min ago"
+        : age < TimeSpan.FromDays(1) ? $"{(int)age.TotalHours} h ago"
+        : $"{(int)age.TotalDays} d ago";
+
+    private static string Size(long bytes) =>
+        bytes < 1L << 20 ? $"{Math.Max(1, bytes >> 10)} KiB"
+        : bytes < 1L << 30 ? $"{bytes / (double)(1L << 20):0.#} MiB"
+        : $"{bytes / (double)(1L << 30):0.#} GiB";
 
     /// <summary>The screen when even the status could not be read: a sentence, and the way out.</summary>
     public static string StatusFailedText(Exception ex) =>

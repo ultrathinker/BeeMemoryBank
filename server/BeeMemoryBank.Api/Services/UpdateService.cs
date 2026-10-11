@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using System.Security.Cryptography;
 using System.Text;
@@ -7,6 +8,7 @@ using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Velopack;
@@ -56,6 +58,11 @@ public sealed class UpdateService
     private readonly SessionService _sessionService;
     private readonly string _dataPath;
     private readonly ILogger<UpdateService> _logger;
+
+    // A sealed node's pre-update copy is taken under the gate's hold and with the relay's writes paused (docs/design/step-b-spec.md 8.5).
+    // Both are null on a node that cannot be sealed (a plain node, a test without them): then the locked path is the plain one.
+    private readonly IVaultGate? _gate;
+    private readonly ISealedRelayLifecycle? _relayLifecycle;
 
     // Pluggable collaborators — defaults are set at construction; tests override.
     private IUpdateArtifactSource _artifactSource;
@@ -108,12 +115,14 @@ public sealed class UpdateService
         SessionService sessionService,
         string dataPath,
         ILogger<UpdateService> logger,
-        string applyBehavior = "simulate")
+        string applyBehavior = "simulate",
+        IVaultGate? gate = null,
+        ISealedRelayLifecycle? relayLifecycle = null)
         : this(DefaultReleasePublicKeys, snapshotService, maintenance, dekRotation,
                snapshotRestore, sessionService, dataPath, logger,
                new InMemoryArtifactSource(new Dictionary<string, byte[]>()),
                new AlwaysHealthyHealthCheck(),
-               applyBehavior)
+               applyBehavior, gate, relayLifecycle)
     {
     }
 
@@ -131,8 +140,12 @@ public sealed class UpdateService
         ILogger<UpdateService> logger,
         IUpdateArtifactSource artifactSource,
         IUpdateHealthCheck healthCheck,
-        string applyBehavior = "simulate")
+        string applyBehavior = "simulate",
+        IVaultGate? gate = null,
+        ISealedRelayLifecycle? relayLifecycle = null)
     {
+        _gate = gate;
+        _relayLifecycle = relayLifecycle;
         _releasePublicKeys = releasePublicKeys;
         _snapshotService = snapshotService;
         _maintenance = maintenance;
@@ -327,7 +340,8 @@ public sealed class UpdateService
     ///
     /// Pre-update backup strategy:
     ///   - Session unlocked: call SnapshotService.CreateAsync (full signed snapshot).
-    ///   - Session locked: WAL checkpoint + raw file copy to &lt;data&gt;/updates/pre-update-&lt;version&gt;/.
+    ///   - Session locked, plain node: WAL checkpoint + raw file copy to &lt;data&gt;/updates/pre-update-&lt;version&gt;/.
+    ///   - Session locked, sealed node: the quiesced set of docs/design/step-b-spec.md 8.5 (see <see cref="TakePreUpdateBackupAsync"/>).
     ///
     /// Apply is simulated (no real binary swap in this task).
     /// Health check: up to 3 failures → Failed; pass → Completed.
@@ -567,16 +581,24 @@ public sealed class UpdateService
 
     /// <summary>
     /// Takes the pre-update backup and returns the path to the result.
-    /// Uses SnapshotService.CreateAsync when unlocked, or WAL-checkpoint + file-copy when locked.
+    /// Unlocked (plain or sealed): a snapshot (<see cref="SnapshotService.CreateAsync"/>). Locked, plain node: WAL checkpoint + file copy.
+    /// Locked, sealed node: the QUIESCED SET (docs/design/step-b-spec.md 8.5, 8.7.1) - the sealed database, the chat database and the boot
+    /// store copied as files while nothing can write any of the three: the gate is held closed (<see cref="IVaultGate.HoldClosedAsync"/>),
+    /// the relay's writes are paused (<see cref="ISealedRelayLifecycle.PauseWritesAsync"/>), the boot store is checkpointed, and every copy
+    /// is checked against its source by length and SHA-256 (<c>backup_inconsistent</c> on any difference). A node unlocked meanwhile gets
+    /// a snapshot instead. <c>server-auto-unlock.*</c> and <c>os-auto-unlock.dat</c> are never copied: a backup must not carry the key that
+    /// opens it.
     /// </summary>
-    private async Task<string> TakePreUpdateBackupAsync(string version, CancellationToken ct)
+    internal async Task<string> TakePreUpdateBackupAsync(string version, CancellationToken ct)
     {
         if (_sessionService.IsUnlocked)
         {
             // Unlocked path: use SnapshotService (same pattern as DekRotationService)
-            var snap = await _snapshotService.CreateAsync(filterSecrets: false, sign: false);
-            _logger.LogInformation("UpdateService: pre-update snapshot created: {FileName}", snap.FileName);
-            return Path.Combine(_snapshotService.SnapshotsDir, snap.FileName);
+            return await TakeSnapshotBackupAsync();
+        }
+        if (_gate is { IsSealed: true })
+        {
+            return await TakeSealedColdBackupAsync(version, ct);
         }
         else
         {
@@ -606,6 +628,133 @@ public sealed class UpdateService
             }
         }
     }
+
+    private async Task<string> TakeSnapshotBackupAsync()
+    {
+        var snap = await _snapshotService.CreateAsync(filterSecrets: false, sign: false);
+        _logger.LogInformation("UpdateService: pre-update snapshot created: {FileName}", snap.FileName);
+        return Path.Combine(_snapshotService.SnapshotsDir, snap.FileName);
+    }
+
+    // ── The quiesced set of a sealed node ─────────────────────────────────────
+
+    /// <summary>The files of a sealed node's quiesced set, in copy order (spec 8.5). The two sidecars of a database belong to the set only when they exist and are not empty.</summary>
+    private static readonly string[] QuiescedSetFiles =
+    [
+        "beememorybank.db", "beememorybank.db-wal", "beememorybank.db-shm",
+        "chat.db", "chat.db-wal", "chat.db-shm",
+        "beememorybank.boot.db", "beememorybank.boot.db-wal",
+    ];
+
+    /// <summary>Test seam: every SQL statement the cold backup of a sealed node runs (the boot store's checkpoint; there is no VACUUM INTO).</summary>
+    internal Action<string>? ColdBackupSqlRecorder { get; set; }
+
+    /// <summary>Test seam: called with the backup folder after the files are copied and before they are verified, while the hold and the pause are still in force.</summary>
+    internal Func<string, Task>? AfterColdBackupCopy { get; set; }
+
+    private async Task<string> TakeSealedColdBackupAsync(string version, CancellationToken ct)
+    {
+        IAsyncDisposable hold;
+        try
+        {
+            hold = await _gate!.HoldClosedAsync("pre-update", ct).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Not Closed any more: the node was unlocked in the meantime, so the snapshot is the backup (spec 8.5 step 1).
+            _logger.LogInformation("UpdateService: the vault is no longer closed ({Reason}); taking a snapshot instead of a file copy.", ex.GetType().Name);
+            return await TakeSnapshotBackupAsync();
+        }
+
+        await using (hold.ConfigureAwait(false))
+        {
+            if (_relayLifecycle is null)
+                throw new InvalidOperationException("The relay of this sealed node cannot be paused, so a consistent file copy cannot be taken.");
+            await using var pause = (await _relayLifecycle.PauseWritesAsync(ct).ConfigureAwait(false)).ConfigureAwait(false);
+            return await CopyQuiescedSetAsync(version, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<string> CopyQuiescedSetAsync(string version, CancellationToken ct)
+    {
+        var backupDir = Path.Combine(_dataPath, "updates", $"pre-update-{SanitizeVersion(version)}");
+        Directory.CreateDirectory(backupDir);
+        var main = Path.Combine(_dataPath, "beememorybank.db");
+        var boot = Path.Combine(_dataPath, "beememorybank.boot.db");
+        if (!File.Exists(main) || !File.Exists(boot))
+            throw new InvalidOperationException("The sealed database or its boot store is missing: nothing consistent to copy.");
+
+        // The boot store needs no key: a plain checkpoint makes its main file complete. The sealed files were checkpointed at the clean
+        // close (spec 5.4); a non-empty -wal or -shm beside them means that close was not clean, and then it belongs to the set.
+        const string checkpoint = "PRAGMA wal_checkpoint(TRUNCATE)";
+        using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = boot, Pooling = false }.ToString()))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = checkpoint;
+            ColdBackupSqlRecorder?.Invoke(checkpoint);
+            cmd.ExecuteNonQuery();
+        }
+
+        var copied = new List<string>();
+        try
+        {
+            foreach (var name in QuiescedSetFiles)
+            {
+                ct.ThrowIfCancellationRequested();
+                var source = Path.Combine(_dataPath, name);
+                var target = Path.Combine(backupDir, name);
+                var isMain = name is "beememorybank.db" or "chat.db" or "beememorybank.boot.db";
+                var present = File.Exists(source) && (isMain || new FileInfo(source).Length > 0);
+                // A copy of an earlier attempt of the same version must not leave a sidecar that this set does not have.
+                if (!present) { if (File.Exists(target)) File.Delete(target); continue; }
+                File.Copy(source, target, overwrite: true);
+                copied.Add(name);
+            }
+
+            if (AfterColdBackupCopy is { } hook) await hook(backupDir).ConfigureAwait(false);
+
+            foreach (var name in copied)
+            {
+                ct.ThrowIfCancellationRequested();
+                // Re-read both sides: the source may have changed while it was held (which cannot happen), the copy may be short.
+                var source = Path.Combine(_dataPath, name);
+                var target = Path.Combine(backupDir, name);
+                if (!File.Exists(source) || new FileInfo(source).Length != new FileInfo(target).Length
+                    || !await Sha256Matches(source, target, ct).ConfigureAwait(false))
+                    throw new BackupInconsistentException($"{name} differs from its copy");
+            }
+        }
+        catch
+        {
+            // No half set is left behind: the backup either holds every file of the set or none.
+            foreach (var name in copied)
+            {
+                try { File.Delete(Path.Combine(backupDir, name)); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+            try { if (!Directory.EnumerateFileSystemEntries(backupDir).Any()) Directory.Delete(backupDir); } catch (IOException) { }
+            throw;
+        }
+
+        _logger.LogInformation("UpdateService: quiesced set of the sealed node copied to {Path} ({Count} files)", backupDir, copied.Count);
+        return backupDir;
+    }
+
+    private static async Task<bool> Sha256Matches(string a, string b, CancellationToken ct)
+    {
+        var first = await HashFileAsync(a, ct).ConfigureAwait(false);
+        var second = await HashFileAsync(b, ct).ConfigureAwait(false);
+        return first.AsSpan().SequenceEqual(second);
+    }
+
+    private static async Task<byte[]> HashFileAsync(string path, CancellationToken ct)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await SHA256.HashDataAsync(stream, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>A copy of the quiesced set differs from its source (<c>backup_inconsistent</c>); the update does not go on.</summary>
+    internal sealed class BackupInconsistentException(string detail) : IOException("backup_inconsistent: " + detail);
 
     /// <summary>
     /// Returns true if <paramref name="candidate"/> is strictly newer than <paramref name="current"/>.

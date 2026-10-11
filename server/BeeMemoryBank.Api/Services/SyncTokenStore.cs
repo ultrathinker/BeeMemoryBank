@@ -8,10 +8,10 @@ namespace BeeMemoryBank.Api.Services;
 /// In-memory store for temporary challenge tokens and Bearer tokens for sync auth.
 /// Singleton — data lives in the process memory.
 /// </summary>
-public class SyncTokenStore
+public class SyncTokenStore(BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy? policy = null)
 {
     private sealed record ChallengeEntry(Guid ServerNodeId, DateTime ExpiresAt);
-    private sealed record TokenEntry(Guid NodeId, int ProtocolVersion, DateTime ExpiresAt);
+    private sealed record TokenEntry(Guid NodeId, int ProtocolVersion, IReadOnlyList<string>? Capabilities, DateTime ExpiresAt);
 
     private readonly ConcurrentDictionary<string, ChallengeEntry> _challenges = new();
     private readonly ConcurrentDictionary<string, TokenEntry> _tokens = new();
@@ -39,12 +39,12 @@ public class SyncTokenStore
     /// <summary>
     /// Issues a Bearer token for an authenticated node, bound to the protocol it declared. TTL 1 hour.
     /// </summary>
-    public string IssueToken(Guid nodeId, int protocolVersion)
+    public string IssueToken(Guid nodeId, int protocolVersion, IReadOnlyList<string>? capabilities = null)
     {
         var bytes = new byte[32];
         RandomNumberGenerator.Fill(bytes);
         var token = Convert.ToBase64String(bytes);
-        _tokens[token] = new TokenEntry(nodeId, protocolVersion, DateTime.UtcNow.AddHours(1));
+        _tokens[token] = new TokenEntry(nodeId, protocolVersion, capabilities, DateTime.UtcNow.AddHours(1));
         return token;
     }
 
@@ -70,8 +70,12 @@ public class SyncTokenStore
         nodeId = default;
         if (!_tokens.TryGetValue(token, out var entry)) return false;
         // Checked here as well as at issue, because every data endpoint goes through this: a token
-        // of a peer below the minimum protocol opens none of them, however it came to exist.
-        if (entry.ExpiresAt <= DateTime.UtcNow || !SyncProtocolVersion.IsCompatiblePeer(entry.ProtocolVersion))
+        // of a peer below the minimum protocol opens none of them, however it came to exist. The
+        // minimum rises with the metadata activation (docs/design/step-a-spec.md 5.6): a 2.5 peer's
+        // token from before it stops working at once.
+        var compatible = policy?.IsCompatiblePeer(entry.ProtocolVersion, entry.Capabilities)
+                         ?? SyncProtocolVersion.IsCompatiblePeer(entry.ProtocolVersion);
+        if (entry.ExpiresAt <= DateTime.UtcNow || !compatible)
         {
             _tokens.TryRemove(token, out _);
             return false;

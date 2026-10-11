@@ -3,6 +3,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Boot;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Middleware;
@@ -55,6 +56,20 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
         if (authHeader != null && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
             var apiKey = authHeader["Bearer ".Length..].Trim();
+
+            // A sealed node whose database is closed cannot read an agent or a user row. A bee_ key opens it through the agent's door in the
+            // boot store (docs/design/step-b-spec.md 4.6); a bmbrt_ token carries no DEK and opens nothing. While the database is still closed
+            // after that, nothing below reads it: the request goes on and the sealed-vault middleware answers it.
+            var gate = context.RequestServices?.GetService<IVaultGate>();
+            if (gate is { IsSealed: true, IsUsable: false })
+            {
+                if (apiKey.StartsWith("bee_")) await TryOpenThroughAgentDoorAsync(context, apiKey, session);
+                if (!gate.IsUsable)
+                {
+                    await next(context);
+                    return;
+                }
+            }
 
             // Cross-instance remote token: looks like "bmbrt_<40-hex>".
             // No auto-unlock — these tokens have no DEK material. The endpoint
@@ -209,5 +224,42 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
         }
 
         await next(context);
+    }
+
+    /// <summary>
+    /// The agent's door (spec 4.6): the key hash names the agent's copies in the boot store, the key unwraps the master DEK, and the session
+    /// opens the database with it (<see cref="SessionService.TryUnlockWithDekAsync"/> checks the sentinel and that the agent still exists, is
+    /// active, can unlock and belongs to an active superadmin). Any failure leaves the database closed and the request unauthenticated.
+    /// </summary>
+    private async Task TryOpenThroughAgentDoorAsync(HttpContext context, string apiKey, SessionService session)
+    {
+        var doors = context.RequestServices?.GetService<IBootDoorStore>();
+        if (doors is null) return;
+        try
+        {
+            foreach (var door in await doors.FindAgentAsync(AgentKeyHelper.ComputeKeyHash(apiKey)))
+            {
+                byte[]? dek = null;
+                try
+                {
+                    dek = door.KdfVersion == 1 && door.Salt != null
+                        ? AgentKeyHelper.DecryptDekV1(apiKey, door.EncryptedMasterDek, door.Iv, door.Salt)
+                        : AgentKeyHelper.DecryptDek(apiKey, door.EncryptedMasterDek, door.Iv);
+                    if (await session.TryUnlockWithDekAsync(dek, door, context.RequestAborted)) return;
+                }
+                catch (System.Security.Cryptography.CryptographicException)
+                {
+                    // Not a door this key opens (a replaced copy next to the current one): the next.
+                }
+                finally
+                {
+                    if (dek != null) Array.Clear(dek);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "An agent could not open the encrypted database; it stays closed.");
+        }
     }
 }

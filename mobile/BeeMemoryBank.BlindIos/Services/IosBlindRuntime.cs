@@ -44,7 +44,7 @@ public sealed class IosBlindRuntime : IAsyncDisposable
         _services = services;
         App = services.GetRequiredService<IBlindAppController>();
         Scheduler = services.GetRequiredService<BlindTimerScheduler>();
-        Stats = services.GetRequiredService<BlindReplicaStats>();
+        Stats = services.GetRequiredService<BlindStoreStats>();
         Activity = services.GetRequiredService<BlindActivity>();
         Paths = services.GetRequiredService<IBlindPaths>();
     }
@@ -54,7 +54,7 @@ public sealed class IosBlindRuntime : IAsyncDisposable
     /// <summary>The in-app loop: it runs only while the app is in front (iOS suspends the process otherwise).</summary>
     public BlindTimerScheduler Scheduler { get; }
 
-    public BlindReplicaStats Stats { get; }
+    public BlindStoreStats Stats { get; }
     public BlindActivity Activity { get; }
     public IBlindPaths Paths { get; }
     public IServiceProvider Services => _services;

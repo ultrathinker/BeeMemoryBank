@@ -53,7 +53,7 @@ public static class DekRotationEndpoints
                     "web",
                     $"DEK rotation proposed by user {actorId}");
 
-                return Results.Ok(new { commitEventId });
+                return Results.Ok(new { commitEventId, notice = Services.Sealed.WayBackNotice.For(ctx.RequestServices) });
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -106,7 +106,7 @@ public static class DekRotationEndpoints
                 }
             });
 
-            return Results.Accepted(value: new { commitEventId = req.CommitEventId });
+            return Results.Accepted(value: new { commitEventId = req.CommitEventId, notice = Services.Sealed.WayBackNotice.For(ctx.RequestServices) });
         });
 
         group.MapPost("/cancel/{eventId}", async (

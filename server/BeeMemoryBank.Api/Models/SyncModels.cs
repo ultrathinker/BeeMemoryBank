@@ -5,17 +5,24 @@ public record SyncChallengeResponse(string Challenge, Guid ServerNodeId);
 
 /// <summary>Node authentication request.</summary>
 /// <param name="ProtocolVersion">
-/// The caller's SyncProtocolVersion.Current. Absent (null) from builds before protocol 3. Recorded
-/// on the caller's whitelist row (WhitelistEntry.LastProtocolVersion); below
-/// SyncProtocolVersion.MinPeer, or absent, the caller gets no token (426).
+/// The protocol the caller declares (ISyncProtocolPolicy.Declared: 3, or 4 once it applied the metadata activation). Absent
+/// (null) from builds before protocol 3. Recorded on the caller's whitelist row (WhitelistEntry.LastProtocolVersion); one this
+/// node does not accept (below SyncProtocolVersion.MinPeer, or after activation below 4 without the capability), or absent,
+/// gets no token (426).
 /// </param>
-public record SyncAuthRequest(Guid NodeId, string ChallengeB64, string SignatureB64, int? ProtocolVersion = null);
+/// <param name="Capabilities">What the caller's build advertises (docs/design/step-a-spec.md 5.1); absent from 2.5 builds.</param>
+/// <param name="AppVersion">The caller's application version; absent from 2.5 builds.</param>
+public record SyncAuthRequest(Guid NodeId, string ChallengeB64, string SignatureB64, int? ProtocolVersion = null,
+    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null);
 
 /// <summary>Response after successful authentication.</summary>
 public record SyncAuthResponse(string Token);
 
 /// <summary>Identity of this node for remote nodes.</summary>
-public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion);
+/// <param name="ProtocolVersion">What this node declares: 3, or 4 once it applied the metadata activation.</param>
+/// <param name="Capabilities">What this build advertises (docs/design/step-a-spec.md 5.1); older nodes ignore it.</param>
+public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion,
+    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null);
 
 /// <summary>Result of applying events.</summary>
 /// <param name="Applied">Count of events successfully persisted via ApplyAsync.</param>
@@ -29,7 +36,9 @@ public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed255
 /// them and the pusher will never re-send. null means the accepted prefix is empty (all-skipped,
 /// a first-item skip, or an empty batch); pusher should leave its cursor unchanged.
 /// </param>
-public record SyncApplyResult(int Applied, int Skipped, long? LastAppliedSequence = null, int Dropped = 0);
+/// <param name="Held">Step A (docs/design/step-a-spec.md 6.2), informative: how many of <paramref name="Applied"/> were stored
+/// held (a locked node, a key not here yet). They count as applied, so a pusher of any version advances over them.</param>
+public record SyncApplyResult(int Applied, int Skipped, long? LastAppliedSequence = null, int Dropped = 0, int Held = 0);
 
 // ─── Blob transport (protocol 2) ───────────────────────────────────────────────
 // Wire shapes for /api/sync/blobs/*. The client side (BlobTransport in BeeMemoryBank.Sync) keeps

@@ -6,13 +6,14 @@ using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Metadata;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Sync.Blind;
 
 /// <summary>
-/// Pull-only protocol-3 sync for a blind phone. It deliberately has no push path: the phone has no
+/// Pull-only sync for a blind phone (the protocol its host declares: 3, or 4 once it has activated Step A). It deliberately has no push path: the phone has no
 /// authoring services and only advances its receive cursor after EventApplier accepts an event.
 /// </summary>
 public sealed class BlindPhonePullClient(
@@ -29,7 +30,8 @@ public sealed class BlindPhonePullClient(
         if (identity.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
             throw new InvalidOperationException("The blind phone requires its v=2 external-key identity before sync.");
 
-        var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct);
+        var declared = services.GetService<ISyncProtocolPolicy>()?.Declared;
+        var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct, declared);
         var positions = services.GetRequiredService<ISyncPositionRepository>();
         var position = await positions.GetAsync(target.NodeId);
         var after = position?.LastSequenceNum ?? 0;
@@ -60,7 +62,9 @@ public sealed class BlindPhonePullClient(
 
             try
             {
-                await applier.ApplyAsync(evt);
+                // The relay applier stores a sealed event as received (never opens it) with the node it came from and its number in that
+                // node's log: what the baseline's trimming goes by (docs/design/step-a-spec.md 13.2, 13.3).
+                await applier.ApplyAsync(evt, new ApplyContext(ReceivedFrom: target.NodeId, ReceivedSeq: evt.SequenceNum));
                 await SyncEventQuarantine.ClearFailureAsync(quarantine, evt.EventId);
                 last = evt.SequenceNum;
             }
@@ -91,7 +95,7 @@ public sealed class BlindPhonePullClient(
             UpdatedAt = DateTime.UtcNow
         });
         if (stopped is not null) ExceptionDispatchInfo.Capture(stopped).Throw();
-        await ReportPositionAsync(http, target.Address, token, last, ct);
+        await ReportPositionAsync(http, target.Address, token, last, declared ?? SyncProtocolVersion.Current, ct);
     }
 
     private static async Task<List<SyncEvent>> PullAsync(HttpClient http, string address, string token, long after, CancellationToken ct)
@@ -115,12 +119,15 @@ public sealed class BlindPhonePullClient(
         await log.ExistsAsync(evt.EventId) || (identity.Ed25519PublicKey is { Length: > 0 }
             && Ed25519Signer.Verify(identity.Ed25519PublicKey, EventSignature.BuildPayload(evt), evt.Signature));
 
-    private async Task ReportPositionAsync(HttpClient http, string address, string token, long sequence, CancellationToken ct)
+    private async Task ReportPositionAsync(HttpClient http, string address, string token, long sequence, int declaredProtocol, CancellationToken ct)
     {
         try
         {
+            // What this copy declares and advertises (docs/design/step-a-spec.md 5.1): a node that has activated Step A refuses a peer that says less.
             using var request = new HttpRequestMessage(HttpMethod.Post,
-                $"{address.TrimEnd('/')}/api/sync/report-position?sequence={sequence}&protocolVersion={SyncProtocolVersion.Current}");
+                $"{address.TrimEnd('/')}/api/sync/report-position?sequence={sequence}&protocolVersion={declaredProtocol}" +
+                $"&capabilities={Uri.EscapeDataString(string.Join(",", MetadataCapabilities.Advertised))}" +
+                $"&appVersion={Uri.EscapeDataString(BuildVersion.Current)}");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using var response = await http.SendAsync(request, ct);
             response.EnsureSuccessStatusCode();

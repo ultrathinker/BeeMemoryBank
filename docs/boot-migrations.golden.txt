@@ -1,0 +1,1 @@
+BeeMemoryBank.Storage.BootMigrations.B001_boot_store.sql 66149e8528736eb57f4c4cbe5a95216ea05acbcb891f31e2448dd1c34c82a1c6

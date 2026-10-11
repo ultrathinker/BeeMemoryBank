@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -5,11 +6,19 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Blind.Format2;
+using BeeMemoryBank.Sync.Metadata;
 using Dapper;
 
 namespace BeeMemoryBank.Api.Services;
 
 public sealed class BlindNodeUnreachableException(string message, Exception? inner = null) : Exception(message, inner);
+
+/// <summary>
+/// This node has activated Step A but has no baseline to give a blind node yet (docs/design/step-a-spec.md 8.7): one has been asked for
+/// (<see cref="BaselineReasons.BlindReseed"/>), and the blind node is reseeded once it exists.
+/// </summary>
+public sealed class BaselineNotReadyException(string message) : Exception(message);
 
 /// <summary>A blind node as the PC's "Blind nodes" page shows it (plan 9, 5.6).</summary>
 /// <param name="Alarms">The kinds of the <see cref="BlindAlarmService"/> alarms the page shows as banners: "old_protocol" — it last
@@ -19,9 +28,18 @@ public sealed class BlindNodeUnreachableException(string message, Exception? inn
 /// none (see <see cref="SyncClient.SyncWithPeerAsync"/>); null when it never had to.</param>
 /// <param name="CreatedAt">When the row was added: a node never heard from is judged from here.</param>
 /// <param name="ProtocolSeenAt">When the node last declared its protocol to this PC (it called, or answered my-standing).</param>
+/// <param name="Capabilities">The capabilities the node advertised in its last my-standing answer (spec 5.1); null when it sent none.</param>
+/// <param name="Store">What the blind node holds, from the same answer (spec 10): the baseline's age and the deltas, no note count; null when unknown.</param>
 public sealed record BlindNodeStatus(
     Guid NodeId, string DisplayName, string? Address, int? Protocol, DateTime? LastContact,
-    IReadOnlyList<string> Alarms, long? AdoptedCheckpoint = null, DateTime CreatedAt = default, DateTime? ProtocolSeenAt = null);
+    IReadOnlyList<string> Alarms, long? AdoptedCheckpoint = null, DateTime CreatedAt = default, DateTime? ProtocolSeenAt = null,
+    IReadOnlyList<string>? Capabilities = null, BlindStoreSummary? Store = null);
+
+/// <summary>What a blind node's my-standing answer says it holds, kept in memory (the answer is asked every cycle; nothing of it is replicated).</summary>
+internal sealed record BlindObservation(BlindStoreSummary? Store, DateTime SeenAt);
+
+/// <summary>A package ready to go to a blind node, of either format.</summary>
+internal sealed record OutgoingPackage(string FilePath, string Sha256, long Length, Guid SeedId, long CpSequence);
 
 /// <param name="Warnings">What the pre-flight wants the operator to know, which did not stop the add.</param>
 public sealed record BlindNodeAdded(Guid NodeId, string DisplayName, long PackageCp, IReadOnlyList<string> Warnings);
@@ -48,6 +66,14 @@ public sealed class BlindNodeManager(
     private readonly BlindAlarmService _alarms = alarms ?? new BlindAlarmService(time ?? TimeProvider.System);
 
     private const int PartBytes = 32 * 1024 * 1024;
+
+    private readonly ConcurrentDictionary<Guid, BlindObservation> _observed = new();
+
+    /// <summary>The newest baseline offered to each blind node, and when: an offer a node refused is not repeated every cycle.</summary>
+    private readonly ConcurrentDictionary<Guid, (Guid BaselineId, DateTime At)> _offered = new();
+
+    /// <summary>How long a baseline that was offered stays offered, whether or not the node took it (the scheduler's own debounce).</summary>
+    public static readonly TimeSpan OfferAgainAfter = TimeSpan.FromMinutes(10);
 
     /// <summary>The blind nodes with their banners: the alarms of <see cref="GetAlarmsAsync"/> the page shows.</summary>
     public async Task<IReadOnlyList<BlindNodeStatus>> ListAsync()
@@ -79,8 +105,10 @@ public sealed class BlindNodeManager(
             // when it last answered this PC's my-standing call (AsksForReseedAsync records that as its protocol sighting).
             var latest = new[] { pulled.GetValueOrDefault(r.NodeId), pushed.GetValueOrDefault(r.NodeId), r.LastProtocolSeenAt ?? default }.Max();
             DateTime? last = latest > DateTime.MinValue ? latest : null;
+            _observed.TryGetValue(r.NodeId, out var seen);
             return new BlindNodeStatus(r.NodeId, r.DisplayName, r.ApiAddress, r.LastProtocolVersion, last, [],
-                adopted.TryGetValue(r.NodeId, out var cp) ? cp : null, r.CreatedAt, r.LastProtocolSeenAt);
+                adopted.TryGetValue(r.NodeId, out var cp) ? cp : null, r.CreatedAt, r.LastProtocolSeenAt,
+                MetadataCapabilities.Parse(r.LastCapabilities), seen?.Store);
         }).ToList();
     }
 
@@ -97,6 +125,10 @@ public sealed class BlindNodeManager(
 
         using var scope = scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;
+        // After the activation a blind node is seeded in format 2, from a baseline; without one there is nothing to seed it with, and nothing
+        // is changed (no whitelist row, no event) until there is (spec 8.7).
+        var activated = IsActivated(sp);
+        if (activated) await RequireBaselineAsync(sp, ct);
         var warnings = await sp.GetRequiredService<BlindPreflight>().RunAsync(http, ct);
 
         var whitelist = sp.GetRequiredService<IWhitelistRepository>();
@@ -156,11 +188,13 @@ public sealed class BlindNodeManager(
         // that no longer fits the log (every cycle would end in a 410).
         var includesUpTo = await TakeInWhatTheNodeHoldsAsync(sp, http, entry, ct);
 
-        var package = await sp.GetRequiredService<BlindPackageBuilder>()
-            .BuildAsync(Guid.NewGuid(), includesUpTo, producerIsSuperadmin: true, ct);
+        // A first seed after the activation is a `full` package with its blobs (spec 8.1); before it, today's package.
+        var package = activated
+            ? await BuildFormat2Async(sp, BlindPackageKinds.Full, includesUpTo, includeBlobs: true, ct)
+            : OutgoingOf(await sp.GetRequiredService<BlindPackageBuilder>().BuildAsync(Guid.NewGuid(), includesUpTo, producerIsSuperadmin: true, ct));
         var me = await sp.GetRequiredService<INodeIdentityRepository>().GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
-        var seederProof = BlindSeederProof.Compute(code.Secret, package.Manifest.SeedId, me.NodeId, me.Ed25519PublicKey);
+        var seederProof = BlindSeederProof.Compute(code.Secret, package.SeedId, me.NodeId, me.Ed25519PublicKey);
         try
         {
             await UploadAsync(http, code.Address, package, req =>
@@ -176,13 +210,13 @@ public sealed class BlindNodeManager(
         }
         finally
         {
-            File.Delete(package.FilePath);
+            DeletePackage(package);
         }
         await sp.GetRequiredService<BlindState>().ClearAdoptedCheckpointAsync(code.NodeId);
-        await StartPushingFromAsync(sp, code.NodeId, package.Manifest.CpSequence);
+        await StartPushingFromAsync(sp, code.NodeId, package.CpSequence);
         logger.LogInformation("Blind node {NodeId} at {Address} added and seeded (cp {Cp}, includes up to {UpTo})",
-            code.NodeId, code.Address, package.Manifest.CpSequence, includesUpTo);
-        return new BlindNodeAdded(code.NodeId, displayName, package.Manifest.CpSequence, warnings);
+            code.NodeId, code.Address, package.CpSequence, includesUpTo);
+        return new BlindNodeAdded(code.NodeId, displayName, package.CpSequence, warnings);
     }
 
     /// <summary>
@@ -200,10 +234,15 @@ public sealed class BlindNodeManager(
         var address = row.ApiAddress.TrimEnd('/');
 
         using var http = CreateClient();
+        if (IsActivated(sp))
+        {
+            await RefreshWithBaselineAsync(sp, http, row, address, ct);
+            return;
+        }
         var includesUpTo = await PullEverythingAsync(sp, http, row, ct);
 
-        var package = await sp.GetRequiredService<BlindPackageBuilder>()
-            .BuildAsync(Guid.NewGuid(), includesUpTo, producerIsSuperadmin: true, ct);
+        var package = OutgoingOf(await sp.GetRequiredService<BlindPackageBuilder>()
+            .BuildAsync(Guid.NewGuid(), includesUpTo, producerIsSuperadmin: true, ct));
         try
         {
             var self = await sp.GetRequiredService<INodeIdentityRepository>().GetAsync()
@@ -214,12 +253,81 @@ public sealed class BlindNodeManager(
         }
         finally
         {
-            File.Delete(package.FilePath);
+            DeletePackage(package);
         }
         await sp.GetRequiredService<BlindState>().ClearAdoptedCheckpointAsync(blindId);
-        await StartPushingFromAsync(sp, blindId, package.Manifest.CpSequence);
+        await StartPushingFromAsync(sp, blindId, package.CpSequence);
         logger.LogInformation("Blind node {NodeId} reseeded (includes up to {UpTo}, cp {Cp})",
-            blindId, includesUpTo, package.Manifest.CpSequence);
+            blindId, includesUpTo, package.CpSequence);
+    }
+
+    /// <summary>
+    /// The reseed of an operational blind node after the activation (docs/design/step-a-spec.md 8.7, 9.2): this node's newest baseline goes
+    /// to it as a <c>baseline</c> package, after the blobs the baseline lists that it lacks. The blind node keeps its log: what is in it is
+    /// still valid, and its adoption trims it to the baseline's cut; so this node's push position is left where it is and nothing is
+    /// cleared. As ever, what the blind node holds that this node lacks (a phone's pushes) is pulled first.
+    /// </summary>
+    private async Task RefreshWithBaselineAsync(IServiceProvider sp, HttpClient http, WhitelistEntry row, string address, CancellationToken ct)
+    {
+        await RequireBaselineAsync(sp, ct);
+        var includesUpTo = await PullEverythingAsync(sp, http, row, ct);
+        var self = await sp.GetRequiredService<INodeIdentityRepository>().GetAsync()
+            ?? throw new InvalidOperationException("Node is not initialized.");
+        var token = await PeerAuthenticator.AuthenticateAsync(
+            sp.GetRequiredService<INodeAuthSigner>(), http, address, self, row.NodeId, ct);
+
+        // Blobs first: the blind node refuses a baseline whose blobs it does not hold (spec 9.2 step 3).
+        var servable = await sp.GetRequiredService<IBaselineSource>().GetServableAsync(ct)
+            ?? throw new BaselineNotReadyException("This computer has no baseline yet.");
+        var hashes = Format2Package.ParseBlobList(await File.ReadAllBytesAsync(Path.Combine(servable.Files.Directory, BaselineManifest.BlobListFileName), ct));
+        await BaselineBlobShipper.ShipAsync(http, address, token, hashes, sp.GetRequiredService<IBlobRepository>(), logger,
+            $"baseline {servable.Files.Manifest.BaselineId:N}", ct);
+
+        var package = await BuildFormat2Async(sp, BlindPackageKinds.Baseline, includesUpTo, includeBlobs: false, ct);
+        try
+        {
+            await UploadAsync(http, address, package, req => req.Headers.Authorization = new("Bearer", token), ct);
+        }
+        finally
+        {
+            DeletePackage(package);
+        }
+        logger.LogInformation("Blind node {NodeId} refreshed with baseline {BaselineId} (includes up to {UpTo}, its log kept)",
+            row.NodeId, servable.Files.Manifest.BaselineId, includesUpTo);
+    }
+
+    private static bool IsActivated(IServiceProvider sp) => sp.GetService<ISyncProtocolPolicy>()?.SealsMetadata == true;
+
+    /// <summary>
+    /// Fails with <see cref="BaselineNotReadyException"/> when this node has no baseline to give, after asking the scheduler for one
+    /// (<see cref="BaselineReasons.BlindReseed"/>): the blind node's flag stays up, so the next cycle after the baseline exists seeds it.
+    /// </summary>
+    private async Task RequireBaselineAsync(IServiceProvider sp, CancellationToken ct)
+    {
+        var source = sp.GetService<IBaselineSource>();
+        if (source is not null && await source.GetServableAsync(ct) is not null) return;
+        sp.GetService<IBaselineScheduler>()?.RequestEarly(BaselineReasons.BlindReseed);
+        throw new BaselineNotReadyException("This computer has no baseline to give a blind node yet; one is being made. Try again in a few minutes.");
+    }
+
+    private static async Task<OutgoingPackage> BuildFormat2Async(
+        IServiceProvider sp, string kind, long? includesUpTo, bool includeBlobs, CancellationToken ct)
+    {
+        var servable = await sp.GetRequiredService<IBaselineSource>().GetServableAsync(ct)
+            ?? throw new BaselineNotReadyException("This computer has no baseline yet.");
+        var written = await sp.GetRequiredService<IBlindPackageV2Writer>().WriteAsync(
+            new BlindPackageV2Request(kind, Guid.NewGuid(), servable, includesUpTo, includeBlobs), ct);
+        return new OutgoingPackage(written.FilePath, written.Sha256, written.Length, written.Manifest.SeedId, written.Manifest.CpSequence);
+    }
+
+    private static OutgoingPackage OutgoingOf(BlindPackage package) =>
+        new(package.FilePath, package.Sha256, package.Length, package.Manifest.SeedId, package.Manifest.CpSequence);
+
+    /// <summary>The package file and, for a format-2 one, the detached signature the writer keeps beside it (the seed route does not use it).</summary>
+    private static void DeletePackage(OutgoingPackage package)
+    {
+        File.Delete(package.FilePath);
+        File.Delete(package.FilePath + ".sig");
     }
 
     public async Task AfterSyncAsync(WhitelistEntry peer, HttpClient http, Exception? failure, CancellationToken ct)
@@ -228,11 +336,42 @@ public sealed class BlindNodeManager(
         {
             PushGapException => "push gap",
             null when await AsksForReseedAsync(peer, http, ct) => "the blind node asked for it",
+            null when await HoldsAnOlderBaselineAsync(peer, ct) => "the blind node holds an older baseline than this node's newest",
             _ => null
         };
         if (reason is null) return;
         logger.LogWarning("Reseeding blind node {NodeId} ({Address}): {Reason}", peer.NodeId, peer.ApiAddress, reason);
-        await ReseedAsync(peer.NodeId, ct);
+        try
+        {
+            await ReseedAsync(peer.NodeId, ct);
+        }
+        catch (BaselineNotReadyException ex)
+        {
+            // Not a failure of the blind node or the link: the next cycle after the baseline exists seeds it.
+            logger.LogInformation("Blind node {NodeId} is not reseeded yet: {Reason}", peer.NodeId, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Spec 7.5 and 8.7 (push): an operational blind node whose my-standing summary names a baseline other than this node's newest servable one,
+    /// which is not older, gets the newer one at the next cycle. That is how the baseline a key rotation or a hard delete asks for reaches a copy
+    /// that adopted one: without it the copy keeps the old key's baseline, never trims its log and keeps hard-deleted content in its baseline.
+    /// A copy that holds none (the flag path) and an activation not applied here are not this method's business. Each baseline is offered once per
+    /// <see cref="OfferAgainAfter"/>, so a copy that refuses it does not turn every cycle into a pull and an upload.
+    /// </summary>
+    private async Task<bool> HoldsAnOlderBaselineAsync(WhitelistEntry peer, CancellationToken ct)
+    {
+        if (!_observed.TryGetValue(peer.NodeId, out var seen) || seen.Store is not { BaselineId: { } held } store) return false;
+        using var scope = scopeFactory.CreateScope();
+        var sp = scope.ServiceProvider;
+        if (!IsActivated(sp)) return false;
+        if (sp.GetService<IBaselineSource>() is not { } source) return false;
+        var newest = (await source.GetServableAsync(ct))?.Files.Manifest;
+        if (newest is null || newest.BaselineId == held || newest.CreatedAt < (store.BaselineCreatedAt ?? DateTime.MinValue)) return false;
+        var now = UtcNow();
+        if (_offered.TryGetValue(peer.NodeId, out var offered) && offered.BaselineId == newest.BaselineId && now - offered.At < OfferAgainAfter) return false;
+        _offered[peer.NodeId] = (newest.BaselineId, now);
+        return true;
     }
 
     /// <summary>
@@ -257,7 +396,16 @@ public sealed class BlindNodeManager(
         var standing = await resp.Content.ReadFromJsonAsync<MyStanding>(ct);
         if (standing is null) return false;
         if (standing.ResponderNodeId == peer.NodeId && standing.Protocol > 0)
-            await sp.GetRequiredService<IWhitelistRepository>().RecordProtocolVersionAsync(peer.NodeId, standing.Protocol, UtcNow());
+        {
+            var whitelist = sp.GetRequiredService<IWhitelistRepository>();
+            await whitelist.RecordProtocolVersionAsync(peer.NodeId, standing.Protocol, UtcNow());
+            // What the node advertises (spec 5.1, 5.2): a node that sends none (a 2.5 one) records nothing, so the row keeps what it saw last.
+            if (standing.Capabilities is { } capabilities)
+                await whitelist.RecordCapabilitiesAsync(peer.NodeId, capabilities, standing.AppVersion, UtcNow());
+            // What it holds: the page's stale-baseline alarm (spec 10.4). A node without a summary clears the old one rather than keeping it.
+            if (standing.Store is { } store) _observed[peer.NodeId] = new BlindObservation(store, UtcNow());
+            else _observed.TryRemove(peer.NodeId, out _);
+        }
         return standing is { ReseedNeeded: true, CallerIsSuperadmin: true };
     }
 
@@ -360,12 +508,12 @@ public sealed class BlindNodeManager(
     /// broken connection or a restart of this loop.
     /// </summary>
     private static async Task UploadAsync(
-        HttpClient http, string address, BlindPackage package, Action<HttpRequestMessage> authorize, CancellationToken ct)
+        HttpClient http, string address, OutgoingPackage package, Action<HttpRequestMessage> authorize, CancellationToken ct)
     {
         await using var file = File.OpenRead(package.FilePath);
         var buffer = new byte[PartBytes];
         long offset = 0;
-        var seedId = package.Manifest.SeedId;
+        var seedId = package.SeedId;
         while (true)
         {
             file.Position = offset;

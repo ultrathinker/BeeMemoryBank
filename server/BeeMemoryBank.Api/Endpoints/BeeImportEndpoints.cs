@@ -2,6 +2,7 @@ using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Services;
 using Microsoft.AspNetCore.Mvc;
+using BeeMemoryBank.Core.Exceptions;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -29,12 +30,12 @@ public static class BeeImportEndpoints
                 var report = await importService.ImportAsync(stream, destinationPath, ctx.RequestAborted);
                 return Results.Ok(report);
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 // Missing/unparseable .bmb-manifest.json - a genuine "wrong kind of ZIP" user error.
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 400);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.Json(new ErrorResponse($"Import failed: {ex.Message}"), statusCode: 500);
             }

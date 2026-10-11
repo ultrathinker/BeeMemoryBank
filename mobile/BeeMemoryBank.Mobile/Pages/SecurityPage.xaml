@@ -130,6 +130,53 @@
                 </VerticalStackLayout>
             </Frame>
 
+            <!-- Database encryption (docs/design/step-b-spec.md 10.8). Hidden until the native release gate (12.4) is green:
+                 PhoneVaultLifecycle.PhoneEncryptionAvailable. -->
+            <Frame Style="{StaticResource CardFrame}" x:Name="EncryptionCard" IsVisible="False">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="Database encryption" FontAttributes="Bold" FontSize="16" />
+                    <Label x:Name="EncryptionStatusLabel"
+                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}"
+                           LineBreakMode="WordWrap" />
+
+                    <VerticalStackLayout x:Name="EncryptionForm" Spacing="10">
+                        <Label Text="Keep the app open and the phone plugged in or charged while the database is encrypted. If you stop it half-way, the app finishes or undoes it the next time it starts."
+                               FontSize="13" TextColor="{StaticResource SecondaryTextColor}"
+                               LineBreakMode="WordWrap" />
+
+                        <Entry x:Name="EncryptPasswordEntry"
+                               AutomationId="EncryptPasswordEntry"
+                               Placeholder="Master password"
+                               IsPassword="True"
+                               BackgroundColor="{StaticResource SurfaceColor}"
+                               TextColor="{StaticResource TextColor}"
+                               PlaceholderColor="{StaticResource SecondaryTextColor}" />
+
+                        <HorizontalStackLayout Spacing="8" x:Name="OnlyCopyRow" IsVisible="False">
+                            <CheckBox x:Name="OnlyCopyCheck" AutomationId="OnlyCopyCheck" VerticalOptions="Center" />
+                            <Label Text="This phone holds the only copy of these notes; encrypting cannot be undone"
+                                   FontSize="13" VerticalOptions="Center" LineBreakMode="WordWrap" />
+                        </HorizontalStackLayout>
+
+                        <Label x:Name="EncryptErrorLabel"
+                               TextColor="{StaticResource ErrorColor}"
+                               FontSize="13"
+                               IsVisible="False"
+                               LineBreakMode="WordWrap" />
+
+                        <ProgressBar x:Name="EncryptProgress" Progress="0" IsVisible="False" />
+                        <Label x:Name="EncryptStepLabel" FontSize="12" IsVisible="False"
+                               TextColor="{StaticResource SecondaryTextColor}" />
+
+                        <Button x:Name="EncryptButton"
+                                Text="Encrypt this phone's database"
+                                AutomationId="EncryptDatabaseButton"
+                                Style="{StaticResource PrimaryButton}"
+                                Clicked="OnEncryptDatabaseClicked" />
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+            </Frame>
+
         </VerticalStackLayout>
     </ScrollView>
 

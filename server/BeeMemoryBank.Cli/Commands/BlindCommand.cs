@@ -176,8 +176,21 @@ public static class BlindCommand
         await output.WriteLineAsync($"Version:   {Str(j, "version")}  protocol {Str(j, "protocol")}");
         await output.WriteLineAsync($"Data:      {Str(j, "data_path")}");
         await output.WriteLineAsync($"Backups:   {Str(j, "backups_path") ?? "(not configured)"}");
+        // What the node holds, never how many notes (step-a-spec 10.1, owner decision 6): a 2.5 node that still sends
+        // "articles" does not get it printed either.
+        if (j.TryGetProperty("activated", out var activated) && activated.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            await output.WriteLineAsync($"Metadata:  {(activated.GetBoolean() ? "sealed (activated)" : "not activated")}");
+        if (j.TryGetProperty("baseline", out var baseline))
+            await output.WriteLineAsync(baseline.ValueKind == JsonValueKind.Object
+                ? $"Baseline:  {Age(baseline)} old, key generation {Str(baseline, "key_generation")}"
+                : "Baseline:  none yet (waiting for a format-2 reseed)");
+        if (j.TryGetProperty("deltas", out var deltas) && deltas.ValueKind == JsonValueKind.Object)
+            await output.WriteLineAsync($"Deltas:    {Str(deltas, "count")} ({Human(deltas, "bytes")})");
         if (j.TryGetProperty("stored", out var st))
-            await output.WriteLineAsync($"Stored:    {Str(st, "articles")} articles, {Str(st, "blobs")} blobs, {Bytes(st, "bytes")}");
+            await output.WriteLineAsync($"Stored:    {Str(st, "blobs")} blobs, {Human(st, "bytes")}");
+        if (j.TryGetProperty("legacy_copies", out var legacy) && legacy.ValueKind == JsonValueKind.Array)
+            foreach (var copy in legacy.EnumerateArray())
+                await output.WriteLineAsync($"Legacy:    {copy.GetString()} (holds plaintext metadata; retire it)");
         await output.WriteLineAsync($"Free:      {Bytes(j, "free_bytes")}");
         await output.WriteLineAsync($"CPU mode:  {Str(j, "cpu_mode")}");
         if (j.TryGetProperty("peers", out var peers) && peers.GetArrayLength() > 0)
@@ -346,4 +359,27 @@ public static class BlindCommand
 
     private static string Bytes(JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? $"{v.GetInt64() / 1_000_000} MB" : "?";
+
+    /// <summary>A byte count for a person: B, KB, MB, GB (base 1024, one decimal).</summary>
+    private static string Human(JsonElement e, string name)
+    {
+        if (!e.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Number) return "?";
+        double value = v.GetInt64();
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1) { value /= 1024; unit++; }
+        return unit == 0
+            ? $"{value:0} B"
+            : value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " " + units[unit];
+    }
+
+    /// <summary>How old a baseline is, from its <c>age_seconds</c>: minutes, hours or days.</summary>
+    private static string Age(JsonElement baseline)
+    {
+        if (!baseline.TryGetProperty("age_seconds", out var v) || v.ValueKind != JsonValueKind.Number) return "?";
+        var age = TimeSpan.FromSeconds(Math.Max(0, v.GetInt64()));
+        return age.TotalHours < 1 ? $"{(int)age.TotalMinutes} min"
+            : age.TotalDays < 2 ? $"{(int)age.TotalHours} h"
+            : $"{(int)age.TotalDays} days";
+    }
 }

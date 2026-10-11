@@ -23,7 +23,9 @@ The server is unavailable while a restore runs. When it ends the vault is locked
 
 While a snapshot is being made (by hand, before an update, for compaction, for a joining device or a blind copy), its
 working copy of the database is made in the node's data folder (`tmp/snapshot-*.tmp`, owner-only), not in the
-operating system's temp folder, and is removed when the archive is written. Until the snapshot filters it, that copy is
+operating system's temp folder, and is removed when the archive is written, with the SQLite files beside it (`-journal`,
+`-wal`, `-shm`). A copy that cannot be removed fails the snapshot (repair required): it is not reported as made, and its
+archive is removed too. Until the snapshot filters it, that copy is
 the whole database; if the process is killed in between, the node removes the leftover at its next start. A snapshot
 therefore needs free space for about twice the database on the data drive, and on the drive of the snapshots folder.
 
@@ -32,6 +34,10 @@ A join or a restore works the same way in the other direction: the archive it do
 folder, as `work-*`, owner-only (mode 0600 files and 0700 folders on Linux and macOS, an owner-only ACL on Windows),
 not in the operating system's temp folder, and are removed when the join or restore ends. If the process is killed in
 between, the leftover is removed at the next start of the node, of the phone app, or of `bmb join`.
+
+The `tmp/` folder itself is owner-only too, and so are the SQLite files that SQLite creates beside a working copy: on
+Windows they take the folder's ACL. A restore, a join or a snapshot whose folder or file cannot be removed fails with
+repair required; it is never reported as done.
 
 ## Restore this node only
 
@@ -58,7 +64,11 @@ What happens, in order:
    password does not open its key slots — the restore is refused before anything is replaced. An encrypted
    snapshot from a different vault is likewise refused before anything is replaced: its key slots cannot be
    read until the database has already been decrypted with this vault's master key.
-5. The staged database replaces the live one, the media are swapped in, and the vault is locked.
+5. The staged database replaces the live one, the media are swapped in, and the vault is locked. The live file is
+   replaced behind the node's connection barrier, on a plain and on an encrypted node alike (a restore, and the
+   put-back of a failed network restore): new database connections wait, the ones in use are waited for (30 seconds
+   at most), and only then does the file change, so no connection can go on writing the old file. If work of the node
+   does not finish in time, the restore says so and nothing has been changed; try again in a minute.
 
 **What you have to do afterwards**
 
@@ -98,7 +108,155 @@ What stays as it is on every node: its identity, users, key slots and the nodes 
 
 From the command line: `bmb snapshot restore-network <file name or id>`; the API is
 `POST /api/snapshots/restore-network` (superadmin, not an agent key; the Admin page also sends the master
-password, which the server then re-checks).
+password, which the server then re-checks). It is refused (409) while this node holds events it received but has not
+applied yet ([sync.md](sync.md#held-events-received-and-applied)): unlock it and wait until they are applied. On a
+receiving node, held events that arrived after a restore wait until that restore has finished, then apply.
+
+## Joining a device after sealed metadata is turned on
+
+Once the owner has turned on sealed metadata ([encryption.md](encryption.md), the activation in Admin → Sync), a node no longer hands out
+a plain archive to a device that joins:
+
+- **The join archive's database is sealed.** `GET /api/sync/snapshot/for-join` returns the archive with its database entry as a
+  `BMBCH1` container (purpose `join`) under the master key; `manifest.json` says `"dbEncrypted": true, "dbCipher": "bmbch1"`. It is not
+  a SQLite file and holds no title, path, tag or comment in the clear. The cache of join archives is kept per master key and is dropped
+  when sealed metadata is turned on and when the master key rotates. A blind copy asking for it gets 403 (it joins by being paired).
+- **Only a 2.6 device joins.** `POST /api/join` also needs the joiner to say it is on protocol 4, or on protocol 3 with the
+  `metadata-envelope-v1` capability. A device on 2.5 sends neither: it gets 426 ("update this device to 2.6 or newer") before any row
+  is written, on the producer or anywhere else.
+- **The joiner opens it with the key it was just given.** `bmb join`, the Setup page and the Android and iPhone full apps decrypt the
+  archive with the master key received from the join and only then import it. A 2.6 joiner that sees protocol 4 in the producer's identity and
+  is handed a plain archive refuses it (it fails closed), so a node that merely claims it has not activated cannot make a joiner take a plain
+  copy.
+- **The joiner starts activated.** The imported tables include the metadata keys and the activation, so the new device declares protocol 4 from
+  its first start and opens the metadata key after its first unlock.
+- **Refusals that stay.** A locked producer answers 423; a producer that holds events it received but has not applied yet answers 409
+  ([sync.md](sync.md#held-events-received-and-applied)) until they are applied.
+
+Before sealed metadata is turned on none of this applies: the join is the plain archive it always was, for every device.
+
+## Restore from a baseline and the deltas after it
+
+After sealed metadata is turned on, what a blind node, an Android blind copy or a Docker blind node's backup holds is **a baseline**
+(a sealed copy of the vault's state at one moment, made by a full node that held the master key) **and the sealed changes after it**
+(deltas). Restoring from them needs the master password and nothing else; the file, the blind node or the folder cannot open anything.
+
+The sources are the same as before:
+
+| Source | What it holds |
+|---|---|
+| A blind node, with its restore code | a `full` package over the restore routes: the baseline, the control tables (keys, recovery boxes, anchors), the deltas and the blobs |
+| An Android blind copy's backup file | the same package, the phone's own events and the pairing record sealed under the master key |
+| A Docker blind node's backup folder (or restic repository) | the node's database copy (control tables, signed log, blobs, no metadata), `baselines/current/` and the recovery set beside it |
+
+What the restore does, in this order, and what it refuses:
+
+1. **Checks the source.** A package is verified by the format-2 reader against the key the restore code (or the phone's pairing record)
+   names: both signatures, every entry's hash, the baseline's producer (a superadmin of the package's own whitelist) and its signature. A folder's
+   baseline must match the signed record in its database and be signed by a superadmin the copy knows.
+2. **Recovers the keys from the password** (recovery boxes and the chain of retired master keys, as for any restore) and opens every metadata
+   key with the master key of its fingerprint. A baseline whose key no recovered key opens is refused before anything is written.
+3. **Imports** the baseline (decrypted into an owner-only staging folder), the control tables and the blobs, then makes the identity, the
+   slot and the admin.
+4. **Replays the deltas** through the ordinary event applier, with the package's whitelist deciding who may have written what. Progress is
+   kept (`restore_replay_seq` in `tbl_migration_marker`), so a restore that was stopped runs again and finishes; a delta already applied is a
+   no-op. A delta whose signature does not verify is skipped and counted, never applied.
+5. **Checks the anchor after the replay.** The newest integrity anchor under the master key is compared with the restored state; a blind node
+   that held a delta back, or a copy that was changed, shows as a mismatch. Restored peers keep the status the anchor vouches for.
+6. **Sets the positions**: the pull positions of the signed baseline, and the blind node it came from at the package's last position.
+
+If the blind node holds more deltas than one restore takes (200 000), the restore replays that many, says **"Incomplete: sync with the
+blind node to finish"** (the `replay` part of `/api/restore/progress`), and leaves the rest to the first sync from the position it reached.
+
+Two things a baseline cannot do, which the restore reports instead of hiding: a change that only a delta older than the baseline's cut
+carried (an anchor from before it) is not in the package, and a newer row backed only by a sealed delta cannot be vouched for by the
+signed log in the clear. Both make the anchor result "partially confirmed" rather than "confirmed", with the rows named.
+
+## On an encrypted node (2.6.0)
+
+When the owner has chosen "Encrypt this node", the database files on the disk are encrypted (see `docs/sqlite-engine.md`). A snapshot of such a
+node and a restore onto it work as described above, with these differences. Nothing in this section applies to a node that is not encrypted.
+
+**Making a snapshot.** The working copy in `tmp/snapshot-*.tmp` is made with `VACUUM INTO` from the open, encrypted vault, so it is encrypted with the
+node's own key at every moment; it is filtered and compacted through encrypted connections, and the database entry of the archive is built from it in
+memory and encrypted under the master key, exactly as before. A plain database file never exists, not even for a moment. Two consequences: a
+snapshot can only be made while the vault is open (a locked encrypted node makes none and leaves no working copy), and a **plain** snapshot
+(`encryptDb: false`, what a node before 2.6.0 offered for a join) is refused. The join snapshot of an activated node is built the same way
+(a `BMBCH1` container streamed from the working copy).
+
+**Restoring a snapshot onto an encrypted node** (this node only, in place, or as part of a network restore). The archive is checked before anything is
+extracted: a snapshot whose database is *not* encrypted is refused ("restore it on a node that is not encrypted, then encrypt that node"), because
+extracting it would put a plain copy of a vault on the disk. An encrypted database is opened in memory and written into a staging copy that is encrypted
+with the node's own key; the staging edits (new identity for a restore of this node only), the checks and the table import work on that copy through
+encrypted connections. The node also keeps a small unlock record outside the database, so that a password can be tried before the database is open:
+the restore writes the snapshot's key slots into that record before it replaces the database and rewrites it afterwards, so the passwords of the
+restored snapshot open the node after a restart, wherever a crash falls. A node that cannot update that record refuses the restore before anything
+is replaced.
+
+**The way-back snapshot.** Right before a node is encrypted the product takes a snapshot of the unencrypted node and keeps it in `pre-encryption/` (not
+listed in Admin → Snapshots, not removed by the retention, deleted only when the owner asks). It is an ordinary snapshot, encrypted under the master key
+of that day, plus one extra entry, `key-envelope.json`, listed with its SHA-256 in the manifest like every other entry. The envelope holds copies of the
+key slots that a password or the recovery key opens: the slots of active superadmins, the recovery slot and the legacy password slot (for each: its type,
+the wrapped key, IV, salt and the Argon2id parameters; no user id, user name or slot id), and never the slots of OS or server auto-unlock or an
+agent's key. These are the same wrapped bytes the node keeps as the doors of its unlock record, so the envelope shows nothing a stolen disk of the
+encrypted node does not. Why it exists: a key rotation or a reset leaves no way to the master key of the day the snapshot was taken, and the envelope
+carries it under the password and recovery key of that day.
+
+To go back to an unencrypted node: reset the node (`bmb init reset`; `snapshots/` and `pre-encryption/` stay), set it up again **with the master password you
+had on the day of the snapshot** (or the text of the recovery key of that day), then restore with
+`bmb snapshot restore-standalone <file name>` and that same password. The file is looked up in `snapshots/` and then in `pre-encryption/`. The new
+vault's own key does not open the snapshot, so the product tries each slot of the envelope with the password (under the same Argon2id limits it applies
+to the slots of a staged database); the key that passes the check of the vault's sentinel opens the database and is cleared at once. With a wrong
+password, or a snapshot that has no envelope, the restore is refused before anything is replaced. The result is a new node (new id and key pair, as for
+any restore of this node only) with the activation state the snapshot had; join the other devices to it again.
+
+**Restoring from a blind copy or an Android backup** onto an encrypted node (a fresh vault): the baseline of the package is opened with the recovered
+keys and written, through a pipe, into an encrypted staging copy; the package's control tables are plain by design and are attached to the node's
+connection with an empty key. Nothing plain is written to `tmp/`.
+
+## Restoring from a blind copy (2.6.0, after metadata encryption is switched on)
+
+A blind copy no longer holds your tree — it holds an encrypted **baseline** (a filtered copy of the
+replicated tables, built by an unlocked superadmin full node), the signed events that came after the
+baseline's cut, and the encrypted media. Restoring a full node from it needs **only the master
+password**, on any machine: the password recovers the key chain, the keys open the metadata-key rows,
+the baseline is decrypted and imported, and the deltas are replayed through the ordinary event
+applier (a very long backlog is capped at 200,000 changes and can resume).
+
+Only then is the newest state anchor checked — so a blind copy whose deltas were lost or withheld is
+*detected*, not prevented. When the replay could not reach the anchor, the node tells you plainly:
+**"Incomplete: sync with the blind node to finish"** — the fastest fix is to let the restored node
+sync with the copy it was restored from, or with any full node that is current.
+
+What a restore cannot do: the package a blind copy serves is the new format 2, so a full node of
+2.5 or older cannot read it; and a blind copy that has itself adopted the activated state refuses
+the old format 1 outright. And as everywhere else, this reaches only copies made *after* activation
+— older backups still contain readable metadata and are the owner's to retire.
+
+## On an encrypted (sealed) node
+
+"Encrypt this node" (2.6.0) page-encrypts the database files themselves; the operator's guide for that is
+[sealed-database.md](sealed-database.md). What it changes on this page:
+
+- **Snapshots work unchanged and stay the primary backup.** A snapshot of a sealed node is made while the node is
+  open, holds the same content as any snapshot — encrypted under your master key, restorable on any machine with the
+  password — and holds no boot store; the node rebuilds one when the restore ends. A snapshot restore never
+  encrypts or decrypts the node you restore it *on*: a sealed node stays sealed, a plain node stays plain.
+- **Restore needs the vault open.** A sealed, locked node serves sync only; sign in as an administrator first
+  (that unlocks the vault), then restore. The safety backup before the restore is taken as usual.
+- **The pre-encryption snapshot is found here too.** The migration writes it to `pre-encryption/` in the data folder —
+  not listed on the Snapshots page, not pruned, deleted only deliberately. `bmb snapshot restore-standalone <name>`
+  looks in `snapshots/` first, then in `pre-encryption/`, and opens the latter through its key envelope with the
+  password you had on the day of the encryption — even if the password has since changed. That restore is step 4 of
+  the documented rollback ([sealed-database.md](sealed-database.md#making-this-node-plain-again-rollback)): the node
+  comes back as a **new node** with the content of the moment just before the encryption, and you join your devices
+  again. What the rollback gives up (changes that never synced, chat history) is listed there too.
+- **The server's "Start unlocked after a restart" checkbox survives a restore in one case only** — an in-place
+  restore over the very server that enabled it, with a byte-identical key slot. Every other restore starts locked
+  and retires the stale slot ([sealed-database.md](sealed-database.md#restore) has the rule and the notice text).
+
+File-level backups of a sealed node are a different animal — three files that form one set, copied only while the
+node is stopped; see [sealed-database.md](sealed-database.md#backups).
 
 ## On the record
 

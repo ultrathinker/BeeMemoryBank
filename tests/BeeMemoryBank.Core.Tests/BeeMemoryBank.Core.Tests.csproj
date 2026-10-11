@@ -50,5 +50,10 @@
 
   <ItemGroup>
     <Compile Include="..\shared\WindowsAcl.cs" Link="Shared\WindowsAcl.cs" />
+    <Compile Include="..\shared\PlatformFacts.cs" Link="Shared\PlatformFacts.cs" />
+    <!-- Step B red tests: a gate and a key holder that answer only what the mirror and the auto-unlock services ask (one source, linked into every project that tests them). -->
+    <Compile Include="..\shared\SealedTestFakes.cs" Link="Shared\SealedTestFakes.cs" />
+    <!-- Step B red tests: the walk of the managed object graph for key material (a locked node holds none). -->
+    <Compile Include="..\shared\KeyGraphWalker.cs" Link="Shared\KeyGraphWalker.cs" />
   </ItemGroup>
 </Project>

@@ -34,6 +34,12 @@ public static class EventTypes
     public const string RetiredLinkSet = "retired_link_set";
     public const string StateAnchor = "state_anchor";
     public const string SealedSecretSet = "sealed_secret_set";
+
+    // Step A (docs/design/step-a-spec.md 3.1, 4.3, 5.4): the outer type of a protocol-4 content event and the two
+    // control events of the metadata key. Aliases of Metadata.EventClasses, which classifies every type here.
+    public const string Sealed = Metadata.EventClasses.Sealed;
+    public const string MetadataKeySet = Metadata.EventClasses.MetadataKeySet;
+    public const string MetadataActivation = Metadata.EventClasses.MetadataActivation;
 }
 
 /// <summary>
@@ -69,6 +75,10 @@ public static class EventAuthorization
         // anchor is what a restore trusts. Both are cluster-state decisions.
         EventTypes.RecoveryBoxRetire,
         EventTypes.StateAnchor,
+        // The metadata key and the one-way activation (step-a-spec 3.1): a key record names which key every node
+        // seals with, and the activation cuts 2.5 peers off; both are vault-wide decisions of a superadmin.
+        EventTypes.MetadataKeySet,
+        EventTypes.MetadataActivation,
     };
 
     /// <summary>
@@ -92,6 +102,9 @@ public static class EventAuthorization
         EventTypes.ConceptTagMerge,
         EventTypes.ConceptTagDelete,
         EventTypes.SnapshotCheckpoint,
+        // A protocol-4 content event: the gate runs again on the opened view (step-a-spec 6.3), so a sealed hard
+        // delete from a plain peer is refused after it is opened, exactly as a clear one is.
+        EventTypes.Sealed,
         // Any full node may publish these: a box is always the author's own (checked by the
         // applier), and a forged link or sealed secret is harmless because a restore keeps only
         // what opens and verifies. Restricting links to superadmins would lose a link together

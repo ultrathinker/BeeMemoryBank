@@ -5,6 +5,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\BeeMemoryBank.AppPaths\BeeMemoryBank.AppPaths.csproj" />
+    <!-- The scanner and the sealed-pair probe are proven against real SQLite3 Multiple Ciphers files and against Storage's own VaultStoreFiles (docs/design/step-b-spec.md 7.6, 15.1.14, 15.1.15). Test project only: AppPaths itself keeps no project reference. -->
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -22,6 +24,10 @@
   <ItemGroup>
     <!-- Windows-ACL facts and helpers (review release-a #7): one source in tests/shared. -->
     <Compile Include="..\shared\WindowsAcl.cs" Link="Shared\WindowsAcl.cs" />
+    <!-- Step B red tests: the key walk, real sealed and plain files, platform-specific facts, one source in tests/shared. -->
+    <Compile Include="..\shared\KeyGraphWalker.cs" Link="Shared\KeyGraphWalker.cs" />
+    <Compile Include="..\shared\SealedCorpus.cs" Link="Shared\SealedCorpus.cs" />
+    <Compile Include="..\shared\PlatformFacts.cs" Link="Shared\PlatformFacts.cs" />
   </ItemGroup>
 
 </Project>

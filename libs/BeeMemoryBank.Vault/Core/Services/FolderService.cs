@@ -50,6 +50,9 @@ public class FolderService(
 
     private async Task<Folder> CreateInternalAsync(string path, bool isSystem)
     {
+        // First: refused before anything is written while the new metadata key of a DEK rotation is not published, and held
+        // until the event is logged so the rotation cannot commit in between (spec 4.4). Same at the top of every method below.
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var existing = await folderRepo.GetByPathAsync(path);
         if (existing != null)
             throw new InvalidOperationException($"Folder already exists at path '{path}'.");
@@ -103,6 +106,7 @@ public class FolderService(
         if (newName.Length > 255)
             throw new ArgumentException("Folder name is too long (max 255 characters).");
 
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var folder = await folderRepo.GetByIdAsync(folderId)
             ?? throw new KeyNotFoundException($"Folder {folderId} not found");
 
@@ -164,6 +168,7 @@ public class FolderService(
         // compares raw strings) can't be evaded by an extra slash.
         newParentPath = TreePathCanonicalizer.Canonicalize(newParentPath);
 
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var folder = await folderRepo.GetByIdAsync(folderId)
             ?? throw new KeyNotFoundException($"Folder {folderId} not found");
 
@@ -244,6 +249,7 @@ public class FolderService(
 
     public async Task DeleteAsync(Guid folderId)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var folder = await folderRepo.GetByIdAsync(folderId)
             ?? throw new KeyNotFoundException($"Folder {folderId} not found");
 

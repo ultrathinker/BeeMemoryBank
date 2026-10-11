@@ -117,6 +117,14 @@ else
 
         <partial name="_HttpsRequiredAlert" />
 
+        @if (Model.EncryptedAndClosed)
+        {
+            <sl-alert variant="primary" open id="encrypted-closed-notice" style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="lock"></sl-icon>
+                This node's database is encrypted and closed. Signing in with the administrator password opens it.
+            </sl-alert>
+        }
+
         @if (Model.Recovered)
         {
             <sl-alert variant="success" open style="margin-bottom:16px;">

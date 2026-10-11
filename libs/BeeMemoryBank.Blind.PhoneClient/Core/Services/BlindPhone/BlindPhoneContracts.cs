@@ -52,6 +52,13 @@ public interface IBlindIdentityRecorder
 public interface IBlindReplicaSource
 {
     Task FetchAndInstallAsync(BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct);
+
+    /// <summary>
+    /// A newer baseline of the node this copy calls, when it has one (docs/design/step-a-spec.md 13.3). True when one was installed. The default
+    /// is a source that knows no baselines: there is never anything newer.
+    /// </summary>
+    Task<bool> UpdateBaselineAsync(BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
+        Task.FromResult(false);
 }
 
 /// <summary>

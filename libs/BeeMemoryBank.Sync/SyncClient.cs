@@ -28,7 +28,11 @@ public class SyncClient(
     IBlobRepository blobRepo,
     IRestoreRetrier? restoreRetrier = null,
     BlindState? blindState = null,
-    IRemoteSentinelVerifier? sentinelVerifier = null)
+    IRemoteSentinelVerifier? sentinelVerifier = null,
+    // Step A (docs/design/step-a-spec.md 5.2, 5.6, 5.7): what this node declares and accepts, and where it records what a
+    // peer showed. Every host registers both; a hand-built client without them behaves as 2.5.1 did.
+    Metadata.ISyncProtocolPolicy? protocolPolicy = null,
+    IWhitelistRepository? whitelistRepo = null)
 {
     // WhenWritingNull: the push body is written through this too, and the stripped envelope
     // fields (SyncWire.Strip) must vanish from the wire, not ride along as explicit nulls.
@@ -193,21 +197,39 @@ public class SyncClient(
         // (SyncProtocolVersion.MinPeer). It must not learn of one from us, and anything we pulled
         // from it could have come from one — so nothing moves either way until it upgrades. It
         // refuses our token request anyway; checking first keeps the log clear about why.
-        if (!SyncProtocolVersion.IsCompatiblePeer(remoteIdentity.ProtocolVersion))
+        // After this node applied the metadata activation (spec 5.6) the bar is protocol 4, or 3 with the envelope
+        // capability: a 2.5 peer is cut off both ways, a 2.6 one that has not applied the activation yet still syncs.
+        var compatible = protocolPolicy?.IsCompatiblePeer(remoteIdentity.ProtocolVersion, remoteIdentity.Capabilities)
+                         ?? SyncProtocolVersion.IsCompatiblePeer(remoteIdentity.ProtocolVersion);
+        if (!compatible)
         {
-            logger.LogWarning("Remote node {NodeId} is on protocol {Remote} < {Min}; not syncing with it until it upgrades.",
-                remoteIdentity.NodeId, remoteIdentity.ProtocolVersion, SyncProtocolVersion.MinPeer);
+            logger.LogWarning("Remote node {NodeId} is on protocol {Remote}, which this node no longer syncs with; not syncing with it until it upgrades.",
+                remoteIdentity.NodeId, remoteIdentity.ProtocolVersion);
             return 0;
         }
 
         var token = await AuthenticateAsync(http, remoteApiBase, identity, expectedPeerNodeId, ct);
 
+        // The identity was read on this connection and the challenge proved who answers it (spec 5.2): what it advertises
+        // is an observation of this peer, for the readiness report of the activation. A 2.5 peer advertises nothing.
+        if (whitelistRepo is not null)
+        {
+            try
+            {
+                await whitelistRepo.RecordCapabilitiesAsync(remoteIdentity.NodeId,
+                    remoteIdentity.Capabilities ?? [], remoteIdentity.AppVersion, DateTime.UtcNow);
+            }
+            catch (Exception ex) { logger.LogWarning(ex, "Could not record what {NodeId} advertises", remoteIdentity.NodeId); }
+        }
+
         int appliedCount = 0;
 
-        if (remoteIdentity.ProtocolVersion > SyncProtocolVersion.Current)
+        var shouldPull = protocolPolicy?.ShouldPullFrom(remoteIdentity.ProtocolVersion)
+                         ?? remoteIdentity.ProtocolVersion <= SyncProtocolVersion.Current;
+        if (!shouldPull)
         {
-            logger.LogWarning("Remote node {NodeId} has a newer protocol version ({RemoteVersion} > {LocalVersion}). Skipping pull-and-apply.",
-                remoteIdentity.NodeId, remoteIdentity.ProtocolVersion, SyncProtocolVersion.Current);
+            logger.LogWarning("Remote node {NodeId} has a newer protocol version ({RemoteVersion}). Skipping pull-and-apply.",
+                remoteIdentity.NodeId, remoteIdentity.ProtocolVersion);
             peerNewerProtocolState.HasNewerProtocol = true;
 
             // Still tell the peer where we stand. Its compaction refuses to run while any active
@@ -239,6 +261,7 @@ public class SyncClient(
             long lastApplied = afterSeq;
             int droppedCount = 0;
             int ownCount = 0;
+            int heldCount = 0;
             foreach (var evt in remoteEvents)
             {
                 // Our own event, come back to us (F5). A blind node that was reseeded replays the tail
@@ -265,8 +288,16 @@ public class SyncClient(
 
                 try
                 {
-                    var result = await eventApplier.ApplyAsync(evt);
-                    if (result == EventApplyResult.SilentlyDropped)
+                    // Who delivered it and where it sits in that peer's log: stored with the row (step-a-spec 6.1).
+                    var result = await eventApplier.ApplyAsync(evt,
+                        new Metadata.ApplyContext(ReceivedFrom: remoteIdentity.NodeId, ReceivedSeq: evt.SequenceNum));
+                    if (result == EventApplyResult.Held)
+                    {
+                        // Stored durably and applied after unlock (spec 6.2): received, so the cursor moves over it.
+                        lastApplied = evt.SequenceNum;
+                        heldCount++;
+                    }
+                    else if (result == EventApplyResult.SilentlyDropped)
                     {
                         // Permanently dropped — advance cursor so we don't re-fetch this event next cycle.
                         // Replay shield and hard-delete gate are monotone (only get raised, not lowered;
@@ -325,8 +356,8 @@ public class SyncClient(
                 UpdatedAt = DateTime.UtcNow
             });
             if (remoteEvents.Count > 0)
-                logger.LogInformation("Pull: applied {Applied}, dropped {Dropped}, own {Own}. Position: {Seq}",
-                    appliedCount, droppedCount, ownCount, lastApplied);
+                logger.LogInformation("Pull: applied {Applied}, held {Held}, dropped {Dropped}, own {Own}. Position: {Seq}",
+                    appliedCount, heldCount, droppedCount, ownCount, lastApplied);
 
             // Always report our current position back to the remote — even when we're fully caught up
             // and there were no new events. Otherwise the remote never learns our position and shows
@@ -365,6 +396,11 @@ public class SyncClient(
             && await eventLogRepo.GetLastCompactionCpAsync() is { } lastCompactionCp && pushAfter < lastCompactionCp)
             throw new PushGapException(remoteApiBase, remoteIdentity.NodeId, pushAfter, lastCompactionCp, localMaxSeq);
 
+        // Protocol-1..3 content after activation (spec 5.7): a blind peer gets content only sealed or inside a baseline,
+        // historic rows included. Such rows are left out of what is sent and the cursor moves over them as if accepted;
+        // the next baseline carries what they changed.
+        var withholdClearContent = BlindNodeId.IsBlind(remoteIdentity.NodeId) && protocolPolicy is { SealsMetadata: true };
+
         logger.LogInformation("Push to {Remote}: localMaxSeq={MaxSeq}, pushAfter={After}", remoteIdentity.NodeId, localMaxSeq, pushAfter);
         while (true)
         {
@@ -375,8 +411,13 @@ public class SyncClient(
             logger.LogInformation("Push page to {Remote}: {Count} events", remoteIdentity.NodeId, page.Count);
             if (page.Count == 0) break;
 
+            var sendable = withholdClearContent
+                ? page.Where(e => !Metadata.EventClasses.IsClearContent(e.ProtocolVersion, e.EventType)).ToList()
+                : page;
+            var withheld = page.Count - sendable.Count;
+
             bool stalled = false;
-            foreach (var chunk in SplitIntoByteBoundedBatches(page, PushBatchByteTarget))
+            foreach (var chunk in SplitIntoByteBoundedBatches(sendable, PushBatchByteTarget))
             {
                 // Blobs first, then the events that reference them — the receiver applies events
                 // as they arrive and cannot call back for bytes it lacks (it is usually behind
@@ -442,6 +483,13 @@ public class SyncClient(
             }
             if (stalled) break;
 
+            if (withheld > 0)
+            {
+                // Everything sendable in the page was accepted: the withheld rows, trailing ones included, are passed over.
+                pushAfter = Math.Max(pushAfter, page[^1].SequenceNum);
+                totalDropped += withheld;
+            }
+
             if (page.Count < PushFetchSize) break;
         }
 
@@ -473,7 +521,7 @@ public class SyncClient(
     // also used by the reachability self-test (POST /api/sync/probe) endpoint.
     private Task<string> AuthenticateAsync(
         HttpClient http, string baseUrl, NodeIdentity identity, Guid expectedServerNodeId, CancellationToken ct)
-        => PeerAuthenticator.AuthenticateAsync(authSigner, http, baseUrl, identity, expectedServerNodeId, ct);
+        => PeerAuthenticator.AuthenticateAsync(authSigner, http, baseUrl, identity, expectedServerNodeId, ct, protocolPolicy?.Declared);
 
     private static async Task<List<SyncEvent>> PullEventsAsync(
         HttpClient http, string baseUrl, string token, long afterSequence, CancellationToken ct)
@@ -540,8 +588,11 @@ public class SyncClient(
     {
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Post, 
-                $"{baseUrl}/api/sync/report-position?sequence={sequence}&protocolVersion={SyncProtocolVersion.Current}");
+            // What this node declares, and (spec 5.1) the capabilities and version it advertises.
+            using var req = new HttpRequestMessage(HttpMethod.Post,
+                $"{baseUrl}/api/sync/report-position?sequence={sequence}&protocolVersion={protocolPolicy?.Declared ?? SyncProtocolVersion.Current}" +
+                $"&capabilities={Uri.EscapeDataString(string.Join(",", Metadata.MetadataCapabilities.Advertised))}" +
+                $"&appVersion={Uri.EscapeDataString(Metadata.BuildVersion.Current)}");
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
             var resp = await http.SendAsync(req, ct);
             resp.EnsureSuccessStatusCode();
@@ -656,7 +707,8 @@ public class SyncClient(
     }
 
     // Local DTOs for remote API responses
-    private sealed record RemoteIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);
+    private sealed record RemoteIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0,
+        IReadOnlyList<string>? Capabilities = null, string? AppVersion = null);
     // LastAppliedSequence is nullable for backward compat with older servers — fall back to
     // advancing to the batch end (batch[^1]) if absent. Current servers always populate it (see
     // SyncApplyResult in BeeMemoryBank.Api.Models).

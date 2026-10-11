@@ -6,6 +6,9 @@ The release changes the engine and nothing else: **no key is set anywhere, and e
 written by 2.5.3 opens on a 2.5.1 node and a vault written by 2.5.1 opens on a 2.5.3 node (rolling upgrades, a restore from an older
 backup, a downgrade), and any other SQLite 3 tool still reads the files.
 
+Since 2.6.0 the same engine encrypts a node's databases when the owner chooses "Encrypt this node" (see "Encrypted databases (2.6.0)"
+below). A node the owner has not encrypted behaves exactly as described in the rest of this page; nothing here changes for it.
+
 ## Why a separate release
 
 SQLite3MC reads and writes plain files exactly like stock SQLite, and can encrypt a database page by page when it is given a key.
@@ -43,13 +46,74 @@ FTS5, WAL). The differences, from `PRAGMA compile_options` and the pragma defaul
 
 * `SQLITE_TEMP_STORE=2` (temp data in memory unless asked otherwise) against 1 (files) in the stock build. An in-place `VACUUM` of a
   vault that shrinks from 351 to 175 MiB peaked at 257 MiB working set in memory, 57 MiB with files. The two connection factories,
-  the restore compaction and the rekey scrub therefore run `PRAGMA temp_store=FILE`: the memory profile of 2.5.1 is kept. (The later
-  encrypted release chooses memory on purpose, because temp files are not encrypted; that is a decision of that release.)
+  the restore compaction and the rekey scrub therefore run `PRAGMA temp_store=FILE` on plain databases: the memory profile of 2.5.1 is
+  kept. (An encrypted database chooses memory on purpose, because the engine does not encrypt temporary files: see below.)
 * `SQLITE_SECURE_DELETE`: deleted content is overwritten with zeros by default (`PRAGMA secure_delete` is 1, stock 0). The code that
   needs it (`DEK rotation`, `StoredEventRepair`, the rekey scrub) already asked for it explicitly. Deletes write a little more.
 * `SQLITE_ENABLE_CARRAY`, `SQLITE_ENABLE_PERCENTILE`: two more SQL features, unused.
 * `SQLITE_USE_URI`: a `Data Source` that starts with `file:` is read as a URI (no path of the product does).
 * The SQL function `sqlite3mc_version()` exists, and the cipher pragmas (`PRAGMA cipher`, `key`, `rekey`) are known; nothing is encrypted until a key is set, and the product sets none.
+
+## Encrypted databases (2.6.0)
+
+An encrypted ("sealed") node keeps `beememorybank.db` and `chat.db` as SQLCipher 4 files written by SQLite3MC: 4096-byte pages, each page
+AES-256-CBC with an 80-byte tail (16 bytes of IV and a 64-byte HMAC-SHA512), no `SQLite format 3` header, so the file looks like noise. The
+key of each file is a raw 256-bit page key derived from the node's database key (one key per file: a page of `beememorybank.db` does not
+decrypt in `chat.db`); the database key is opened by the master-key chain, not by this page (design: `docs/design/step-b-spec.md`
+sections 3 and 7; operator guide: `docs/sealed-database.md`). Which mode a data directory is in is decided from the files
+(`VaultStoreFiles.Diagnose`), never from a setting.
+
+**How a sealed file is opened.** Everything goes through `DbConnectionFactory` (and `ChatDbConnectionFactory`), or, for one file outside
+a factory (a staging copy, the re-key), through `SealedSqlite.OpenKeyed` or `DbConnectionFactory.OpenFile`.
+
+* The connection string never contains the key: `file://<path>?cipher=sqlcipher&legacy=4`. Right after the connection opens, the key goes
+  to the native connection with `sqlite3_key_v2` as `x'<64 hex>'` in a byte array that is zeroed at once. A key written into a
+  `Password=` would stay reachable: `Microsoft.Data.Sqlite` (10.0.11, measured) keeps every connection string, pooled or not, in its
+  provider-wide pool registry, and neither `ClearPool` nor `ClearAllPools` removes the entry; only its private prune timer does, after
+  several runs. The spec text of 7.1/7.2 describes the `Password=` recipe; this is the deliberate deviation, and it keeps the promise of
+  spec 3.3: after the vault closes, the key is nowhere (the tests walk the factory, the key source and the provider's registry).
+* Pooling stays: the pooled string carries a non-secret `bmbpool=<factory>-<generation>` parameter, so one pool belongs to one open
+  generation, and a connection taken from the pool is recognised as already keyed by its native handle object. A pooled keyed connection
+  costs the same as a plain one (about 0.02 ms); a new physical connection pays for the key once.
+* `temp_store=MEMORY` on every keyed connection (a plain one keeps `FILE`), because SQLite3MC does not encrypt temporary files. A large
+  sort or `VACUUM` of an encrypted vault therefore uses memory instead of disk.
+* A wrong key, and a plain file opened with a key, both end in SQLite error 26 and become `VaultKeyMismatchException` (no inner
+  exception, no key in the message). Nothing is retried without a key. A factory whose vault is closed throws `VaultSealedException`
+  on `CreateConnection` and `OpenFile`: there is no plain fallback.
+* `VACUUM INTO` from a keyed connection writes a copy under the same key; a copy under another key uses
+  `SqlCipherScheme.VacuumIntoTarget` (the re-key and the migration); a plain copy of a sealed database is never written on a sealed node.
+* The sealed WAL and rollback journal have plain headers (page numbers, salts, checksums) with encrypted page images, so the "is this
+  file plain" test looks at the page images and not at the header magic of a sidecar file (`VaultStoreFiles.LooksLikePlainPage`).
+* A read of a sealed file that must leave its directory byte-identical (the re-key reads the old vault) opens it with
+  `immutable=1`: a read-only WAL open would create `-wal` and `-shm` beside it.
+
+**Plain images without a plain file.** A sealed file is turned into a plain SQLite image page by page by `PlainImageReader` (a seekable
+read-only stream that checks the HMAC of every page; one flipped byte anywhere is refused) and back by `PlainImageImporter` and
+`SealedFileWriter` (a new sealed file, created with `CreateNew`, removed again on a failure). The engine has no `sqlite_dbpage`
+(`SQLITE_ENABLE_DBPAGE_VTAB` is not compiled in), so this codec is the only way to get a plain image from a sealed file without a plain
+file ever touching the disk. The snapshot of a sealed node is built this way (`Bmbdb2Container`, the same BMBDB2 container
+`SnapshotService` has always written).
+
+* An image of 4096-byte pages with at least 80 reserved bytes (every image a 2.6 node makes) is streamed. Any other image (from a 2.5
+  node or a plain 2.6 node) is loaded with `sqlite3_deserialize` into native memory, read-only, and written with `VACUUM INTO` under the
+  page key. That is held in memory up to a cap: 1 GiB, 256 MiB on a phone, `BMB_SEALED_IMPORT_MEMORY_MB` overrides it. Above the cap the
+  import throws `SealedImportTooLargeException`; it never falls back to a plain file.
+* An image with a page size other than 4096 is refused (`InvalidDataException`): `VACUUM INTO` keeps the page size.
+* The page format is checked in `docs/design/step-b-spec.md` Appendix C against files SQLite3MC wrote (zero HMAC failures, `integrity_check`
+  and FTS5 answers on the rebuilt image).
+
+**No hand access to a sealed file.** `sqlite3`, DB Browser and every other tool see an unreadable file. A copy of the file is useless
+without the master password (the database key is in the boot store only wrapped under the master key), and a snapshot, a backup or the
+re-key is how data leaves or is changed. Do not set a key on a vault by hand (`PRAGMA key`, `PRAGMA rekey`): the node would no longer open it.
+
+**Where a page key may appear in the source.** `docs/design/key-string-sites.golden.txt` lists the files that may call `sqlite3_key_v2`
+or build a string that holds a key (`SqlCipherScheme.Password`, `SqlCipherScheme.VacuumIntoTarget`). `KeyStringSitesTests` scans libs,
+server, desktop, mobile and tools and fails for a file outside the list; a new entry is a review question (does the site clear the
+key and keep it out of logs, exceptions and cache keys?).
+
+**Not checked here.** Linux x64/arm64 and macOS runs of the sealed files (the `fstat`-based file identity of `FileIdentity` among them)
+are the gate of spec 15.5, run by the owner or the orchestrator; the tests carry no Windows-only assumption and the one
+platform-specific assertion per OS is skipped on the other family.
 
 ## Checked when the engine was swapped (2.5.3)
 
@@ -83,6 +147,19 @@ FTS5, WAL). The differences, from `PRAGMA compile_options` and the pragma defaul
   maui-android workload, as any build of these projects does.
 * `tests/BeeMemoryBank.MacFullPackage.Tests` and `scripts/pack-macos-full.sh` name `api/libsqlite3mc.dylib`.
 
+For the encrypted databases of 2.6.0, `tests/BeeMemoryBank.Storage.Tests/Sealed/`:
+
+* `KeyedFactoryTests`: a keyed factory writes and reopens (pooled and not), its files hold no canary and no SQLite magic, a wrong key and
+  a plain file are refused, a closed factory throws, the key is found nowhere once the vault is closed (the reflective walk of the factory,
+  the key source and the provider's pool registry), `temp_store` is 2 on keyed connections and 1 on plain ones, a large keyed sort leaves no
+  temporary file.
+* `PageCodecTests`, `PlainImageImporterTests`, `Bmbdb2ContainerTests`: a sealed file becomes a plain image stock SQLite opens, a flipped
+  byte anywhere is refused, the writer's output opens in SQLite3MC, the streamed and the in-memory import, the cap, the container layout and
+  its compatibility with `SnapshotService` in both directions.
+* `SealedSqliteTests`: an immutable read creates no file and changes no byte.
+* `DetectModeTests`: `VaultStoreFiles.Diagnose` and `DetectMode` with real SQLite3MC files.
+* `KeyStringSitesTests`: the allow-list above.
+
 ## Changing the version
 
 1. Read the release notes of SQLite3MC and of the NuGet package (`https://github.com/utelle/SQLite3MultipleCiphers-NuGet/releases`).
@@ -97,5 +174,5 @@ FTS5, WAL). The differences, from `PRAGMA compile_options` and the pragma defaul
 
 ## For operators
 
-Nothing changes for a node: the files are what they were, `sqlite3` and DB Browser still open them (take a copy first, or use the
-snapshot and backup features, as before). The notices are in `THIRD-PARTY-NOTICES.txt`, inside both Docker images.
+Nothing changes for a node that is not encrypted: the files are what they were, `sqlite3` and DB Browser still open them (take a copy
+first, or use the snapshot and backup features, as before). An encrypted node's files cannot be opened by hand (see above). The notices are in `THIRD-PARTY-NOTICES.txt`, inside both Docker images.

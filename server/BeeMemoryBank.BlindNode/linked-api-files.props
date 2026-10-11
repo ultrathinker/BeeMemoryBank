@@ -21,11 +21,14 @@
     <Compile Include="..\BeeMemoryBank.Api\Models\Requests.cs" Link="Api\Models\Requests.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Models\Responses.cs" Link="Api\Models\Responses.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Models\SyncModels.cs" Link="Api\Models\SyncModels.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindActivationObserver.cs" Link="Api\Services\Blind\BlindActivationObserver.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindLogTrimmer.cs" Link="Api\Services\Blind\BlindLogTrimmer.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindPackageBuilder.cs" Link="Api\Services\Blind\BlindPackageBuilder.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindPackageV2Builder.cs" Link="Api\Services\Blind\BlindPackageV2Builder.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindPairing.cs" Link="Api\Services\Blind\BlindPairing.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindReplicaPackageCache.cs" Link="Api\Services\Blind\BlindReplicaPackageCache.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindSeedCutover.cs" Link="Api\Services\Blind\BlindSeedCutover.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindSeedService.Format2.cs" Link="Api\Services\Blind\BlindSeedService.Format2.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindSeedService.cs" Link="Api\Services\Blind\BlindSeedService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindTlsCertificate.cs" Link="Api\Services\Blind\BlindTlsCertificate.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindTlsIdentity.cs" Link="Api\Services\Blind\BlindTlsIdentity.cs" />
@@ -69,6 +72,7 @@
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Swap.cs" Link="Api\Services\SnapshotService.Swap.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.cs" Link="Api\Services\SnapshotService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SyncTokenStore.cs" Link="Api\Services\SyncTokenStore.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Startup\BlindRoleServices.Format2.cs" Link="Api\Startup\BlindRoleServices.Format2.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Startup\BlindRoleServices.cs" Link="Api\Startup\BlindRoleServices.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Startup\BlindRoleStartup.cs" Link="Api\Startup\BlindRoleStartup.cs" />
   </ItemGroup>

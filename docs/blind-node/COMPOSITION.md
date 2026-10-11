@@ -18,6 +18,7 @@ the full node takes them from `AddSync` (Vault), the blind host registers its ow
 | core | `InvisibleModeService`, `MaintenanceModeService`, `SearchMetrics`, `MediaBlobBackfillService`, `FolderAccessService`, `ConceptTagService`, the null actor provider | non-decrypting helpers the sync code uses. No `SessionService`, `CommentService`, `MediaService`, `RemoteAccountService` and no content crypto: they are vault code |
 | sync | `LamportClock`, `SyncTrigger`, `BlindEventLogger` (refuses to author), `ExternalKeyNodeAuthSigner` (signs with the external key), `EventApplier`, `SyncClient` (no master-key sentinel check), `HardDeleteService`, the pin registry and the pinned `HttpClient`, `SyncScheduler`, `CleanupService`, `RecoverySetBuilder` | the mesh protocol, and the recovery sets a blind node receives and serves. No `EventLogger`, `LazySlotRewrapService`, `StateAnchorService`, device box publisher or reconciler: they create or open recovery boxes with the master key |
 | blind role (host) | `FileNodeKey` as `IExternalNodeKey`, `BlindState`, `BlindRestoreInitiator`, `BlindDekRotationApplier`, `BlindEmbeddingGenerator`, `BlindTlsIdentity`, `BlindPairing`, `BlindSeedService`, `BlindLogTrimmer`, `BlindPackageBuilder` + `BlindReplicaPackageCache`, backups, console login, wipe, the blind side of recovery (`BlindRestoreCodeService`, anchors, boxes status) | what makes the node blind: its identity key lives in a file, it cannot rotate or restore a vault, it computes no vector |
+| Step A (`AddBlindMetadataHost`, hooks H1 and H2) | `RelayEnvelopeOpener` as `IEnvelopeOpener`, `NoHeldEventDrain`, `SyncProtocolPolicy`; H1 (`MetadataHostServices.BlindStore.cs`, also in AppCore): `BaselineStore` as `IBaselineStore`, `BlindPackageV2Reader`, `BlindBaselineSource` as `IBaselineSource`, `BlindStoreSummarySource`; H2 (`BlindRoleServices.Format2.cs`, linked): the format-2 writer signed with the external key, `BlindActivationObserver` | it relays sealed events it cannot open, keeps a sealed baseline and serves it, and asks for a reseed at the activation; nothing here holds or derives a metadata key (the key ring, `MetadataKeyCrypto`, the Vault opener and the chunked container are Vault types) |
 
 ## Dropped (not linked, so not registered)
 
@@ -43,7 +44,15 @@ compaction, download tokens, the unlock cache, OS auto-unlock, the remote-accoun
 * `BlindNodeCompositionTests.TheBlindCodeDoesNotContain` / `TheHostDoesNotReferenceAnythingOfAFullNode` / `TheHostDoesNotReachTheFullNodeLayer`.
 * `BlindBoundaryTests` / `AppBoundaryTests`: assembly-level scan (TypeDefs, TypeRefs, MemberRefs, AssemblyRefs) for the vault, with controls; also run over publish folders
   and the extracted image (`BMB_SCAN_DIRS`) by the release process.
-* `BlindLinkedSetTests`: nothing on `tools/blind-link/exclude.txt` is linked, and no Vault file is linked anywhere.
+* `BlindLinkedSetTests`: nothing on `tools/blind-link/exclude.txt` is linked, and no Vault file is linked anywhere. The exclude list names every
+  full-node-only file of Step A (activation and readiness endpoints, the full node's metadata and baseline compositions, baseline production
+  and scheduling, the full node's baseline source and observer, the hub's format-2 writer registration).
+* `BlindNodeFormat2CompositionTests`, `Format2CompositionTests` (Api in the blind role and full node) and `BlindAppCoreFormat2CompositionTests`:
+  one composition test per host for the Step A services; `TheBlindCodeDoesNotContain` and `BlindAppCoreStepABoundaryTests` keep the Vault
+  metadata types out of the host and of AppCore's output.
+* `BaselineStoreTests.TheOperationalTables_AreTheGolden...` pins [OPERATIONAL-TABLES.golden.txt](OPERATIONAL-TABLES.golden.txt), the tables
+  that may hold rows on an activated blind host; `BlindFormat2HostTests` drives the host through a format-2 first seed and checks that
+  every other table is empty and no canary is in its files or log.
 * The blind-only integration tests of `BeeMemoryBank.Integration.Tests` run unchanged against this host (`BeeMemoryBank.BlindNode.Tests`):
   they found the one registration the first draft forgot (`IEmbeddingGenerator`) within a minute.
 

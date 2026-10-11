@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
@@ -25,8 +26,15 @@ public partial class DekRotationService
         byte[]? newWrappedSlotDek = null,
         byte[]? newWrappedSlotIv = null,
         string? chainEncryptedNewDekB64 = null,
-        string? chainIvB64 = null)
+        string? chainIvB64 = null,
+        bool createNextMetadataKey = false,
+        DekRotationCompletionRecord? completionRecord = null)
     {
+        // The initiator commits a new DEK and, on an activated network, a new metadata key generation: no write may be sealed under the
+        // old generation and appended after that (docs/design/step-a-spec.md 4.4). Writes in flight finish first, new ones wait; after
+        // the commit they are refused until the key is published. Nothing has been changed while this waits.
+        using var authoringHeldBack = isInitiator ? await HoldBackAuthoringAsync() : null;
+
         // chat.db lives outside the rewrap transaction. Its remaining legacy rows (sealed directly
         // under the master DEK) are moved onto the node chat key now, while the session still holds
         // the outgoing DEK; the chat key itself is then carried forward inside the transaction.
@@ -42,6 +50,8 @@ public partial class DekRotationService
             oldDek, newDek, newEpoch, commitEventId,
             isInitiator, initiatorSlotId, newWrappedSlotDek, newWrappedSlotIv,
             chainEncryptedNewDekB64, chainIvB64,
+            createNextMetadataKey: createNextMetadataKey,
+            completionRecord: completionRecord,
             progress: (step, pct, msg) =>
             {
                 if (step == DekRotationFlowStep.Completed)
@@ -56,6 +66,26 @@ public partial class DekRotationService
                 }
                 _progress.Update(step, pct, msg);
             });
+    }
+
+    /// <summary>
+    /// Takes the exclusive side of the authoring barrier (null on a host without one). Gives up with a precondition failure, which
+    /// leaves the commit pending for a retried accept, when the writes in flight do not end in time.
+    /// </summary>
+    private async Task<IDisposable?> HoldBackAuthoringAsync()
+    {
+        using var scope = _scopeFactory.CreateScope();
+        if (scope.ServiceProvider.GetService<BeeMemoryBank.Vault.Metadata.AuthoringBarrier>() is not { } barrier) return null;
+        _progress.Update(DekRotationFlowStep.ReWrappingPerItem, 18, "Waiting for the writes in flight to finish...");
+        try
+        {
+            return await barrier.EnterExclusiveAsync(_authoringDrainTimeout);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new DekRotationPreconditionException(
+                "DEK rotation was not started: writes that were in progress did not finish in time. Nothing was changed; accept the rotation again in a moment.", ex);
+        }
     }
 
     // Completion message held back by RewrapDestructiveCoreAsync until maintenance mode is off.

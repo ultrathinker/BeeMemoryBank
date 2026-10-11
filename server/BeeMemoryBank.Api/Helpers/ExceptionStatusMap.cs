@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Exceptions;
+using BeeMemoryBank.Core.Interfaces;
 
 namespace BeeMemoryBank.Api.Helpers;
 
@@ -22,6 +23,12 @@ public static class ExceptionStatusMap
         // InvalidOperationException arm below would otherwise swallow all three and hand back 409.
         SessionLockedException e => (403, e.Message),
         BeeMemoryBank.Crypto.KdfBusyException e => (503, e.Message),
+        MetadataKeyPublishPendingException e => (503, e.Message),
+        // A sealed node whose database is closed, held for a file copy, or whose key does not open the file (docs/design/step-b-spec.md 5.6, 5.10):
+        // a deferrable 503 that names itself, never a 409 or a 500.
+        VaultSealedException e => (503, e.Message),
+        VaultBusyException e => (503, e.Message),
+        VaultKeyMismatchException => (503, "This node's database could not be opened with its key: the boot store does not belong to this database."),
         InsufficientDiskSpaceException e => (507, e.Message),
         ConflictException e => (409, e.Message),
 
@@ -30,5 +37,18 @@ public static class ExceptionStatusMap
         UnauthorizedAccessException e => (403, e.Message),
         InvalidOperationException e => (409, e.Message),
         _ => (500, "Internal server error")
+    };
+
+    /// <summary>
+    /// The machine-readable code and the <c>Retry-After</c> seconds of the few errors a caller is meant to act on, or
+    /// <c>(null, null)</c>. Kept apart from <see cref="Map"/> so that its tuple, which several pipelines deconstruct, stays as it is.
+    /// </summary>
+    public static (string? Code, int? RetryAfterSeconds) Details(Exception? ex) => ex switch
+    {
+        MetadataKeyPublishPendingException => (MetadataKeyPublishPendingException.ErrorCode, MetadataKeyPublishPendingException.RetryAfterSeconds),
+        VaultSealedException => ("vault_sealed", 30),
+        VaultBusyException => ("vault_busy", 5),
+        VaultKeyMismatchException => ("vault_key_mismatch", 30),
+        _ => (null, null)
     };
 }

@@ -2,7 +2,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sealed;
 using Microsoft.Data.Sqlite;
 
 namespace BeeMemoryBank.Rekey.Steps;
@@ -29,7 +31,7 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// full node's data directory, the comments of a purged body (dropped by the re-seal). The pre-flight deletes
 /// nothing.</para>
 /// </summary>
-public sealed class RekeyPreflight : IRekeyPreflight
+public sealed class RekeyPreflight : IRekeyPreflight, IRekeySealedSourceConsumer
 {
     /// <summary>§7: the copy, the old vault kept until it is deleted, and room for the rebuild.</summary>
     public const double SpaceFactor = 2.5;
@@ -40,6 +42,28 @@ public sealed class RekeyPreflight : IRekeyPreflight
 
     /// <summary>The OS temp folder to look for vault copies in (tests point it elsewhere).</summary>
     public string OsTempDir { get; init; } = Path.GetTempPath();
+
+    /// <summary>
+    /// The page key of the vault being re-keyed when it is sealed (a copy the caller clears; docs/design/step-b-spec.md 7.6): a sealed copy of
+    /// the vault has no SQLite header, so it is only found by opening it with this key. Null for a plain vault, whose copies have the header.
+    /// </summary>
+    public byte[]? VaultPageKey { get; set; }
+
+    private byte[]? _sourceKey;
+
+    /// <summary>The runner hands over the source's key source for a sealed vault and takes it back (<c>null</c>) at the end; the copy of the key made here is cleared then.</summary>
+    public void SetSealedSource(IVaultKeySource? source)
+    {
+        if (_sourceKey is not null)
+        {
+            CryptographicOperations.ZeroMemory(_sourceKey);
+            if (ReferenceEquals(VaultPageKey, _sourceKey)) VaultPageKey = null;
+            _sourceKey = null;
+        }
+        if (source is null) return;
+        _sourceKey = source.GetPageKey(DbPurposes.Vault);
+        VaultPageKey = _sourceKey;
+    }
 
     /// <summary>The free bytes of the vault's volume (tests replace it); null when it cannot be measured.</summary>
     public Func<string, long?> FreeBytes { get; init; } = MeasureFreeBytes;
@@ -396,7 +420,7 @@ public sealed class RekeyPreflight : IRekeyPreflight
 
     // ─── Warnings: what the re-key leaves as it is ──────────────────────────
 
-    private void ListLeftovers(string sourceDir, List<string> warnings)
+    internal void ListLeftovers(string sourceDir, List<string> warnings)
     {
         foreach (var dir in BlindDirs)
             if (Directory.Exists(Path.Combine(sourceDir, dir)))
@@ -418,35 +442,81 @@ public sealed class RekeyPreflight : IRekeyPreflight
                     if (OsTempVaultDirPrefixes.Any(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
                         warnings.Add($"{entry}: a folder a snapshot, restore or upload left in the OS temp folder; it may hold a copy of the vault under the old key — delete it yourself");
                 }
-                else if (IsVaultCopy(entry))
-                    warnings.Add($"{entry}: a copy of a vault in the OS temp folder, under the old key — delete it yourself");
+                else
+                {
+                    switch (ClassifyCopy(entry))
+                    {
+                        case VaultCopyKind.Plain:
+                            warnings.Add($"{entry}: a copy of a vault in the OS temp folder, under the old key — delete it yourself");
+                            break;
+                        case VaultCopyKind.EncryptedOpens:
+                            warnings.Add($"{entry}: an encrypted copy of this vault (opens with the current key) in the OS temp folder — delete it yourself");
+                            break;
+                        case VaultCopyKind.EncryptedMaybe:
+                            warnings.Add($"{entry}: a file that may be an encrypted copy of a vault (cannot be checked) in the OS temp folder — delete it yourself if it is one");
+                            break;
+                    }
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* not ours to judge */ }
         }
     }
 
-    /// <summary>A SQLite file, whatever its extension (a raw snapshot copy is a <c>.tmp</c>), with the vault's tables.</summary>
-    private static bool IsVaultCopy(string path)
+    internal enum VaultCopyKind { No, Plain, EncryptedOpens, EncryptedMaybe }
+
+    /// <summary>
+    /// A SQLite file, whatever its extension (a raw snapshot copy is a <c>.tmp</c>), with the vault's tables; and, when the vault is sealed
+    /// (<see cref="VaultPageKey"/>), a file of whole 4096-byte pages that opens with the vault's page key and has those tables - or that does not
+    /// open, which is reported as "cannot be checked": the check must never silently stop finding copies (meta-enc-db.md risk 7).
+    /// </summary>
+    internal VaultCopyKind ClassifyCopy(string path)
     {
         // Only a regular file can be a copy, and it is opened only once that is known. Opening a FIFO blocks until
         // a writer comes, forever: on Linux every running .NET process keeps clr-debug-pipe-* FIFOs in /tmp, the
         // verb's own included. A SQLite database is at least one 512-byte page, and stat() gives a FIFO, a socket or
         // a device a length of 0.
-        if (new FileInfo(path).Length < 512) return false;
+        var length = new FileInfo(path).Length;
+        if (length < 512) return VaultCopyKind.No;
         var header = new byte[SqliteMagic.Length];
         using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            if (fs.Read(header, 0, header.Length) != header.Length || !header.AsSpan().SequenceEqual(SqliteMagic)) return false;
-        // A file another process holds locked is not waited on for long: it is a warning, not a reason to stall.
-        var builder = new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 1 };
+            if (fs.Read(header, 0, header.Length) != header.Length) return VaultCopyKind.No;
+        if (header.AsSpan().SequenceEqual(SqliteMagic)) return HasVaultTables(path, key: null) == true ? VaultCopyKind.Plain : VaultCopyKind.No;
+
+        // No magic: a sealed copy looks like noise. Only a sealed vault has any (the page key is what finds it).
+        if (VaultPageKey is null || length < 4096 || length % 4096 != 0) return VaultCopyKind.No;
+        return HasVaultTables(path, VaultPageKey) switch
+        {
+            true => VaultCopyKind.EncryptedOpens,
+            false => VaultCopyKind.No,
+            null => VaultCopyKind.EncryptedMaybe,
+        };
+    }
+
+    /// <summary>True when the file opens (with <paramref name="key"/>, if any) and holds the vault's tables, false when it opens and does not, null when it cannot be opened.</summary>
+    private static bool? HasVaultTables(string path, byte[]? key)
+    {
         try
         {
-            using var conn = new SqliteConnection(builder.ToString());
-            conn.Open();
+            // A file another process holds locked is not waited on for long: it is a warning, not a reason to stall.
+            using var conn = key is null
+                ? OpenPlainReadOnly(path)
+                : SealedSqlite.OpenKeyed(path, key, readOnly: true, busyTimeoutSeconds: 1);
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('tbl_article_body','tbl_key_slot')";
             return Convert.ToInt64(cmd.ExecuteScalar()) == 2;
         }
-        catch (SqliteException) { return false; }
+        catch (Exception ex) when (ex is SqliteException or VaultKeyMismatchException)
+        {
+            return key is null ? false : null;
+        }
+    }
+
+    private static SqliteConnection OpenPlainReadOnly(string path)
+    {
+        var builder = new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 1 };
+        var conn = new SqliteConnection(builder.ToString());
+        conn.Open();
+        return conn;
     }
 
     // ─── Space ──────────────────────────────────────────────────────────────

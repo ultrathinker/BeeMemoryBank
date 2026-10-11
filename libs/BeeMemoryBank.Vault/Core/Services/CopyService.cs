@@ -40,6 +40,9 @@ public class CopyService(
         var createdFolders = new List<Guid>();
         var createdMedia = new List<Guid>();
 
+        // One scope for all the writes of the copy (see ArticleService.BeginAuthoringAsync): a refusal comes before the first one, and
+        // the failure rollback below never has to undo articles whose events were already logged.
+        using var authoring = await articleService.BeginAuthoringAsync();
         try
         {
             return await CopyArticleInternalAsync(
@@ -64,6 +67,7 @@ public class CopyService(
         var createdFolders = new List<Guid>();
         var createdMedia = new List<Guid>();
 
+        using var authoring = await articleService.BeginAuthoringAsync();
         try
         {
             return await CopyFolderInternalAsync(

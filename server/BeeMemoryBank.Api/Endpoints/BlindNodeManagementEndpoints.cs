@@ -40,6 +40,10 @@ public static class BlindNodeManagementEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
             }
+            catch (BaselineNotReadyException ex)
+            {
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
+            }
         });
 
         group.MapPost("/{nodeId:guid}/reseed", async (Guid nodeId, BlindNodeManager manager, CancellationToken ct) =>
@@ -56,6 +60,10 @@ public static class BlindNodeManagementEndpoints
             catch (BlindNodeUnreachableException ex)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
+            }
+            catch (BaselineNotReadyException ex)
+            {
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
         });
     }

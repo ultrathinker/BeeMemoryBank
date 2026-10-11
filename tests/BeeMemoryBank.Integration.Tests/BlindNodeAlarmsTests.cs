@@ -392,7 +392,7 @@ public sealed class BlindNodeAlarmsTests : IAsyncLifetime
     {
         var id = await AddBlindRowAsync(DateTime.UtcNow, address: null);
         await _pc.Services.GetRequiredService<IWhitelistRepository>()
-            .RecordProtocolVersionAsync(id, SyncProtocolVersion.Current + 1, DateTime.UtcNow);
+            .RecordProtocolVersionAsync(id, SyncProtocolVersion.Current + 2, DateTime.UtcNow);
         using var api = _pc.CreateClient();
 
         var report = await JudgedAlarmsAsync(api);
@@ -401,7 +401,7 @@ public sealed class BlindNodeAlarmsTests : IAsyncLifetime
         var alarm = report.GetProperty("alarms").EnumerateArray().Should().ContainSingle().Subject;
         alarm.GetProperty("kind").GetString().Should().Be("pc_too_old");
         alarm.GetProperty("nodeId").GetGuid().Should().Be(id);
-        alarm.GetProperty("protocol").GetInt32().Should().Be(SyncProtocolVersion.Current + 1);
+        alarm.GetProperty("protocol").GetInt32().Should().Be(SyncProtocolVersion.Current + 2);
         alarm.GetProperty("notify").GetBoolean().Should().BeTrue();
     }
 

@@ -55,6 +55,12 @@ public interface IWhitelistRepository
     Task RecordProtocolVersionAsync(Guid nodeId, int protocolVersion, DateTime seenAt);
 
     /// <summary>
+    /// Records the capabilities and application version a peer just showed (see <see cref="WhitelistEntry.LastCapabilities"/>,
+    /// docs/design/step-a-spec.md 5.2). An observation like <see cref="RecordProtocolVersionAsync"/>: nothing replicated.
+    /// </summary>
+    Task RecordCapabilitiesAsync(Guid nodeId, IReadOnlyCollection<string> capabilities, string? appVersion, DateTime seenAt);
+
+    /// <summary>
     /// A removed node is added again: its row starts over as far as this node's own bookkeeping goes (<c>created_at</c>,
     /// <c>deleted_at</c>, the protocol it last declared and when), so the alarms judge it from now and not from the first
     /// pairing. Touches no version column, so nothing is replicated.

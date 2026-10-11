@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sealed;
 using Microsoft.Data.Sqlite;
 
 namespace BeeMemoryBank.Rekey.Steps;
@@ -19,13 +21,18 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// column (written before sealing, not yet reached by the hosted backfill) is sealed here and the column cleared to
 /// '' as the product clears it. The old ciphertext left in free pages is the scrub's (step 5).</para>
 /// </summary>
-public sealed class ChatRekeyStep : IRekeyStep
+public sealed class ChatRekeyStep : IRekeyStep, IRekeySealedSourceConsumer
 {
     public const string StepName = "ChatRekey";
 
     private const string MainFile = "beememorybank.db";
 
     public string Name => StepName;
+
+    private IVaultKeySource? _sealedSource;
+
+    /// <summary>On a sealed vault the live file is read with the source's page key (docs/design/step-b-spec.md 13.2); the copy it works on arrives keyed.</summary>
+    public void SetSealedSource(IVaultKeySource? source) => _sealedSource = source;
 
     public Task<RekeyStepResult> RunAsync(RekeyContext ctx)
     {
@@ -105,7 +112,7 @@ public sealed class ChatRekeyStep : IRekeyStep
         if (ctx.Chat is null) return Task.FromResult<IReadOnlyList<RekeyProblem>>(problems);
 
         var oldKeys = new List<byte[]>(keys.OldCandidates);
-        var liveChatKey = LiveChatKey(ctx.SourceDir, keys);
+        var liveChatKey = LiveChatKey(ctx.SourceDir, keys, _sealedSource);
         if (liveChatKey != null) oldKeys.Add(liveChatKey);
         try
         {
@@ -238,15 +245,28 @@ public sealed class ChatRekeyStep : IRekeyStep
     }
 
     /// <summary>The chat key of the live vault, for the check that nothing opens under it. Read-only.</summary>
-    private static byte[]? LiveChatKey(string sourceDir, RekeyKeys keys)
+    private static byte[]? LiveChatKey(string sourceDir, RekeyKeys keys, IVaultKeySource? sealedSource)
     {
         var path = Path.Combine(sourceDir, MainFile);
         if (!File.Exists(path)) return null;
-        using var live = new SqliteConnection(new SqliteConnectionStringBuilder
-            { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
-        live.Open();
+        using var live = OpenLiveReadOnly(path, sealedSource);
         if (KeyRow(live) is not { } row) return null;
         return keys.OldCandidates.Select(k => ChatDataKeyEnvelope.TryUnwrap(row.Wrapped, row.Iv, k)).FirstOrDefault(v => v is not null);
+    }
+
+    private static SqliteConnection OpenLiveReadOnly(string path, IVaultKeySource? sealedSource)
+    {
+        if (sealedSource is not null)
+        {
+            var key = sealedSource.GetPageKey(DbPurposes.Vault);
+            // Immutable: the vault is only read and D must stay byte-identical; a read-only WAL open would leave -wal and -shm in it.
+            try { return SealedSqlite.OpenKeyed(path, key, readOnly: true, immutable: true); }
+            finally { CryptographicOperations.ZeroMemory(key); }
+        }
+        var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        conn.Open();
+        return conn;
     }
 
     private static (byte[] Wrapped, byte[] Iv)? KeyRow(SqliteConnection main)

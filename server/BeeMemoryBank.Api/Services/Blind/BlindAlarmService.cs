@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Metadata;
 
 namespace BeeMemoryBank.Api.Services;
 
@@ -14,6 +15,12 @@ public static class BlindAlarmKinds
 
     /// <summary>The blind node declared a sync protocol above this build's: this PC cannot apply what it holds, update this PC.</summary>
     public const string PcTooOld = "pc_too_old";
+
+    /// <summary>
+    /// The blind node's current baseline is older than <see cref="BlindAlarmService.StaleBaselineAfter"/> while it holds deltas
+    /// (docs/design/step-a-spec.md 10.4): its restore would replay a week of changes, and its log only grows until a newer baseline covers it.
+    /// </summary>
+    public const string StaleBaseline = "stale_baseline";
 }
 
 /// <summary>
@@ -33,10 +40,13 @@ public sealed record BlindAlarm(
     string Kind, Guid NodeId, string? Name, DateTime? Since, int? Protocol, bool Notify, bool Banner);
 
 /// <summary>Makes the host build <see cref="BlindAlarmService"/> at start, so it listens to the sync loop from its first cycle. Does nothing else.</summary>
-public sealed class BlindAlarmStarter(BlindAlarmService alarms) : Microsoft.Extensions.Hosting.IHostedService
+public sealed class BlindAlarmStarter(BlindAlarmService alarms, ISyncProtocolPolicy? policy = null) : Microsoft.Extensions.Hosting.IHostedService
 {
-    /// <summary>The service this one made the host build.</summary>
-    public BlindAlarmService Alarms { get; } = alarms;
+    /// <summary>
+    /// The service this one made the host build, judging against the protocol the host declares (docs/design/step-a-spec.md 5.6): the host's
+    /// registration of the service predates the policy and passes none, so the policy is handed over here, once, as the host starts.
+    /// </summary>
+    public BlindAlarmService Alarms { get; } = alarms.UsePolicy(policy);
 
     public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -79,6 +89,9 @@ public sealed record BlindAlarmReport(string State, bool Locked, IReadOnlyList<B
 /// </summary>
 public sealed class BlindAlarmService
 {
+    /// <summary>A blind node whose baseline is older than this, while it holds deltas, is flagged on the Blind nodes page (spec 10.4).</summary>
+    public static readonly TimeSpan StaleBaselineAfter = TimeSpan.FromDays(7);
+
     /// <summary>A server blind node this PC has failed to reach for this long, while awake, is worth a notification.</summary>
     public static readonly TimeSpan ServerNotifyAfter = TimeSpan.FromHours(6);
 
@@ -106,6 +119,7 @@ public sealed class BlindAlarmService
     private readonly InvisibleModeService? _invisible;
     private readonly SessionService? _session;
     private readonly Func<IReadOnlyDictionary<Guid, DateTime>>? _unreachableSince;
+    private ISyncProtocolPolicy? _policy;
     private long _lastCycleTicks; // 0 = no completed cycle counts yet
     private long _awakeSinceTicks; // the first completed cycle after this process started or the computer woke; 0 = none counts yet
 
@@ -115,22 +129,32 @@ public sealed class BlindAlarmService
     /// <param name="scheduler">The sync loop: its completed cycles are what makes the contact times fresh, its unreachable peers the
     /// server-node streaks. Null (a host without the loop) judges at once and without streaks.</param>
     public BlindAlarmService(
-        TimeProvider time, InvisibleModeService? invisible = null, SessionService? session = null, SyncScheduler? scheduler = null)
-        : this(time, invisible, session, scheduler is null ? null : scheduler.UnreachableSince)
+        TimeProvider time, InvisibleModeService? invisible = null, SessionService? session = null, SyncScheduler? scheduler = null,
+        ISyncProtocolPolicy? policy = null)
+        : this(time, invisible, session, scheduler is null ? null : scheduler.UnreachableSince, policy)
     {
         if (scheduler != null) scheduler.SyncCycleCompleted += (_, _) => NoteSyncCycleCompleted();
     }
 
     /// <param name="unreachableSince">The sync loop's failure streaks. Not null means there is a sync loop, and judging waits for one of
     /// its cycles to complete (<see cref="NoteSyncCycleCompleted"/>); null judges at once and without streaks.</param>
+    /// <param name="policy">The protocol this node declares (docs/design/step-a-spec.md 5.6); null judges against <see cref="SyncProtocolVersion.Current"/>.</param>
     public BlindAlarmService(
         TimeProvider time, InvisibleModeService? invisible, SessionService? session,
-        Func<IReadOnlyDictionary<Guid, DateTime>>? unreachableSince)
+        Func<IReadOnlyDictionary<Guid, DateTime>>? unreachableSince, ISyncProtocolPolicy? policy = null)
     {
+        _policy = policy;
         _time = time;
         _invisible = invisible;
         _session = session;
         _unreachableSince = unreachableSince;
+    }
+
+    /// <summary>Judges the protocol alarms against <paramref name="policy"/> from now on; null keeps <see cref="SyncProtocolVersion.Current"/>.</summary>
+    public BlindAlarmService UsePolicy(ISyncProtocolPolicy? policy)
+    {
+        if (policy is not null) _policy = policy;
+        return this;
     }
 
     /// <summary>
@@ -156,17 +180,17 @@ public sealed class BlindAlarmService
     {
         var now = UtcNow();
         var locked = _session is { IsUnlocked: false };
-        if (_invisible?.IsInvisible == true) return NotJudged(BlindAlarmReport.Invisible, nodes, locked);
+        if (_invisible?.IsInvisible == true) return NotJudged(BlindAlarmReport.Invisible, nodes, locked, _policy);
         if (_unreachableSince != null)
         {
             var last = Interlocked.Read(ref _lastCycleTicks);
             if (last == 0 || now - new DateTime(last, DateTimeKind.Utc) > CycleFresh)
-                return NotJudged(BlindAlarmReport.WarmingUp, nodes, locked);
+                return NotJudged(BlindAlarmReport.WarmingUp, nodes, locked, _policy);
         }
 
         var awakeSince = Interlocked.Read(ref _awakeSinceTicks);
         var copiesHeard = _unreachableSince == null || (awakeSince != 0 && now - new DateTime(awakeSince, DateTimeKind.Utc) >= CopyGrace);
-        var alarms = Evaluate(now, nodes, _unreachableSince?.Invoke() ?? new Dictionary<Guid, DateTime>(), copiesHeard);
+        var alarms = Evaluate(now, nodes, _unreachableSince?.Invoke() ?? new Dictionary<Guid, DateTime>(), copiesHeard, _policy);
         if (locked) alarms = alarms.Select(a => a with { Name = null }).ToList();
         return new BlindAlarmReport(BlindAlarmReport.Judged, locked, alarms);
     }
@@ -176,8 +200,8 @@ public sealed class BlindAlarmService
     /// (<see cref="BlindAlarm.Notify"/> false): they rest on what the blind node declared, not on how fresh a contact time is, and
     /// the "update the blind node" banner has always been there in invisible mode.
     /// </summary>
-    private static BlindAlarmReport NotJudged(string state, IReadOnlyList<BlindNodeStatus> nodes, bool locked) =>
-        new(state, locked, nodes.Select(n => ProtocolAlarmOf(n, notify: false))
+    private static BlindAlarmReport NotJudged(string state, IReadOnlyList<BlindNodeStatus> nodes, bool locked, ISyncProtocolPolicy? policy) =>
+        new(state, locked, nodes.Select(n => ProtocolAlarmOf(n, notify: false, policy))
             .OfType<BlindAlarm>().Select(a => locked ? a with { Name = null } : a).ToList());
 
     /// <summary>
@@ -188,12 +212,14 @@ public sealed class BlindAlarmService
     /// then a copy that would be silent is kept in the list without a banner or a notification (an open episode stays open, a new one
     /// does not begin).</param>
     public static IReadOnlyList<BlindAlarm> Evaluate(
-        DateTime now, IReadOnlyList<BlindNodeStatus> nodes, IReadOnlyDictionary<Guid, DateTime> unreachableSince, bool copiesHeard = true)
+        DateTime now, IReadOnlyList<BlindNodeStatus> nodes, IReadOnlyDictionary<Guid, DateTime> unreachableSince, bool copiesHeard = true,
+        ISyncProtocolPolicy? policy = null)
     {
         var alarms = new List<BlindAlarm>();
         foreach (var node in nodes)
         {
-            if (ProtocolAlarmOf(node, notify: true) is { } protocolAlarm) alarms.Add(protocolAlarm);
+            if (ProtocolAlarmOf(node, notify: true, policy) is { } protocolAlarm) alarms.Add(protocolAlarm);
+            if (StaleBaselineAlarmOf(now, node) is { } staleAlarm) alarms.Add(staleAlarm);
 
             var quietSince = DateTime.SpecifyKind(node.LastContact ?? node.CreatedAt, DateTimeKind.Utc);
             var isCopy = string.IsNullOrEmpty(node.Address);
@@ -215,13 +241,33 @@ public sealed class BlindAlarmService
         return alarms;
     }
 
-    /// <summary>The protocol alarm of <paramref name="node"/>, if it declared a protocol other than this build's.</summary>
-    private static BlindAlarm? ProtocolAlarmOf(BlindNodeStatus node, bool notify)
+    /// <summary>
+    /// The protocol alarm of <paramref name="node"/>, if it declared a protocol this node cannot work with. Without a policy that is any
+    /// protocol other than this build's; with one (docs/design/step-a-spec.md 5.6) it is what the policy refuses to talk to (an old node
+    /// once this one has activated, unless it declares 3 with the envelope capability) or cannot apply (above 4).
+    /// </summary>
+    private static BlindAlarm? ProtocolAlarmOf(BlindNodeStatus node, bool notify, ISyncProtocolPolicy? policy = null)
     {
-        if (node.Protocol is not { } protocol || protocol == SyncProtocolVersion.Current) return null;
-        var kind = protocol < SyncProtocolVersion.Current ? BlindAlarmKinds.OldProtocol : BlindAlarmKinds.PcTooOld;
-        return new BlindAlarm(kind, node.NodeId, node.DisplayName, Since: null, protocol, notify, Banner: true);
+        if (node.Protocol is not { } protocol) return null;
+        string? kind;
+        if (policy is null)
+            kind = protocol == SyncProtocolVersion.Current ? null : protocol < SyncProtocolVersion.Current ? BlindAlarmKinds.OldProtocol : BlindAlarmKinds.PcTooOld;
+        else if (!policy.ShouldPullFrom(protocol))
+            kind = BlindAlarmKinds.PcTooOld;
+        else
+            kind = policy.IsCompatiblePeer(protocol, node.Capabilities) ? null : BlindAlarmKinds.OldProtocol;
+        return kind is null ? null : new BlindAlarm(kind, node.NodeId, node.DisplayName, Since: null, protocol, notify, Banner: true);
     }
+
+    /// <summary>
+    /// A blind node whose current baseline is older than <see cref="StaleBaselineAfter"/> while it holds deltas (spec 10.4). A node that
+    /// told this PC nothing about its store, or holds no baseline or no deltas, has none: the page does not guess.
+    /// </summary>
+    private static BlindAlarm? StaleBaselineAlarmOf(DateTime now, BlindNodeStatus node) =>
+        node.Store is { BaselineCreatedAt: { } created, DeltaCount: > 0 } && now - DateTime.SpecifyKind(created, DateTimeKind.Utc) > StaleBaselineAfter
+            ? new BlindAlarm(BlindAlarmKinds.StaleBaseline, node.NodeId, node.DisplayName, DateTime.SpecifyKind(created, DateTimeKind.Utc),
+                Protocol: null, Notify: false, Banner: true)
+            : null;
 
     private DateTime UtcNow() => _time.GetUtcNow().UtcDateTime;
 }

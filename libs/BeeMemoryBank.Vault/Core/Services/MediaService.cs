@@ -54,6 +54,8 @@ public class MediaService(
         if (plaintext.Length > MaxInputSize)
             throw new ArgumentException($"Input size exceeds {MaxInputSize / (1024 * 1024)} MB limit.");
 
+        using var authoring = await eventLogger.BeginAuthoringAsync();
+
         // A nonexistent (or ACL-hidden) articleId must be rejected here: MediaRepository's write
         // check skips its FK-existence lookup for superadmin scope, so without this the INSERT
         // below fails with a raw SQLite FK-constraint exception instead of a clean error.
@@ -224,6 +226,7 @@ public class MediaService(
     /// </summary>
     public async Task<bool> DeleteOwnedOrphanAsync(Guid id, string uploadedBy)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         // Row change and media-delete event commit together (same shape as CreateAsync): a failed
         // event append must not leave the row deleted here while peers keep it.
         bool changed;
@@ -318,6 +321,7 @@ public class MediaService(
 
     public async Task DeleteAsync(Guid id)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var media = await mediaRepo.GetByIdAsync(id)
             ?? throw new KeyNotFoundException($"Media {id} not found.");
 

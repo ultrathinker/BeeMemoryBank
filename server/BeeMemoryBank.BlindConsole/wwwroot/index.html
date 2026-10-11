@@ -175,6 +175,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmtBytes = (n) => { if (n == null) return "—"; const u=["B","KB","MB","GB","TB"]; let i=0; while (n>=1000&&i<u.length-1){n/=1000;i++;} return n.toFixed(n>=100?0:1)+" "+u[i]; };
 const fmtDate = (iso) => { if (!iso) return "—"; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+const fmtAge = (s) => { if (s == null) return "?"; return s < 3600 ? Math.floor(s / 60) + " min" : s < 2 * 86400 ? Math.floor(s / 3600) + " h" : Math.floor(s / 86400) + " days"; };
 
 let timer = null;
 // Whether the operator has moved the schedule toggle since the settings were loaded. Only then
@@ -206,9 +207,22 @@ function render(st) {
   h += row("Role", st.role === "blind" ? "blind node" : esc(st.role));
   h += row("Data", esc(st.data_path));
   h += row("Backups", esc(st.backups_path || "not configured"));
-  if (st.stored) h += row("Stored", esc(st.stored.articles) + " articles · " + esc(st.stored.blobs) + " blobs · " + fmtBytes(st.stored.bytes));
+  // What the node holds, never how many notes (owner decision 6): baseline age, deltas, storage size.
+  if (st.activated != null) h += row("Metadata", st.activated ? "sealed (activated)" : "not activated");
+  if ("baseline" in st) {
+    const b = st.baseline;
+    h += row("Baseline", b ? fmtAge(b.age_seconds) + " old · key generation " + esc(b.key_generation) : "none yet (waiting for a format-2 reseed)");
+    if (b && b.age_seconds > 7 * 86400 && st.deltas && st.deltas.count > 0)
+      h += row("Alarm", "<span class='err'>The baseline is older than 7 days while changes keep arriving: a superadmin full node should send a newer one.</span>");
+  }
+  if (st.deltas) h += row("Deltas", esc(st.deltas.count) + " deltas · " + fmtBytes(st.deltas.bytes));
+  if (st.stored) h += row("Stored", esc(st.stored.blobs) + " blobs · " + fmtBytes(st.stored.bytes));
+  if (st.activated && st.metadata_in_backups)
+    h += row("Backups", "<span class='err'>Until this node takes its first sealed baseline, its backups still hold the vault's metadata in plain text.</span>");
+  for (const copy of (st.legacy_copies || []))
+    h += row("Legacy copy", "<span class='err'>" + esc(copy) + "</span> holds plaintext metadata from before the first sealed baseline; retire it");
   h += row("Free", fmtBytes(st.free_bytes));
-  if (st.anchor) h += row("Anchor", (st.anchor.confirmed ? "confirmed" : "not confirmed") + " as of " + fmtDate(st.anchor.created_at));
+  if (st.anchor) h += row("Anchor", (st.anchor.confirmed == null ? esc(st.anchor.note || "checked by a restoring full node") : st.anchor.confirmed ? "confirmed" : "not confirmed") + " as of " + fmtDate(st.anchor.created_at));
   else h += row("Anchor", "—");
   if (st.boxes) h += row("Recovery boxes", esc(st.boxes.count) + " (strong: " + esc(st.boxes.strong) + ", device: " + esc(st.boxes.device) + ")");
   if (st.pairing) h += row("Pairing code", st.pairing.code_active ? "active" : "none");

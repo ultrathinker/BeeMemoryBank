@@ -29,6 +29,23 @@ public class ExceptionStatusMapTests
         ExceptionStatusMap.Map(new UnauthorizedAccessException("nope")).StatusCode.Should().Be(403);
         ExceptionStatusMap.Map(new ReadOnlyAccessException("/Locked")).StatusCode.Should().Be(403);
         ExceptionStatusMap.Map(new InvalidOperationException("something else")).StatusCode.Should().Be(409);
+        ExceptionStatusMap.Map(new MetadataKeyPublishPendingException()).StatusCode.Should().Be(503);
+    }
+
+    /// <summary>
+    /// A write refused while a key rotation's new metadata key is not published is deferrable (spec 4.4): 503 with the code and
+    /// the retry hint, which the pipeline puts into the body and the Retry-After header. Derived from InvalidOperationException
+    /// like its siblings, so the arm must sit above the base.
+    /// </summary>
+    [Fact]
+    public void ADeferredMetadataKeyPublication_IsA503_WithItsCodeAndRetryHint()
+    {
+        var ex = new MetadataKeyPublishPendingException();
+        ex.Should().BeAssignableTo<InvalidOperationException>();
+        ExceptionStatusMap.Map(ex).StatusCode.Should().Be(503);
+        ExceptionStatusMap.Details(ex).Should().Be(("metadata_key_publish_pending", 60));
+        ExceptionStatusMap.Details(new ConflictException("x")).Should().Be(((string?)null, (int?)null));
+        ExceptionStatusMap.Details(null).Should().Be(((string?)null, (int?)null));
     }
 
     /// <summary>

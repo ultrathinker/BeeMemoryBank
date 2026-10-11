@@ -1,4 +1,5 @@
 using BeeMemoryBank.Hosting.AspNetCore;
+using BeeMemoryBank.Sync.Blind.Format2;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -9,6 +10,10 @@ namespace BeeMemoryBank.Api.Services;
 /// Keeps one immutable replica package available long enough for an Android download to resume.
 /// A range retry has to refer to the exact same bytes and detached signature as its first request;
 /// rebuilding on every request makes a correct Range client append a different archive.
+///
+/// <para>Step A (docs/design/step-a-spec.md 8.7): once activated a node serves format 2, a <c>full</c> package and, for a
+/// phone that names the baseline it holds, a <c>baseline</c> package. Each kind of each baseline is its own cached entry,
+/// with the same lifetime and leases as the format-1 one; a new baseline is a new key, so a resume never gets other bytes.</para>
 /// </summary>
 public sealed class BlindReplicaPackageCache(
     IServiceScopeFactory scopes,
@@ -28,6 +33,7 @@ public sealed class BlindReplicaPackageCache(
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly List<Entry> _retired = [];
     private Entry? _entry;
+    private readonly Dictionary<string, Entry> _v2 = new(StringComparer.Ordinal);
     private ITimer? _expiryTimer;
     private int _disposed;
 
@@ -66,7 +72,7 @@ public sealed class BlindReplicaPackageCache(
         await _gate.WaitAsync(ct);
         try
         {
-            return (await GetCurrentLockedAsync(producerIsSuperadmin, ct)).Package;
+            return (await GetCurrentLockedAsync(producerIsSuperadmin, ct)).Package!;
         }
         finally
         {
@@ -109,9 +115,34 @@ public sealed class BlindReplicaPackageCache(
                 _entry = null;
                 RetireLocked(entry);
             }
+            foreach (var v2 in _v2.Values.ToList())
+                RetireLocked(v2);
+            _v2.Clear();
             foreach (var retiredEntry in _retired)
-                DeletePackageFiles(retiredEntry.Package);
+                DeletePackageFiles(retiredEntry.Served);
             _retired.Clear();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Retires the format-1 package, the readable copy a phone may have asked for in the last <see cref="Lifetime"/> (docs/design/step-a-spec.md 5.5, 9.3):
+    /// once the metadata activation is applied a node serves format 2 only, and nothing readable may stay on the disk until the entry would expire.
+    /// An HTTP response that still leases it finishes first; the files go with the last lease.
+    /// </summary>
+    public async Task RetireFormat1Async(CancellationToken ct = default)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (_entry is not { } entry) return;
+            _entry = null;
+            RetireLocked(entry);
+            ScheduleEarliestLocked();
         }
         finally
         {
@@ -126,16 +157,23 @@ public sealed class BlindReplicaPackageCache(
         await _gate.WaitAsync(ct);
         try
         {
-            if (_entry is not { } entry) return;
+            foreach (var (key, v2) in _v2.ToList())
+                if (time.GetUtcNow() - v2.CreatedAt >= Lifetime)
+                {
+                    _v2.Remove(key);
+                    RetireLocked(v2);
+                }
+            if (_entry is not { } entry)
+            {
+                ScheduleEarliestLocked();
+                return;
+            }
             if (time.GetUtcNow() - entry.CreatedAt >= Lifetime)
             {
                 _entry = null;
                 RetireLocked(entry);
             }
-            else
-            {
-                ScheduleExpiryLocked(entry);
-            }
+            ScheduleEarliestLocked();
         }
         finally
         {
@@ -148,8 +186,8 @@ public sealed class BlindReplicaPackageCache(
         var now = time.GetUtcNow();
         if (_entry is { } cached
             && now - cached.CreatedAt < Lifetime
-            && File.Exists(cached.Package.FilePath)
-            && File.Exists(cached.Package.FilePath + ".sig"))
+            && File.Exists(cached.Served.FilePath)
+            && File.Exists(cached.Served.FilePath + ".sig"))
         {
             return cached;
         }
@@ -159,13 +197,54 @@ public sealed class BlindReplicaPackageCache(
         var package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
             .BuildAsync(Guid.NewGuid(), includesUpTo: null, isSuperadmin, ct,
                 outputDirectory: PackageDirectory(scope.ServiceProvider.GetRequiredService<SnapshotService>()));
-        var replacement = new Entry(package, now);
+        var replacement = new Entry(ServedPackage.Of(package), now, package);
         var superseded = _entry;
         _entry = replacement;
         if (superseded is not null)
             RetireLocked(superseded);
         ScheduleExpiryLocked(replacement);
         return replacement;
+    }
+
+    /// <summary>
+    /// A format-2 package of <paramref name="kind"/> for <paramref name="baseline"/> (spec 8.7), leased like the format-1 one:
+    /// built once per baseline and kind and lifetime, the same signed bytes for every request and resume until it expires.
+    /// </summary>
+    public async Task<Lease> AcquireV2Async(string kind, ServableBaseline baseline, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var key = kind + ":" + baseline.Files.Manifest.BaselineId.ToString("N");
+            var now = time.GetUtcNow();
+            if (!_v2.TryGetValue(key, out var entry)
+                || now - entry.CreatedAt >= Lifetime
+                || !File.Exists(entry.Served.FilePath) || !File.Exists(entry.Served.FilePath + ".sig"))
+            {
+                using var scope = scopes.CreateScope();
+                var package = await scope.ServiceProvider.GetRequiredService<IBlindPackageV2Writer>().WriteAsync(
+                    new BlindPackageV2Request(kind, Guid.NewGuid(), baseline, IncludesUpTo: null,
+                        IncludeBlobs: kind == BlindPackageKinds.Full,
+                        OutputDirectory: PackageDirectory(scope.ServiceProvider.GetRequiredService<SnapshotService>())), ct);
+                var replacement = new Entry(new ServedPackage(package.FilePath, package.Sha256, package.Manifest.SeedId), now);
+                if (entry is not null) RetireLocked(entry);
+                _v2[key] = replacement;
+                entry = replacement;
+                ScheduleEarliestLocked();
+            }
+            entry.Readers++;
+            return new Lease(this, entry);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private void ScheduleEarliestLocked()
+    {
+        var earliest = _v2.Values.Select(e => (Entry?)e).Append(_entry).Where(e => e is not null).MinBy(e => e!.CreatedAt);
+        if (earliest is not null) ScheduleExpiryLocked(earliest);
     }
 
     private async ValueTask ReleaseAsync(Entry entry)
@@ -177,7 +256,7 @@ public sealed class BlindReplicaPackageCache(
             if (entry.Retired && entry.Readers == 0)
             {
                 _retired.Remove(entry);
-                DeletePackageFiles(entry.Package);
+                DeletePackageFiles(entry.Served);
             }
         }
         finally
@@ -189,7 +268,7 @@ public sealed class BlindReplicaPackageCache(
     private void RetireLocked(Entry entry)
     {
         entry.Retired = true;
-        if (entry.Readers == 0) DeletePackageFiles(entry.Package);
+        if (entry.Readers == 0) DeletePackageFiles(entry.Served);
         else _retired.Add(entry);
     }
 
@@ -246,7 +325,7 @@ public sealed class BlindReplicaPackageCache(
     private static string PackageDirectory(SnapshotService snapshots) =>
         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(snapshots.SnapshotsDir))!, DirectoryName);
 
-    private static void DeletePackageFiles(BlindPackage package)
+    private static void DeletePackageFiles(ServedPackage package)
     {
         if (File.Exists(package.FilePath)) File.Delete(package.FilePath);
         var signaturePath = package.FilePath + ".sig";
@@ -264,7 +343,11 @@ public sealed class BlindReplicaPackageCache(
             _entry = entry;
         }
 
-        public BlindPackage Package => _entry.Package;
+        /// <summary>The format-1 package of a format-1 lease.</summary>
+        public BlindPackage Package => _entry.Package ?? throw new InvalidOperationException("A format-2 lease has no format-1 package; use Served.");
+
+        /// <summary>What every response needs, either format: the file (its detached signature beside it), its hash, its seed id.</summary>
+        public ServedPackage Served => _entry.Served;
 
         public ValueTask DisposeAsync()
         {
@@ -273,11 +356,18 @@ public sealed class BlindReplicaPackageCache(
         }
     }
 
-    internal sealed class Entry(BlindPackage package, DateTimeOffset createdAt)
+    internal sealed class Entry(ServedPackage served, DateTimeOffset createdAt, BlindPackage? package = null)
     {
-        public BlindPackage Package { get; } = package;
+        public ServedPackage Served { get; } = served;
+        public BlindPackage? Package { get; } = package;
         public DateTimeOffset CreatedAt { get; } = createdAt;
         public int Readers { get; set; }
         public bool Retired { get; set; }
     }
+}
+
+/// <summary>A package on disk as a response serves it: its detached signature is <c>FilePath + ".sig"</c>.</summary>
+public sealed record ServedPackage(string FilePath, string Sha256, Guid SeedId)
+{
+    public static ServedPackage Of(BlindPackage package) => new(package.FilePath, package.Sha256, package.Manifest.SeedId);
 }

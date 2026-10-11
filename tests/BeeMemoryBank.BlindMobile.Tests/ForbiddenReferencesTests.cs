@@ -418,7 +418,9 @@ public class ForbiddenReferencesTests
                 "IBlindSecretStore" or "IBlindStateStore" or "IBlindLifecycle" or
                 "IBlindPaths" or "IBlindBackupExporter" or
                 // the page shows the shared controller's status (BlindHomeView) and asks it, like the desktop hosts do
-                "IBlindAppController" or "BlindAppStatus" or "BlindAppBackup" or "BlindAppOptions" or "BlindHomeView" or "BlindPaths"
+                "IBlindAppController" or "BlindAppStatus" or "BlindAppBackup" or "BlindAppOptions" or "BlindHomeView" or "BlindPaths" or
+                // the store line of the screen (docs/design/step-a-spec.md 10.2): what the copy holds, in the host-facing shape
+                "BlindStoreStats" or "BlindStoreInfo"
                 || typeNs.Equals("BeeMemoryBank.Core.Services.BlindPhone", StringComparison.Ordinal) && typeName is
                 "BlindPhoneState" or "BlindPhoneLog" or "BlindPhoneLog.Entry" or "BlindHeavyWork" or
                 "BlindBackupSchedule" or "BlindPhoneBackupRunner" or

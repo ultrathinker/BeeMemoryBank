@@ -38,6 +38,10 @@ public static class KeyDerivation
         int iterations = CryptoConstants.DefaultArgonIterations,
         int parallelism = CryptoConstants.DefaultArgonParallelism)
     {
+        // This is the one last line of defence for every parameter-bearing key slot, snapshot
+        // envelope and recovery device box: validate before the memory-budget calculation or the
+        // Argon2 provider can commit attacker-chosen memory.
+        ValidateUntrustedParameters(memory, iterations, parallelism);
         var units = UnitsFor(memory);
         AcquireUnits(units);
         var inFlight = Interlocked.Add(ref _inFlightKiB, memory);

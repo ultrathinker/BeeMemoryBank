@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.TestSupport;
+using Microsoft.Data.Sqlite;
 
 namespace BeeMemoryBank.Core.Tests;
 
@@ -87,5 +88,136 @@ public class SnapshotStagingTests : IDisposable
         Directory.Exists(extracted).Should().BeFalse();
         File.Exists(copy).Should().BeFalse();
         File.Exists(other).Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryCleanupDirectory_WhenADeleteFails_RetriesAndDoesNotClaimTheClearFilesWereRemoved()
+    {
+        var extracted = SnapshotStaging.NewDirectory(_data);
+        var database = Path.Combine(extracted, "beememorybank.db");
+        File.WriteAllText(database, "clear vault");
+        File.WriteAllText(database + "-wal", "clear wal");
+        File.WriteAllText(database + "-shm", "shared memory");
+
+        var attempts = 0;
+        SnapshotStaging.TryCleanupDirectory(extracted, _ => { attempts++; return false; }).Should().BeFalse();
+
+        attempts.Should().Be(3, "cleanup retries before a caller reports repair-required");
+        File.Exists(database).Should().BeTrue();
+        File.Exists(database + "-wal").Should().BeTrue();
+        File.Exists(database + "-shm").Should().BeTrue();
+
+        SnapshotStaging.TryCleanupDirectory(extracted).Should().BeTrue();
+        Directory.Exists(extracted).Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryCleanupFile_RemovesTheStagingFileAndEachSqliteSidecar()
+    {
+        var copy = SnapshotStaging.NewFile(_data);
+        foreach (var name in Names(copy)) File.WriteAllText(name, "clear pages");
+
+        SnapshotStaging.TryCleanupFile(copy).Should().BeTrue();
+
+        foreach (var name in Names(copy)) File.Exists(name).Should().BeFalse(name);
+    }
+
+    [Fact]
+    public void TryCleanupFile_WhenASidecarCannotBeRemoved_ReportsFailure_AndDoesNotClaimTheCopyIsGone()
+    {
+        var copy = SnapshotStaging.NewFile(_data);
+        // A folder under a sidecar's name cannot be deleted as a file on any platform, so it stands for a sidecar that stays.
+        Directory.CreateDirectory(copy + "-journal");
+
+        SnapshotStaging.TryCleanupFile(copy).Should().BeFalse("a sidecar is still there: the caller must report repair-required");
+
+        Directory.Delete(copy + "-journal");
+        SnapshotStaging.TryCleanupFile(copy).Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryCleanupFile_HandsEachFileOfTheCopyToTheDeleteCallback_SidecarsIncluded()
+    {
+        var copy = SnapshotStaging.NewFile(_data);
+        foreach (var name in Names(copy)) File.WriteAllText(name, "clear pages");
+        var handed = new List<string>();
+
+        SnapshotStaging.TryCleanupFile(copy, file => { handed.Add(file); File.Delete(file); return true; }).Should().BeTrue();
+
+        handed.Should().BeEquivalentTo(Names(copy), "a caller that wipes its copy wipes the sidecars too");
+    }
+
+    [Fact]
+    public void The_journal_and_the_WAL_that_SQLite_creates_beside_a_staging_file_are_owner_only()
+    {
+        var copy = SnapshotStaging.NewFile(_data);
+        using var conn = new SqliteConnection($"Data Source={copy};Pooling=False");
+        conn.Open();
+        Exec(conn, "PRAGMA journal_mode=DELETE; CREATE TABLE t (x); BEGIN; INSERT INTO t VALUES (1);");
+        File.Exists(copy + "-journal").Should().BeTrue("the rollback journal of the open transaction");
+        AssertOwnerOnly(copy + "-journal");
+
+        Exec(conn, "COMMIT; PRAGMA journal_mode=WAL; INSERT INTO t VALUES (2);");
+        File.Exists(copy + "-wal").Should().BeTrue("the write-ahead log of the WAL mode");
+        AssertOwnerOnly(copy + "-wal");
+        AssertOwnerOnly(copy + "-shm");
+    }
+
+    [Fact]
+    public void An_existing_staging_folder_that_others_can_read_is_made_owner_only_before_a_copy_is_made_in_it()
+    {
+        var root = SnapshotStaging.DirIn(_data);
+        Directory.CreateDirectory(root);
+        if (OperatingSystem.IsWindows())
+            WindowsAcl.MakeReadableByAllUsers(root);
+        else
+            File.SetUnixFileMode(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+        var copy = SnapshotStaging.NewFile(_data);
+
+        if (OperatingSystem.IsWindows())
+            WindowsAcl.DirectoryUsersCanRead(root).Should().BeFalse("SQLite creates the journal and the WAL of the copy inside this folder");
+        else
+            (File.GetUnixFileMode(root) & (UnixFileMode.GroupRead | UnixFileMode.OtherRead)).Should().Be(0);
+        AssertOwnerOnly(copy);
+    }
+
+    [Fact]
+    public void Sweep_RemovesTheSqliteSidecarsOfACopyThatIsGone()
+    {
+        var copy = SnapshotStaging.NewFile(_data);
+        File.Delete(copy);
+        File.WriteAllText(copy + "-wal", "clear wal");
+        File.WriteAllText(copy + "-shm", "shared memory");
+
+        SnapshotStaging.Sweep(_data);
+
+        File.Exists(copy + "-wal").Should().BeFalse();
+        File.Exists(copy + "-shm").Should().BeFalse();
+    }
+
+    /// <summary>A staging file and each SQLite sidecar of it.</summary>
+    private static string[] Names(string copy) => [copy, copy + "-journal", copy + "-wal", copy + "-shm"];
+
+    private static void Exec(SqliteConnection conn, string sql)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void AssertOwnerOnly(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            WindowsAcl.UsersCanRead(path).Should().BeFalse($"{path} holds the vault in clear");
+            WindowsAcl.OwnerHasFullControl(path).Should().BeTrue(path);
+        }
+        else
+        {
+            (File.GetUnixFileMode(path) & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite))
+                .Should().Be(0, path);
+        }
     }
 }

@@ -50,6 +50,7 @@
 
       <!-- State -->
       <TextBlock Text="{Binding LoadText}" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding StoreText}" TextWrapping="Wrap" />
       <TextBlock Text="{Binding SyncText}" />
       <TextBlock Text="{Binding BackupText}" />
       <StackPanel IsVisible="{Binding JobVisible}" Spacing="4">

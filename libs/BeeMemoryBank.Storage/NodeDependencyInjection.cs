@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -24,7 +25,9 @@ public static class NodeDependencyInjection
         // pool — would never run. Every pooled handle would stay open on the database file, and
         // on Windows "delete the data directory" fails long after the provider is gone.
         // Both registrations resolve the same instance; Dispose is idempotent.
-        services.AddSingleton(_ => new DbConnectionFactory(dataPath));
+        // The key source is optional: a blind host and every plain node register none, and the factory is then exactly the factory of 2.5.
+        // On a sealed node the vault gate (BeeMemoryBank.Vault) registers it and every connection is keyed (docs/design/step-b-spec.md 7.2).
+        services.AddSingleton(sp => new DbConnectionFactory(dataPath, sp.GetService<IVaultKeySource>()));
         services.AddSingleton<IDbConnectionFactory>(sp => sp.GetRequiredService<DbConnectionFactory>());
         services.AddSingleton<MigrationRunner>();
 

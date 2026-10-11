@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile.Pages;
@@ -45,6 +46,80 @@ public partial class SecurityPage : ContentPage
     {
         base.OnAppearing();
         _ = LoadSlotsAsync();
+        ShowEncryptionCard();
+    }
+
+    // ---- Database encryption (docs/design/step-b-spec.md 10.8): hidden until the native release gate of 12.4 is green. ----
+
+    private void ShowEncryptionCard()
+    {
+        var gate = _services.GetService<IVaultGate>();
+        var offered = PhoneVaultLifecycle.PhoneEncryptionAvailable && gate is not null;
+        EncryptionCard.IsVisible = offered;
+        if (!offered) return;
+
+        var encrypted = gate!.IsSealed;
+        EncryptionForm.IsVisible = !encrypted;
+        EncryptionStatusLabel.Text = encrypted
+            ? "This phone's database is encrypted. It closes whenever the app goes to the background, and the master password (or the fingerprint) opens it."
+            : "Encrypt the notes on this phone so that a copy of the phone's storage shows nothing. The way back is to remove the vault here and join again from another device.";
+    }
+
+    private async void OnEncryptDatabaseClicked(object? sender, EventArgs e)
+    {
+        EncryptErrorLabel.IsVisible = false;
+        var seal = _services.GetRequiredService<SealMigrationService>();
+        var options = new SealOptions(AcceptNoSnapshot: OnlyCopyCheck.IsChecked);
+        try
+        {
+            EncryptButton.IsEnabled = false;
+            var preflight = await seal.PreflightAsync(options);
+            // The tick is only offered when it is the blocker in the way (spec 10.8 phone_no_copy).
+            OnlyCopyRow.IsVisible = preflight.Blockers.Any(b => b.Code == SealBlockers.PhoneNoCopy) || OnlyCopyCheck.IsChecked;
+            if (!preflight.CanStart)
+            {
+                ShowEncryptError(preflight.Blockers[0].Message);
+                return;
+            }
+
+            // The screen stays on for as long as the database is rewritten (spec 10.8).
+            DeviceDisplay.Current.KeepScreenOn = true;
+            await seal.StartAsync(EncryptPasswordEntry.Text ?? "", options);
+            EncryptProgress.IsVisible = true;
+            EncryptStepLabel.IsVisible = true;
+            SealProgress? progress;
+            do
+            {
+                await Task.Delay(500);
+                progress = seal.Progress;
+                EncryptProgress.Progress = (progress?.Percent ?? 0) / 100.0;
+                EncryptStepLabel.Text = progress?.Step ?? "";
+            }
+            while (progress is null || progress.Phase is SealProgress.Idle or SealProgress.Running);
+
+            if (progress.Phase == SealProgress.Failed) ShowEncryptError(progress.Error ?? "The encryption failed; the phone is unchanged.");
+            else ShowEncryptionCard();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            ShowEncryptError("The master password is not correct.");
+        }
+        catch (SealMigrationException ex)
+        {
+            ShowEncryptError(ex.Message);
+        }
+        finally
+        {
+            DeviceDisplay.Current.KeepScreenOn = false;
+            EncryptPasswordEntry.Text = "";
+            EncryptButton.IsEnabled = true;
+        }
+    }
+
+    private void ShowEncryptError(string message)
+    {
+        EncryptErrorLabel.Text = message;
+        EncryptErrorLabel.IsVisible = true;
     }
 
     private async Task LoadSlotsAsync()

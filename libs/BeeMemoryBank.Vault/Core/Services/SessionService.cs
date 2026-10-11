@@ -4,14 +4,24 @@ using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Boot;
+using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Core.Services;
 
+/// <param name="gate">The sealed database's lifecycle (docs/design/step-b-spec.md 5); null or a plain gate: the unlock is exactly the unlock of 2.5.</param>
+/// <param name="bootDoors">The doors of the boot store, the source of the key slots while a sealed database is closed (spec 4.4 step 1).</param>
+/// <param name="diagnostics">Where a refused door is recorded and the pair diagnosis (spec 4.4 step 5) is asked; the gate implements it.</param>
 public class SessionService(
     IKeySlotRepository keySlotRepo,
     IServiceScopeFactory? scopeFactory = null,
-    IRetiredMasterDekStore? retiredDekStore = null)
+    IRetiredMasterDekStore? retiredDekStore = null,
+    IVaultGate? gate = null,
+    IBootDoorStore? bootDoors = null,
+    ISealedUnlockDiagnostics? diagnostics = null,
+    ILogger<SessionService>? logger = null)
 {
     private byte[]? _masterDek;
     private byte[]? _pendingClearDek;
@@ -165,8 +175,9 @@ public class SessionService(
     {
         LastMigrationResult = null;
 
-        var dek = await TryDeriveAuthorizedMasterDekAsync(password);
-        if (dek == null) return false;
+        var derived = await TryDeriveCoreAsync(password, recoveryOnly: false, leaveOpen: true);
+        if (derived == null) return false;
+        var dek = derived.Dek;
 
         lock (_lock)
         {
@@ -175,13 +186,19 @@ public class SessionService(
             LoadPersistedRetiredDeksLocked();
         }
 
+        // A sealed database the door just opened: the state moves to Importing at once (requests are served), the inbox import runs in the
+        // background and is the first step of the post-unlock chain (spec 4.4 step 8).
+        // The door's DEK fingerprint is written before the end of the open starts: the rewrite that ends it must find it.
+        await RecordSealedUnlockAsync(derived);
+        var completing = derived.OpenedByGate ? CompleteOpen() : null;
+
         if (scopeFactory != null)
         {
             using var scope = scopeFactory.CreateScope();
             var migration = scope.ServiceProvider.GetRequiredService<LegacyPasswordSlotMigrationService>();
             LastMigrationResult = await migration.MigrateIfNeededAsync();
         }
-        TriggerPostUnlockCatchUp();
+        TriggerPostUnlockCatchUp(completing);
         return true;
     }
 
@@ -190,26 +207,62 @@ public class SessionService(
     /// permitted slot unwraps — or null when no slot accepts the password. The caller owns the
     /// returned buffer and must wipe it. Shared by <see cref="UnlockCoreAsync"/> (which installs it
     /// as the session key) and <see cref="VerifyMasterPasswordAsync"/> (which only wants the yes/no).
+    /// A sealed database that is closed stays closed afterwards (it is opened only for the checks).
     /// </summary>
     private async Task<byte[]?> TryDeriveAuthorizedMasterDekAsync(string password, bool recoveryOnly = false)
     {
-        var slots = await keySlotRepo.GetAllAsync();
-        var trySlots = slots
-            .Where(s => s.Salt != null && s.ArgonMemory.HasValue && (!recoveryOnly || s.SlotType == "recovery"))
+        var derived = await TryDeriveCoreAsync(password, recoveryOnly, leaveOpen: false);
+        return derived?.Dek;
+    }
+
+    /// <summary>What a door gave: the master DEK, the boot door when the database was closed, whether the gate opened it for this call, and a lease.</summary>
+    private sealed record Derived(byte[] Dek, BootDoor? Door, bool OpenedByGate, IAsyncDisposable? Lease = null);
+
+    /// <summary>True while a sealed database is closed: the key slots are then read from the boot store (spec 4.4 step 1).</summary>
+    private bool BootDoorSource => gate is { IsSealed: true } && bootDoors != null && gate.State is VaultState.Closed or VaultState.Closing;
+
+    private async Task<List<(MasterKeyStore Slot, BootDoor? Door)>> ListSlotsAsync(bool recoveryOnly)
+    {
+        if (BootDoorSource)
+        {
+            var doors = await bootDoors!.ListAsync();
+            return doors
+                .Where(d => d.Kind == BootDoorKinds.Slot && d.SlotType is not null && (!recoveryOnly || d.SlotType == "recovery"))
+                .Select(d => (new MasterKeyStore
+                {
+                    SlotId = (int)d.SourceId,
+                    SlotType = d.SlotType!,
+                    EncryptedMasterDek = d.EncryptedMasterDek,
+                    IV = d.Iv,
+                    Salt = d.Salt,
+                    ArgonMemory = d.ArgonMemory,
+                    ArgonIterations = d.ArgonIterations,
+                    ArgonParallelism = d.ArgonParallelism,
+                }, (BootDoor?)d))
+                .ToList();
+        }
+        return (await keySlotRepo.GetAllAsync()).Select(s => (s, (BootDoor?)null)).ToList();
+    }
+
+    /// <param name="leaveOpen">A sealed database that was closed stays open after a success (an unlock); false: it is opened for the checks only (a verify, a recovery) and closed again.</param>
+    private async Task<Derived?> TryDeriveCoreAsync(string password, bool recoveryOnly, bool leaveOpen)
+    {
+        var fromBoot = BootDoorSource;
+        var candidates = await ListSlotsAsync(recoveryOnly);
+        var trySlots = candidates
+            .Where(c => c.Slot.Salt != null && c.Slot.ArgonMemory.HasValue && (!recoveryOnly || c.Slot.SlotType == "recovery"))
             .ToList();
 
-        foreach (var slot in trySlots)
+        foreach (var (slot, door) in trySlots)
         {
-            const int MinArgonMemory = 32768; // 32 MiB
-            const int MinArgonIterations = 2;
-            if (slot.ArgonMemory < MinArgonMemory || slot.ArgonIterations < MinArgonIterations)
-                throw new SecurityException($"Key slot has weakened KDF params (memory={slot.ArgonMemory}, iter={slot.ArgonIterations}); refusing to unlock.");
-
-            const int MaxArgonMemory = 1_048_576;
-            const int MaxArgonIterations = 20;
-            const int MaxArgonParallelism = 16;
-            if (slot.ArgonMemory > MaxArgonMemory || slot.ArgonIterations > MaxArgonIterations || slot.ArgonParallelism > MaxArgonParallelism)
-                throw new SecurityException($"Key slot has unreasonable KDF params (memory={slot.ArgonMemory}, iter={slot.ArgonIterations}, parallelism={slot.ArgonParallelism}); refusing to unlock.");
+            try
+            {
+                KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory!.Value, slot.ArgonIterations!.Value, slot.ArgonParallelism!.Value);
+            }
+            catch (System.Security.Cryptography.CryptographicException ex)
+            {
+                throw new SecurityException("Key slot has invalid KDF parameters; refusing to unlock.", ex);
+            }
 
             byte[]? kek = null;
             byte[]? unwrappedDek = null;
@@ -241,9 +294,26 @@ public class SessionService(
             byte[] currentCandidate = unwrappedDek!;
             bool sentinelMatch = false;
             bool authorized = true;
+            var openedByGate = false;
+            IAsyncDisposable? lease = null;
 
             try
             {
+                if (fromBoot)
+                {
+                    // Spec 4.4 step 3: the master DEK this door yielded unwraps the database key (a wrapper of the current generation) and
+                    // the database opens. No wrapper, or a key that does not open the file: this door is refused like a wrong password.
+                    var refusal = await OpenSealedAsync(unwrappedDek!, leaveOpen, l => lease = l);
+                    if (refusal is not null)
+                    {
+                        await RecordRefusalAsync(refusal);
+                        Array.Clear(currentCandidate, 0, currentCandidate.Length);
+                        Array.Clear(kek, 0, kek.Length);
+                        continue;
+                    }
+                    openedByGate = leaveOpen;
+                }
+
                 if (scopeFactory != null)
                 {
                     using var sentinelScope = scopeFactory.CreateScope();
@@ -310,6 +380,11 @@ public class SessionService(
                             .FirstOrDefault(u => u.KeySlotId == slot.SlotId);
                         authorized = owner != null && owner.Role == UserRoles.Superadmin;
                     }
+
+                    // Spec 4.4 step 6: a door of the boot store is a copy; the slot it names must still be a row of the database (any
+                    // content: a replaced slot is accepted once, 4.3). A door the sealed database no longer knows opens nothing.
+                    if (fromBoot && sentinelMatch && authorized)
+                        authorized = (await keySlotRepo.GetAllAsync()).Any(s => s.SlotId == slot.SlotId);
                 }
                 else
                 {
@@ -323,22 +398,265 @@ public class SessionService(
                 // endpoint into an oracle for "is this someone else's valid password".
                 if (!sentinelMatch || !authorized)
                 {
+                    if (fromBoot) await RefuseOpenDoorAsync(openedByGate, lease, VaultOpenRefusals.DoorNotAuthorized);
                     Array.Clear(currentCandidate, 0, currentCandidate.Length);
                     Array.Clear(kek, 0, kek.Length);
                     continue;
                 }
 
                 Array.Clear(kek, 0, kek.Length);
-                return currentCandidate;
+                // An unlock keeps the database open (the caller completes it); a check only borrowed it.
+                if (fromBoot && !leaveOpen && lease != null) await lease.DisposeAsync();
+                return new Derived(currentCandidate, door, openedByGate);
             }
             catch
             {
+                if (fromBoot) await RefuseOpenDoorAsync(openedByGate, lease, null);
                 Array.Clear(currentCandidate, 0, currentCandidate.Length);
-                Array.Clear(kek, 0, kek.Length);
+                if (kek != null) Array.Clear(kek, 0, kek.Length);
                 throw;
             }
         }
         return null;
+    }
+
+    // ---- the sealed database (docs/design/step-b-spec.md 4.4, 4.7) ------------------------------------------------------------------------
+
+    /// <summary>
+    /// Opens the closed database with a master DEK a door yielded: for an unlock through the gate (stays open), for a check through a temporary
+    /// open (closed again with the lease). Returns the refusal code, or null when it is open.
+    /// </summary>
+    private async Task<string?> OpenSealedAsync(byte[] masterDek, bool leaveOpen, Action<IAsyncDisposable> lease)
+    {
+        if (gate is null) return VaultOpenRefusals.Broken;
+        if (leaveOpen)
+        {
+            var result = await gate.OpenAsync(masterDek);
+            if (result.Opened) return null;
+            if (result.Refusal == VaultOpenRefusals.Busy) throw new VaultBusyException();
+            return result.Refusal ?? VaultOpenRefusals.NoWrapper;
+        }
+        try
+        {
+            lease(await gate.OpenTemporarilyAsync(masterDek));
+            return null;
+        }
+        catch (VaultKeyMismatchException)
+        {
+            return VaultOpenRefusals.KeyMismatch;
+        }
+        catch (VaultSealedException)
+        {
+            return VaultOpenRefusals.NoWrapper;
+        }
+    }
+
+    /// <summary>A door that opened the database and was then refused: the pair diagnosis names the reason, the database closes again (spec 4.4 steps 5-7).</summary>
+    private async Task RefuseOpenDoorAsync(bool openedByGate, IAsyncDisposable? lease, string? code)
+    {
+        if (code is not null)
+        {
+            var reason = code;
+            try
+            {
+                if (diagnostics != null && gate is { IsSealed: true } && await diagnostics.IsDatabaseOlderThanBootStoreAsync())
+                {
+                    reason = VaultOpenRefusals.StoreStale;
+                    logger?.LogWarning("The unlock was refused and the database is older than its boot store: restore the data directory from one backup set.");
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { logger?.LogDebug(ex, "The pair diagnosis failed."); }
+            await RecordRefusalAsync(reason);
+        }
+        if (lease != null) await lease.DisposeAsync();
+        else if (openedByGate && gate != null) await gate.CloseAsync("refused");
+    }
+
+    private async Task RecordRefusalAsync(string code)
+    {
+        logger?.LogWarning("An unlock of the encrypted database was refused ({Code}).", code);
+        if (diagnostics != null) await diagnostics.RecordRefusalAsync(code);
+    }
+
+    /// <summary>Starts the end of the open (spec 4.4 step 8). The state change is synchronous; the returned task is the inbox import.</summary>
+    private Task? CompleteOpen()
+    {
+        try
+        {
+            return gate!.CompleteOpenAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            logger?.LogWarning(ex, "The database was closed again before the unlock finished.");
+            return null;
+        }
+    }
+
+    /// <summary>After a successful unlock: which master DEK the door yielded (spec 3.4) and the cleared last refusal. Best effort.</summary>
+    private async Task RecordSealedUnlockAsync(Derived derived)
+    {
+        if (!derived.OpenedByGate) return;
+        try
+        {
+            if (derived.Door is { } door && bootDoors != null)
+                await bootDoors.SetDekFingerprintAsync(door.DoorId, DekFingerprint.Of(derived.Dek));
+            if (diagnostics != null) await diagnostics.RecordRefusalAsync(null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogDebug(ex, "The unlock was not recorded in the boot store (the rewrite repairs it).");
+        }
+    }
+
+    /// <summary>
+    /// Opens a closed sealed database for a forgotten-password reset (docs/design/step-b-spec.md 3.7): the recovery key's door opens it
+    /// temporarily, the session stays locked, and the lease closes it again. Null when the node is not sealed and closed, or no recovery slot
+    /// accepts the key (the caller then answers like any other refusal).
+    /// </summary>
+    public Task<IAsyncDisposable?> OpenForRecoveryAsync(string recoveryKey) => OpenTemporarilyBySecretAsync(recoveryKey, recoveryOnly: true);
+
+    /// <summary>
+    /// Opens a closed sealed database for one action that needs the master password but must not unlock the session (the node reset, a CLI verb;
+    /// spec 5.7, 13.1): a door the password opens (a superadmin's slot, a recovery slot, the legacy slot) gives the master DEK, the gate opens
+    /// temporarily with it, and the lease closes it again. Null when the node is not sealed and closed or no door accepts the password.
+    /// </summary>
+    public Task<IAsyncDisposable?> OpenForPasswordAsync(string password) => OpenTemporarilyBySecretAsync(password, recoveryOnly: false);
+
+    private async Task<IAsyncDisposable?> OpenTemporarilyBySecretAsync(string secret, bool recoveryOnly)
+    {
+        if (!BootDoorSource) return null;
+        await _recoverySemaphore.WaitAsync();
+        try
+        {
+            var candidates = (await ListSlotsAsync(recoveryOnly)).Where(c => c.Slot.Salt != null && c.Slot.ArgonMemory.HasValue).ToList();
+            foreach (var (slot, _) in candidates)
+            {
+                byte[]? kek = null;
+                byte[]? dek = null;
+                try
+                {
+                    KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory!.Value, slot.ArgonIterations!.Value, slot.ArgonParallelism!.Value);
+                    kek = KeyDerivation.DeriveKek(secret, slot.Salt!, slot.ArgonMemory!.Value, slot.ArgonIterations!.Value, slot.ArgonParallelism!.Value);
+                    dek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, kek);
+                    return await gate!.OpenTemporarilyAsync(dek);
+                }
+                catch (KdfBusyException)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is not VaultBusyException)
+                {
+                    // Not this slot's key, or a key the boot store has no wrapper for: the next slot, then the generic refusal.
+                    logger?.LogDebug(ex, "A slot did not open the database.");
+                }
+                finally
+                {
+                    if (kek != null) Array.Clear(kek);
+                    if (dek != null) Array.Clear(dek);
+                }
+            }
+            return null;
+        }
+        finally
+        {
+            _recoverySemaphore.Release();
+        }
+    }
+
+    /// <summary>
+    /// The no-password form of <see cref="UnlockAsync"/> for a master DEK a door of the boot store yielded (an agent key, OS auto-unlock, the
+    /// update hand-off, "start unlocked after a restart", the iPhone's quick unlock; docs/design/step-b-spec.md 4.7). On a sealed node whose
+    /// database is closed it opens first, then checks the sentinel (the order of the old paths is reversed), then the door (the slot or the agent
+    /// row must still exist and may unlock), and only then installs the DEK; any refusal closes the database again and returns false. On a plain
+    /// node it checks the sentinel and installs. The caller keeps <paramref name="masterDek"/> and clears it; the session holds its own copy.
+    /// </summary>
+    public async Task<bool> TryUnlockWithDekAsync(byte[] masterDek, BootDoor? door, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(masterDek);
+        await _unlockSemaphore.WaitAsync(ct);
+        try
+        {
+            if (IsUnlocked) return true;
+
+            var openedByGate = false;
+            if (gate is { IsSealed: true } && !gate.IsUsable)
+            {
+                var refusal = await OpenSealedAsync(masterDek, leaveOpen: true, _ => { });
+                if (refusal is not null)
+                {
+                    await RecordRefusalAsync(refusal);
+                    return false;
+                }
+                openedByGate = true;
+            }
+
+            bool ok;
+            try
+            {
+                ok = await SentinelMatchesAsync(masterDek) && (door is null || await DoorStillAuthorizedAsync(door));
+            }
+            catch
+            {
+                if (openedByGate) await gate!.CloseAsync("refused");
+                throw;
+            }
+            if (!ok)
+            {
+                if (openedByGate) await RefuseOpenDoorAsync(openedByGate: true, lease: null, VaultOpenRefusals.DoorNotAuthorized);
+                return false;
+            }
+
+            var own = (byte[])masterDek.Clone();
+            lock (_lock)
+            {
+                if (_masterDek != null) Array.Clear(_masterDek);
+                _masterDek = own;
+                LoadPersistedRetiredDeksLocked();
+            }
+            if (openedByGate)
+                await RecordSealedUnlockAsync(new Derived(own, door, true));
+            var completing = openedByGate ? CompleteOpen() : null;
+            TriggerPostUnlockCatchUp(completing);
+            return true;
+        }
+        finally
+        {
+            _unlockSemaphore.Release();
+        }
+    }
+
+    private async Task<bool> SentinelMatchesAsync(byte[] masterDek)
+    {
+        if (scopeFactory == null) return true;
+        using var scope = scopeFactory.CreateScope();
+        var sentinel = await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetSentinelAsync();
+        return sentinel == null || MasterKeyManager.VerifySentinel(sentinel, masterDek);
+    }
+
+    /// <summary>Spec 4.4 step 6 for a door that came with a DEK: a slot still in the database that may unlock, or an agent that may.</summary>
+    private async Task<bool> DoorStillAuthorizedAsync(BootDoor door)
+    {
+        if (scopeFactory == null) return false;   // a door cannot be judged without the database: refuse
+        using var scope = scopeFactory.CreateScope();
+        var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+
+        if (door.Kind == BootDoorKinds.Slot)
+        {
+            var slot = (await keySlotRepo.GetAllAsync()).FirstOrDefault(s => s.SlotId == door.SourceId);
+            if (slot == null) return false;
+            if (slot.SlotType != "user") return true;
+            var owner = (await users.ListActiveAsync()).FirstOrDefault(u => u.KeySlotId == slot.SlotId);
+            return owner != null && owner.Role == UserRoles.Superadmin;
+        }
+
+        if (door.Kind == BootDoorKinds.Agent && door.KeyHash is { Length: > 0 } keyHash)
+        {
+            var agent = await scope.ServiceProvider.GetRequiredService<IAgentRepository>().GetByKeyHashAsync(keyHash);
+            if (agent == null || agent.Id != door.SourceId || agent.Status != "A" || !agent.CanAutoUnlock) return false;
+            var owner = await users.GetByIdAsync(agent.OwnerUserId);
+            return owner != null && owner.IsActive && owner.Role == UserRoles.Superadmin;
+        }
+        return false;
     }
 
     /// <summary>
@@ -396,28 +714,75 @@ public class SessionService(
     /// plaintext node identity key. All three are idempotent/safe-to-retry, so running them
     /// unconditionally on every unlock is safe.
     /// </summary>
-    private void TriggerPostUnlockCatchUp()
+    private void TriggerPostUnlockCatchUp(Task? openCompletion = null)
     {
         if (scopeFactory == null) return;
         var capturedScopeFactory = scopeFactory;
 
+        // On a sealed node the chain starts after the inbox import has replayed what was received while the database was closed
+        // (docs/design/step-b-spec.md 4.4 step 8, 14.4 item 6): the drain of held events and the rest see the log as an open node has it.
+        async Task AfterOpenAsync()
+        {
+            if (openCompletion == null) return;
+            try { await openCompletion; }
+            catch (Exception ex) when (ex is not OperationCanceledException) { logger?.LogWarning(ex, "The end of the database open failed; the catch-up goes on."); }
+        }
+
         // Retry any deferred auto-accept DEK rotations whose COMMIT arrived while the
-        // session was locked.
+        // session was locked. Then publish this node's own pending metadata key (spec 4.4), then apply the events held while
+        // locked (docs/design/step-a-spec.md 6.7), in this order: a metadata key of the rotation just accepted opens only once the
+        // rotation's DEK is in the session.
         TrackPostUnlockCatchUp(Task.Run(async () =>
         {
+            await AfterOpenAsync();
             try
             {
                 using var s = capturedScopeFactory.CreateScope();
-                var dekApplier = s.ServiceProvider.GetService<IDekRotationApplier>();
-                if (dekApplier != null) await dekApplier.RetryPendingAutoAcceptsAsync();
+                try
+                {
+                    var dekApplier = s.ServiceProvider.GetService<IDekRotationApplier>();
+                    if (dekApplier != null) await dekApplier.RetryPendingAutoAcceptsAsync();
+                }
+                catch { /* logged inside the applier */ }
+                // A DEK rotation this node started and could not finish publishing the new metadata key for (a crash, a failed
+                // write): the step is repeated now that the new DEK is back in the session, before anything else is written
+                // sealed (spec 4.4). Failures are logged and retried by the service's own timer.
+                try
+                {
+                    var publish = s.ServiceProvider.GetService<BeeMemoryBank.Vault.Metadata.MetadataKeyPublishService>();
+                    if (publish != null) await publish.TryPublishAsync();
+                }
+                catch { /* logged inside the service */ }
+                // ...and then the rest of that rotation (completion audit, Completed, compaction), which a restart would otherwise
+                // have taken with it: it is read from the record the rotation's own transaction wrote.
+                try
+                {
+                    var dekApplier = s.ServiceProvider.GetService<IDekRotationApplier>();
+                    if (dekApplier != null) await dekApplier.FinishPendingCompletionAsync();
+                }
+                catch { /* logged inside the applier; its own timer repeats it */ }
+                try
+                {
+                    switch (s.ServiceProvider.GetService<BeeMemoryBank.Sync.Metadata.IHeldEventDrain>())
+                    {
+                        case BeeMemoryBank.Vault.Metadata.HeldEventDrainService drain:
+                            await drain.DrainAsync();
+                            break;
+                        case { } other:
+                            other.RequestDrain();
+                            break;
+                    }
+                }
+                catch { /* the drain runs again on its period and at the next unlock */ }
             }
-            catch { /* logged inside the applier */ }
+            catch { /* no scope: the host is shutting down */ }
         }));
 
         // Seal any comment still stored as plaintext and drop plaintext comment events from the log
         // (an Android build wrote comments unencrypted, BMB-35). Needs the DEK, hence after unlock.
         TrackPostUnlockCatchUp(Task.Run(async () =>
         {
+            await AfterOpenAsync();
             try
             {
                 using var s = capturedScopeFactory.CreateScope();
@@ -434,6 +799,7 @@ public class SessionService(
         // is retried here like the DEK rotation above. AcceptRestoreAsync is idempotent.
         TrackPostUnlockCatchUp(Task.Run(async () =>
         {
+            await AfterOpenAsync();
             try
             {
                 using var s = capturedScopeFactory.CreateScope();
@@ -448,6 +814,7 @@ public class SessionService(
         // is missing, so running it on every unlock is what makes it "continuous".
         TrackPostUnlockCatchUp(Task.Run(async () =>
         {
+            await AfterOpenAsync();
             try
             {
                 using var s = capturedScopeFactory.CreateScope();
@@ -472,6 +839,7 @@ public class SessionService(
         }
         TrackPostUnlockCatchUp(Task.Run(async () =>
         {
+            await AfterOpenAsync();
             try
             {
                 using var s = capturedScopeFactory.CreateScope();
@@ -604,6 +972,25 @@ public class SessionService(
         // holding our own internal lock — it has no reason to touch _masterDek et al., and
         // invoking arbitrary handlers from inside a lock risks reentrancy/deadlock for no benefit.
         Locked?.Invoke();
+        CloseSealedDatabase();
+    }
+
+    /// <summary>
+    /// A sealed database closes with the lock (docs/design/step-b-spec.md 5.4), after every subscriber of <see cref="Locked"/> has cleared its
+    /// keys, so the state is published as Closed only when no key of this process is left. Returns when it is closed (30 s at most). Nothing on a
+    /// plain node.
+    /// </summary>
+    private void CloseSealedDatabase()
+    {
+        if (gate is not { IsSealed: true }) return;
+        try
+        {
+            gate.CloseAsync("lock").GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogError(ex, "The encrypted database could not be closed cleanly at the lock; its keys are cleared all the same.");
+        }
     }
 
     public byte[] GetMasterDek()

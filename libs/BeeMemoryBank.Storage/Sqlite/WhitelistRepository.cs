@@ -30,6 +30,9 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 source_node_id             AS SourceNodeId,
                 last_protocol_version      AS LastProtocolVersion,
                 last_protocol_seen_at      AS LastProtocolSeenAt,
+                last_capabilities          AS LastCapabilities,
+                last_app_version           AS LastAppVersion,
+                last_capabilities_seen_at  AS LastCapabilitiesSeenAt,
                 tls_spki                   AS TlsSpki,
                 tls_trust                  AS TlsTrust
               FROM tbl_whitelist WHERE node_id = @nodeId"
@@ -50,6 +53,9 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 source_node_id             AS SourceNodeId,
                 last_protocol_version      AS LastProtocolVersion,
                 last_protocol_seen_at      AS LastProtocolSeenAt,
+                last_capabilities          AS LastCapabilities,
+                last_app_version           AS LastAppVersion,
+                last_capabilities_seen_at  AS LastCapabilitiesSeenAt,
                 tls_spki                   AS TlsSpki,
                 tls_trust                  AS TlsTrust
               FROM tbl_whitelist WHERE node_id = @nodeId COLLATE NOCASE AND status = 'A'";
@@ -94,6 +100,9 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 source_node_id             AS SourceNodeId,
                 last_protocol_version      AS LastProtocolVersion,
                 last_protocol_seen_at      AS LastProtocolSeenAt,
+                last_capabilities          AS LastCapabilities,
+                last_app_version           AS LastAppVersion,
+                last_capabilities_seen_at  AS LastCapabilitiesSeenAt,
                 tls_spki                   AS TlsSpki,
                 tls_trust                  AS TlsTrust
               FROM tbl_whitelist WHERE status = 'A' ORDER BY (substr(display_name,1,1)='_') DESC, display_name"))
@@ -196,12 +205,22 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
             new { nodeId, protocolVersion, seenAt });
     }
 
+    public async Task RecordCapabilitiesAsync(Guid nodeId, IReadOnlyCollection<string> capabilities, string? appVersion, DateTime seenAt)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_whitelist SET last_capabilities = @caps, last_app_version = @appVersion, last_capabilities_seen_at = @seenAt
+              WHERE node_id = @nodeId COLLATE NOCASE",
+            new { nodeId, caps = string.Join(",", capabilities), appVersion, seenAt });
+    }
+
     public async Task ResetLocalBookkeepingAsync(Guid nodeId, DateTime now)
     {
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"UPDATE tbl_whitelist
-              SET created_at = @now, deleted_at = NULL, last_protocol_version = NULL, last_protocol_seen_at = NULL
+              SET created_at = @now, deleted_at = NULL, last_protocol_version = NULL, last_protocol_seen_at = NULL,
+                  last_capabilities = NULL, last_app_version = NULL, last_capabilities_seen_at = NULL
               WHERE node_id = @nodeId COLLATE NOCASE",
             new { nodeId, now });
     }

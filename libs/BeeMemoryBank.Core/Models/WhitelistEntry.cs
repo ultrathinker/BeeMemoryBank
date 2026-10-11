@@ -61,6 +61,19 @@ public class WhitelistEntry
     public DateTime? LastProtocolSeenAt { get; set; }
 
     /// <summary>
+    /// The capabilities (comma-separated, e.g. <c>metadata-envelope-v1</c>) and application version this peer last showed
+    /// THIS node, and when (migration 037, docs/design/step-a-spec.md 5.2). A local observation, never replicated; the
+    /// readiness report of the metadata activation reads it. An empty list seen is a peer that has none (a 2.5 node).
+    /// </summary>
+    public string? LastCapabilities { get; set; }
+
+    /// <inheritdoc cref="LastCapabilities"/>
+    public string? LastAppVersion { get; set; }
+
+    /// <inheritdoc cref="LastCapabilities"/>
+    public DateTime? LastCapabilitiesSeenAt { get; set; }
+
+    /// <summary>
     /// base64url(SHA-256(SubjectPublicKeyInfo)) of the TLS key this peer serves HTTPS with, when that
     /// certificate is self-signed — a blind node (plan 4.4, migration 029). Replicated with the row.
     /// Every sync connection to <see cref="ApiAddress"/> must present exactly this key. Null = no

@@ -7,6 +7,7 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Metadata;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -26,7 +27,7 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 /// tests fail on any other type of the app that mentions one. It goes away with BMB-91 (a receive-only
 /// applier in its own project).
 /// </summary>
-public static class BlindMobileServices
+public static partial class BlindMobileServices
 {
     public static IServiceCollection ConfigureServices(IServiceCollection services, string dataDir, string dbPath)
         => AddBlindAppCore(services, new BlindAppOptions(dataDir, dbPath));
@@ -92,6 +93,11 @@ public static class BlindMobileServices
         services.AddSingleton<IRestoreInitiator>(sp => sp.GetRequiredService<BlindRestoreInitiator>());
         services.AddScoped<IDekRotationApplier, BlindDekRotationApplier>();
         services.AddSingleton<IEmbeddingGenerator, BlindEmbeddingGenerator>();
+        // Step A (docs/design/step-a-spec.md 9.4, 15.2): the protocol this copy declares, the relay opener (a blind copy
+        // stores and relays sealed events and never opens one), no held events, the blind store (hook H1), then the
+        // phone's own metadata services (hook H5, track 3).
+        services.AddBlindMetadataHost(dataDir);
+        AddPhoneMetadataServices(services, dataDir);
         services.AddScoped<EventApplier>();
 
         services.AddLogging();
@@ -123,7 +129,7 @@ public static class BlindMobileServices
                 sp.GetRequiredService<DbConnectionFactory>(),
                 sp.GetRequiredService<INodeIdentityRepository>(),
                 sp.GetRequiredService<INodeAuthSigner>(), sp.GetRequiredService<IBlindPaths>().DataDirectory, sp.GetRequiredService<IBlindPaths>().DatabasePath,
-                sp.GetRequiredService<ILogger<BlindPhoneReplicaClient>>()))
+                sp.GetRequiredService<ILogger<BlindPhoneReplicaClient>>(), scopes: sp.GetRequiredService<IServiceScopeFactory>()))
             .AddSingleton<IBlindReplicaSource, BlindReplicaSource>()
             .AddSingleton<BlindPhonePullClient>()
             .AddSingleton<IBlindPhonePullClient>(sp => sp.GetRequiredService<BlindPhonePullClient>())
@@ -159,9 +165,9 @@ public static class BlindMobileServices
 
         services.AddSingleton<BlindAppController>();
         services.AddSingleton<IBlindAppController>(sp => sp.GetRequiredService<BlindAppController>());
-        // How many notes the copy holds, for a host's screen (row count only, nothing is opened).
-        services.AddSingleton(sp => new BlindReplicaStats(sp.GetRequiredService<BlindStartup>(), sp.GetRequiredService<IDbConnectionFactory>()));
-
         return services;
     }
+
+    /// <summary>Hook H5 (spec 15.2), track 3: <c>BlindMobileServices.Metadata.cs</c> (activation observer, store stats).</summary>
+    static partial void AddPhoneMetadataServices(IServiceCollection services, string dataDir);
 }

@@ -27,6 +27,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Step B red tests (docs/design/step-b-spec.md 15.1.3): the walk that looks for a key in the managed object graph, one source in tests/shared. -->
+    <Compile Include="..\shared\KeyGraphWalker.cs" Link="Shared\KeyGraphWalker.cs" />
+    <Compile Include="..\shared\SealedCorpus.cs" Link="Shared\SealedCorpus.cs" />
+    <Compile Include="..\shared\PlatformFacts.cs" Link="Shared\PlatformFacts.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="FluentAssertions" />
   </ItemGroup>

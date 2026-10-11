@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 
 namespace BeeMemoryBank.Api.Middleware;
@@ -95,6 +96,16 @@ public class McpSessionGuardMiddleware(RequestDelegate next, McpToolRegistry reg
             object? requestId = root.TryGetProperty("id", out var idEl)
                 ? JsonSerializer.Deserialize<JsonElement>(idEl.GetRawText())
                 : null;
+
+            // Check 0 — a sealed node whose database is closed (docs/design/step-b-spec.md 5.6). The agent's own request has already had its
+            // chance to open it (AgentAuthMiddleware, 4.6); every tool call fails the same way, in JSON-RPC, before anything reads the vault.
+            if (context.RequestServices?.GetService<IVaultGate>() is { IsSealed: true, IsUsable: false })
+            {
+                logger.LogWarning("MCP tools/call for {Tool} rejected: the database is encrypted and closed (TraceId={TraceId})",
+                    toolName, context.TraceIdentifier);
+                await WriteErrorAsync(context, requestId, SealedVaultMiddleware.ClosedMessage + " (" + SealedVaultMiddleware.ErrorCode + ")");
+                return;
+            }
 
             // Check A — revoked/unresolved agent key. Runs regardless of which tool is being
             // called — it's not tool-specific. A bee_ agent key was presented but

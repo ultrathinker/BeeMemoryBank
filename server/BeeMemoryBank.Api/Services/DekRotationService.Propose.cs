@@ -51,6 +51,17 @@ public partial class DekRotationService
             if (pendingCommitting.Count > 0)
                 throw new ConflictException("Another rotation is in progress (pending Accept).");
 
+            // Step A (docs/design/step-a-spec.md 6.8): changes received but not applied yet would meet a vault rewrapped
+            // under them.
+            if (scope.ServiceProvider.GetService<BeeMemoryBank.Sync.Metadata.IHeldEventStatus>() is { } held
+                && await held.AnyHeldAsync())
+                throw new ConflictException(BeeMemoryBank.Sync.Metadata.HeldEventStatus.RefusalMessage("rotate the key"));
+
+            // Step A (spec 4.4): the new metadata key of the previous rotation is not published yet; a second rotation would
+            // leave it for ever without its event.
+            if (PreviousRotationUnfinishedMessage(scope, "rotate again") is { } unfinished)
+                throw new ConflictException(unfinished);
+
             // (The big try-catch comment moved to AcceptCommitCoreAsync where it actually
             // applies — Propose doesn't have the same Failed-state-leak risk because it runs
             // synchronously and returns before any persistent state machine is engaged.)

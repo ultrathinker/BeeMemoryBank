@@ -14,17 +14,21 @@ namespace BeeMemoryBank.AppPaths.Tests;
 /// Full test matrix for <see cref="LegacyDataRescue.TryRescue"/> as specified in TASK_BRIEF §6 / §98-111.
 /// All tests use isolated temp directories; none touch the real BeeMemoryBankData root.
 /// </summary>
+[Collection("LocalAppData")] // some tests set LOCALAPPDATA: never run them next to another class that does (see BmbPathsTests)
 public sealed class LegacyDataRescueTests : IDisposable
 {
     // We route ALL rescue calls through a fake targetVaultDir that we own,
     // so BmbPaths.VaultDir() is only invoked for the recovered-<date> case.
-    // To keep tests hermetic we point the "target" at our own temp dirs too.
+    // To keep tests hermetic we point the "target" at our own temp dirs too, and the rescue log
+    // at _logRoot, so no test writes into the owner's real BeeMemoryBankData (BMB-184).
 
     private readonly string _testRoot;
+    private readonly string _logRoot;
 
     public LegacyDataRescueTests()
     {
         _testRoot = Path.Combine(Path.GetTempPath(), $"BmbRescueTests-{Guid.NewGuid():N}");
+        _logRoot = Path.Combine(_testRoot, "log-root");
         Directory.CreateDirectory(_testRoot);
     }
 
@@ -120,7 +124,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         File.WriteAllText(Path.Combine(legacy, "node.status.json"), "{}");
         File.WriteAllText(Path.Combine(legacy, "api.ready"), "1");
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
 
         result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
         result.VaultDir.Should().Be(target);
@@ -162,7 +166,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         var beforeMtime = File.GetLastWriteTimeUtc(Path.Combine(target, "beememorybank.db"));
         Thread.Sleep(10); // ensure time difference if anything were modified
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
 
         result.Outcome.Should().Be(RescueOutcome.TargetAlreadyValid);
         result.VaultDir.Should().Be(target);
@@ -199,7 +203,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         {
             Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
 
-            var result = LegacyDataRescue.TryRescue(legacy, target);
+            var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
 
             result.Outcome.Should().Be(RescueOutcome.RescuedToRecoveredVault);
             result.VaultDir.Should().NotBeNullOrEmpty();
@@ -243,7 +247,7 @@ public sealed class LegacyDataRescueTests : IDisposable
             FileAccess.ReadWrite,
             FileShare.None);
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
 
         result.Outcome.Should().Be(RescueOutcome.LegacyFoundButRescueFailed);
         result.Message.Should().Contain("node.lock");
@@ -265,7 +269,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         WriteFile(Path.Combine(legacy, "node.json"), "{}");
 
         // First call — should rescue.
-        var result1 = LegacyDataRescue.TryRescue(legacy, target);
+        var result1 = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
         result1.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
 
         // Record state after first call
@@ -275,7 +279,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         Thread.Sleep(50);
 
         // Second call — should be no-op (target now has a valid DB).
-        var result2 = LegacyDataRescue.TryRescue(legacy, target);
+        var result2 = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
         result2.Outcome.Should().Be(RescueOutcome.TargetAlreadyValid);
         result2.VaultDir.Should().Be(target);
 
@@ -313,7 +317,7 @@ public sealed class LegacyDataRescueTests : IDisposable
 
         try
         {
-            var result = LegacyDataRescue.TryRescue(legacy, target);
+            var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
 
             result.Outcome.Should().Be(RescueOutcome.LegacyFoundButRescueFailed,
                 "a failed copy must return explicit failure, not throw");
@@ -349,7 +353,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         garbage[1] = 0xFE;
         File.WriteAllBytes(Path.Combine(legacy, "beememorybank.db"), garbage);
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
 
         result.Outcome.Should().Be(RescueOutcome.NoLegacyFound,
             "a file with invalid SQLite header must be treated as no legacy found");
@@ -367,7 +371,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         var target = MakeDir("target8");
         Directory.Delete(target);
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
 
         result.Outcome.Should().Be(RescueOutcome.NoLegacyFound);
         Directory.Exists(target).Should().BeFalse();
@@ -387,7 +391,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         WriteValidSqliteDb(Path.Combine(legacy, "beememorybank.db"));
         WriteFile(Path.Combine(legacy, "extra.txt"), "hello");
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
         result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
 
         var markerPath = Path.Combine(target, "rescued-from.json");
@@ -418,7 +422,7 @@ public sealed class LegacyDataRescueTests : IDisposable
 
         var dbBytesBefore = File.ReadAllBytes(Path.Combine(legacy, "beememorybank.db"));
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
         result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
 
         // Source directory must still exist and be identical.
@@ -456,7 +460,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         status.Should().Be(SqliteFileStatus.Unreadable,
             "a file held exclusively should be reported as Unreadable, not FileNotFound");
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
         result.Outcome.Should().Be(RescueOutcome.LegacyFoundButRescueFailed,
             "an unreadable (but existing) legacy DB must not silently return NoLegacyFound");
         result.Message.Should().Contain("unreadable");
@@ -483,7 +487,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         // node.lock exists but NOT held externally.
         File.WriteAllText(Path.Combine(legacy, "node.lock"), "");
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
 
         // Should succeed — an un-held node.lock must not block rescue.
         result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully,
@@ -540,7 +544,7 @@ public sealed class LegacyDataRescueTests : IDisposable
             }
         }
 
-        var result = LegacyDataRescue.TryRescue(legacy, target);
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
 
         result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
 
@@ -571,11 +575,11 @@ public sealed class LegacyDataRescueTests : IDisposable
         WriteValidSqliteDb(Path.Combine(legacy, "beememorybank.db"));
 
         // First rescue
-        var result1 = LegacyDataRescue.TryRescue(legacy, target);
+        var result1 = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
         result1.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
 
         // Second rescue (simulates concurrent / immediate retry)
-        var result2 = LegacyDataRescue.TryRescue(legacy, target);
+        var result2 = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
         result2.Outcome.Should().Be(RescueOutcome.TargetAlreadyValid,
             "a second rescue on an already-rescued target must not fail — data is safe");
     }
@@ -616,7 +620,7 @@ public sealed class LegacyDataRescueTests : IDisposable
         try
         {
             Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
-            var result = LegacyDataRescue.TryRescue(legacy, target);
+            var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
             result.Outcome.Should().Be(RescueOutcome.RescuedToRecoveredVault,
                 "full-file hash must detect differences beyond 64 KB");
         }
@@ -633,35 +637,54 @@ public sealed class LegacyDataRescueTests : IDisposable
     [Fact]
     public void MigrationLog_IsWritten_ToBothMigrationAndLogsDir()
     {
-        // Route BmbPaths to our fake LOCALAPPDATA to intercept log writes.
-        var fakeLocalAppData = MakeDir("fakeAppData16");
+        var legacy = MakeDir("legacy16");
+        var target = MakeDir("target16");
+        Directory.Delete(target);
+
+        WriteValidSqliteDb(Path.Combine(legacy, "beememorybank.db"));
+
+        var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
+        result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
+
+        // Both log directories should now contain a rescue log file.
+        var migrationDir = Path.Combine(_logRoot, "migration");
+        var logsDir = Path.Combine(_logRoot, "logs");
+
+        Directory.Exists(migrationDir).Should().BeTrue("migration dir must be created");
+        Directory.Exists(logsDir).Should().BeTrue("logs dir must be created");
+
+        var migrationLogs = Directory.GetFiles(migrationDir, "rescue-*.log");
+        var logsLogs = Directory.GetFiles(logsDir, "rescue-*.log");
+
+        migrationLogs.Should().NotBeEmpty("at least one rescue log must be in migration\\");
+        logsLogs.Should().NotBeEmpty("at least one rescue log must be in logs\\ (Fix #7 / spec §3.2 pt 5)");
+    }
+
+    // -----------------------------------------------------------------------
+    // BMB-184: the rescue log goes to the folder the caller passes, never under %LOCALAPPDATA%
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void RescueLog_WithAnInjectedLogRoot_IsNotWrittenUnderLocalAppData()
+    {
+        // A fresh, empty folder stands in for %LOCALAPPDATA%: any rescue log written there would show up in it.
+        var fakeLocalAppData = MakeDir("fakeAppData-bmb184");
         var originalLocalAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
 
         try
         {
             Environment.SetEnvironmentVariable("LOCALAPPDATA", fakeLocalAppData);
 
-            var legacy = MakeDir("legacy16");
-            var target = MakeDir("target16");
+            var legacy = MakeDir("legacy-bmb184");
+            var target = MakeDir("target-bmb184");
             Directory.Delete(target);
-
             WriteValidSqliteDb(Path.Combine(legacy, "beememorybank.db"));
 
-            var result = LegacyDataRescue.TryRescue(legacy, target);
+            var result = LegacyDataRescue.TryRescue(legacy, target, _logRoot);
+
             result.Outcome.Should().Be(RescueOutcome.RescuedSuccessfully);
-
-            // Both log directories should now contain a rescue log file.
-            var migrationDir = Path.Combine(fakeLocalAppData, "BeeMemoryBankData", "migration");
-            var logsDir = Path.Combine(fakeLocalAppData, "BeeMemoryBankData", "logs");
-
-            Directory.Exists(migrationDir).Should().BeTrue("migration dir must be created");
-            Directory.Exists(logsDir).Should().BeTrue("logs dir must be created");
-
-            var migrationLogs = Directory.GetFiles(migrationDir, "rescue-*.log");
-            var logsLogs = Directory.GetFiles(logsDir, "rescue-*.log");
-
-            migrationLogs.Should().NotBeEmpty("at least one rescue log must be in migration\\");
-            logsLogs.Should().NotBeEmpty("at least one rescue log must be in logs\\ (Fix #7 / spec §3.2 pt 5)");
+            Directory.GetFiles(Path.Combine(_logRoot, "logs"), "rescue-*.log").Should().ContainSingle();
+            Directory.GetFileSystemEntries(fakeLocalAppData).Should().BeEmpty("nothing is written under LOCALAPPDATA");
         }
         finally
         {

@@ -14,6 +14,8 @@
 | `BMB_INTERNAL_KEY` | API, Web | Shared secret for Web→API authentication. Every request from Web to API must carry this key in the `X-Internal-Key` header. **In Docker:** `docker-entrypoint.sh` auto-generates and exports the key before starting both processes — you do not need to set it manually. **From source (separate processes):** you must set it explicitly and pass the same value to both API and Web (see below). The API refuses to start in Production if the key is missing. |
 | `BMB_AUDIT_RETENTION_DAYS` | API | Optional. How long to keep `tbl_audit_log` rows. Default `90`. Set to `0` to disable pruning entirely. The pruning service runs ~24 h after process start and once a day after; it skips when the session is locked (no operator present to react to anomalies) and writes a meta-audit row recording the deletion so the prune itself shows up in the audit trail. |
 | `BMB_COMPACTION_KEEP_COUNT` | API | Optional. How many of the most recent events survive an event-log compaction. Default `1500`, minimum `100` (a lower value is ignored and the default used instead). This number is also how far a peer may fall behind before compacting would strand it, so it trades two things off against each other: raise it and `tbl_event` stays large but a phone that was off for a week can still resume; lower it and the log shrinks but a peer that misses a busy day has to wipe and rejoin. With ~20 active writers 1500 events is roughly a day or two. Compaction refuses outright while any peer would be stranded and names them; `acceptCuttingOffPeers` on `POST /api/admin/compact` is the deliberate override, and it logs which peers it stranded. |
+| `BMB_AUTO_UNLOCK_KEY_FILE` | API | Optional, and **only a pointer**: the path of the file that holds the key of *Start unlocked after a restart* once the owner has switched that on in the app (see the section of that name below). Setting it switches nothing on: with the checkbox off the node logs *key file configured, auto-unlock is off* and never opens the file, and a key file that merely appears is ignored. Keep the file **outside** the data folder and out of every backup, and mount it read-only (a Docker secret); it must not name `<data>/server-auto-unlock.key`. The node reads it and never writes, moves or deletes it. 64 hexadecimal characters, readable by the node's user only. |
+| `BMB_SEALED_INBOX_MAX_MB` | API | Optional. On an encrypted node: how many megabytes of changes and attachments a **locked** node keeps for its peers before it answers *507 Insufficient Storage* (default `2048`; it also refuses when less than 1 GiB is free on the data drive). The peers retry later, nothing is lost. See *A Locked Node Still Receives Changes* below. |
 | `BMB_TRUSTED_PROXIES` | API, Web | **Set this whenever a reverse proxy (including Docker port publishing) sits in front of the node.** Comma- or whitespace-separated IP addresses and/or CIDR networks whose `X-Forwarded-For` header is believed — e.g. `172.16.0.0/12` for the Docker bridge range. Without it every per-IP rate limit keys on the proxy's own address, so all clients share one bucket: a single anonymous caller can exhaust the sync-challenge budget and stall synchronization for the whole mesh, or the login budget for every user at once. Only one hop is trusted (`ForwardLimit = 1`), and an unparsable entry is logged and ignored rather than failing startup. Trust here is transitive — anything that can reach the port from a listed address can claim any client IP — so name the proxy or its network and nothing wider. Both processes announce what they ended up trusting on startup — `[forwarded-headers] Trusting X-Forwarded-For from: …`, or a line saying nothing is configured — so check the log after changing this rather than assuming it took. |
 | `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS` | API, Web | Optional, `true`/unset. Believe `X-Forwarded-For` from loopback. For a proxy sharing the host with the node (the desktop app sets this itself). Independent of `BMB_TRUSTED_PROXIES`; either or both may be set. Not sufficient under Docker — published-port traffic arrives on the bridge interface, never on loopback. |
 
@@ -66,7 +68,12 @@ source deployment with its own update script (`scripts/bmb-self-update.sh`); wit
 The images are built by `.github/workflows/docker-publish.yml` when a release is published (the maintainer's approval of
 the draft release), smoke-tested on each architecture before anything is tagged, and carry a GitHub build provenance
 attestation: `gh attestation verify oci://ghcr.io/ultrathinker/beememorybank:X.Y.Z --owner ultrathinker`.
-`scripts/smoke-docker.sh <image> <full|blind> <version>` is the same start-up test, for an image you built yourself.
+`scripts/smoke-docker.sh <image> <full|blind> <version>` is the same start-up test, for an image you built yourself. It
+removes its container when the run ends, whether it succeeds, fails, or is interrupted; set `BMB_SMOKE_KEEP=1` to keep
+the stopped container around for `docker logs` (the last line names it).
+`scripts/test-entrypoint-term.sh <image> [rounds] [entrypoint]` starts the container and sends it SIGTERM a few milliseconds after
+the start, round after round: each round must stop by itself, so a `docker stop` never has to end in SIGKILL (BMB-185). The
+full node is the default; for the blind node image pass its entrypoint: `scripts/test-entrypoint-term.sh <blind-image> 40 /app/entrypoint.sh`.
 
 ### Exposure
 
@@ -224,6 +231,181 @@ So under Docker, restart the container after the `docker exec` above, before ope
 > Login page, and through an unauthenticated `POST /api-proxy/init/reset`. Both are gone: with the
 > master password as the only credential, anyone who could load the login screen could grind it and,
 > on a correct guess, destroy the node.
+
+## Backing Up and Restoring the Data Folder
+
+Two different things can be backed up:
+
+- **Snapshots** (`<data>/snapshots/`, *Admin → Backup*, `bmb snapshot create`) are the node's own backups: one file each,
+  encrypted under the master key, written complete and atomically. Copy them whenever you like, **while the node runs**.
+  Bringing a node back from one is described in [snapshot-restore.md](snapshot-restore.md).
+- **The data folder itself**, with restic, rsync, a volume backup or a file-system snapshot. Do this only with the node
+  **stopped** (below).
+
+### What is in the data folder
+
+| File | What it is |
+|---|---|
+| `beememorybank.db` (and `-wal`, `-shm`) | The vault. Plain SQLite on a node that was never encrypted; encrypted pages on a node the owner encrypted (*Encrypt this node*). |
+| `chat.db` | Chat, if the node has any. Encrypted the same way on an encrypted node. |
+| `beememorybank.boot.db` | **Encrypted nodes only.** The *boot store*: a small plain SQLite file with what a locked node needs before anybody unlocks it. It holds copies of the ways in (the wrapped master keys of the key slots and of auto-unlock agents, with their salts), the wrapped database key, the node's id, name and public key, the list of peers (names, addresses, flags), and the changes and attachments peers sent while the node was locked. It holds no article, title, user name, password or open key. The encrypted database cannot be opened without it, so **a backup of an encrypted node always contains both**. |
+| `snapshots/`, `media/`, `search-index-segments/`, `baselines/` | Encrypted already, on every node. Copy them in the same run as the databases when you restore a whole set. |
+| `server-auto-unlock.key`, `server-auto-unlock.enabled`, `os-auto-unlock.dat` | Only when the owner switched an auto-unlock on. **Never in a backup** (see *Start Unlocked After a Restart* below). |
+| `seal-journal.json`, `*.seal-new`, `*.seal-old*` | Only while *Encrypt this node* runs or after it was interrupted. Part of the set when present. |
+
+### Stop, copy, start
+
+The database files and the boot store change at different moments: locking or stopping the node rewrites the boot store and
+checkpoints the databases, and a locked node keeps writing the boot store while peers send it changes. A copy of a **running**
+node, locked or not, can therefore show a state no crash could produce. Stop the node first; a clean stop checkpoints and
+closes everything, so the three files are each complete and belong to the same moment. Then copy the whole folder in one run,
+including any `-wal` or `-shm` a crash left behind.
+
+```bash
+# Docker: "restart: unless-stopped" brings a stopped container back only when you start it again
+docker compose stop bmb
+restic backup /var/lib/beememorybank --exclude 'server-auto-unlock.*' --exclude os-auto-unlock.dat
+# or: rsync -a --exclude 'server-auto-unlock.*' --exclude os-auto-unlock.dat /var/lib/beememorybank/ /backup/bmb-$(date +%F)/
+docker compose start bmb
+```
+
+A volume backup (`bmb-data`) is the same: stop the container, back the volume up, start the container. The two `--exclude`
+lines are part of the recipe: **a backup that carries the key that opens it is a plain copy** (see below). The update takes its own
+pre-update copy for you, with the writes held for a few seconds, so an update does not need these steps.
+
+### Restoring a set
+
+1. Stop the node. Put **all** the files of one backup into the data folder; never a database from one set and a boot store
+   from another.
+2. Start the node. It comes up **locked**, and checks the set before it opens anything. A set that does not belong together
+   (an encrypted database without its boot store, a boot store beside a plain database, a database cut inside a page, a plain
+   `chat.db` beside an encrypted vault) is refused with a named reason and nothing is opened, created or deleted; the message
+   names the files and the ways back.
+3. Unlock it with the master password. Before the node meets its peers again, run `bmb vault verify`: it checks the databases
+   and the boot store and prints `ok` or the check that failed.
+
+A restored folder brings the node back **as it was at the backup moment, with its node id and its place in the event log**.
+Whether that is safe for the other nodes is the question [snapshot-restore.md](snapshot-restore.md) answers; read it before
+restoring a node that has peers. A set taken before *Encrypt this node* is a plain set, and restoring it gives a plain node: that
+is the deliberate way back.
+
+If the boot store is lost and the database is not, the database cannot be opened. Restore a snapshot (it opens with the master
+password and does not depend on the boot store), join again from a peer, or restore from a blind copy.
+
+## Start Unlocked After a Restart (Servers)
+
+By default a server that restarts stays **locked** until someone signs in with the master password. That is the safe behaviour and
+it is what every node does after every update: the option below is **off** unless the owner switches it on, and while it is off
+nothing of it runs (no key file is read, no code path of it is entered).
+
+It exists for a server nobody is at to type a password. With it on, the key that opens the vault is kept **on the server itself**,
+so anyone who gets the server's disk, a copy of its data folder or a backup of it can read the whole vault: the encryption of the
+database no longer protects it. Turn it on only if you accept that.
+
+**Roles.** The option belongs to a *server*: a node started by Docker, a service or `dotnet run`. The desktop app starts its node
+as a *desktop* (it sets `BMB_HOST_ROLE=desktop` itself; nobody sets that by hand), and a desktop uses the *Auto-unlock* switch
+of this computer instead (the Windows or macOS key store). On a server that switch (`POST /api/keys/auto-unlock/enable`) answers
+*409 role_server*; on a desktop the server routes answer *409 role_desktop*. A plain server (one that was never encrypted) can
+use the option too, with the same warnings.
+
+**Turning it on** (superadmin, a person and not an agent, vault unlocked): *Admin → Security* and the encryption page, or
+`bmb vault auto-unlock enable`. It asks twice. First a warning with *Cancel* as the default; then the master password and the
+phrase `START UNLOCKED`, typed exactly. The API route behind it is `POST /api/keys/server-auto-unlock/enable` with
+`{ "password": "…", "confirmation": "START UNLOCKED" }`; `GET …/status` and `POST …/disable` sit beside it. An audit line
+(`server_auto_unlock_enabled`, no names) is written.
+
+**What it consists of.** Three things, all three must agree before the node reads or uses anything:
+
+1. a key slot of type `server_auto_unlock` in the vault (the master key wrapped under a random 32-byte secret), one at most;
+2. the secret itself, 64 hexadecimal characters in a **file**: the file named by `BMB_AUTO_UNLOCK_KEY_FILE` when that is set,
+   otherwise `<data>/server-auto-unlock.key`, which the node creates for itself, readable by its user only. The node refuses to
+   read a key file others can read (on Linux and macOS: no group or other permission bits; on Windows: an access list for the
+   node's user only);
+3. the *enable record* `<data>/server-auto-unlock.enabled`, written last. It holds no secret; it says "the owner enabled exactly
+   this slot on this server". It is local to the server and is in no snapshot, baseline, package or backup.
+
+**Putting the key file outside the data folder** (recommended; required for the "never in a backup" rule to be easy to keep):
+
+```bash
+openssl rand -hex 32 > bmb-auto-unlock.key && chmod 0400 bmb-auto-unlock.key
+```
+
+```yaml
+services:
+  bmb:
+    environment:
+      - BMB_AUTO_UNLOCK_KEY_FILE=/run/secrets/bmb-auto-unlock-key
+    secrets:
+      - source: bmb_auto_unlock_key
+        target: bmb-auto-unlock-key
+secrets:
+  bmb_auto_unlock_key:
+    file: ./bmb-auto-unlock.key
+```
+
+This is the same example, commented out, as in `docker-compose.yml`, `docker-compose.image.yml` and `.env.example`. The key
+file must not be readable by other users (the shipped image runs as root, so `0400` is enough). Put the file in place **first**, then
+switch the option on: the node takes the secret for the new slot from that file and writes nothing there. When the file is the
+operator's, turning the option off never deletes it: remove it yourself. A key file the node created itself is wiped and deleted when the option is
+turned off.
+
+**Turning it off:** *Admin → Security* or `bmb vault auto-unlock disable`, with the master password. The enable record goes first,
+then the slot, then a key file the node created.
+
+**What a restore does to it.** A restore never turns the option on. The slot travels with the data, the enable record never does,
+so after a restore the slot has no matching record and is *stale*: the server starts **locked**, nothing is unlocked, the key file
+is not read, and the first password unlock removes the slot (an audit line `server_auto_unlock_retired_stale` is written and the
+Web shows a notice: *Start unlocked after a restart was switched off because this data came from a backup or a copy; turn it on
+again if you want it*). This holds **even when the key file is still mounted**.
+
+| Restore | Result |
+|---|---|
+| Into an emptied or new data folder; on another machine; a copied data folder | Starts locked. Switch the option on again on the restored node if you want it. |
+| A restore **in place** over the very server that enabled it, whose record and key file are still where they were, and whose restored slot is byte-identical to the one the record names | Stays as the owner left it. This is the owner's earlier choice staying in force; the restore created no slot, record or key file. |
+| In place, but the option was switched off and on again (or the key rotated) since the backup, so the slot differs | Starts locked. |
+| A snapshot restore, a restore from a blind copy or an Android backup, a join, a baseline | The slot is removed on the way in: the option is off afterwards, whatever the key file says. |
+| A backup taken **without** the two `--exclude` lines | A plain copy. It carries the key file and the record; restoring it is the same as the stolen disk the warning describes. |
+
+A DEK rotation also switches the option off (the slot is deleted with the other slots; the record and a node-created key file are
+removed at once), and so does a node reset. A key file that appears by itself, or a `BMB_AUTO_UNLOCK_KEY_FILE` pointing at a file,
+does nothing without the slot and the matching record; no environment variable, setting, flag or installer option turns the
+option on.
+
+An *Auto-unlock* slot the owner created earlier on a server keeps working; the card shows it with a *Turn off* button.
+
+## A Locked Node Still Receives Changes
+
+An encrypted node that is locked (after a restart, or after *Lock*) cannot open its database, but it is still a member of the
+network. From the boot store alone it:
+
+- answers its peers' identity, challenge and sign-in requests for the nodes that were in its peer list when it closed;
+- **accepts sealed changes and attachments** from them into a holding area in the boot store, and serves them on to other peers
+  with sequence numbers above the last one it closed with, so a peer's position on this node stays meaningful;
+- takes a position report from a peer and keeps the highest;
+- **refuses changes that still carry readable content** (nodes that have not applied metadata encryption send them): they are
+  answered *deferred*, nothing is stored, and the peer sends them again after the unlock. No readable article text, title or
+  tag is ever written to the boot store;
+- suspends a node that a superadmin revokes or changes while it was locked: from that moment that node can no longer sign in,
+  push or pull here;
+- does not apply a node added while it was locked until it is unlocked (deferred).
+
+Everything else, except the sign-in, unlock and recovery pages and the health and version checks (the web UI, articles, search,
+the join and snapshot routes, readiness and status of sync), answers *503 vault_sealed* with `Retry-After: 30` until the node is
+unlocked. A peer asking for events older than the point where this node
+closed gets *503 vault_sealed_range* and gets those events from another peer or after the unlock.
+
+At the unlock the holding area is emptied into the vault: every change is applied **once and in the order it arrived**, through
+the same rules an unlocked node applies (a node revoked before the close is refused, a revoke received while locked takes effect at
+its place), attachments first, position reports merged, and numbering continues above every sequence number the locked node
+handed out. The login page says *Locked - N changes received, they will be applied after unlock*. A change that cannot be applied yet
+stays in the holding area, is retried every minute, and holds back the ones after it so the order is kept.
+
+The holding area is bounded: at 2 GiB of changes and attachments (`BMB_SEALED_INBOX_MAX_MB`), or when less than 1 GiB is free on
+the data drive, the node answers *507 Insufficient Storage* and the peer tries again later.
+
+While the node holds itself still for a file copy (the update's pre-update copy, a few seconds), pushes from peers are answered
+*503 vault_sealed_busy* with `Retry-After: 5`; nothing is stored, the peer's position does not move, and the same push is stored
+once when the copy is done.
 
 ## Deployment Procedure (Docker)
 
@@ -384,3 +566,23 @@ resilience, whitelist versioning, persistent sync quarantine, and more). Key tab
 | `tbl_projection_matrix` | Embedding projection data |
 | `tbl_key_slot` | Shared key slots for multi-user access |
 | `tbl_dek_rotation_state` | DEK rotation state machine (Proposed/Committing/Applied/Cancelled/Failed/Rejected) |
+
+### The boot store (`beememorybank.boot.db`, encrypted nodes only)
+
+A second, plain SQLite file with its own migration ledger (`tbl_boot_migration`, scripts `B001_…` in
+`libs/BeeMemoryBank.Storage/BootMigrations/`, listed in `docs/boot-migrations.golden.txt`) that the vault's migration runner never
+sees. `PRAGMA application_id = 0x424D4253`. Its tables, all of them allow-listed column by column in
+`docs/design/boot-store.golden.txt`:
+
+| Table | Purpose |
+|---|---|
+| `tbl_boot_meta` | `node_id` (written once), `dbk_generation`, `seq_floor`, `sealed_head`, `clean_close`, `unlock_material_version`, … |
+| `tbl_boot_door` | Copies of the ways in: key slots and auto-unlock agents (wrapped master key, iv, salt, Argon2 parameters, key hash), never a user or agent name |
+| `tbl_boot_db_key` | The database key wrapped under a master key (one row per master-key fingerprint and generation) |
+| `tbl_boot_identity` | The node's id, name and public key |
+| `tbl_whitelist` | Mirror of the vault's peer list, same columns; status `S` = suspended while locked |
+| `tbl_relay_event`, `tbl_relay_blob`, `tbl_relay_report` | The holding area of a locked node (events, attachments, position reports) |
+
+Migration `040_sealed_unlock_material.sql` adds only triggers to the vault: any change to a key slot, a user's slot reference, an
+auto-unlock agent or the node identity bumps `unlock_material_version` in the same transaction, and a watcher that checks every
+10 seconds rewrites the boot store when it is behind.

@@ -4,6 +4,8 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Metadata;
+using BeeMemoryBank.Vault.Metadata;
 
 namespace BeeMemoryBank.Sync;
 
@@ -18,9 +20,50 @@ public class EventLogger(
     IActorProvider actorProvider,
     ISyncTrigger syncTrigger,
     SessionService session,
-    IBlobRepository blobRepo) : IEventLogger
+    IBlobRepository blobRepo,
+    // Step A (docs/design/step-a-spec.md 3.9): after this node applied the metadata activation it writes protocol 4 and
+    // seals every content event with the key ring's current key. Without a policy it writes protocol 3, as 2.5.1 did.
+    ISyncProtocolPolicy? protocolPolicy = null,
+    IMetadataKeyRing? keyRing = null,
+    // While a DEK rotation's new metadata key is not published, nothing is sealed (spec 4.4): the previous generation is one a
+    // node the rotation left out can still open.
+    IMetadataKeyPublishGate? publishGate = null,
+    // Holds a DEK rotation's commit back while an operation that seals is in flight (spec 4.4), see BeginAuthoringAsync.
+    AuthoringBarrier? barrier = null) : IEventLogger
 {
     public void SignalSync() => syncTrigger.Signal();
+
+    /// <summary>
+    /// Enters the authoring barrier and refuses, before the caller changed anything, while the new metadata key of the last DEK
+    /// rotation is not published. Deliberately not <c>async</c>: the barrier's ambient flow is set in the caller's context.
+    /// </summary>
+    public ValueTask<IDisposable> BeginAuthoringAsync()
+    {
+        var entering = barrier?.EnterShared() ?? new ValueTask<IDisposable>(NullAuthoringScope.Instance);
+        return RefuseWhilePendingAsync(entering);
+    }
+
+    private async ValueTask<IDisposable> RefuseWhilePendingAsync(ValueTask<IDisposable> entering)
+    {
+        var scope = await entering;
+        try
+        {
+            ThrowIfPublishPending();
+        }
+        catch
+        {
+            scope.Dispose();
+            throw;
+        }
+        return scope;
+    }
+
+    /// <summary>Nothing is sealed between the DEK commit of a rotation and the publication of its new key (spec 4.4).</summary>
+    private void ThrowIfPublishPending()
+    {
+        if (protocolPolicy is { SealsMetadata: true } && publishGate is { IsPending: true })
+            throw new Core.Exceptions.MetadataKeyPublishPendingException();
+    }
 
     /// <summary>
     /// Makes sure the bytes an event is about to reference exist in tbl_blob, in the caller's
@@ -392,7 +435,8 @@ public class EventLogger(
             EntityId = EventEntityId.Derive(eventType, articleId, payloadJson),
             Payload = payloadJson,
             Signature = [],
-            ProtocolVersion = SyncProtocolVersion.Current,
+            // What this node declares: 3 until it applied the metadata activation, 4 after (control events stay clear).
+            ProtocolVersion = protocolPolicy?.Declared ?? SyncProtocolVersion.Current,
             CreatedAt = now,
             ActorType = actorProvider.ActorType,
             ActorName = actorProvider.ActorName,
@@ -416,33 +460,80 @@ public class EventLogger(
             throw new InvalidOperationException(
                 $"Refusing to log a {eventType} event: this is a blind node, and blind nodes never author events.");
 
-        var sigPayload = EventSignature.BuildPayload(evt);
-        if (identity.Ed25519PrivateKeyV == 0)
+        // After activation a content event travels sealed (spec 3.9): the event just built is the inner one, the row
+        // written and signed is the outer `sealed` event. This node's own activity views keep the inner type and article
+        // as local columns, the entity id and actor columns as before; none of them is ever served.
+        var written = evt;
+        EventRowLocal? local = null;
+        // Sealing and appending are one step as far as a DEK rotation is concerned (spec 4.4): the rotation cannot commit between
+        // them, or the row would be appended under a generation the rotation retired. Reentrant when the caller's operation holds it.
+        IDisposable? authoring = null;
+        try
         {
-            // Legacy v=0 row (plaintext seed) — sign without needing master DEK.
-            evt.Signature = NodeIdentityVault.SignWithIdentity(
-                identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
-                identity.NodeId, Array.Empty<byte>(), sigPayload);
-        }
-        else
-        {
-            var masterDek = session.GetMasterDek();
-            try
+            if (protocolPolicy is { SealsMetadata: true } && EventClasses.IsSealable(eventType))
             {
-                evt.Signature = NodeIdentityVault.SignWithIdentity(
-                    identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
-                    identity.NodeId, masterDek, sigPayload);
+                authoring = await BeginAuthoringAsync();
+                written = Seal(evt);
+                local = new EventRowLocal(LocalType: evt.EventType, LocalArticleId: evt.ArticleId);
             }
-            finally
-            {
-                Array.Clear(masterDek);
-            }
-        }
 
-        await eventLogRepo.AppendAsync(evt, transaction);
-        if (transaction == null)
+            var sigPayload = EventSignature.BuildPayload(written);
+            if (identity.Ed25519PrivateKeyV == 0)
+            {
+                // Legacy v=0 row (plaintext seed) — sign without needing master DEK.
+                written.Signature = NodeIdentityVault.SignWithIdentity(
+                    identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
+                    identity.NodeId, Array.Empty<byte>(), sigPayload);
+            }
+            else
+            {
+                var masterDek = session.GetMasterDek();
+                try
+                {
+                    written.Signature = NodeIdentityVault.SignWithIdentity(
+                        identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
+                        identity.NodeId, masterDek, sigPayload);
+                }
+                finally
+                {
+                    Array.Clear(masterDek);
+                }
+            }
+
+            await eventLogRepo.AppendAsync(written, transaction, local);
+            if (transaction == null)
+            {
+                syncTrigger.Signal();
+            }
+        }
+        finally
         {
-            syncTrigger.Signal();
+            authoring?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The outer event of a content event (spec 3.9), sealed with the current key (spec 4.8). No key this node can open:
+    /// the write fails. Clear content is never written after activation.
+    /// </summary>
+    private SyncEvent Seal(SyncEvent inner)
+    {
+        if (keyRing?.Current is not { } current)
+            throw new InvalidOperationException(
+                $"Refusing to log a {inner.EventType} event: metadata is encrypted on this network and this node holds no metadata key it can open now.");
+        var eventKey = keyRing.DeriveKey(current.KeyId, MetadataKeyCrypto.EventKeyInfo, ReadOnlySpan<byte>.Empty);
+        try
+        {
+            var outer = MetadataEnvelope.Seal(inner, current.KeyId, eventKey);
+            outer.EntityId = inner.EntityId;
+            outer.ActorType = inner.ActorType;
+            outer.ActorName = inner.ActorName;
+            outer.ViaAgentName = inner.ViaAgentName;
+            return outer;
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(eventKey);
         }
     }
 }

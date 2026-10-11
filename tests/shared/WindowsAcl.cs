@@ -32,6 +32,22 @@ public static class WindowsAcl
     public static readonly SecurityIdentifier BuiltinUsers = new("S-1-5-32-545");
 
     /// <summary>
+    /// Adds the generic inherit-only entries present on the root of a normal non-system NTFS drive. They do not apply
+    /// to <paramref name="dir"/> itself, but become rules on its children; CREATOR OWNER is substituted with the
+    /// child's owner there. SDDL is used because <see cref="FileSystemAccessRule"/> deliberately refuses generic
+    /// access masks such as GENERIC_ALL.
+    /// </summary>
+    public static void AddGenericInheritOnlyRules(string dir)
+    {
+        var info = new DirectoryInfo(dir);
+        var security = info.GetAccessControl();
+        var descriptor = security.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        security.SetSecurityDescriptorSddlForm(
+            $"{descriptor}(A;OICIIO;GA;;;CO)(A;OICIIO;GRGX;;;BU)", AccessControlSections.Access);
+        info.SetAccessControl(security);
+    }
+
+    /// <summary>
     /// A data folder outside the user's profile (C:\BMB\data, a service install): every account of the computer may read
     /// what is created in it, through an inheritable BUILTIN\Users entry.
     /// </summary>
@@ -58,6 +74,21 @@ public static class WindowsAcl
 
     public static bool IsProtected(string path) => new FileInfo(path).GetAccessControl().AreAccessRulesProtected;
 
+    public static bool DirectoryUsersCanRead(string path) =>
+        DirectoryRules(path).Any(r => r.AccessControlType == AccessControlType.Allow && r.IdentityReference.Equals(BuiltinUsers));
+
+    public static bool IsDirectoryProtected(string path) => new DirectoryInfo(path).GetAccessControl().AreAccessRulesProtected;
+
+    public static bool DirectoryOwnerHasFullControl(string path)
+    {
+        using var me = WindowsIdentity.GetCurrent();
+        return DirectoryRules(path).Any(r => r.AccessControlType == AccessControlType.Allow && r.IdentityReference.Equals(me.User)
+            && (r.FileSystemRights & FileSystemRights.FullControl) == FileSystemRights.FullControl);
+    }
+
     private static IEnumerable<FileSystemAccessRule> Rules(string path) =>
         new FileInfo(path).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>();
+
+    private static IEnumerable<FileSystemAccessRule> DirectoryRules(string path) =>
+        new DirectoryInfo(path).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>();
 }

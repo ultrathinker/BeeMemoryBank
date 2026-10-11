@@ -28,6 +28,8 @@ public sealed class EventLogResetStep : IRekeyStep
     [
         "tbl_event", "tbl_sync_quarantine", "tbl_sync_position", "tbl_sync_push_position",
         "tbl_restore_event_state", "tbl_restore_replay_shield", "tbl_state_anchor",
+        // A blind host's baseline record (migration 039): positioned in the old log by its local cut.
+        "tbl_baseline", "tbl_baseline_blob",
     ];
 
     public const string Reason = "rekey";
@@ -65,7 +67,11 @@ public sealed class EventLogResetStep : IRekeyStep
             EventType = EventTypes.SnapshotCheckpoint,
             Payload = payload,
             Signature = [],
-            ProtocolVersion = SyncProtocolVersion.Current,
+            // What the vault declares (docs/design/step-a-spec.md 5.6): 4 once activated, 3 before. A checkpoint is a
+            // control event, clear either way.
+            ProtocolVersion = await db.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_metadata_activation", transaction: tx) > 0
+                ? BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol
+                : SyncProtocolVersion.Current,
             CreatedAt = now,
             ActorType = "system",
             ActorName = id.Name,

@@ -28,6 +28,12 @@ public static class NodeDependencyInjection
         services.AddSingleton<SyncTrigger>();
         services.AddSingleton<ISyncTrigger>(sp => sp.GetRequiredService<SyncTrigger>());
 
+        // Step A (docs/design/step-a-spec.md 5.6): the protocol this node declares, read from its activation record. Per host,
+        // never static: in-process tests run several nodes. Nothing is ever held where no drain is registered (a blind host).
+        services.TryAddSingleton<Metadata.ISyncProtocolPolicy, Metadata.SyncProtocolPolicy>();
+        services.TryAddSingleton<Metadata.IHeldEventDrain, Metadata.NoHeldEventDrain>();
+        services.TryAddSingleton<Metadata.IHeldEventStatus, Metadata.HeldEventStatus>();
+
         services.AddScoped<EventApplier>();
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();

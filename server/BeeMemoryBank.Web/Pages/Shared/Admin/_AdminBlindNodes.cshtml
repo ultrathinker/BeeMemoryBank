@@ -85,6 +85,13 @@ else
                     This blind node runs a newer sync protocol than this PC. Update this PC: until then it takes nothing from the blind node.
                 </sl-alert>
             }
+            @if (node.Alarms.Contains("stale_baseline"))
+            {
+                <sl-alert variant="warning" open style="margin-top:8px;">
+                    This blind node's restore point is more than a week old. A restore from it would replay everything since. A new one is made
+                    by a computer that holds the vault key; use Reseed once one of them has been running for a while.
+                </sl-alert>
+            }
             @if (node.Alarms.Contains("silent"))
             {
                 <sl-alert variant="warning" open style="margin-top:8px;">

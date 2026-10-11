@@ -95,6 +95,9 @@ services:
       # BMB_MCP_URL=https://bee.example.com/mcp). Empty = not set.
       - BMB_API_PUBLISHED_PORT=${BMB_API_PORT:-5300}
       - BMB_MCP_URL=${BMB_MCP_URL:-}
+      # OPTIONAL, OFF unless the owner turns "Start unlocked after a restart" on in the app: the file that holds its secret, mounted
+      # read-only from OUTSIDE the data folder. docker-compose.yml shows the Docker secret for it; docs/deployment.md has the rules.
+      # - BMB_AUTO_UNLOCK_KEY_FILE=/run/secrets/bmb-auto-unlock-key
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5300/health"]
       interval: 30s

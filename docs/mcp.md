@@ -9,6 +9,44 @@ The MCP (Model Context Protocol) server is built into the API process at the `/m
 - Streamable HTTP (SSE) at `/mcp`
 - Authentication: Bearer token in the `Authorization` HTTP header
 - Auto-unlock: AgentAuthMiddleware decrypts the Master DEK from the bearer token on the first request — but only for an agent owned by a superadmin. An ordinary user's agent has no wrapped DEK at all (see docs/encryption.md's Agent section): it authenticates and works normally whenever the vault is already unlocked by someone else, but cannot unlock it itself. A tool call that needs decrypted content while the vault is locked fails with a clear "Bank is locked" error either way.
+- **An encrypted node (2.6.0, `docs/sealed-database.md`).** A node whose database is encrypted and closed has nothing to read until a door opens it. A request to `/mcp` is answered with a JSON-RPC error whose message reads "This node's database is encrypted and closed: unlock it first. (vault_sealed)", after the agent's key has had its chance: the bearer token of an agent owned by a superadmin is itself a door, so the first request with such a key opens the database (a key that was revoked is refused and the database closes again), exactly as it unlocks a plain node. An ordinary user's agent cannot open a closed encrypted node; it works once someone else has unlocked it. Nothing about the tools or their arguments changes.
+
+### What metadata encryption changes for agents (2.6.0)
+
+Nothing about the tools, the addresses or the keys changes, and an agent never takes part in the switch itself —
+activation is a superadmin's human action and an agent key is refused there. Two moments an agent can notice:
+
+- **A write refused for a short window during a key rotation.** On an activated mesh the metadata key rotates with
+  every DEK rotation, and while the new key is being published (the rotation's final "Completing" step, normally
+  seconds) writing new sealed content is refused with `metadata_key_publish_pending` (`Retry-After: 60`). An MCP tool
+  surfaces the same text as its error; the agent should simply retry a minute later.
+- **A locked node that has been receiving traffic.** While sealed events wait to be applied (the "N changes wait for
+  unlock" state), node-administration operations are refused with 409 — an agent holding a superadmin key cannot
+  start a compaction or a DEK rotation either until the node is unlocked and has caught up. Reading and writing
+  content is unaffected once the vault is unlocked.
+
+After activation an agent's own reads and writes look exactly as before: a full node it talks to decrypts and
+re-encrypts transparently. What changes is what everyone *else* can see — the sync stream and blind copies no longer
+carry titles ([sync.md](sync.md#metadata-encryption-protocol-4)).
+
+### What a sealed node means for agents (2.6.0)
+
+"Encrypt this node" (2.6.0) can leave a node **closed** — after a restart with no auto-unlock option enabled, until
+an administrator signs in. While it is closed the MCP endpoint still answers, but only the relay works: every tool
+that reads or writes content fails with a `vault_sealed` error (the HTTP API answers 503 with the same code). The
+node keeps receiving its peers' changes meanwhile and applies them at the unlock; an agent holding a superadmin key
+cannot start a rotation, a restore or a compaction on a closed node either — run those after the unlock. Two things
+to know:
+
+- **A superadmin-owned agent key opens the node.** It carries the wrapped master key, so the first request it makes
+  unlocks the sealed vault exactly as it unlocked a merely-locked one before — including right after a restart, with
+  no password typed anywhere. An ordinary user's agent still cannot, and a remote-account token (`bmbrt_…`) is not a
+  key to the disk at all. A revoked agent's stale key is refused and the node closes again.
+- **While closed, the node leaks nothing.** The sealed vault answers no metadata search, no tree, no activity log —
+  there is no open key in the process. Status and health still answer.
+
+[sealed-database.md](sealed-database.md#locked-and-unlocked-what-a-restart-does) has the full closed-node picture.
+Nothing about the tools, the addresses or the keys changes, and agents take no part in encrypting a node.
 
 ## 7 Tool Groups
 

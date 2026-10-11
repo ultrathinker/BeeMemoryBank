@@ -29,6 +29,25 @@ Level 3: Master DEK → decrypts → Article DEK (unique per article)
 - Per-article DEK: compromising one article does not expose the rest
 - Agents: a **superadmin's** agent stores the Master DEK encrypted with its API key — another "entry point" to the same DEK, no more privileged than that superadmin's own web login. An ordinary user's agent stores no such thing at all (see the Agent section below) — it is not an "entry point" to the vault, only to whatever content the vault already has decrypted for someone else.
 
+**A fourth key joins once metadata encryption is switched on (2.6.0).** Activating metadata encryption
+creates the **metadata key (MEK)**: 32 random bytes, wrapped by the Master DEK (with the key id, its
+generation and the DEK's fingerprint bound in as additional data), replicated as a clear control event
+that blind copies store but cannot open. It encrypts the *metadata* of sync events — the payload that
+otherwise travels as plaintext JSON — and exists only in memory while the vault is unlocked. **Every
+DEK rotation creates the next MEK generation**, so it inherits the rotation's property of locking out
+a peer the rotation left out. See [sync.md](sync.md#metadata-encryption-protocol-4) for what it
+protects and what a relay still learns.
+
+**A fifth key seals the disk itself, once the node is encrypted ("Encrypt this node", 2.6.0).** An
+encrypted — *sealed* — node's database files are page-encrypted (SQLite3 Multiple Ciphers / SQLCipher
+4) under a per-node **database key (DBK)**: 32 random bytes, node-local, reached through one more link
+in the chain. A *door* (a copy of a key slot kept in a small plaintext boot store) unwraps the Master
+DEK, the Master DEK unwraps the DBK (AES-256-GCM, node id and generation bound in as additional
+data), and the DBK derives the per-page keys with HKDF-SHA256. The DBK exists on disk only wrapped and
+in memory only while the node is open; a DEK rotation re-wraps its wrapper and rewrites no encrypted
+page. See [sealed-database.md](sealed-database.md) and
+[ADR-0010](adr/0010-database-closed-until-unlock.md).
+
 ## Database Storage
 
 ### Key Slots (`tbl_key_slot`)
@@ -194,6 +213,13 @@ chat rows sealed under the previous key then read as `[unable to decrypt …]` p
 attachments, skipped provider keys) instead of failing. A network restore only imports replicated
 tables, so the local key row survives it.
 
+**On a sealed node, chat.db is sealed at the page level too.** "Encrypt this node" page-encrypts
+both database files under the DBK; the chat file's page key comes from the same DBK with its own
+HKDF purpose. The row-level scheme above is unchanged and stays the layer DEK rotation works
+through — a rotation re-wraps the node data key and the DBK's wrapper, and touches no page. What a
+sealed node changes for backups and restores (the boot store, file-level copies of a stopped node)
+is in [sealed-database.md](sealed-database.md#backups).
+
 ### Sentinel (`tbl_node_identity.sentinel_value`)
 
 ```sql
@@ -289,6 +315,20 @@ upgraded past this change; it is nullable and omitted on an all-upgraded mesh. S
 `docs/adr/0006-confidential-dek-rotation-x25519-envelopes.md` for the full design rationale,
 including what this does and does not fix (a rotation whose commit already shipped under the old
 scheme is not retroactively protected).
+
+**On an activated mesh (2.6.0), a rotation also rotates the metadata key.** The initiator creates
+the next MEK generation in the same transaction as the DEK swap and publishes it as a
+`metadata_key_set` event right after; until it is published, writing new sealed content is briefly
+refused (`metadata_key_publish_pending`), and a peer the rotation left out can no more open the new
+metadata than the new content. The details are in
+[sync.md](sync.md#rotation-on-a-mesh-with-metadata-encryption-260-activated).
+
+**On a sealed node, a rotation re-wraps the database key's wrapper and switches the server
+auto-unlock option off.** The DBK itself never changes and no encrypted page is rewritten — the
+rotation's re-wrap work is exactly as on an unencrypted node. The `server_auto_unlock` slot is
+deleted with the other old-DEK slots, so the server starts locked afterwards until an administrator
+signs in; turn "Start unlocked after a restart" on again if you still want it. See
+[sealed-database.md](sealed-database.md#key-rotation).
 
 ### Three-Step Flow (Initiator Node)
 
@@ -436,6 +476,84 @@ Stored in `tbl_dek_rotation_state`:
 
 Every rotation action is logged to `tbl_audit_log`: propose, accept, cancel, peer-accept, peer-reject, auto-accept. Entries include the commit event ID, initiator user, and pre-rotation snapshot filename.
 
+## An Encrypted Node: the Database Key and the Boot Store
+
+Everything above describes what every node does: bodies, comments and media are encrypted, and titles, paths and tags are plain
+columns in a plain SQLite file. The owner can go one step further with **Encrypt this node**. Then the database file itself is
+encrypted page by page (SQLCipher 4 pages, written by SQLite3MC), so a stolen disk shows no title, path, tag, user name, agent
+name, audit line or SQLite schema; `chat.db` is encrypted the same way, under its own key. This is owner-started and nothing
+encrypts a node by itself.
+
+### A fourth key: the database key (DBK)
+
+The pages are encrypted under keys derived from a **database key** that is not the master key and not a password:
+
+```
+door: password KEK | recovery KEK | OS or server secret | agent key      (the same ways in as always)
+    │  AES-256-GCM unwrap
+    ▼
+Master DEK
+    │  AES-256-GCM unwrap of the stored wrapper (boot store, `tbl_boot_db_key`)
+    ▼
+Database key (DBK): 32 random bytes, one per node, never sent anywhere
+    │  HKDF-SHA256, info = "bmb-db-page-v1:" + "vault" | "chat"
+    ▼
+Page keys → the pages of beememorybank.db and chat.db (SQLCipher raw key, never a passphrase)
+```
+
+- **Why a separate key.** A password change, a new user, a recovery key and a DEK rotation only change *doors* and wrappers; the
+  DBK stays and **no page is rewritten**. A new DBK (generation + 1) is made only when the database file is rebuilt under a new key
+  (the offline re-key).
+- **The wrapper** is `AES-256-GCM(key = master DEK, nonce = 12 random bytes, plaintext = DBK)` stored as 48 bytes (ciphertext plus
+  tag). Its additional data is `"bmb-dbk-v1:" + node id + ":" + generation + ":" + the master DEK's fingerprint`, with the node id
+  in lowercase hyphenated form and the generation as a plain decimal number, so a wrapper cannot be moved to another node, another
+  generation or another key. A wrapper that fails any check is "no wrapper", never an error, and every buffer that held a key is
+  zeroed afterwards.
+- **In memory only while the node is open.** A locked encrypted node holds no master DEK, no DBK, no page key and no metadata key.
+  Locking closes the database and clears them.
+
+### Why a second file: the boot store
+
+The key slots, the users and the agents live *inside* the database, but a locked node must read them before it has a key to open
+it. So an encrypted node keeps **copies** of the ways in in a small plain SQLite file, `beememorybank.boot.db` (the *boot store*).
+The database stays authoritative; the boot store can be rebuilt from it at any time. It holds only allow-listed columns:
+
+- the doors: each key slot's and each auto-unlock agent's wrapped master key with its iv, salt and Argon2 parameters, and the agent's
+  key hash. These are exactly as exposed as the same columns were in `tbl_key_slot` and `tbl_agent` (the Argon2id cost that
+  protects a slot still stands between a thief and a password). No user name and no agent name is copied;
+- the wrapped database key, one wrapper per master key some door can still yield;
+- the node's id, display name and public key, and the list of peers (names, addresses, TLS pins, flags);
+- what peers sent while the node was locked ([deployment.md](deployment.md#a-locked-node-still-receives-changes)): sealed events,
+  ciphertext attachments and position reports. Never an article, title, tag, comment or any content event in the clear.
+
+**How the copies are kept in step.** Every code path that adds, replaces or removes a door follows one order: a door that is
+*added* is written to the boot store as *pending* **before** the database commit, a door that is *removed* is deleted from the boot
+store **before** the database delete, and after the commit the whole boot store is rewritten from the database. A crash at any
+point therefore leaves the node unlockable with the password it had and never with a door that was removed. As a backstop, a
+trigger set in the vault (migration `040_sealed_unlock_material.sql`) bumps `unlock_material_version` inside the writing
+transaction, and a watcher compares it with the boot store every 10 seconds and rewrites it when it is behind.
+
+**Wrappers and DEK rotation.** A door may yield an older master key (a peer that accepted a rotation rewraps each user's slot at that
+user's next login). The boot store therefore keeps a wrapper for every master key some door may still yield, and no other. After
+a rotation the *initiator* has exactly one wrapper, under the new key, so a node the rotation left out, which still holds the old
+key, cannot open a stolen copy of this node's disk. An *auto-accepting peer* keeps the old wrapper until the last slot under the old
+key is rewrapped or deleted; that equals the exposure the rotation's chain material already had on that disk.
+
+### Auto-unlock and what a stolen disk then gives
+
+Auto-unlock keeps a key next to the data, so with it on the encryption protects against much less. On a **desktop** the secret
+is in the Windows or macOS key store (`os-auto-unlock.dat`); on a **server** the owner may switch on *Start unlocked after a
+restart*, whose key lives in a file, preferably outside the data folder ([deployment.md](deployment.md#start-unlocked-after-a-restart-servers)).
+Both are off by default, both are warned about twice, and neither is ever in a backup.
+
+### What encryption does not hide
+
+File sizes and counts; the already-encrypted `media/*.enc` and `search-index-segments/`; free-space remnants of the plain files from
+before the switch (SSD wear levelling and copy-on-write file systems keep old blocks: encrypt the volume as well); `os-auto-unlock.dat`
+or a server key file when switched on; process memory, swap, hibernation files and crash dumps of an *unlocked* node; plain exports and
+cold backups the owner made; and the pre-encryption snapshot, which is encrypted but opens with the master password of the day it was
+taken. The decision is [ADR 0010](adr/0010-database-closed-until-unlock.md); the design is in [design/step-b-spec.md](design/step-b-spec.md) (sections 2, 3 and 4).
+
 ## What is NOT Encrypted (by design)
 
 | Data | Why it's in plaintext |
@@ -446,14 +564,17 @@ Every rotation action is logged to `tbl_audit_log`: propose, accept, cancel, pee
 | timestamps | Sorting, activity feed |
 | media file name, content type, size | Attachment lists without unlock (the bytes are encrypted) |
 | sync event metadata | Lamport clock, node_id, event_type |
-| sync event payload | `tbl_event.payload` is plaintext JSON — see below |
+| sync event payload | `tbl_event.payload` is plaintext JSON until metadata encryption is switched on — see below |
+
+The table is the state of a node that has not been encrypted. On a node the owner encrypted ([above](#an-encrypted-node-the-database-key-and-the-boot-store)) none of these columns is readable from the database file; what stays in the clear is the allow-listed content of the boot store.
 
 **Comments are encrypted**, and are deliberately not in the table above. `CommentService.CreateAsync`
 encrypts every comment with the parent article's DEK and stores it as `tbl_comment.ciphertext` with
 `encrypted = 1` (the legacy `text` column is left empty). Reading one costs exactly what reading the
 article costs: an unwrapped master DEK.
 
-**The event log is plaintext, and it carries the same metadata the tables do.** `tbl_event.payload`
+**Until metadata encryption is switched on, the event log is plaintext, and it carries the same metadata the tables
+do** (after the switch, see [Metadata encryption](#metadata-encryption-sync-protocol-4) below). `tbl_event.payload`
 is a plain JSON string — nothing wraps it — so every metadata field a synced entity has travels in
 the clear next to the ciphertext it describes. `article_create` / `article_update` payloads carry
 `title`, `tree_path` and `concept_tags` (`ArticleEventPayload`); folder events carry the folder path
@@ -464,7 +585,79 @@ Signing (Ed25519) protects the payload's integrity, not its confidentiality.
 
 **Trade-off:** A leaked SQLite file reveals topics and structure, but NOT article texts. A leaked
 event log on its own reveals the same, and so does a whitelisted peer that never does anything but
-pull: the event stream alone is enough to reconstruct the whole tree, every title and every tag.
+pull: the event stream alone is enough to reconstruct the whole tree, every title and every tag —
+until metadata encryption is switched on.
+
+## Metadata Encryption (sync protocol 4)
+
+Off until the owner switches it on, once, for the whole network (operator guide:
+[sync.md](sync.md#switching-metadata-encryption-on)). From then on:
+
+- **What it covers.** Every content event (article, comment, folder, media, concept tag, hard delete) travels between
+  nodes, and is stored in every event log, as a `sealed` event: title, tree path, tags, folder names, file names,
+  content types and the shape of the tree are inside it. Bodies were already encrypted and still travel as blobs; the
+  envelope lists their hashes so that a relay can fetch and ship them without opening anything. Blind copies (the
+  Docker blind node, phones, desktop blind copies) store content only sealed or inside an encrypted baseline.
+- **What stays readable.** The outer event (event id, node id, Lamport time, type `sealed`, protocol version 4,
+  creation time, signature), the envelope's key id, nonce and blob hashes, and the payloads of control events:
+  whitelist changes (including device display names), DEK rotation, recovery material, state anchors, checkpoints,
+  network restore, the metadata key records and the activation itself. The exact list is
+  `docs/design/protocol4-clear-fields.golden.txt`; a test fails when a field joins it, so that every addition is a
+  decision. Sizes and timing of events stay visible.
+- **What it does not cover.** A full node's own database still holds titles, paths and tags in its tables in clear: it
+  shows and searches them. So does every backup or snapshot of a full node, and any blind copy made before the switch
+  until it has taken its first encrypted baseline (see "retiring plaintext copies" in the operator guide).
+
+### The metadata key (MEK)
+
+- A random 32-byte key with a random 16-byte key id (32 lowercase hex) and a generation. Stored in
+  `tbl_metadata_key` (migration 037) wrapped with AES-256-GCM under the master DEK, additional data
+  `bmb-mek-v1:{keyId}:{generation}:{dekFingerprint}`, and replicated by the `metadata_key_set` control event. Rows are
+  never rewritten: a node opens a row with any DEK its session holds (the current one or a retired one).
+- Generation 1 is created by the superadmin who switches encryption on. Every DEK rotation creates generation g+1 on
+  the rotation's initiator, wrapped under the new DEK; peers create nothing. A node the rotation left out (it got no
+  envelope, ADR 0006) holds only the old DEK, cannot open generation g+1, and so cannot read metadata written after the
+  rotation.
+- Generation g+1 is created **inside the transaction that swaps the DEK**, together with a durable marker; the
+  `metadata_key_set` event is appended and the marker deleted in one more transaction right after. Until that holds
+  (it is retried every minute and at every unlock, also after a crash) the rotation stays "completing" and the
+  initiator writes no sealed metadata at all: sealing with generation g would let the node the rotation left out read
+  what is written now.
+- Unwrapped MEKs live only in memory (`MetadataKeyRing`), opened on first use and wiped when the vault locks. A node
+  seals with the highest generation it can open (ties: the ordinally greatest key id). It refuses to write content at
+  all when it can open none: a write that cannot be sealed is never written in clear.
+- The re-key (`bmb rekey`) drops every MEK with the old DEK and, on an activated vault, starts again with a new
+  generation 1 under the new DEK.
+
+### The envelope
+
+```
+{"v":1,"k":"<key id>","n":"<12-byte nonce, base64>","b":["<blob hash>", ...],"c":"<ciphertext || tag, base64>"}
+```
+
+The plaintext is `{"t":<inner type>,"a":<article id or null>,"p":<the protocol-3 payload>}`, zero-padded to a
+multiple of 64 bytes. The cipher is AES-256-GCM with the event key `HKDF-SHA256(MEK, salt empty,
+info "bmb-meta-event-v1")`, a fresh random nonce per event, and additional data that binds the envelope to its outer
+event: `BMB-META-ENV-V1\0`, then event id, node id, Lamport time, type, creation time, protocol version, envelope
+version, key id and every blob hash (integers little-endian, strings length-prefixed). The outer event is signed with
+Ed25519 as before, so a relay checks the signature without any key. Changing the ciphertext, tag, nonce, key id, a
+blob hash, an outer field or the padding makes the event refused at receipt or quarantined in the drain; it is never
+applied and never read as protocol 3.
+
+**What metadata encryption (2.6.0) changes about this table.** Everything above stays true for the
+full node's **own database** — titles, paths, tags and the plaintext payload in `tbl_event` are still
+stored unencrypted there, until the owner runs "Encrypt this node" (the same release): that
+page-encrypts the database file itself and seals the metadata on the disk with everything else, so
+this table then describes what a running, unlocked node serves — not what a closed node's disk shows
+([sealed-database.md](sealed-database.md)). What the metadata-encryption switch removes is
+the *spread*: once activated, the copy of that metadata that leaves the node is sealed. Sync events
+carry it encrypted (the `sealed` envelope, see
+[sync.md](sync.md#metadata-encryption-protocol-4)), blind copies store no structure at all, and the
+packages nodes serve to each other carry an encrypted baseline instead of plain tables. A stolen
+blind disk, a relaying peer, or a TLS-terminating proxy in front of the sync endpoint then learns
+sizes, times and node ids — not titles. The residual (what still *is* visible there) is listed
+honestly in ADR 0009 and in sync.md; and copies made **before** activation or encryption are not
+retrofitted.
 
 ## Media Encryption (Images)
 

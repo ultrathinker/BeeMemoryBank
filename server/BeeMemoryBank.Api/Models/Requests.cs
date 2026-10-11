@@ -71,12 +71,16 @@ public record AddCommentRequest(Guid ArticleId, string Text);
 
 public record CreateAgentRequest(string Name, string? Description);
 
+/// <param name="ProtocolVersion">The sync protocol the joiner declares (2.6 and later send it; docs/design/step-a-spec.md 5.1, 11).</param>
+/// <param name="Capabilities">What the joiner advertises (<c>metadata-envelope-v1</c>); a 2.5 joiner sends neither.</param>
 public record JoinRequest(
     string MasterPassword,
     Guid NodeId,
     string DisplayName,
     string Ed25519PublicKeyB64,
-    string? ApiAddress = null);
+    string? ApiAddress = null,
+    int? ProtocolVersion = null,
+    string[]? Capabilities = null);
 
 /// <summary>
 /// <c>POST /api/join/abort</c>: the joiner of <see cref="NodeId"/> takes back the row its join made. The same proof as the join (the master

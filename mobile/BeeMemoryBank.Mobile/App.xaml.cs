@@ -1,5 +1,7 @@
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Vault.Sealed;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -16,8 +18,10 @@ public partial class App : Application
     // Singleton — safe to hold on the singleton App. Used to open a short-lived scope for the
     // scoped MediaBlobBackfillService in OnStart without capturing it as a captive dependency.
     private readonly IServiceScopeFactory _scopeFactory;
+    // The root provider: PhoneStart / PhoneVaultLifecycle are registered only when the phone starts through the vault lifecycle (Step B).
+    private readonly IServiceProvider _services;
 
-    public App(InitializationService initSvc, MigrationRunner migrationRunner, DbConnectionFactory dbFactory, FolderBootstrapper folderBootstrapper, Services.SyncNotificationService syncNotify, SessionService session, IServiceScopeFactory scopeFactory)
+    public App(InitializationService initSvc, MigrationRunner migrationRunner, DbConnectionFactory dbFactory, FolderBootstrapper folderBootstrapper, Services.SyncNotificationService syncNotify, SessionService session, IServiceScopeFactory scopeFactory, IServiceProvider services)
     {
         InitializeComponent();
         _initSvc = initSvc;
@@ -27,6 +31,7 @@ public partial class App : Application
         _syncNotify = syncNotify;
         _session = session;
         _scopeFactory = scopeFactory;
+        _services = services;
         MainPage = new ContentPage();
     }
 
@@ -34,6 +39,15 @@ public partial class App : Application
     {
         base.OnStart();
         _syncNotify.SetForegroundMode(true);
+        Services.MauiPhoneEnvironment.Foreground = true;
+
+        // An encrypted phone, or a folder that cannot start: the database is not read until the unlock page has opened it (spec 5.8, 12.1);
+        // what OnStart does below runs then, as the vault gate's open steps (Services/AndroidOpenWork.cs).
+        if (_services.GetService<PhoneStart>() is { } phoneStart && (!phoneStart.CanStart || phoneStart.Mode == VaultStoreMode.Sealed))
+        {
+            await StartWithoutDatabaseAsync(phoneStart);
+            return;
+        }
 
         try
         {
@@ -96,22 +110,54 @@ public partial class App : Application
         }
     }
 
+    private async Task StartWithoutDatabaseAsync(PhoneStart start)
+    {
+        if (!start.CanStart)
+        {
+            // The reason, in words (spec 2.5); nothing was opened, created, changed or deleted.
+            MainPage = new ContentPage { Content = new ScrollView { Content = new Label { Text = start.Broken!.Message, Padding = 24, FontSize = 16 } } };
+            return;
+        }
+
+        try
+        {
+            BeeMemoryBank.Core.IO.SnapshotStaging.Sweep(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            await PhoneVaultLifecycle.PrepareSealedStartAsync(_services);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Sealed start error: {ex}");
+        }
+
+        MainPage = new AppShell();
+        _session.Locked -= OnSessionLocked;
+        _session.Locked += OnSessionLocked;
+        Shell.Current.GoToAsync("//unlock").FireAndForget();
+    }
+
     protected override void OnSleep()
     {
         base.OnSleep();
         _syncNotify.SetForegroundMode(false);
+        Services.MauiPhoneEnvironment.Foreground = false;
 
         // Auto-lock when the app leaves the foreground. Without this, an
         // attacker who grabs an unlocked phone (snatch-and-run, "show me
         // a photo") gets full vault access via the recent-apps switcher.
         // Re-navigation happens in OnResume so the user lands on UnlockPage.
-        if (_session.IsUnlocked) _session.Lock();
+        // On an encrypted phone the lock also closes the database (spec 5.4, 12.1); the lifecycle does both.
+        if (_session.IsUnlocked)
+        {
+            if (_services.GetService<PhoneVaultLifecycle>() is { } lifecycle) _ = lifecycle.OnBackgroundAsync();
+            else _session.Lock();
+        }
     }
 
     protected override void OnResume()
     {
         base.OnResume();
         _syncNotify.SetForegroundMode(true);
+        Services.MauiPhoneEnvironment.Foreground = true;
 
         // After OnSleep locked the session, route the user to the unlock
         // page. Skip if the app is in setup or already on /unlock to avoid

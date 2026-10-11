@@ -2,6 +2,7 @@ using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Exceptions;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -55,7 +56,7 @@ public static class CopyEndpoints
                     : "Permission denied for this copy.";
                 return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
@@ -104,7 +105,7 @@ public static class CopyEndpoints
                     : "Permission denied for this copy.";
                 return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }

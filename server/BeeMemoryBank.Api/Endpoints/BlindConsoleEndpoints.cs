@@ -28,6 +28,12 @@ public static class BlindConsoleEndpoints
         {
             if (string.IsNullOrWhiteSpace(req.NewPassword) || req.NewPassword.Length < 8)
                 return Results.BadRequest(new ErrorResponse("console password must be at least 8 characters"));
+            // A state file that cannot be read or is damaged is not "no password set": nothing is set or changed on top of
+            // it, and the operator is told why (BMB-85).
+            if (auth.UnusableStateReason() is { } stateProblem)
+                return Results.Json(new ErrorResponse(
+                    $"The console password was not changed: {stateProblem}. Fix or restore it in the node's data folder " +
+                    "(permissions or content), then try again."), statusCode: StatusCodes.Status409Conflict);
             // Two different refusals, told apart by what the request carried — not by re-reading
 // HasPassword() after the attempt, which cannot distinguish them: a node WITH a password answers
 // "wrong password" for a missing current one too, and the CLI's "already set, keep it and move on"

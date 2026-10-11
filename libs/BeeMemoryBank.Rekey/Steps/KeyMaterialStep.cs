@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Vault.Metadata;
 using Dapper;
 
 namespace BeeMemoryBank.Rekey.Steps;
@@ -22,6 +23,8 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// <item>the chain material of past rotations and the <c>retired-master-dek:*</c> rows are removed;</item>
 /// <item>recovery boxes, their bookkeeping and the rotation links are removed. The owner's device box for D_c is
 ///   written at the first login after the re-key.</item>
+/// <item>the metadata keys (docs/design/step-a-spec.md 4.1) are removed, all of them wrapped under old keys; an activated
+///   vault gets one new generation-1 key under D_c. Nothing is logged: the re-keyed node is alone.</item>
 /// </list>
 /// After the transaction, a fresh <c>.internal-key</c> is written into the new vault. The chat key
 /// (<c>tbl_node_data_key</c> row <c>chat</c>) is ChatRekeyStep's. Notes name what was cleared, for the
@@ -151,6 +154,24 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
         foreach (var table in RecoveryTables)
             counts[table] = await db.ExecuteAsync($"DELETE FROM {table}", transaction: tx);
 
+        // The metadata keys: every row is wrapped under an old DEK. An activated vault stays activated (its activation
+        // record is kept) and seals with one new generation-1 key under D_c from its first write.
+        counts["tbl_metadata_key"] = await db.ExecuteAsync("DELETE FROM tbl_metadata_key", transaction: tx);
+        if (await db.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_metadata_activation", transaction: tx) > 0)
+        {
+            var (mek, row) = MetadataKeyCrypto.Create(1, dc);
+            CryptographicOperations.ZeroMemory(mek);
+            await db.ExecuteAsync(
+                @"INSERT INTO tbl_metadata_key (key_id, generation, dek_fingerprint, epoch_hint, wrapped, iv, author_node_id, created_at, lamport_ts, event_id)
+                  VALUES (@KeyId, @Generation, @DekFingerprint, (SELECT dek_epoch FROM tbl_node_identity LIMIT 1), @Wrapped, @Iv, @Author, @Now, 0, @EventId)",
+                new
+                {
+                    row.KeyId, row.Generation, row.DekFingerprint, row.Wrapped, row.Iv, Author = nodeId.ToString("D"),
+                    Now = DateTime.UtcNow.ToString("O"), EventId = Guid.NewGuid().ToString("D")
+                }, tx);
+            notes.Add($"metadata-key:{row.KeyId} generation 1");
+        }
+
         tx.Commit();
 
         // A fresh Web-to-Api key in the new vault (batch review L-2). A Docker or dev node reads D/.internal-key and
@@ -251,6 +272,18 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
         foreach (var table in RecoveryTables)
             if (await db.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM {table}") is var n and > 0)
                 problems.Add(new(table, "*", $"{n} row(s) left"));
+
+        var activated = await db.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_metadata_activation") > 0;
+        var keys = (await db.QueryAsync<(string KeyId, long Generation, string Fp, byte[] Wrapped, byte[] Iv)>(
+            "SELECT key_id, generation, dek_fingerprint, wrapped, iv FROM tbl_metadata_key")).ToList();
+        if (keys.Count != (activated ? 1 : 0))
+            problems.Add(new("tbl_metadata_key", "*", $"{keys.Count} metadata key(s); an {(activated ? "activated" : "unactivated")} vault keeps {(activated ? 1 : 0)}"));
+        foreach (var k in keys)
+        {
+            var mek = MetadataKeyCrypto.TryUnwrap(new MetadataKeyRow(k.KeyId, (int)k.Generation, k.Fp, k.Wrapped, k.Iv), [dc]);
+            if (mek is null) problems.Add(new("tbl_metadata_key", k.KeyId, "the metadata key does not open under D_c"));
+            else CryptographicOperations.ZeroMemory(mek);
+        }
         return problems;
     }
 

@@ -28,7 +28,10 @@ public class RateLimitMiddleware(RequestDelegate next, ILogger<RateLimitMiddlewa
         // Verifies a master password and, when it matches, WIPES THE NODE. The Web layer's
         // PublicRateLimitMiddleware covers the browser route into this; listing it here closes
         // the direct-to-API port for any caller that isn't on loopback.
-        "/api/init/reset"
+        "/api/init/reset",
+        // "Encrypt this node" (spec 10) and the erase of unencrypted copies: both re-check the master password, an Argon2id derivation each.
+        "/api/vault/seal",
+        "/api/vault/seal/erase-plain-copies"
     };
 
     public async Task InvokeAsync(HttpContext context)

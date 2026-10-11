@@ -85,7 +85,10 @@ public class NodeSetupService
             nodeId = nodeId,
             displayName = name,
             ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
-            apiAddress = (string?)null
+            apiAddress = (string?)null,
+            // A fresh node has applied no activation: it declares 3 and says what it can read (docs/design/step-a-spec.md 5.1, 11).
+            protocolVersion = SyncProtocolVersion.Current,
+            capabilities = BeeMemoryBank.Sync.Metadata.MetadataCapabilities.Advertised
         };
 
         // The host writes this phone's row as soon as it accepts the join. From there on a failure leaves that row behind unless the host
@@ -145,6 +148,8 @@ public class NodeSetupService
         JoinRemoteNodeDto remote;
         NodeIdentity identity;
         byte[] masterDek = [];
+        // The DEK the snapshot is opened with after activation (docs/design/step-a-spec.md 11): a copy, kept from the unwrap to the end of the import.
+        byte[] snapshotDek = [];
         try
         {
             var answer = await response.Content.ReadFromJsonAsync<JoinResponseDto>(_jsonOptions)
@@ -242,6 +247,7 @@ public class NodeSetupService
 
             WriteMigrationMarker();
 
+            snapshotDek = (byte[])masterDek.Clone();
             Array.Clear(masterDek);
 
             foreach (var entry in joinResponse.Whitelist ?? [])
@@ -310,6 +316,7 @@ public class NodeSetupService
         {
             Array.Clear(privateKey);
             Array.Clear(masterDek);
+            Array.Clear(snapshotDek);
             _logger.LogError(ex, "The answer of the host could not be used — rolling back the partial node so a retry can start clean.");
             try { RollbackPartialNode(); }
             catch (Exception rbEx) { _logger.LogError(rbEx, "Rollback of partial node failed; a manual reset may be required."); }
@@ -324,7 +331,11 @@ public class NodeSetupService
                 remoteUrl,
                 nodeId,
                 privateKey,
-                Convert.FromBase64String(remote.Ed25519PublicKeyB64));
+                Convert.FromBase64String(remote.Ed25519PublicKeyB64),
+                masterDek: snapshotDek,
+                // A host that encrypts its metadata (protocol 4) sends the database sealed under the DEK this phone just unwrapped;
+                // a plain archive from it is refused.
+                requireEncrypted: remote.ProtocolVersion >= BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol);
 
             // The same tail as bmb join and the Setup page: the pull position at the checkpoint, the clock past the imported rows
             // (durably: LamportFloor, or a restarted phone begins at 0 and loses every edit it makes), the initial sync done.
@@ -350,6 +361,7 @@ public class NodeSetupService
         finally
         {
             Array.Clear(privateKey);
+            Array.Clear(snapshotDek);
         }
 
         return identity;
@@ -394,7 +406,7 @@ public class NodeSetupService
     }
 
     private sealed record JoinResponseDto(JoinRemoteNodeDto RemoteNode, JoinKeySlotDto KeySlot, List<JoinWhitelistEntryDto>? Whitelist);
-    private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64);
+    private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);
     private sealed record JoinWhitelistEntryDto(
         Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false,
         string? TlsTrust = null, string? TlsSpki = null);

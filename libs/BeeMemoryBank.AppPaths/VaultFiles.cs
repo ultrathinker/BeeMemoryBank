@@ -15,7 +15,7 @@ public enum VaultFolderState
     Missing,
     /// <summary>The folder exists and has nothing in it.</summary>
     Empty,
-    /// <summary>The folder holds a vault: a readable <c>beememorybank.db</c> with a SQLite header.</summary>
+    /// <summary>The folder holds a vault: a readable <c>beememorybank.db</c> with a SQLite header, or the boot store of a sealed vault.</summary>
     Vault,
     /// <summary>The folder has files, but no vault database.</summary>
     Other,
@@ -70,6 +70,9 @@ public static class VaultFiles
         {
             if (!Directory.Exists(directory)) return VaultFolderState.Missing;
             if (HasSqliteHeader(Path.Combine(directory, DatabaseFileName))) return VaultFolderState.Vault;
+            // A sealed vault has no SQLite header: its database is encrypted. Its boot store is the plain file that says so
+            // (docs/design/step-b-spec.md 7.6): the SQLite magic and our application id.
+            if (VaultStoreProbe.IsBootStore(Path.Combine(directory, VaultStoreProbe.Boot))) return VaultFolderState.Vault;
             return Directory.EnumerateFileSystemEntries(directory).Any() ? VaultFolderState.Other : VaultFolderState.Empty;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

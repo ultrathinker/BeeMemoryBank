@@ -56,6 +56,9 @@ public partial class BeeImportService(
 
     public async Task<BeeImportReport> ImportAsync(Stream zipStream, string destinationPath, CancellationToken ct)
     {
+        // One scope for the whole import (refused up front while a DEK rotation's new metadata key is not published, and the
+        // rotation cannot commit between two articles); the per-item catches below rethrow that refusal instead of filing it as a warning.
+        using var authoring = await articleService.BeginAuthoringAsync();
         var report = new BeeImportReport();
 
         using var archive = new ZipArchive(zipStream, ZipArchiveMode.Read, leaveOpen: true);
@@ -156,6 +159,7 @@ public partial class BeeImportService(
                 await ImportAttachmentsAsync(archive, manifestArticle, created.Id, reader, report, ct);
             }
             catch (OperationCanceledException) { throw; }
+            catch (Core.Exceptions.MetadataKeyPublishPendingException) { throw; }
             // An attachment read that blows the ceiling means the archive is hostile or corrupt,
             // not that this one article failed — don't let it be filed away as a warning while the
             // loop carries on decompressing the rest.
@@ -302,6 +306,7 @@ public partial class BeeImportService(
                 report.ImagesImported++;
             }
             catch (OperationCanceledException) { throw; }
+            catch (Core.Exceptions.MetadataKeyPublishPendingException) { throw; }
             catch (Exception ex)
             {
                 report.Warnings.Add($"Image rejected ({fileName}): {ex.Message}");
@@ -343,6 +348,7 @@ public partial class BeeImportService(
                 report.AttachmentsImported++;
             }
             catch (OperationCanceledException) { throw; }
+            catch (Core.Exceptions.MetadataKeyPublishPendingException) { throw; }
             catch (Exception ex)
             {
                 report.Warnings.Add($"Attachment rejected ({name}) for article '{manifestArticle.Title}': {ex.Message}");

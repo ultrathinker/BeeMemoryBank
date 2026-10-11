@@ -64,8 +64,9 @@ public partial class DekRotationService
                 _maintenance.Enter("DEK rotation in progress\u2026");
                 try
                 {
-                    await AcceptCommitCoreAsync(commitEventId, masterPassword, initiatorUserId);
-                    runPostCompaction = true;
+                    // False: the DEK is swapped but the new metadata key is not published yet (spec 4.4). The rotation is not
+                    // complete then: no Completed, no completion record, no compaction until the publication holds.
+                    runPostCompaction = await AcceptCommitCoreAsync(commitEventId, masterPassword, initiatorUserId);
                 }
                 finally
                 {
@@ -103,7 +104,163 @@ public partial class DekRotationService
         }
     }
 
-    private async Task AcceptCommitCoreAsync(string commitEventId, string masterPassword, int? initiatorUserId)
+    private int _publishSubscribed;
+
+    /// <summary>
+    /// Step A (docs/design/step-a-spec.md 4.4): the rotation's transaction created the next metadata key generation (under the
+    /// new DEK) and the durable marker; this logs its <c>metadata_key_set</c> event and ends the marker in one transaction. True
+    /// when nothing is outstanding. False is NOT swallowed into "done": the rotation stays <see cref="DekRotationFlowStep.Completing"/>
+    /// and the service retries every minute and at every unlock, until the marker is gone. Never throws: the rotation itself
+    /// committed and must not be marked failed because its follow-up has not succeeded yet.
+    /// </summary>
+    private async Task<bool> PublishMetadataKeyAfterRotationAsync(IServiceScope scope)
+    {
+        // A host without the service has no metadata key to publish (it is registered with the policy that creates the marker).
+        if (scope.ServiceProvider.GetService<BeeMemoryBank.Vault.Metadata.MetadataKeyPublishService>() is not { } publisher) return true;
+        SubscribeToPublication(publisher);
+        return await publisher.TryPublishAsync();
+    }
+
+    private void SubscribeToPublication(BeeMemoryBank.Vault.Metadata.MetadataKeyPublishService publisher)
+    {
+        if (Interlocked.Exchange(ref _publishSubscribed, 1) == 0)
+            publisher.Published += OnMetadataKeyPublished;
+    }
+
+    /// <summary>
+    /// The publication a deferred rotation waited for happened (a retry, or the unlock chain): finish the rotation as the accept
+    /// would have. Detached, because the event is raised inside the publication and the finish needs the rotation lock.
+    /// </summary>
+    private Task OnMetadataKeyPublished(string keyId)
+    {
+        _ = Task.Run(FinishPendingCompletionAsync);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Finishes the rotation this node started and could not finish at once: the completion audit, the <c>Completed</c> step and the
+    /// post-rotation compaction, once its new metadata key is published. What is left to do is read from the durable
+    /// <see cref="DekRotationCompletionRecord"/> (written in the DEK transaction), never from the memory of a process, so it works
+    /// after a restart and is repeated until it holds: from the unlock chain, from the service's own timer and from the
+    /// publication. Idempotent and never throws: a failed finish keeps the record and is tried again; a rotation that has nothing
+    /// left, or whose key is not published yet, does nothing.
+    /// </summary>
+    public async Task FinishPendingCompletionAsync()
+    {
+        var compact = false;
+        if (!await _executeLock.WaitAsync(TimeSpan.FromSeconds(30)))
+            return; // an accept is running; it finishes inline or leaves the record for the next try
+        try
+        {
+            if (DekRotationCompletionRecord.Read(_connFactory) is not { } record) return;
+            if (!_sessionService.IsUnlocked) return;
+
+            using var scope = _scopeFactory.CreateScope();
+            if (scope.ServiceProvider.GetService<BeeMemoryBank.Vault.Metadata.MetadataKeyPublishService>() is { } publisher)
+            {
+                SubscribeToPublication(publisher);
+                if (publisher.IsPending)
+                {
+                    // The key of this rotation is not published yet (a restart before the unlock chain got to it): still completing.
+                    _progress.Update(DekRotationFlowStep.Completing, 96,
+                        "The key is rotated; publishing the new metadata key is still outstanding and is retried every minute and at every unlock.",
+                        eventId: record.CommitEventId);
+                    return;
+                }
+            }
+
+            await CompleteRotationAsync(scope, record);
+            PublishCompleted();
+            compact = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "DEK rotation: finishing the rotation failed; it is retried every minute and at every unlock");
+        }
+        finally
+        {
+            _executeLock.Release();
+        }
+
+        if (compact) await RunPostRotationCompactionAsync();
+    }
+
+    /// <summary>The compaction a rotation runs after it (its events were the last to describe the retired DEK). Failure is not fatal.</summary>
+    private async Task RunPostRotationCompactionAsync()
+    {
+        try
+        {
+            using var compactionScope = _scopeFactory.CreateScope();
+            await compactionScope.ServiceProvider.GetRequiredService<CompactionService>().ExecuteAsync(reason: "dek-rotation");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "DEK rotation: post-rotation compaction failed (non-fatal)");
+        }
+    }
+
+    /// <summary>The service's retry of <see cref="FinishPendingCompletionAsync"/> while unlocked and a record waits.</summary>
+    private void OnCompletionTimer()
+    {
+        try
+        {
+            if (!_sessionService.IsUnlocked || DekRotationCompletionRecord.Read(_connFactory) is null) return;
+        }
+        catch
+        {
+            return; // the database is gone (shutdown); nothing to retry
+        }
+        _ = Task.Run(FinishPendingCompletionAsync);
+    }
+
+    /// <summary>
+    /// The completion record and the log line of a rotation whose metadata key is published (or that has none to publish), then the
+    /// durable record is deleted. Writing the audit line twice would be wrong and losing it worse, so the order is: audit (skipped
+    /// when this rotation's line is already there), then the record. A crash in between repeats the step without a second line.
+    /// </summary>
+    private async Task CompleteRotationAsync(IServiceScope scope, DekRotationCompletionRecord done)
+    {
+        if (!await CompletionAuditExistsAsync(done.CommitEventId))
+        {
+            var auditRepo = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
+            await auditRepo.LogAsync(
+                "dek_rotation",
+                done.CommitEventId,
+                "dek_rotation_completed",
+                "web",
+                $"DEK rotation completed; epoch {done.NewEpoch - 1}→{done.NewEpoch}; initiator={done.InitiatorId} ({done.InitiatorName}); pre-rotation snapshot={done.SnapshotFileName}; auto-unlock agent keys removed={done.AgentsDeleted}");
+        }
+
+        using (var conn = _connFactory.CreateConnection())
+            DekRotationCompletionRecord.Clear(conn);
+
+        _logger.LogInformation(
+            "DEK rotation completed. Epoch {OldEpoch}→{NewEpoch}. Initiator={Initiator} ({InitiatorName}). Snapshot={Snap}. AutoUnlockAgentsRemoved={Agents}.",
+            done.NewEpoch - 1, done.NewEpoch, done.InitiatorId, done.InitiatorName, done.SnapshotFileName, done.AgentsDeleted);
+    }
+
+    /// <summary>
+    /// Why a new rotation must wait for the previous one, or null: its new metadata key is not published yet (spec 4.4), or its
+    /// completion record is not finished. <paramref name="then"/> completes the sentence "Wait until it is, then ...".
+    /// </summary>
+    private string? PreviousRotationUnfinishedMessage(IServiceScope scope, string then)
+    {
+        if (scope.ServiceProvider.GetService<BeeMemoryBank.Vault.Metadata.IMetadataKeyPublishGate>() is { IsPending: true })
+            return $"The new metadata key of the previous key rotation is not published yet. Wait until it is, then {then}.";
+        if (DekRotationCompletionRecord.Read(_connFactory) is not null)
+            return $"The previous key rotation is still being completed. Wait a moment, then {then}.";
+        return null;
+    }
+
+    private async Task<bool> CompletionAuditExistsAsync(string commitEventId)
+    {
+        using var conn = _connFactory.CreateConnection();
+        return await conn.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM tbl_audit_log WHERE entity_type = 'dek_rotation' AND entity_id = @commitEventId AND action = 'dek_rotation_completed'",
+            new { commitEventId }) > 0;
+    }
+
+    private async Task<bool> AcceptCommitCoreAsync(string commitEventId, string masterPassword, int? initiatorUserId)
     {
         using var scope = _scopeFactory.CreateScope();
         var stateRepo = scope.ServiceProvider.GetRequiredService<IDekRotationStateRepository>();
@@ -148,6 +305,15 @@ public partial class DekRotationService
             var refusal = $"DEK rotation {commitEventId} is already {existingState.State.ToString().ToLowerInvariant()}; it cannot be accepted again.";
             _progress.Update(DekRotationFlowStep.Failed, err: refusal, msg: refusal);
             throw new ConflictException(refusal);
+        }
+
+        // Two rotations must not overlap on the metadata key: the marker of the first names the one key whose publication is
+        // outstanding, and its completion record the one rotation whose finish is. Refused before anything is changed (the commit
+        // stays pending and is accepted again later).
+        if (PreviousRotationUnfinishedMessage(scope, "accept this rotation") is { } unfinished)
+        {
+            _progress.Update(DekRotationFlowStep.Failed, err: unfinished, msg: unfinished);
+            throw new ConflictException(unfinished);
         }
 
         _progress.Update(DekRotationFlowStep.PreRotationBackup, 18, "Creating pre-rotation backup...");
@@ -287,29 +453,48 @@ public partial class DekRotationService
             // first time after a rotation goes through the same lazy walk, and the initiator is
             // also the node that compacts immediately afterwards, which is what deletes the events
             // the walk used to read.
+            // Step A (spec 4.4): on an activated network the next metadata key generation is created in the very transaction that
+            // swaps the DEK, so there is no committed state with a new DEK and no new key (a failure rolls the rotation back).
+            var createNextMetadataKey = scope.ServiceProvider.GetService<BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy>()?.SealsMetadata ?? false;
+            // What is left to finish after the commit (audit, Completed, compaction) is written in that same transaction.
+            var done = new DekRotationCompletionRecord(commitEventId, payload.NewDekEpoch, initiator.Id, initiator.DisplayName, snap.FileName, 0);
             var (agentsDeleted, _, _) = await RewrapDestructiveCoreAsync(
                 oldDek, newDek, payload.NewDekEpoch, commitEventId,
                 isInitiator: true, initiatorSlot.SlotId, newEncDek, newIv,
                 chainEncryptedNewDekB64: chainEncB64,
-                chainIvB64: chainIvB64);
+                chainIvB64: chainIvB64,
+                createNextMetadataKey: createNextMetadataKey,
+                completionRecord: done);
             rewrapped = true;
-
-            var auditRepo = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
-            await auditRepo.LogAsync(
-                "dek_rotation",
-                commitEventId,
-                "dek_rotation_completed",
-                "web",
-                $"DEK rotation completed; epoch {payload.NewDekEpoch - 1}\u2192{payload.NewDekEpoch}; initiator={initiator.Id} ({initiator.DisplayName}); pre-rotation snapshot={snap.FileName}; auto-unlock agent keys removed={agentsDeleted}");
+            done = done with { AgentsDeleted = agentsDeleted };
 
             // Blind-node recovery (plan 6.5): the rotation was started here and the password is in
             // memory — device box for the rewrapped slot, chain link, re-seals, new strong box.
             _ = scope.ServiceProvider.GetRequiredService<RecoveryTriggers>()
                 .OnRotationAccepted(initiatorSlot.SlotId, masterPassword);
 
-            _logger.LogInformation(
-                "DEK rotation completed. Epoch {OldEpoch}\u2192{NewEpoch}. Initiator={Initiator} ({InitiatorName}). Snapshot={Snap}. AutoUnlockAgentsRemoved={Agents}.",
-                payload.NewDekEpoch - 1, payload.NewDekEpoch, initiator.Id, initiator.DisplayName, snap.FileName, agentsDeleted);
+            if (!await PublishMetadataKeyAfterRotationAsync(scope))
+            {
+                _progress.Update(DekRotationFlowStep.Completing, 96,
+                    "The key is rotated; publishing the new metadata key is still outstanding and is retried every minute and at every unlock.");
+                _logger.LogWarning("DEK rotation {CommitEventId}: the new metadata key is not published yet; the rotation completes when it is", commitEventId);
+                return false;
+            }
+
+            // Published. A retry's finisher cannot pass the rotation lock this path holds, so it finds the record gone or waits.
+            try
+            {
+                await CompleteRotationAsync(scope, done);
+            }
+            catch (Exception ex)
+            {
+                // The DEK is rotated and the key published: this is not a failed rotation. The record stays and the finish is retried.
+                _progress.Update(DekRotationFlowStep.Completing, 97,
+                    "The key is rotated; writing the completion record failed and is retried every minute and at every unlock.");
+                _logger.LogError(ex, "DEK rotation {CommitEventId}: the completion record could not be written; it is retried", commitEventId);
+                return false;
+            }
+            return true;
         }
         catch (DekRotationPreconditionException ex) when (!rewrapped)
         {

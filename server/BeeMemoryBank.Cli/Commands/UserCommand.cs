@@ -75,8 +75,17 @@ public static class UserCommand
             return 1;
         }
 
-        await using var services = await CliServiceProvider.CreateAsync(dataPath);
+        // A sealed folder is not unlocked by this verb: the recovery key's door opens the database for the reset only (docs/design/step-b-spec.md 3.7, 5.9).
+        await using var services = await CliServiceProvider.CreateAsync(dataPath, openSealed: false);
         using var scope = services.CreateScope();
+        await using var recoveryLease = CliSealed.IsSealed(dataPath)
+            ? await services.GetRequiredService<SessionService>().OpenForRecoveryAsync(recoveryKey)
+            : null;
+        if (CliSealed.IsSealed(dataPath) && recoveryLease is null)
+        {
+            await output.WriteLineAsync(Refused);
+            return 1;
+        }
         var users = scope.ServiceProvider.GetRequiredService<UserService>();
         var audit = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
 

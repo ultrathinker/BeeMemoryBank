@@ -53,6 +53,28 @@ public static class DependencyInjection
 
         services.AddRecovery();
 
+        // Step A (docs/design/step-a-spec.md 4.5): the open metadata keys of this unlocked node, in memory only.
+        services.TryAddSingleton<BeeMemoryBank.Vault.Metadata.IMetadataKeyRing, BeeMemoryBank.Vault.Metadata.MetadataKeyRing>();
+        // The next key of a DEK rotation is logged by this service (retried every minute and at every unlock); until it is, nothing
+        // is sealed (spec 4.4). The gate is the same singleton, so its timer runs as soon as anything writes.
+        services.TryAddSingleton<BeeMemoryBank.Vault.Metadata.MetadataKeyPublishService>();
+        services.TryAddSingleton<BeeMemoryBank.Vault.Metadata.IMetadataKeyPublishGate>(
+            sp => sp.GetRequiredService<BeeMemoryBank.Vault.Metadata.MetadataKeyPublishService>());
+        // One barrier per process between the operations that author sealed content and the DEK commit of a rotation (spec 4.4).
+        services.TryAddSingleton<BeeMemoryBank.Vault.Metadata.AuthoringBarrier>();
+        // A full node opens sealed events (spec 3.8). TryAdd: the Api started as a blind node calls AddSync too and
+        // replaces it with the relay opener (BlindRoleServices).
+        services.TryAddSingleton<Metadata.IEnvelopeOpener, BeeMemoryBank.Vault.Metadata.VaultEnvelopeOpener>();
+        // The owner's switch and what it checks first (spec 5.3, 5.4), and the author of this node's own key records.
+        services.AddScoped<BeeMemoryBank.Vault.Metadata.MetadataEventPublisher>();
+        services.AddScoped<BeeMemoryBank.Vault.Metadata.MetadataReadinessService>();
+        services.AddScoped<BeeMemoryBank.Vault.Metadata.MetadataActivationService>();
+        // A full node applies what it holds once it can (spec 6.7). Replace: AddNodeSync registered the no-op every host
+        // starts from; a blind composition puts the no-op back (AddBlindMetadataHost).
+        services.TryAddSingleton<BeeMemoryBank.Vault.Metadata.HeldEventDrainService>();
+        services.Replace(ServiceDescriptor.Singleton<Metadata.IHeldEventDrain>(
+            sp => sp.GetRequiredService<BeeMemoryBank.Vault.Metadata.HeldEventDrainService>()));
+
         return services;
     }
 

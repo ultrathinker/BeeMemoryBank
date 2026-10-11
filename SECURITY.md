@@ -2,7 +2,7 @@
 
 ## Encryption Architecture
 
-BeeMemoryBank uses a **3-layer envelope encryption** model designed to protect article, version, and media content at rest and in transit. Titles, folder paths and names, concept tag names, timestamps, the FTS5 search index, sync event-log payloads, and audit-log details are stored in plaintext by design — they're metadata that folder ACLs, search, and sync all need as fast, plain lookups rather than per-row decrypt operations. This is a deliberate, documented trade-off, not an oversight: see [ADR-0005](docs/adr/0005-plaintext-metadata.md) for the exact table-by-table split and what it means for someone who obtains the raw database file.
+BeeMemoryBank uses a **3-layer envelope encryption** model designed to protect article, version, and media content at rest and in transit. Titles, folder paths and names, concept tag names, timestamps, the FTS5 search index, sync event-log payloads, and audit-log details are stored in plaintext by design — they're metadata that folder ACLs, search, and sync all need as fast, plain lookups rather than per-row decrypt operations. This is a deliberate, documented trade-off, not an oversight: see [ADR-0005](docs/adr/0005-plaintext-metadata.md) for the exact table-by-table split and what it means for someone who obtains the raw database file. Since 2.6.0 the metadata that travels between nodes, and what blind copies store, can be encrypted as well (a one-way switch for the whole network, off until the owner turns it on): see [Metadata encryption](#metadata-encryption-sync-protocol-4) below.
 
 ### Encryption Layers
 
@@ -75,9 +75,10 @@ API agent keys use a separate wrapping mechanism:
 ### Data at Rest
 
 - All article, version, and media content is stored encrypted in SQLite (or, for media bytes, as `.enc` files on disk)
-- Titles, folder paths/names, tag names, and timestamps are stored in plaintext — see [ADR-0005](docs/adr/0005-plaintext-metadata.md)
+- Titles, folder paths/names, tag names, and timestamps are stored in plaintext — see [ADR-0005](docs/adr/0005-plaintext-metadata.md); on a full node this stays so after metadata encryption is switched on, while the event log and blind copies then hold them only sealed
 - Keys are never persisted in plaintext
 - The Master DEK exists only in memory during an active session
+- Since 2.6.0 the owner can also encrypt the database files themselves, per node, on purpose: see [Encrypted database](#encrypted-database-260-opt-in-per-node) below
 - Salt and wrapped key material are stored per-slot for offline brute-force resistance
 
 ### iPhone Regular App
@@ -85,7 +86,9 @@ API agent keys use a separate wrapping mechanism:
 The source-only iPhone regular app keeps the vault in its app container, excluded from iCloud and computer backups. Its master password
 is never stored; the Master DEK exists only while the app is unlocked. Optional Face ID / Touch ID unlock uses a random key in the
 device-only Keychain, gated by the current biometric set, to wrap the DEK rather than storing the password. The app has no listener or
-server surface: it calls pinned peers while open and for the short time iOS grants as it leaves the foreground.
+server surface: it calls pinned peers while open and for the short time iOS grants as it leaves the foreground. The phones' own database
+encryption (2.6.0) is built and tested but stays hidden until its native release gate has been run on a device
+([docs/sealed-database.md](docs/sealed-database.md#phones)); neither phone ever hands a database key or a page key to the Keystore or the Keychain.
 
 ### Online DEK Rotation
 
@@ -182,10 +185,70 @@ What each choice protects against, and what it does not: a pin cannot be satisfi
 duress; a normal certificate can, so anyone a public authority issues the name's certificate to can impersonate the hub's TLS
 endpoint to a blind copy. What that gets them is limited: a blind copy authenticates by an Ed25519 challenge and verifies the Ed25519
 signature of every package under the key its call code carries, so a man in the middle cannot hand it forged data (it can withhold
-it), and what travels is ciphertext plus the plaintext metadata every node holds (ADR 0005), never the master key. A stolen
+it), and what travels is ciphertext plus the plaintext metadata every node holds (ADR 0005; sealed once metadata encryption is
+on), never the master key. A stolen
 blind-copy token (one hour) can pull exactly that and nothing more; the replica route limits each device to 20 requests per ten
 minutes, and revoking the copy in Admin stops its token at once. The blind apps accept a normal-certificate node only over https
 to the call code's own origin, with no redirect and no fall-back to http.
+
+### Metadata encryption (sync protocol 4)
+
+Off until a superadmin switches it on for the whole network (Admin → Metadata encryption, or `bmb sync activate`; the
+operator guide is in [docs/sync.md](docs/sync.md#switching-metadata-encryption-on), the cryptography in
+[docs/encryption.md](docs/encryption.md#metadata-encryption-sync-protocol-4)).
+
+What it protects against: anyone who sees sync traffic or relays it without the master DEK — a blind node and whoever
+operates or seizes its volume (after its first encrypted baseline), a phone or desktop blind copy, a reverse proxy, a
+network observer behind a broken TLS — learns no title, path, tag, folder or file name and not the shape of the tree:
+every content event travels and is stored sealed (AES-256-GCM under a metadata key that is itself wrapped under the
+master DEK), and a tampered or replayed envelope is refused or quarantined, never applied and never read as protocol
+3. A node a DEK rotation left out cannot open the metadata key generation that rotation creates, so it reads nothing
+written afterwards. The generation is created in the same transaction that swaps the DEK; until its `metadata_key_set`
+event is logged the initiator writes no sealed metadata (503, retried), so there is no window in which something is
+sealed with the previous generation.
+
+What it does not protect against: anyone holding the master password or the master DEK — every full node opens
+everything, and keeps titles in clear in its own database unless the owner has encrypted that node's database (below); the fields that stay readable by
+design (outer event ids, node ids, Lamport times, sizes and timing; the payloads of control events, including device
+display names; the exact list is `docs/design/protocol4-clear-fields.golden.txt`); copies made before the switch
+(backups, snapshots, an old blind copy's database), which the operator guide asks you to retire.
+
+Design points worth knowing: the switch is one way (no deactivation event; the way back is restoring the backup taken
+before it, losing later changes); a 2.5 node is refused (426) once a node has switched, and a 2.6 node that has not
+pulled the switch yet is still accepted only because it shows the capability; the switch re-asks the master password
+and is refused for agents and while anything blocks it; a locked full node holds sealed events (it cannot open them)
+and serves them onward unchanged, and applies them at unlock in log order with the originator's authority as it was
+at receipt, so a revocation that arrived meanwhile cannot split the mesh; while events are held, compaction, a DEK
+rotation, a network restore and the switch are refused. Unwrapped metadata keys live only in memory and are wiped at
+lock; a node that cannot open any key refuses to write rather than write in clear. No log line carries a title, path,
+tag or name from a sealed event (a test scans the logs of the whole sealed path for canaries).
+
+### Encrypted database (2.6.0, opt-in per node)
+
+Off until the owner presses "Encrypt this node" (Admin → Database encryption, or `bmb vault seal`); no update, start, join or restore
+encrypts anything by itself. The operator guide is [docs/sealed-database.md](docs/sealed-database.md); the design is
+[docs/design/step-b-spec.md](docs/design/step-b-spec.md).
+
+What it protects against: a stolen disk, a copied data folder, a backup of it, or a cloud snapshot of the volume. The vault and chat
+databases are encrypted page by page (SQLCipher 4 format, SQLite3 Multiple Ciphers) under keys derived from a per-node database key that
+only the master key can unwrap; no table name, title, path, tag, user, agent or chat title is readable in any file the node writes. A locked
+node holds no key in memory. The migration verifies the encrypted copy against the original before it swaps, makes an encrypted
+way-back snapshot first, overwrites and deletes the plain files it replaced, and refuses to start while another plain copy of the vault
+lies anywhere in the data folder (found by content, not by name). A node whose folder holds a plain companion beside the encrypted pair
+refuses to start and says why. While locked, a node keeps relaying its peers' sealed events from a small plain *boot store* (wrapped keys,
+the peer list, opaque events); it applies them at the next unlock.
+
+What it does not protect against: process memory, swap, hibernation files and crash dumps of an **unlocked** node; free-space remnants of
+the plain files from before the switch (SSD wear levelling, copy-on-write file systems: use full-disk encryption as well); plaintext
+copies the owner made or asked for (exports, downloads, a cold backup, a hard link outside the data folder); file sizes and counts; and
+anything that puts a key next to the data. **Auto-unlock does exactly that, by the owner's choice:** on a desktop it uses the OS secret
+store (the protection rests on the account password); on a server "Start unlocked after a restart" keeps a key on the server itself,
+behind a strong warning and a typed confirmation, so a stolen disk then opens everything. Neither is ever turned on by an upgrade, a
+migration, a restore, a default or an environment variable, and a restore starts a server locked.
+
+Backups of an encrypted node are file copies of a **stopped** node's data folder (a running node's database, `-wal`, `-shm` and boot
+store change at different moments), taken without `server-auto-unlock.*` and `os-auto-unlock.dat`, which would otherwise carry the key
+that opens them. `bmb vault verify` is the check after a restore.
 
 ### The master password is the network, not the node
 

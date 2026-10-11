@@ -18,6 +18,9 @@ namespace BeeMemoryBank.Api.Services;
 
 public partial class SnapshotService
 {
+    /// <summary>The fingerprint of the master DEK a join snapshot is sealed under, or null while the vault is locked (the join cache key).</summary>
+    public string? JoinKeyFingerprint() => _keys?.GetJoinKeyFingerprint();
+
     /// <summary>
     /// Signs with the node identity through the key operations this instance was given. Without any (test scaffolding) only an
     /// identity that needs no key signs - a legacy plaintext seed (v=0), or a v=2 one whose seed is not there and says so - exactly as
@@ -43,14 +46,31 @@ public partial class SnapshotService
     /// package (plan 4.2) is the one caller. See <see cref="SnapshotAdditions"/>.</param>
     /// <param name="outputDirectory">Where the archive is written instead of <see cref="SnapshotsDir"/>.
     /// A file there is invisible to listing, retention and delete, which only read the snapshots directory.</param>
+    /// <param name="sealForJoin">After activation (docs/design/step-a-spec.md 11): the database entry is a BMBCH1 container under the master DEK
+    /// ("dbCipher": "bmbch1" in the manifest) instead of plain SQLite. Refuses while the vault is locked; wins over <paramref name="encryptDb"/>.</param>
+    /// <param name="wipeStaging">The plain working copy goes through <c>SecureFileWipe</c> (overwritten with random bytes, then removed) instead of
+    /// being truncated and deleted: the pre-encryption snapshot of a node that is about to be sealed (docs/design/step-b-spec.md 10.4 step 3). The
+    /// container takes the copy's name only after the wipe. A node that is already sealed has no plain copy to wipe.</param>
+    /// <remarks>
+    /// On a sealed node (docs/design/step-b-spec.md 8.1, 8.3) the working copy is a <c>VACUUM INTO</c> of the keyed vault, so it is encrypted with the
+    /// vault's page key at every moment; it is filtered through keyed connections, and its database entry is a container built from its plain image
+    /// in memory. No plain SQLite file exists. <c>encryptDb: false</c> is refused there.
+    /// </remarks>
     public async Task<SnapshotInfo> CreateAsync(
         bool filterSecrets = true,
         bool sign = true,
         long? cpSequenceNum = null,
         bool encryptDb = true,
         SnapshotAdditions? additions = null,
-        string? outputDirectory = null)
+        string? outputDirectory = null,
+        bool sealForJoin = false,
+        bool wipeStaging = false)
     {
+        // A sealed node never writes a plain image (spec 8.1): the only container writer it has for a join is sealForJoin.
+        if (_connFactory.IsSealed && !encryptDb && !sealForJoin)
+            throw new InvalidOperationException(
+                "This node's database is encrypted: a snapshot of it is always encrypted too. A plain snapshot is not made.");
+
         var outputDir = outputDirectory ?? SnapshotsDir;
         Directory.CreateDirectory(outputDir);
 
@@ -82,6 +102,9 @@ public partial class SnapshotService
         // Inside the data folder, owner-only, swept at the next start if this process dies before the finally below:
         // until FilterSecretsFrom has run, this is the whole database (key slots, wrapped key, password hashes).
         var tempDb = SnapshotStaging.NewFile(_dataPath);
+        var plainWiped = false;
+        var completed = false;
+        string? archive = null;
         try
         {
             using (var conn = (SqliteConnection)_connFactory.CreateConnection())
@@ -102,7 +125,26 @@ public partial class SnapshotService
                 CompactInPlace(tempDb);
 
             bool dbEncrypted = false;
-            if (encryptDb)
+            string? dbCipher = null;
+            if (sealForJoin)
+            {
+                // Never a plain file: a locked vault (or a node with no key operations) is a refusal, not a downgrade.
+                if (_keys is null)
+                    throw new InvalidOperationException("This node cannot seal a join snapshot: it has no key operations.");
+                if (_connFactory.IsSealed)
+                {
+                    var pageKey = _connFactory.CopyPageKey()!;
+                    try { await _keys.SealJoinSealedDatabaseAsync(tempDb, pageKey); }
+                    finally { Array.Clear(pageKey); }
+                }
+                else
+                {
+                    await _keys.SealJoinDatabaseAsync(tempDb);
+                }
+                dbEncrypted = true;
+                dbCipher = "bmbch1";
+            }
+            else if (encryptDb)
             {
                 // Refuse rather than silently downgrade: falling back to "write it unencrypted"
                 // whenever the vault happens to be locked would land a plain SQLite file holding
@@ -121,7 +163,24 @@ public partial class SnapshotService
                 // so a running node cannot end up in that state. A locked vault (and a blind node,
                 // which never holds a master DEK) makes EncryptDatabaseAsync throw.
                 if (_keys != null)
-                    dbEncrypted = await _keys.EncryptDatabaseAsync(tempDb);
+                {
+                    if (_connFactory.IsSealed)
+                    {
+                        // The working copy is encrypted with the vault's page key; the container is built from its plain image in memory.
+                        var pageKey = _connFactory.CopyPageKey()!;
+                        try { dbEncrypted = await _keys.EncryptSealedDatabaseAsync(tempDb, pageKey); }
+                        finally { Array.Clear(pageKey); }
+                    }
+                    else if (wipeStaging)
+                    {
+                        dbEncrypted = await _keys.EncryptDatabaseAsync(tempDb, wipePlain: true, AfterStagingOverwrite);
+                        plainWiped = dbEncrypted;
+                    }
+                    else
+                    {
+                        dbEncrypted = await _keys.EncryptDatabaseAsync(tempDb);
+                    }
+                }
             }
 
             var allFiles = new Dictionary<string, string>();
@@ -197,6 +256,9 @@ public partial class SnapshotService
                 ["snapshotFormatVersion"] = 4,
                 ["dbEncrypted"] = dbEncrypted
             };
+
+            if (dbCipher != null)
+                manifestDict["dbCipher"] = dbCipher;
 
             // Producer node id always included when known. Upload-side signature verification
             // (SaveUploadedAsync) requires this field to find the originator in whitelist.
@@ -302,6 +364,7 @@ public partial class SnapshotService
                 }
             }
 
+            archive = filePath;
             if (sign)
             {
                 // Sidecar signature over (manifest || file content) for sync-export back-compat.
@@ -313,12 +376,38 @@ public partial class SnapshotService
             }
 
             var fi = new FileInfo(filePath);
+            completed = true;
             return new SnapshotInfo(fileName, fi.Length, fi.LastWriteTimeUtc,
                 cpSequenceNum, producerNodeId, sign);
         }
         finally
         {
-            if (File.Exists(tempDb)) File.Delete(tempDb);
+            // A failure before the container was written leaves the plain working copy: with wipeStaging it is overwritten before it goes.
+            AfterStagingWork?.Invoke(tempDb);
+            RemoveWorkingCopy(tempDb, wipe: wipeStaging && !plainWiped, completed, archive);
         }
     }
+
+    /// <summary>
+    /// Removes a working copy with its SQLite sidecars: the one cleanup of <see cref="SqliteStaging"/>, wiped when <paramref name="wipe"/> asks
+    /// for it. A copy that stays is repair-required: after a completed snapshot that is the failure reported, never a snapshot made, so the
+    /// archive written for it goes as well.
+    /// </summary>
+    private void RemoveWorkingCopy(string tempDb, bool wipe, bool completed, string? archive)
+    {
+        Func<string, bool>? wipeFile = wipe ? path => SecureFileWipe.TryWipe(path, AfterStagingOverwrite) : null;
+        if (SqliteStaging.TryCleanup(tempDb, wipeFile)) return;
+        _logger?.LogError("A working copy of a snapshot could not be removed; node repair is required.");
+        if (!completed) return;
+        if (archive is not null)
+            foreach (var file in new[] { archive, archive + ".sig" })
+                try { File.Delete(file); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* a leftover file is no snapshot */ }
+        throw new IOException("The working copy of the snapshot could not be removed. The snapshot requires repair and was not reported as made.");
+    }
+
+    /// <summary>Test seam of <c>wipeStaging</c>: called with the working copy after it was overwritten and flushed, before it is truncated.</summary>
+    internal Action<string>? AfterStagingOverwrite { get; set; }
+
+    /// <summary>Test seam: called with the working copy once its work is done and before it is removed; a test plants or holds a sidecar of it here.</summary>
+    internal Action<string>? AfterStagingWork { get; set; }
 }

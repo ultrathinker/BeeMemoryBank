@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Blind.Format2;
 using BeeMemoryBank.Sync.Recovery;
 using Dapper;
 
@@ -639,6 +640,42 @@ public class RecoveryEventApplierTests : IAsyncLifetime
         var act = () => Apply(_pc.Secret(name, FpA, lamport: 10, fill: 1));
 
         await act.Should().ThrowAsync<InvalidDataException>();
+    }
+
+    // --- control.db -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Parity of the package check with the appliers (review round 3): whatever these appliers write - an active strong and device
+    /// box, a box superseded or retired with its material cleared, a link, an anchor whose position vector is keyed as sent, a secret -
+    /// travels in control.db and must pass <see cref="ControlDbValidator"/>, which copies their rules.
+    /// </summary>
+    [Fact]
+    public async Task TheRowsTheAppliersWrite_AreAcceptedByTheControlDbValidator()
+    {
+        var strong = Guid.NewGuid();
+        var superseded = Guid.NewGuid();
+        var retired = Guid.NewGuid();
+        await Apply(_pc.BoxSet(strong, "strong", "s1024t4", FpA, lamport: 10));
+        await Apply(_phone.BoxSet(superseded, "device", "d64t3", FpA, lamport: 11));
+        await Apply(_phone.BoxSet(retired, "device", "d64t3", FpA, lamport: 20));
+        await Apply(_laptop.BoxSet(Guid.NewGuid(), "device", "d64t3", FpB, lamport: 21));
+        await Apply(_pc.Retire([retired], strong, lamport: 30));
+        await Apply(_pc.Link(Guid.NewGuid(), FpA, FpB, lamport: 40, fill: 3));
+        await Apply(_pc.Anchor(Guid.NewGuid(), lamport: 50));
+        await Apply(_pc.Secret($"restic:{Guid.NewGuid()}", FpA, lamport: 60, fill: 4));
+        (await Box(superseded))!.Status.Should().Be("R", "the control: a superseded box is in the table, without its material");
+        (await Box(retired))!.Status.Should().Be("R");
+
+        var file = Path.Combine(Path.GetTempPath(), "bmb_ctlparity_" + Guid.NewGuid().ToString("N") + ".db");
+        try
+        {
+            Format2TestKit.CopyControlTables(_node.Factory, file);
+            ControlDbValidator.Validate(file).Should().Be(60);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
     }
 
     // --- helpers ----------------------------------------------------------------------------

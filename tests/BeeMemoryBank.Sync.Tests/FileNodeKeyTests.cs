@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -168,6 +169,187 @@ public sealed class FileNodeKeyTests : IDisposable
         }
 
         Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty("no loser's temp file is left behind");
+    }
+
+    /// <summary>
+    /// BMB-190: the same race on a key file that EXISTS but holds no seed (empty, or cut short by a start that died
+    /// mid-write on a build that wrote straight to the final name). That path replaces the file deliberately, and the
+    /// check that it is still torn is not atomic with the replacement on any platform: two starts both saw the torn file,
+    /// both renamed their seed over it, and the first went on with an identity that was no longer in the file. Every
+    /// start must end up with the key that is in the file, and exactly one of them made it.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(31)]
+    public void ManyStartsAtOnceOnATornKeyFile_AllGetTheKeyThatIsInTheFile(int tornLength)
+    {
+        const int rounds = 100, starts = 4;
+        for (var round = 0; round < rounds; round++)
+        {
+            var path = Path.Combine(_dir, $"torn-{tornLength}-{round}.key");
+            WriteTornKeyFile(path, tornLength);
+            var key = new FileNodeKey(path);
+            using var barrier = new Barrier(starts);
+            var results = new (byte[] PublicKey, bool Created)[starts];
+
+            var tasks = Enumerable.Range(0, starts).Select(i => Task.Factory.StartNew(() =>
+            {
+                barrier.SignalAndWait();
+                var pub = new FileNodeKey(path).LoadOrCreate(out var created);
+                results[i] = (pub, created);
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+            Task.WaitAll(tasks, TimeSpan.FromSeconds(60)).Should().BeTrue();
+
+            foreach (var result in results)
+                result.PublicKey.Should().Equal(results[0].PublicKey, $"round {round}: every start must end up with one identity");
+            key.Matches(results[0].PublicKey).Should().BeTrue($"round {round}: the key returned is the key in the file");
+            results.Count(r => r.Created).Should().Be(1, $"round {round}: exactly one start replaced the torn file");
+        }
+
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty("no loser's temp file is left behind");
+    }
+
+    /// <summary>
+    /// The loser's side of BMB-190, deterministic: a start that finds the key torn and the replace lock held waits, and
+    /// when it gets the lock it looks at the key again and takes the seed the holder put there instead of writing its own.
+    /// </summary>
+    [Fact]
+    public void ATornKey_WhileAnotherStartHoldsTheLock_WaitsAndThenTakesTheSeedThatStartWrote()
+    {
+        var key = NewKey();
+        WriteTornKeyFile(key.Path, 0);
+        var (winnerPublicKey, winnerSeed) = Ed25519Signer.GenerateKeyPair();
+        Task<(byte[] PublicKey, bool Created)> waiting;
+        var held = key.HoldReplaceLock();
+        try
+        {
+            waiting = Task.Factory.StartNew(() =>
+            {
+                var pub = new FileNodeKey(key.Path).LoadOrCreate(out var created);
+                return (pub, created);
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            waiting.Wait(TimeSpan.FromMilliseconds(400)).Should().BeFalse("the key is being replaced by the holder; nobody else may touch it");
+            File.WriteAllBytes(key.Path, winnerSeed);
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        waiting.Wait(TimeSpan.FromSeconds(30)).Should().BeTrue();
+        waiting.Result.PublicKey.Should().Equal(winnerPublicKey, "the start that waited takes the winner's identity");
+        waiting.Result.Created.Should().BeFalse();
+        File.ReadAllBytes(key.Path).Should().Equal(winnerSeed, "the waiting start did not write over the winner's seed");
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// A replace lock that stays held is a start that failed, not a reason to go on without the lock: fail closed, the
+    /// torn file untouched, no temp left; the next start (lock free) repairs it.
+    /// </summary>
+    [Fact]
+    public void ATornKey_WhenTheLockStaysHeld_FailsAndLeavesTheFileAlone()
+    {
+        var key = new FileNodeKey(Path.Combine(_dir, FileNodeKey.FileName)) { ReplaceLockWait = TimeSpan.FromMilliseconds(300) };
+        WriteTornKeyFile(key.Path, 16);
+        var torn = File.ReadAllBytes(key.Path);
+
+        using (key.HoldReplaceLock())
+        {
+            var act = () => key.LoadOrCreate(out _);
+            act.Should().Throw<IOException>().WithMessage("*replacing it*");
+        }
+
+        File.ReadAllBytes(key.Path).Should().Equal(torn);
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty();
+        var pub = key.LoadOrCreate(out var created);
+        created.Should().BeTrue();
+        key.Matches(pub).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// BMB-190: Windows does not let a rename replace a file while another start still has its
+    /// pre-lock read handle open. The repairing start retries that transient sharing denial while
+    /// keeping the replace lock, rather than failing startup or minting another identity.
+    /// </summary>
+    [Fact]
+    public void ATornKey_WhenAWindowsReaderTemporarilyBlocksReplacement_RetriesAndRepairsIt()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var key = NewKey();
+        WriteTornKeyFile(key.Path, 0);
+
+        Task<(byte[] PublicKey, bool Created)> repairing;
+        using (new FileStream(key.Path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            repairing = Task.Factory.StartNew(() =>
+            {
+                var pub = key.LoadOrCreate(out var created);
+                return (PublicKey: pub, Created: created);
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+            repairing.Wait(TimeSpan.FromMilliseconds(300)).Should().BeFalse(
+                "a Windows reader is still temporarily preventing the atomic replacement");
+        }
+
+        // Releasing the reader lets the bounded retry finish with one complete, owner-only seed.
+        repairing.Wait(TimeSpan.FromSeconds(30)).Should().BeTrue();
+        repairing.Result.Created.Should().BeTrue();
+        key.Matches(repairing.Result.PublicKey).Should().BeTrue();
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// The lock file is only held, never written: it is owner-only like the key beside it, and free again once the key
+    /// has been replaced. A first start (no key file at all) does not need a lock and leaves nothing but the key.
+    /// </summary>
+    [Fact]
+    public void TheReplaceLock_IsFreeAfterTheRepair_IsOwnerOnly_AndIsNotTakenForAMissingKey()
+    {
+        var missing = NewKey();
+        missing.LoadOrCreate(out _);
+        Directory.GetFiles(_dir).Should().ContainSingle().Which.Should().Be(missing.Path, "a first start renames its seed into place and takes no lock");
+
+        var torn = new FileNodeKey(Path.Combine(_dir, "torn.key"));
+        WriteTornKeyFile(torn.Path, 5);
+        var pub = torn.LoadOrCreate(out var created);
+        created.Should().BeTrue();
+        torn.Matches(pub).Should().BeTrue();
+
+        File.Exists(torn.ReplaceLockPath).Should().BeTrue();
+        new FileInfo(torn.ReplaceLockPath).Length.Should().Be(0, "the lock file never holds anything");
+        if (!OperatingSystem.IsWindows())
+            File.GetUnixFileMode(torn.ReplaceLockPath).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        using (torn.HoldReplaceLock()) { }
+    }
+
+    /// <summary>A link at the lock path is refused like one at the key path: the lock is taken through it nowhere.</summary>
+    [Fact]
+    public void ATornKey_WithALinkAtTheLockPath_IsRefused_AndLeftAlone()
+    {
+        if (OperatingSystem.IsWindows()) return; // symlinks need privileges there; the code path is the same
+
+        var key = NewKey();
+        WriteTornKeyFile(key.Path, 3);
+        var torn = File.ReadAllBytes(key.Path);
+        var decoy = Path.Combine(_dir, "decoy");
+        File.WriteAllBytes(decoy, []);
+        File.CreateSymbolicLink(key.ReplaceLockPath, decoy);
+
+        var act = () => key.LoadOrCreate(out _);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*symlink*");
+        File.ReadAllBytes(key.Path).Should().Equal(torn);
+        new FileInfo(decoy).Length.Should().Be(0);
+    }
+
+    /// <summary>A key file as a torn write leaves it: owner-only like the real one, holding the first <paramref name="length"/> bytes of a seed.</summary>
+    private static void WriteTornKeyFile(string path, int length)
+    {
+        using var file = OwnerOnlyFile.CreateNew(path);
+        file.Write(RandomNumberGenerator.GetBytes(length));
     }
 
     [Fact]

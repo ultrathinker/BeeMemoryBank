@@ -228,6 +228,15 @@ public static class RestoreEndpoints
                 }
                 : null,
             retiredKeys = progress.Result?.RetiredKeys,
+            // A restore from a baseline: what the replay of the deltas did; "incomplete" says the blind node holds more than one restore takes.
+            replay = progress.Result?.Replay is { } replay
+                ? new
+                {
+                    total = replay.Total, applied = replay.Applied, dropped = replay.Dropped, deferred = replay.Deferred, skipped = replay.Skipped,
+                    incomplete = replay.Incomplete,
+                    message = replay.Incomplete ? "Incomplete: sync with the blind node to finish." : null,
+                }
+                : null,
             claim = progress.Result?.Claim,
             unconfirmedPeers = progress.Result?.UnconfirmedPeers?.Select(p => new { id = p.NodeId, name = p.DisplayName, wasSuperadmin = p.WasSuperadmin }).ToList(),
         }));

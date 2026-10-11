@@ -24,10 +24,14 @@ public class FullIosBoundaryTests
     private const string AppName = "BeeMemoryBank.FullIos";
     private const string GoldenFile = "docs/full-node/IOS-APP.golden.txt";
 
-    /// <summary>Never in the app, whatever the golden file says.</summary>
+    /// <summary>
+    /// Never in the app, whatever the golden file says. AppPaths is no longer on this list: the encrypted database (docs/design/step-b-spec.md 17.3 rule 6,
+    /// the one project reference Step B adds, Vault to AppPaths) finishes or undoes an interrupted encryption at the phone's start with the resolver, the
+    /// content scan and the wipe that live there, so the app's closure carries it.
+    /// </summary>
     private static readonly string[] NeverInTheApp =
     [
-        "BeeMemoryBank.Hosting", "BeeMemoryBank.Hosting.AspNetCore", "BeeMemoryBank.AppPaths", "BeeMemoryBank.Infrastructure",
+        "BeeMemoryBank.Hosting", "BeeMemoryBank.Hosting.AspNetCore", "BeeMemoryBank.Infrastructure",
         "BeeMemoryBank.Platforms.Apple", "BeeMemoryBank.Profiles", "BeeMemoryBank.Rekey", "BeeMemoryBank.Api", "BeeMemoryBank.Web",
         "BeeMemoryBank.Cli", "BeeMemoryBank.Desktop", "BeeMemoryBank.Node", "BeeMemoryBank.Mobile", "BeeMemoryBank.Blind.AppCore",
         "BeeMemoryBank.Blind.PhoneClient", "BeeMemoryBank.BlindNode", "BeeMemoryBank.BlindIos", "BeeMemoryBank.BlindMobile",

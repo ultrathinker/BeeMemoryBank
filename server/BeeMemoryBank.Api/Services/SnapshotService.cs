@@ -5,9 +5,11 @@ using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync.Metadata;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 
@@ -29,6 +31,8 @@ public partial class SnapshotService
     // SessionSnapshotKeyOperations (master DEK); a blind node passes a signer that only has its external v=2 key (plan 3.5) and
     // refuses the rest. Null = no key capability at all (test scaffolding): nothing is encrypted and only a key-free identity signs.
     private readonly ISnapshotKeyOperations? _keys;
+    private readonly ISyncProtocolPolicy? _protocolPolicy;
+    private readonly IVaultGate? _vaultGate;
 
     public string SnapshotsDir => Path.Combine(_dataPath, "snapshots");
 
@@ -40,7 +44,9 @@ public partial class SnapshotService
         ILogger<SnapshotService>? logger = null,
         IRestoreReplayShieldRepository? replayShieldRepo = null,
         IWhitelistRepository? whitelistRepo = null,
-        ISnapshotKeyOperations? keys = null)
+        ISnapshotKeyOperations? keys = null,
+        ISyncProtocolPolicy? protocolPolicy = null,
+        IVaultGate? vaultGate = null)
     {
         _dataPath = dataPath;
         _connFactory = connFactory;
@@ -50,6 +56,18 @@ public partial class SnapshotService
         _replayShieldRepo = replayShieldRepo;
         _whitelistRepo = whitelistRepo;
         _keys = keys;
+        _protocolPolicy = protocolPolicy;
+        _vaultGate = vaultGate;
+    }
+
+    private async Task CleanupStagingOrFailAsync(string directory)
+    {
+        if (SnapshotStaging.TryCleanupDirectory(directory)) return;
+
+        _logger?.LogError("Could not remove clear vault staging directory {StagingDirectory}; node repair is required.", directory);
+        if (_connFactory.IsSealed && _vaultGate is not null)
+            await _vaultGate.CloseAsync("clear staging cleanup failed");
+        throw new IOException("The clear restore staging files could not be removed. The restore requires repair and was not reported as successful.");
     }
 
     public List<SnapshotInfo> List()

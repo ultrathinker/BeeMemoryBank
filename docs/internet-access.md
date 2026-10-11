@@ -196,7 +196,9 @@ calls a node. Your server behind the proxy above can be that node — a *hub*. T
 **What this exposes.** The two routes need a sync token, which a device gets only by signing in with its own key
 — one you paired — and the device's whitelist entry is checked on every request. What they serve is ciphertext
 plus the metadata every node holds in plaintext (titles, folder paths, tags, file names; see
-[ADR-0005](adr/0005-plaintext-metadata.md)); a blind copy never gets the master key. The replica route also
+[ADR-0005](adr/0005-plaintext-metadata.md)) — once metadata encryption is switched on
+([sync.md](sync.md#switching-metadata-encryption-on)), that metadata is sealed too and what remains readable is ids,
+times, sizes and the control events (device names among them); a blind copy never gets the master key. The replica route also
 limits each device to 20 requests every ten minutes. If a copy is lost, revoke it in Admin (*Trusted Nodes →
 Revoke*); its token stops working at once. Turning the hub off again (the same dialog) stops new pairings.
 
@@ -279,8 +281,12 @@ If you are behind CGNAT, or do not want a hole in the router, nothing needs to b
   an agent key), search queries, the master password when you unlock, session cookies and agent keys.
   It does not see the data at rest on your machine. Only the sync traffic between nodes carries
   ciphertext bodies; even there titles, folder paths, tags and names are not encrypted (see
-  [ADR-0005](adr/0005-plaintext-metadata.md)). Decide if you are comfortable with that. Your own
-  proxy on your own machine (Caddy, nginx) or a VPN (below) has no such third party.
+  [ADR-0005](adr/0005-plaintext-metadata.md)) — **until you switch on metadata encryption (2.6.0)**:
+  after that the sync stream between nodes is sealed envelopes, and a TLS terminator relaying it
+  learns sizes, times and node ids, not titles (see
+  [sync.md](sync.md#metadata-encryption-protocol-4)). What it sees of the Web UI and MCP traffic —
+  the plaintext your browser and agents get — does not change. Decide if you are comfortable with
+  that. Your own proxy on your own machine (Caddy, nginx) or a VPN (below) has no such third party.
 - **A VPN such as Tailscale** keeps the node private: only your own devices on the tailnet can reach
   it. `tailscale serve --bg 5301` gives the Web UI an HTTPS name inside the tailnet (do not use
   Funnel, it publishes to the whole internet). Nothing is exposed to strangers, so this is the safest

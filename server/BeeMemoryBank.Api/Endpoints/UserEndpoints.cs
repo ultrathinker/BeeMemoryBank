@@ -135,7 +135,7 @@ public static class UserEndpoints
                 // box with it while it is in memory (plan 6.3). Background; the response does not wait.
                 if ((await users.GetByIdAsync(userId))?.KeySlotId != null)
                     _ = recovery.OnPasswordChanged(req.NewPassword);
-                return Results.Ok();
+                return ConfirmedWithWayBackNotice(ctx);
             }
             catch (UnauthorizedAccessException)
             {
@@ -165,7 +165,7 @@ public static class UserEndpoints
                 var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
                 await auditRepo.LogAsync("user", id.ToString(), "user_password_admin_reset", "web",
                     $"Admin reset password for user #{id} by user {actor}");
-                return Results.Ok();
+                return ConfirmedWithWayBackNotice(ctx);
             }
             catch (KeyNotFoundException)
             {
@@ -181,4 +181,11 @@ public static class UserEndpoints
             }
         }).RequireSuperadmin();
     }
+
+    /// <summary>
+    /// The confirmation of a password change: empty as it always was, and with the sentence of docs/design/step-b-spec.md 10.7 while the way-back
+    /// snapshot of "Encrypt this node" exists (it still opens with the old password).
+    /// </summary>
+    private static IResult ConfirmedWithWayBackNotice(HttpContext ctx) =>
+        Services.Sealed.WayBackNotice.For(ctx.RequestServices) is { } notice ? Results.Ok(new { notice }) : Results.Ok();
 }

@@ -4,6 +4,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using Microsoft.Extensions.Caching.Memory;
+using BeeMemoryBank.Core.Exceptions;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -178,7 +179,7 @@ public static class ConceptTagEndpoints
                 await conceptTagService.RenameAsync(name, req.NewName);
                 return Results.NoContent();
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.Conflict(new ErrorResponse(ex.Message));
             }
@@ -196,7 +197,7 @@ public static class ConceptTagEndpoints
                 await conceptTagService.MergeAsync(req.Source, req.Target);
                 return Results.NoContent();
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.Conflict(new ErrorResponse(ex.Message));
             }
@@ -211,7 +212,7 @@ public static class ConceptTagEndpoints
                 await conceptTagService.DeleteAsync(name);
                 return Results.NoContent();
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.NotFound(new ErrorResponse(ex.Message));
             }

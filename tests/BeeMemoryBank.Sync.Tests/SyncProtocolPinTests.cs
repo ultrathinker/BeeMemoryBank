@@ -28,8 +28,10 @@ public class SyncProtocolPinTests
     [InlineData(1, true)]
     [InlineData(2, true)]
     [InlineData(3, true)]
+    // Step A (docs/design/step-a-spec.md 5.6): every 2.6 node reads protocol 4, activated or not.
+    [InlineData(4, true)]
     [InlineData(0, false)]
-    [InlineData(4, false)]
+    [InlineData(5, false)]
     public void TheEventProtocolsThisBuildCanApply(int version, bool canApply) =>
         SyncProtocolVersion.CanApply(version).Should().Be(canApply);
 }

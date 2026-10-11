@@ -41,7 +41,9 @@ public record EditContentResponse(Guid Id, bool Protected, bool Unlocked, string
 // POST /api/articles/{id}/unlock: the plaintext plus how long the recent-unlock window now lasts.
 public record UnlockArticleResponse(Guid Id, string Content, int? UnlockExpiresInSeconds);
 
-public record SessionStatusResponse(bool IsUnlocked);
+/// <param name="Sealed">True when this node's database is encrypted (docs/design/step-b-spec.md 5.6): then <see cref="State"/> says whether it is open.</param>
+/// <param name="State">The gate's state (<c>Plain</c>, <c>Closed</c>, <c>Opening</c>, <c>Importing</c>, <c>Open</c>, <c>Closing</c>).</param>
+public record SessionStatusResponse(bool IsUnlocked, bool Sealed = false, string State = "Plain");
 
 public record SessionSettingsResponse(int ExpireHours, bool SlidingExpiration);
 

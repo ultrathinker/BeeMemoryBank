@@ -9,7 +9,8 @@ namespace BeeMemoryBank.Api.Services.Recovery;
 /// <remarks>
 /// "confirmed" recomputes the state digest at the anchor's cut — every blob hashed — so it is kept until
 /// the newest anchor or the event log head changes (<see cref="RecoveryAnchorStatusCache"/>), not redone
-/// on every poll of the console.
+/// on every poll of the console. An activated blind host computes none (step-a-spec 10.3): "confirmed" is null
+/// and the anchor says who checks it instead, with its id and author.
 /// </remarks>
 public sealed class RecoveryAnchorStatusContributor(
     RecoveryStatusService status, IEventLogRepository events, RecoveryAnchorStatusCache cache) : IBlindStatusContributor
@@ -23,8 +24,15 @@ public sealed class RecoveryAnchorStatusContributor(
             return;
         }
         var key = (newest.AnchorId, await events.GetMaxSequenceAsync());
-        var matches = await cache.GetAsync(key, async () => (await status.NewestAnchorStateAsync())?.StateMatches ?? false);
-        b.Set("anchor", new Dictionary<string, object?> { ["created_at"] = newest.CreatedAt, ["confirmed"] = matches });
+        var matches = await cache.GetAsync(key, async () => await status.NewestAnchorStateAsync() is { } state ? state.StateMatches : false);
+        var anchor = new Dictionary<string, object?> { ["created_at"] = newest.CreatedAt, ["confirmed"] = matches };
+        if (matches is null)
+        {
+            anchor["id"] = newest.AnchorId;
+            anchor["author"] = newest.AuthorNodeId;
+            anchor["note"] = RecoveryStatusService.CheckedByARestoringNode;
+        }
+        b.Set("anchor", anchor);
     }
 }
 
@@ -32,9 +40,9 @@ public sealed class RecoveryAnchorStatusContributor(
 public sealed class RecoveryAnchorStatusCache
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private ((string AnchorId, long Head) Key, bool Matches)? _last;
+    private ((string AnchorId, long Head) Key, bool? Matches)? _last;
 
-    public async Task<bool> GetAsync((string AnchorId, long Head) key, Func<Task<bool>> compute)
+    public async Task<bool?> GetAsync((string AnchorId, long Head) key, Func<Task<bool?>> compute)
     {
         await _gate.WaitAsync();
         try

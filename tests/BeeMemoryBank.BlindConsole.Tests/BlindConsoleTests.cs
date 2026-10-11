@@ -111,6 +111,88 @@ public class BlindConsoleTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Step A (step-a-spec 10.1, 10.4): the status card shows the baseline's age, the delta count and the storage size,
+    /// never a note count, and warns when the baseline is older than 7 days while deltas pile up. The page's own render
+    /// function runs in Node against a status a node sends (a DOM stub stands in for the browser), so this checks what
+    /// the operator sees, not the source text.
+    /// </summary>
+    [Fact]
+    public async Task Page_Status_ShowsBaselineAgeDeltasAndSize_NeverANoteCount()
+    {
+        var fresh = await RenderStateAsync($$"""
+            {"version":"2.6.0","protocol":4,"role":"blind","activated":true,"data_path":"/app/data",
+             "stored":{"articles":12,"blobs":3,"bytes":4096},"free_bytes":1000000,
+             "baseline":{"id":"0f0f0f0f-0000-4000-8000-000000000000","created_at":"{{DateTime.UtcNow.AddHours(-3):O}}",
+                         "age_seconds":10800,"key_generation":2,"container_bytes":2048},
+             "deltas":{"count":812,"bytes":1048576},"legacy_copies":[],"peers":[],"jobs":[]}
+            """);
+        fresh.Should().Contain("Baseline").And.Contain("3 h old").And.Contain("key generation 2");
+        fresh.Should().Contain("812 deltas");
+        fresh.Should().Contain("3 blobs");
+        fresh.Should().NotContain("article", "no note count, even from a node that still sends one");
+        fresh.Should().NotContain("older than 7 days");
+
+        var stale = await RenderStateAsync("""
+            {"version":"2.6.0","protocol":4,"role":"blind","activated":true,"stored":{"blobs":3,"bytes":4096},
+             "baseline":{"id":"0f0f0f0f-0000-4000-8000-000000000000","created_at":"2026-01-01T00:00:00Z",
+                         "age_seconds":864000,"key_generation":2,"container_bytes":2048},
+             "deltas":{"count":5,"bytes":100},"legacy_copies":["/app/data/beememorybank.db.pre-seed"],"peers":[],"jobs":[]}
+            """);
+        stale.Should().Contain("older than 7 days");
+        stale.Should().Contain("beememorybank.db.pre-seed");
+
+        var none = await RenderStateAsync("""
+            {"version":"2.6.0","protocol":4,"role":"blind","activated":true,"stored":{"blobs":0,"bytes":10},
+             "baseline":null,"deltas":{"count":5,"bytes":100},"legacy_copies":[],"peers":[],"jobs":[]}
+            """);
+        none.Should().Contain("none yet");
+    }
+
+    /// <summary>Runs the page's script under Node with a DOM stub, calls render(status) and returns the status card's HTML.</summary>
+    private async Task<string> RenderStateAsync(string statusJson)
+    {
+        var html = await (await _factory.CreateClient().GetAsync("/")).Content.ReadAsStringAsync();
+        var start = html.IndexOf("<script>", StringComparison.Ordinal) + "<script>".Length;
+        var script = html[start..html.IndexOf("</script>", start, StringComparison.Ordinal)];
+        const string stub = """
+            const elements = {};
+            const element = () => ({ innerHTML: "", textContent: "", value: "", style: {}, open: false, onclick: null, onchange: null,
+                classList: { toggle() {}, add() {}, remove() {} }, addEventListener() {} });
+            globalThis.document = { getElementById: (id) => (elements[id] ??= element()) };
+            globalThis.location = { reload() {} };
+            globalThis.fetch = () => new Promise(() => {});
+            globalThis.alert = () => {}; globalThis.confirm = () => false;
+            """;
+        var harness = stub + "\n" + script + "\n" +
+            "render(JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8')));\n" +
+            "process.stdout.write(document.getElementById('state').innerHTML);\n";
+        var dir = Path.Combine(Path.GetTempPath(), "bmb_console_render_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var file = Path.Combine(dir, "page.js");
+            var status = Path.Combine(dir, "status.json");
+            await File.WriteAllTextAsync(file, harness);
+            await File.WriteAllTextAsync(status, statusJson);
+            var psi = new System.Diagnostics.ProcessStartInfo("node")
+                { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            psi.ArgumentList.Add(file);
+            psi.ArgumentList.Add(status);
+            using var node = System.Diagnostics.Process.Start(psi);
+            node.Should().NotBeNull("this test needs Node.js on PATH to run the console page script");
+            var stdout = await node!.StandardOutput.ReadToEndAsync();
+            var stderr = await node.StandardError.ReadToEndAsync();
+            await node.WaitForExitAsync();
+            node.ExitCode.Should().Be(0, $"the page's render must run: {stderr}");
+            return stdout;
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Login_ForwardsToApiLogin_WithThePasswordOnly()
     {

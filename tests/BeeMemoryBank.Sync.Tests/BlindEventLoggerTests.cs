@@ -24,7 +24,9 @@ public class BlindEventLoggerTests
     public async Task EveryLogMethod_ReturnsAFaultedTask_WithTheBlindNodeRefusal()
     {
         var logger = new BlindEventLogger(new CountingTrigger());
-        var methods = typeof(IEventLogger).GetMethods().Where(m => m.Name != nameof(IEventLogger.SignalSync)).ToList();
+        // Neither is a Log* method: BeginAuthoringAsync only opens the scope of an operation (a blind node runs none, and the default holds nothing).
+        var methods = typeof(IEventLogger).GetMethods()
+            .Where(m => m.Name != nameof(IEventLogger.SignalSync) && m.Name != nameof(IEventLogger.BeginAuthoringAsync)).ToList();
         methods.Count.Should().BeGreaterThan(15, "the interface has about twenty Log* methods; the scan must see them");
 
         foreach (var method in methods)
@@ -38,6 +40,16 @@ public class BlindEventLoggerTests
             var ex = await act.Should().ThrowAsync<InvalidOperationException>(method.Name);
             ex.Which.Message.Should().StartWith("Refusing to log a ").And.EndWith(" event: this is a blind node, and blind nodes never author events.", method.Name);
         }
+    }
+
+    [Fact]
+    public async Task BeginAuthoring_HoldsNothingBack()
+    {
+        IEventLogger logger = new BlindEventLogger(new CountingTrigger());
+
+        using var scope = await logger.BeginAuthoringAsync();
+
+        scope.Should().NotBeNull("a blind node authors nothing, so it has nothing to keep a rotation waiting for");
     }
 
     [Fact]

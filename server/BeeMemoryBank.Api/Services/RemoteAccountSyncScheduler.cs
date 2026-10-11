@@ -30,9 +30,17 @@ public class RemoteAccountSyncScheduler(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            // A sealed node with a closed database has no remote accounts to read (docs/design/step-b-spec.md 5.5).
+            try { await services.WaitUsableAsync(stoppingToken); }
+            catch (OperationCanceledException) { return; }
+
             try
             {
                 await RunOnceAsync(stoppingToken);
+            }
+            catch (VaultSealedException)
+            {
+                logger.LogDebug("RemoteAccountSyncScheduler stopped a cycle: the database was closed");
             }
             catch (Exception ex)
             {

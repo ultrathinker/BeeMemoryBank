@@ -66,8 +66,15 @@ public sealed class MdnsAnnouncer : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            try { await WaitVaultUsableAsync(stoppingToken); }
+            catch (OperationCanceledException) { break; }
+
             try { await EvaluateAsync(stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+            catch (VaultSealedException)
+            {
+                _logger.LogDebug("MdnsAnnouncer stopped a cycle: the database was closed");
+            }
             catch (Exception ex)
             {
                 // Never let a multicast socket hiccup kill the loop or the host.
@@ -80,6 +87,20 @@ public sealed class MdnsAnnouncer : BackgroundService
 
         // On shutdown, send a goodbye so peers stop seeing us.
         StopAdvertising(reason: "shutdown");
+    }
+
+    /// <summary>
+    /// A sealed node whose database is closed announces nothing (docs/design/step-b-spec.md 5.5): what it had announced is withdrawn, and the loop
+    /// waits for the unlock. A plain node and a host without a gate do not wait.
+    /// </summary>
+    private async Task WaitVaultUsableAsync(CancellationToken ct)
+    {
+        IVaultGate? gate;
+        using (var scope = _scopeFactory.CreateScope())
+            gate = scope.ServiceProvider.GetService<IVaultGate>();
+        if (gate is null || gate.IsUsable) return;
+        if (_advertising) StopAdvertising(reason: "database closed");
+        await gate.WaitUsableAsync(ct);
     }
 
     /// <summary>True while the announcement is up (for the tests: the real thing needs a multicast network).</summary>

@@ -136,6 +136,11 @@ public class BlobRepository(DbConnectionFactory factory) : BaseRepository(factor
         // a future event kind that references a blob is covered without touching this query. Events
         // of a hard-deleted article keep its blobs alive until compaction removes the events.
         // tbl_conflict_version is not consulted: it still stores its ciphertext inline.
+        //
+        // Step A (docs/design/step-a-spec.md 3.10, 9.6): a sealed event names its blobs in the envelope's clear "b" list
+        // (its payload has no ciphertext_sha256), and a blind host's current baseline names the blobs it needs in
+        // tbl_baseline_blob. Both keep their blobs, on every host: on a blind host the content-table references are
+        // empty after the first adoption, so these two are what holds its blobs.
         await conn.ExecuteAsync("BEGIN IMMEDIATE");
         try
         {
@@ -146,7 +151,10 @@ public class BlobRepository(DbConnectionFactory factory) : BaseRepository(factor
                     AND hash NOT IN (SELECT ciphertext_hash FROM tbl_article_version WHERE ciphertext_hash IS NOT NULL)
                     AND hash NOT IN (SELECT ciphertext_sha256 FROM tbl_media          WHERE ciphertext_sha256 IS NOT NULL)
                     AND hash NOT IN (SELECT json_extract(payload, '$.ciphertext_sha256') FROM tbl_event
-                                     WHERE json_extract(payload, '$.ciphertext_sha256') IS NOT NULL)",
+                                     WHERE json_extract(payload, '$.ciphertext_sha256') IS NOT NULL)
+                    AND hash NOT IN (SELECT b.value FROM tbl_event e, json_each(e.payload, '$.b') b
+                                     WHERE e.event_type = 'sealed' AND json_valid(e.payload))
+                    AND hash NOT IN (SELECT hash FROM tbl_baseline_blob)",
                 new { cutoff = createdBefore.ToUniversalTime().ToString("o") });
             await conn.ExecuteAsync("COMMIT");
             return swept;

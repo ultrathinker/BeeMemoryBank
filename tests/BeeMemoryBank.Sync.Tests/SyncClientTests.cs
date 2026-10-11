@@ -759,6 +759,56 @@ public class SyncClientTests : IAsyncLifetime
         createdAt = DateTime.UtcNow
     };
 
+    /// <summary>
+    /// Step A, stragglers on push (docs/design/step-a-spec.md 5.7): once this node is activated, a blind peer never gets a
+    /// protocol-1..3 content event pushed, historic rows included. The article written before the switch stays out of the
+    /// body, the sealed one goes, and the push position moves over the withheld row as if accepted.
+    /// </summary>
+    [Fact]
+    public async Task Push_ToABlindPeer_AfterTheSwitch_LeavesProtocol3ContentOut_AndMovesThePositionOverIt()
+    {
+        var clearEvents = (await _node.EventLogRepo.GetAfterSequenceAsync(0)).Select(e => e.EventId).ToList();
+        clearEvents.Should().NotBeEmpty("the article of InitializeAsync was written in clear");
+        var publisher = new BeeMemoryBank.Vault.Metadata.MetadataEventPublisher(_node.NodeRepo, _node.EventLogRepo, _node.Clock,
+            _node.Session, _node.EventApplier, new SyncTrigger(), _node.ProtocolPolicy);
+        var key = await publisher.PublishNewKeyAsync(1);
+        await publisher.PublishActivationAsync(Guid.NewGuid(), new BeeMemoryBank.Vault.Metadata.MetadataKeyInfo(key.KeyId, key.Generation));
+        await _node.ArticleService.CreateAsync("Written sealed", "/Root", [], "sealed content");
+        var sealedEvent = (await _node.EventLogRepo.GetAfterSequenceAsync(0)).Last();
+        sealedEvent.EventType.Should().Be(EventTypes.Sealed);
+
+        _remoteNodeId = BlindNodeId.NewId();
+        MapIdentity(protocolVersion: 4);
+        var pushed = new List<string>();
+        _mockHandler.MapRoute("/api/sync/events", req =>
+        {
+            if (req.Method == HttpMethod.Get)
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("[]", Encoding.UTF8, "application/json") };
+            var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            pushed.Add(body);
+            var count = JsonDocument.Parse(body).RootElement.GetArrayLength();
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new { applied = count, skipped = 0, dropped = 0 }),
+                    Encoding.UTF8, "application/json")
+            };
+        });
+        var client = new SyncClient(_node.NodeRepo, _node.EventLogRepo, new SyncPositionRepository(_node.Factory),
+            new SyncPushPositionRepository(_node.Factory), _node.EventApplier, new SessionNodeAuthSigner(_node.Session),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SyncClient>.Instance, _peerNewerProtocolState,
+            _node.QuarantineRepo, new BlobRepository(_node.Factory), protocolPolicy: _node.ProtocolPolicy);
+
+        await client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        var sent = string.Join("\n", pushed);
+        sent.Should().Contain(sealedEvent.EventId.ToString());
+        foreach (var id in clearEvents)
+            sent.Should().NotContain(id.ToString(), "a protocol-3 content event never reaches a blind peer after the switch");
+        sent.Should().NotContain("Test Article");
+        var position = await new SyncPushPositionRepository(_node.Factory).GetAsync(_remoteNodeId);
+        position!.LastPushedSeq.Should().Be(await _node.EventLogRepo.GetMaxSequenceAsync());
+    }
+
     private void MapIdentity(int protocolVersion) =>
         _mockHandler.MapRoute("/api/sync/identity", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         {

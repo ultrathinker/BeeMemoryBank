@@ -3,6 +3,7 @@ using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using Microsoft.AspNetCore.Mvc;
+using BeeMemoryBank.Core.Exceptions;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -73,7 +74,7 @@ public static class MediaEndpoints
             {
                 return Results.BadRequest(new { error = ex.Message });
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }

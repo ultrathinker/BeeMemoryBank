@@ -30,12 +30,20 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
     /// </summary>
     public const string InternalKeyForTests = TestInternalKey;
 
-    private readonly string _tempDir =
-        Path.Combine(Path.GetTempPath(), "bmb_integration_" + Guid.NewGuid().ToString("N"));
+    private readonly string _tempDir;
+
+    /// <summary>A node over a fresh, empty data folder.</summary>
+    public BmbWebApplicationFactory() : this(Path.Combine(Path.GetTempPath(), "bmb_integration_" + Guid.NewGuid().ToString("N"))) { }
+
+    /// <summary>A node over a data folder the test has prepared (a sealed node's files, an interrupted migration); the factory owns it and removes it on dispose.</summary>
+    public BmbWebApplicationFactory(string dataPath) => _tempDir = dataPath;
 
     private HttpMessageHandler? _outboundHandler;
 
     public string DataPath => _tempDir;
+
+    /// <summary>True: disposing the host leaves the data folder (a test that restarts a node over the same files). The last owner clears it.</summary>
+    public bool KeepData { get; set; }
 
     /// <summary>
     /// Changes every test host makes to its container after the app's own registrations (installed once by the project that references the
@@ -117,7 +125,7 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        if (disposing && Directory.Exists(_tempDir))
+        if (disposing && !KeepData && Directory.Exists(_tempDir))
         {
             try { Directory.Delete(_tempDir, recursive: true); } catch { }
         }

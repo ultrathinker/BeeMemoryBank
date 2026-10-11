@@ -49,6 +49,7 @@ public class CommentService(
 
     private async Task<Comment> CreateSealedAsync(Guid articleId, string text, DateTime? createdAt)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var body = await bodyRepo.GetByArticleIdAsync(articleId)
             ?? throw new KeyNotFoundException($"Article body {articleId} not found — cannot encrypt comment.");
 
@@ -189,6 +190,7 @@ public class CommentService(
     /// </summary>
     public async Task<int> ReprotectAsync(Guid articleId, string? oldPassphrase, string? newPassphrase)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var moved = 0;
         foreach (var c in await commentRepo.GetByArticleIdAsync(articleId))
         {
@@ -223,6 +225,7 @@ public class CommentService(
     /// </summary>
     public async Task<int> SealLegacyPlaintextAsync()
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var sealedCount = 0;
         foreach (var c in await commentRepo.GetPlaintextAsync())
         {
@@ -242,6 +245,7 @@ public class CommentService(
     /// <summary>Deletes a comment by internal id.</summary>
     public async Task DeleteAsync(int id)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         var comment = await commentRepo.GetByIdAsync(id)
             ?? throw new KeyNotFoundException($"Comment {id} not found");
         await commentRepo.DeleteAsync(id);

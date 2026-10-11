@@ -109,7 +109,10 @@ public static class JoinCommand
             nodeId = nodeId,
             displayName = displayName,
             ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
-            apiAddress = (string?)null
+            apiAddress = (string?)null,
+            // A fresh node has applied no activation: it declares 3 and says what it can read (docs/design/step-a-spec.md 5.1, 11).
+            protocolVersion = SyncProtocolVersion.Current,
+            capabilities = BeeMemoryBank.Sync.Metadata.MetadataCapabilities.Advertised
         };
 
         // The host writes this node's row as soon as it accepts the join. From there on a failure leaves that row behind unless the host
@@ -176,6 +179,8 @@ public static class JoinCommand
         // The checks inside do it themselves and return; the catch is for what they do not name.
         JoinResponseDto joinResponse;
         byte[] masterDek = [];
+        // The DEK the snapshot is opened with after activation (docs/design/step-a-spec.md 11): a copy, kept from the unwrap to the end of the import.
+        byte[] snapshotDek = [];
         byte[] localSalt, localEncryptedDek, localIv;
         DateTime now;
         NodeIdentity identity;
@@ -197,10 +202,10 @@ public static class JoinCommand
             // The same gates as the Setup page's join (InitEndpoints), before anything is written here: this node starts
             // from the host's snapshot and log, so the host must speak this node's sync protocol.
             var hostProtocol = joinResponse.RemoteNode.ProtocolVersion;
-            if (hostProtocol > SyncProtocolVersion.Current)
+            if (hostProtocol > BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol)
             {
                 await output.WriteLineAsync(
-                    $"Error: cannot join: remote node protocol version ({hostProtocol}) is higher than local version ({SyncProtocolVersion.Current}). Update this node first.");
+                    $"Error: cannot join: remote node protocol version ({hostProtocol}) is higher than local version ({BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol}). Update this node first.");
                 await TellHostAsync();
                 return 1;
             }
@@ -339,6 +344,7 @@ public static class JoinCommand
                 cmd.ExecuteNonQuery();
             }
 
+            snapshotDek = (byte[])masterDek.Clone();
             Array.Clear(masterDek);
 
             var selfEntry = new WhitelistEntry
@@ -435,9 +441,14 @@ public static class JoinCommand
                 scope.ServiceProvider.GetRequiredService<DbConnectionFactory>(),
                 DataDirOf(scope.ServiceProvider),
                 loggerFactory.CreateLogger<SnapshotJoinClient>(),
-                requestTimeout);
+                requestTimeout,
+                scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy>());
+            // A host that encrypts its metadata (protocol 4) sends the database sealed under the DEK this node just unwrapped; a plain
+            // archive from it is refused.
             (cpSeq, var lamportTs) = await snapshotClient.DownloadAndImportAsync(
-                remoteUrl, nodeId, privateKey, Convert.FromBase64String(remote.Ed25519PublicKeyB64));
+                remoteUrl, nodeId, privateKey, Convert.FromBase64String(remote.Ed25519PublicKeyB64),
+                masterDek: snapshotDek,
+                requireEncrypted: joinResponse.RemoteNode.ProtocolVersion >= BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol);
 
             await SnapshotJoin.CompleteAsync(
                 remote.NodeId, cpSeq, lamportTs, syncPositionRepo, clock, nodeRepo, dbFactory,
@@ -471,6 +482,7 @@ public static class JoinCommand
         {
             Array.Clear(privateKey);
             Array.Clear(masterDek);
+            Array.Clear(snapshotDek);
         }
 
         await output.WriteLineAsync($"Node '{displayName}' successfully joined the network.");

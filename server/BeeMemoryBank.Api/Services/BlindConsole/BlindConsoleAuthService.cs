@@ -25,9 +25,11 @@ public sealed class BlindConsoleAuthService(
     private static readonly TimeSpan LockWindow = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan LockDuration = TimeSpan.FromMinutes(15);
     private const int LogCap = 200;
+    private const int SaltBytes = 32;
 
     private readonly string _dir = Path.Combine(dataPath, "blind");
     private string StateFile => Path.Combine(_dir, "console.json");
+    private const string StateFileName = "blind/console.json";
     private readonly object _sync = new();
 
     public sealed class ConsoleState
@@ -48,17 +50,75 @@ public sealed class BlindConsoleAuthService(
         [JsonPropertyName("remote")] public string? Remote { get; set; }
     }
 
-    private ConsoleState Load()
+    /// <summary>
+    /// Reads the console state. Three cases, and only the first is "no password yet": an absent file is a first-time
+    /// console (the first password may be set without a current one); a readable, well-formed file is the state as
+    /// written; a file that is unreadable (locked, permissions) or damaged (empty, cut off, not a state) is neither. It
+    /// is not "no password" (BMB-85): nothing may be set or changed on top of it, and nothing may be written over it.
+    /// </summary>
+    private bool TryLoad(out ConsoleState state, out string? unreadable)
     {
-        if (!File.Exists(StateFile)) return new ConsoleState();
+        state = new ConsoleState();
+        unreadable = null;
+
+        string text;
         try
         {
-            return JsonSerializer.Deserialize<ConsoleState>(File.ReadAllText(StateFile)) ?? new();
+            text = File.ReadAllText(StateFile);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            unreadable = $"{StateFileName} cannot be read";
+            return false;
+        }
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<ConsoleState>(text);
+            if (parsed is not null && IsWellFormed(parsed))
+            {
+                state = parsed;
+                return true;
+            }
         }
         catch (JsonException)
         {
-            return new ConsoleState();
+            // Not JSON at all (empty, or cut off by an interrupted write): damaged, as below.
         }
+
+        unreadable = $"{StateFileName} is damaged (it does not hold a valid console state)";
+        return false;
+    }
+
+    /// <summary>What the console writes. With a hash, its salt too, both base64 of the sizes it writes (a SHA-256 hash and a
+    /// 32-byte salt). Without one there is no password yet, and the only state of that kind the console writes is a sign-in
+    /// attempt made before any password was set: it is in the log, and the generation has not moved (only a password set
+    /// moves it). Anything else without a hash is damaged. The log itself has no holes (BMB-85).</summary>
+    private static bool IsWellFormed(ConsoleState s)
+    {
+        if (s.Logins is null || s.Logins.Any(l => l is null) || (s.HashB64 is null) != (s.SaltB64 is null)) return false;
+        if (s.HashB64 is null) return s.Logins.Count > 0 && s.Generation == 0;
+        try
+        {
+            return Convert.FromBase64String(s.HashB64).Length == SHA256.HashSizeInBytes
+                && Convert.FromBase64String(s.SaltB64!).Length == SaltBytes;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The state for read-only callers. An unreadable file reads as an empty state, which fails closed: no
+    /// password, no sessions (the generation is 0), no log.</summary>
+    private ConsoleState Load()
+    {
+        TryLoad(out var state, out _);
+        return state;
     }
 
     private void Save(ConsoleState s)
@@ -71,7 +131,15 @@ public sealed class BlindConsoleAuthService(
 
     public bool HasPassword()
     {
-        lock (_sync) return Load().HashB64 is not null;
+        // An unreadable file may well hold a password, so it counts as set: fail closed.
+        lock (_sync) return !TryLoad(out var s, out _) || s.HashB64 is not null;
+    }
+
+    /// <summary>Why the state file cannot be used (unreadable or damaged), or null when it can. An absent file can be used:
+    /// it is the first-time console.</summary>
+    public string? UnusableStateReason()
+    {
+        lock (_sync) return TryLoad(out _, out var unreadable) ? null : unreadable;
     }
 
     /// <summary>The password generation the console stamps on a session at sign-in and compares on every request.</summary>
@@ -83,12 +151,17 @@ public sealed class BlindConsoleAuthService(
     /// <summary>
     /// Sets (or replaces) the console password. Replacing requires the current one — except the
     /// very first set, which is the pairing-time initialization done by <c>bmb blind init</c>.
+    /// Refused, whatever is offered, while the state file is unreadable or damaged (<see cref="UnusableStateReason"/>).
     /// </summary>
     public bool TrySetPassword(string? currentPassword, string newPassword)
     {
         lock (_sync)
         {
-            var s = Load();
+            if (!TryLoad(out var s, out var unreadable))
+            {
+                logger.LogWarning("Blind console password not set: {Reason}", unreadable);
+                return false;
+            }
             if (s.HashB64 is not null)
             {
                 if (currentPassword is null || !VerifyHash(s, currentPassword))
@@ -101,7 +174,7 @@ public sealed class BlindConsoleAuthService(
                 return false;
             }
 
-            var salt = RandomNumberGenerator.GetBytes(32);
+            var salt = RandomNumberGenerator.GetBytes(SaltBytes);
             var hash = Hash(newPassword, salt);
             s.HashB64 = Convert.ToBase64String(hash);
             s.SaltB64 = Convert.ToBase64String(salt);
@@ -123,7 +196,12 @@ public sealed class BlindConsoleAuthService(
     {
         lock (_sync)
         {
-            var s = Load();
+            if (!TryLoad(out var s, out var unreadable))
+            {
+                // Refused without a journal entry: the journal would have to be written over the file that could not be read.
+                logger.LogWarning("Blind console login refused: {Reason} (remote {Remote})", unreadable, remote);
+                return (false, false);
+            }
 
             // Lock check BEFORE any Argon2 work: the point of the lock is to stop an attacker
             // burning CPU on the verifier, so it must not itself pay for a derivation. A request

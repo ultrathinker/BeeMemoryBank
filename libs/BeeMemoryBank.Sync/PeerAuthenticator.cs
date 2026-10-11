@@ -75,6 +75,10 @@ public static class PeerAuthenticator
     /// this from the whitelist rather than trusting the peer's own self-report.
     /// </param>
     /// <param name="ct">Cancellation token.</param>
+    /// <param name="declaredProtocol">
+    /// The protocol this node declares (<see cref="Metadata.ISyncProtocolPolicy.Declared"/>): 3 until it has applied the
+    /// metadata activation, 4 after. A caller without the policy declares 3 (<see cref="SyncProtocolVersion.Current"/>).
+    /// </param>
     /// <returns>The Bearer token to attach to subsequent peer requests.</returns>
     public static async Task<string> AuthenticateAsync(
         INodeAuthSigner authSigner,
@@ -82,10 +86,11 @@ public static class PeerAuthenticator
         string baseUrl,
         NodeIdentity identity,
         Guid expectedServerNodeId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        int? declaredProtocol = null)
     {
         return await AuthenticateOnceAsync(
-            authSigner, http, baseUrl, identity, expectedServerNodeId, ct);
+            authSigner, http, baseUrl, identity, expectedServerNodeId, ct, declaredProtocol);
     }
 
     private static async Task<string> AuthenticateOnceAsync(
@@ -94,7 +99,8 @@ public static class PeerAuthenticator
         string baseUrl,
         NodeIdentity identity,
         Guid expectedServerNodeId,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? declaredProtocol)
     {
         // TrimEnd('/'): the two requests below are string-concatenated onto baseUrl, so a base
         // ending in a slash yields "//api/sync/challenge" and a 404. Callers that come through
@@ -144,13 +150,17 @@ public static class PeerAuthenticator
             .ToArray();
         var signature = authSigner.SignChallenge(identity, challengePayload);
 
-        // Authenticate
+        // Authenticate. Every 2.6 build advertises the envelope capability whatever it declares (docs/design/step-a-spec.md
+        // 5.1, 5.6): an activated peer still lets in a node that declares 3 with it (one that has not applied the activation
+        // yet), and its readiness report counts this node as ready.
         var authResp = await http.PostAsJsonAsync($"{baseUrl}/api/sync/authenticate", new
         {
             NodeId = identity.NodeId,
             ChallengeB64 = challengeData.Challenge,
             SignatureB64 = Convert.ToBase64String(signature),
-            ProtocolVersion = SyncProtocolVersion.Current
+            ProtocolVersion = declaredProtocol ?? SyncProtocolVersion.Current,
+            Capabilities = Metadata.MetadataCapabilities.Advertised,
+            AppVersion = Metadata.BuildVersion.Current,
         }, ct);
 
         authResp.EnsureSuccessStatusCode();

@@ -48,28 +48,23 @@ public class BlindStatusEndpointsTests : IAsyncLifetime
             "no backup repo is configured; the key is still present so consumers can tell 'unset' from 'unsupported'");
 
         var stored = json.GetProperty("stored");
-        stored.GetProperty("articles").GetInt32().Should().Be(0, "a node that was just initialized holds nothing");
+        stored.TryGetProperty("articles", out _).Should().BeFalse("from 2.6.0 the status shows no note count (step-a-spec 10.1)");
         stored.GetProperty("blobs").GetInt32().Should().BeGreaterThanOrEqualTo(0);
         stored.GetProperty("bytes").GetInt64().Should().BeGreaterThanOrEqualTo(0);
         json.GetProperty("free_bytes").GetInt64().Should().BeGreaterThan(0);
+        json.GetProperty("activated").GetBoolean().Should().BeFalse("2.6.0 ships switched off");
 
         json.GetProperty("peers").GetArrayLength().Should().Be(0, "a freshly initialized node has no peers but itself");
         json.GetProperty("jobs").GetArrayLength().Should().BeGreaterThanOrEqualTo(0);
     }
 
     /// <summary>
-    /// "Stored" describes what this NODE holds, not what the asking caller may read — which on a
-    /// blind node is the difference between a number and nothing at all.
-    ///
-    /// <para>A blind node registers no <c>CallerScopeMiddleware</c> (ApiPipeline: no users, no
-    /// agents, nothing to resolve a scope from), so every request resolves the deny-everything
-    /// default. The count went through <c>IArticleRepository.CountAsync</c>, which pushes the
-    /// caller's folder ACL into its WHERE clause: on the release stand the node reported "0
-    /// articles" while holding 49. The blob count and the database size never went through a scope,
-    /// and neither does this one now.</para>
+    /// Owner decision 6 (step-a-spec 10.1): a blind copy shows no note count, from 2.6.0 on, activated or not. The node
+    /// below holds live articles (a 2.5 blind node materialised them); the status still names none of them, in no key.
+    /// It shows what the node stores (blobs, bytes) and, on a blind host, the baseline and the deltas instead.
     /// </summary>
     [Fact]
-    public async Task StoredArticles_AreCountedWhateverTheCallerMayRead()
+    public async Task Stored_HasNoNoteCount_EvenWhenTheNodeHoldsArticles()
     {
         using var blind = new BlindNodeFactory();
         await blind.InitializeNodeAsync(displayName: "BlindCountNode");
@@ -82,17 +77,17 @@ public class BlindStatusEndpointsTests : IAsyncLifetime
                     @"INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at)
                       VALUES (@id, @title, '/notes', 'A', @now, @now)",
                     new { id = Guid.NewGuid().ToString(), title = $"note {i}", now = DateTime.UtcNow.ToString("O") });
-            // A deleted one is not "stored" in the sense the operator reads.
-            conn.Execute(
-                @"INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at, deleted_at)
-                  VALUES (@id, 'gone', '/notes', 'D', @now, @now, @now)",
-                new { id = Guid.NewGuid().ToString(), now = DateTime.UtcNow.ToString("O") });
         }
 
         using var client = blind.CreateClient();
-        var json = await (await client.GetAsync("/api/blind/status")).Content.ReadFromJsonAsync<JsonElement>();
-        json.GetProperty("stored").GetProperty("articles").GetInt32().Should().Be(3,
-            "the node holds three live articles, whatever the asking caller is allowed to read");
+        var body = await (await client.GetAsync("/api/blind/status")).Content.ReadAsStringAsync();
+        var json = JsonDocument.Parse(body).RootElement;
+        var stored = json.GetProperty("stored");
+        stored.TryGetProperty("articles", out _).Should().BeFalse("no note count, in no key");
+        stored.GetProperty("blobs").GetInt64().Should().BeGreaterThanOrEqualTo(0);
+        stored.GetProperty("bytes").GetInt64().Should().BeGreaterThan(0);
+        body.Should().NotContain("articles", "the word itself would be a note count under another name");
+        json.GetProperty("activated").GetBoolean().Should().BeFalse();
     }
 
     [Fact]

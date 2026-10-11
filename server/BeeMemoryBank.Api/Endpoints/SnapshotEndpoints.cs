@@ -292,6 +292,10 @@ public static class SnapshotEndpoints
                 return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403);
             }
 
+            // Step A (docs/design/step-a-spec.md 6.8): not while changes received here wait to be applied.
+            if (await restoreSvc.InitiationRefusalAsync() is { } refusal)
+                return Results.Json(new ErrorResponse(refusal), statusCode: StatusCodes.Status409Conflict);
+
             var filePath = ResolveSnapshotFile(snapshotSvc, req);
             if (filePath == null || !File.Exists(filePath))
                 return Results.NotFound(new { error = "Snapshot file not found" });

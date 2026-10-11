@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 
@@ -68,6 +69,8 @@ internal sealed class BlindHubHost : IAsyncDisposable
             o.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(https =>
                 https.ServerCertificateSelector = (_, _) => host!.Certificate));
         });
+        var errors = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        builder.Logging.AddProvider(new ErrorCapture(errors));
         builder.AddBeeApiServices(dataDir);
 
         var app = builder.Build();
@@ -83,8 +86,34 @@ internal sealed class BlindHubHost : IAsyncDisposable
 
         using (var scope = app.Services.CreateScope())
             await scope.ServiceProvider.GetRequiredService<InitializationService>().InitializeAsync("admin", displayName, password);
-        (await host.Admin.PostAsJsonAsync("/api/session/unlock", new { password })).EnsureSuccessStatusCode();
+        using (var unlocked = await host.Admin.PostAsJsonAsync("/api/session/unlock", new { password }))
+        {
+            if (!unlocked.IsSuccessStatusCode)
+                throw new InvalidOperationException($"The hub's unlock answered {(int)unlocked.StatusCode}: {await unlocked.Content.ReadAsStringAsync()}"
+                    + " | " + string.Join(" | ", errors.TakeLast(5)));
+        }
         return host;
+    }
+
+    /// <summary>The errors the hub logged, kept so that a failed start can say why.</summary>
+    private sealed class ErrorCapture(System.Collections.Concurrent.ConcurrentQueue<string> sink) : Microsoft.Extensions.Logging.ILoggerProvider
+    {
+        public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new Capture(sink, categoryName);
+
+        public void Dispose() { }
+
+        private sealed class Capture(System.Collections.Concurrent.ConcurrentQueue<string> sink, string category) : Microsoft.Extensions.Logging.ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => logLevel >= Microsoft.Extensions.Logging.LogLevel.Error;
+
+            public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+                Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                if (IsEnabled(logLevel)) sink.Enqueue($"{category}: {formatter(state, exception)} {exception}");
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()

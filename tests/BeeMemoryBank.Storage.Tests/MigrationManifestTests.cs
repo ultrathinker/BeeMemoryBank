@@ -26,7 +26,7 @@ public class MigrationManifestTests
     {
         var assembly = typeof(MigrationRunner).Assembly;
         var lines = assembly.GetManifestResourceNames()
-            .Where(n => n.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
+            .Where(n => n.StartsWith("BeeMemoryBank.Storage.Migrations.", StringComparison.Ordinal) && n.EndsWith(".sql", StringComparison.OrdinalIgnoreCase))
             .OrderBy(n => n, StringComparer.Ordinal)
             .Select(n =>
             {

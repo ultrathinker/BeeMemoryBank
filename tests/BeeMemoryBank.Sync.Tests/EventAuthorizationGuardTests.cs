@@ -86,6 +86,9 @@ public class EventAuthorizationGuardTests
             // the vault, and an integrity anchor is what a restore trusts.
             EventTypes.RecoveryBoxRetire,
             EventTypes.StateAnchor,
+            // Step A: the metadata key record and the one-way activation are vault-wide decisions.
+            EventTypes.MetadataKeySet,
+            EventTypes.MetadataActivation,
         });
     }
 

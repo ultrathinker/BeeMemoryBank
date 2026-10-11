@@ -88,7 +88,7 @@ public class BlindRestoreClient(
 
             // Whitelist and positions come from the package's signed blind-manifest.json; the blind node's
             // row gets the pin the user typed, so this device keeps dialing it pinned.
-            var result = await restore.RestoreFromPackageAsync(package, signature, producerKey, who,
+            var result = await restore.RestoreFromBlindPackageAsync(package, signature, producerKey, who,
                 new RestoreBlindPeer(producer, "Blind node", producerKey, address, CpSeq: 0, TlsSpki: pin),
                 events.Events, ct, boxes);
 
@@ -122,6 +122,12 @@ public class BlindRestoreClient(
         var db = Path.Combine(path, BlindPackageFile.DbFileName);
         if (!File.Exists(db)) throw new FileNotFoundException("No database copy in the backup folder.", db);
         var set = RecoverySet.Parse(await File.ReadAllTextAsync(setFile, ct));
+        // A node that has adopted a baseline (Step A): the copy holds no metadata, the baseline folder beside it does (spec 9.8, 12).
+        if (await BackupFolderRestoreSource.OpenAsync(db, Path.Combine(path, "baselines", "current"), ct) is { } baseline)
+        {
+            using (baseline)
+                return await restore.RestoreFromBaselineAsync(baseline, who, blind: null, [], ct, boxes, set);
+        }
         return await restore.RestoreFromDatabaseAsync(db, set, who, ct, boxes);
     }
 
@@ -154,14 +160,26 @@ public class BlindRestoreClient(
         try
         {
             var listing = await RunResticAsync(repo, resticPassword, ct, "ls", "latest", "--json");
-            var dbInRepo = listing.Split('\n')
+            var paths = listing.Split('\n')
                 .Select(l => { try { return JsonDocument.Parse(l).RootElement; } catch (JsonException) { return default; } })
                 .Where(e => e.ValueKind == JsonValueKind.Object && e.TryGetProperty("path", out _))
                 .Select(e => e.GetProperty("path").GetString())
-                .FirstOrDefault(p => p != null && p.EndsWith("/" + BlindPackageFile.DbFileName, StringComparison.Ordinal))
+                .Where(p => p != null).Select(p => p!).ToList();
+            var dbInRepo = paths.FirstOrDefault(p => p.EndsWith("/" + BlindPackageFile.DbFileName, StringComparison.Ordinal))
                 ?? throw new InvalidDataException("The latest restic snapshot holds no database copy.");
-            await RunResticAsync(repo, resticPassword, ct, "restore", "latest", "--target", workDir, "--include", dbInRepo);
+            // After Step A the adopted baseline's files travel in the same snapshot (spec 9.8): the four files of baselines/current.
+            var baselineFiles = paths.Where(p => p.Contains("/baselines/current/", StringComparison.Ordinal)).ToList();
+            await RunResticAsync(repo, resticPassword, ct,
+                ["restore", "latest", "--target", workDir, "--include", dbInRepo, .. baselineFiles.SelectMany(p => new[] { "--include", p })]);
             var db = Directory.EnumerateFiles(workDir, BlindPackageFile.DbFileName, SearchOption.AllDirectories).First();
+            var baselineDirectory = Directory.EnumerateDirectories(workDir, "current", SearchOption.AllDirectories)
+                .FirstOrDefault(d => string.Equals(Path.GetFileName(Path.GetDirectoryName(d)), "baselines", StringComparison.Ordinal))
+                ?? Path.Combine(workDir, "baselines", "current");
+            if (await BackupFolderRestoreSource.OpenAsync(db, baselineDirectory, ct) is { } baseline)
+            {
+                using (baseline)
+                    return await restore.RestoreFromBaselineAsync(baseline, who, blind: null, [], ct, boxes, set);
+            }
             return await restore.RestoreFromDatabaseAsync(db, set, who, ct, boxes);
         }
         finally

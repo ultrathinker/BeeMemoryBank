@@ -3,7 +3,10 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Infrastructure.AutoUnlock;
 using BeeMemoryBank.Infrastructure.Secrets;
+using BeeMemoryBank.Storage.Boot;
+using BeeMemoryBank.Vault.Sealed;
 
 namespace BeeMemoryBank.Infrastructure.OsAutoUnlock;
 
@@ -57,6 +60,24 @@ public class OsAutoUnlockService(
 {
     private readonly IUserSecretStore _secretStore = secretStore ?? UserSecretStores.CreateDefault(dataPath);
     private readonly SemaphoreSlim _mutationLock = new(1, 1);
+
+    // Step B (docs/design/step-b-spec.md 4.1, 4.7, 11.1): on a sealed node the slot is a door. The writers keep the boot store's copy in step
+    // (pending door before the insert commits, retire before the delete, rewrite after), and the unlock at start reads the door from the boot
+    // store - the database is closed - and goes through the sealed unlock instead of the session. Attached by the sealed-vault composition;
+    // without it (and on a plain node) every path below is the one that has always been.
+    private IDbConnectionFactory? _factory;
+    private IUnlockMaterialMirror? _mirror;
+    private ISealedAutoUnlockHost? _sealedHost;
+
+    /// <summary>Attaches the sealed-node collaborators (the composition calls this once, at start).</summary>
+    public void AttachSealedNode(IDbConnectionFactory? factory, IUnlockMaterialMirror? mirror, ISealedAutoUnlockHost? host)
+    {
+        _factory = factory;
+        _mirror = mirror;
+        _sealedHost = host;
+    }
+
+    private bool SealedAndClosed => _sealedHost is { IsSealed: true, IsUsable: false };
     /// <summary>
     /// DPAPI optional entropy for the auto-unlock secret file. Fixed and versioned
     /// rather than random/per-install: DPAPI folds this byte string into the derivation, so it
@@ -86,6 +107,7 @@ public class OsAutoUnlockService(
             if (secret is null) return false;
             try
             {
+                if (SealedAndClosed) return await FindDoorMatchingSecretAsync(secret) is not null;
                 return await FindSlotMatchingSecretAndRepairAsync(secret) is not null;
             }
             finally
@@ -128,7 +150,7 @@ public class OsAutoUnlockService(
             // the DPAPI file write below) could leave an orphan slot that GetSlotAsync's
             // FirstOrDefault picks over the real one, permanently breaking auto-unlock.
             foreach (var existing in await GetSlotsAsync())
-                await keySlotRepo.DeleteAsync(existing.SlotId);
+                await SlotDoors.DeleteSlotAsync(keySlotRepo, _mirror, existing.SlotId);
             await keySlotRepo.EnsureOsAutoUnlockUniqueIndexAsync();
 
             // Use the secret directly as the KEK: no Argon2 (DPAPI provides the OS-level
@@ -148,13 +170,14 @@ public class OsAutoUnlockService(
                 ArgonParallelism = null,
                 CreatedAt = DateTime.UtcNow
             };
-            var slotId = await keySlotRepo.CreateAsync(slot);
+            var slotId = await SlotDoors.CreateSlotAsync(keySlotRepo, _factory, _mirror, slot, masterDek);
 
             try
             {
                 // Protect the raw secret with DPAPI (current-user scope) using application-specific
                 // optional entropy (see Entropy) and persist it next to the vault.
                 _secretStore.Write("os-auto-unlock", "default", secret);
+                await SlotDoors.RewriteAsync(_mirror);
                 return File.Exists(SecretFilePath)
                     ? await File.ReadAllBytesAsync(SecretFilePath)
                     : Array.Empty<byte>();
@@ -164,7 +187,8 @@ public class OsAutoUnlockService(
                 // Roll back the slot if the secret file write fails, so we never leave a slot
                 // with no matching on-disk secret (which IsEnabledAsync would otherwise report
                 // as "enabled" while auto-unlock could never actually succeed).
-                await keySlotRepo.DeleteAsync(slotId);
+                await SlotDoors.DeleteSlotAsync(keySlotRepo, _mirror, slotId);
+                await SlotDoors.RewriteAsync(_mirror);
                 throw;
             }
         }
@@ -200,6 +224,8 @@ public class OsAutoUnlockService(
             if (secret is null) return false;
             try
             {
+                if (SealedAndClosed) return await TryAutoUnlockSealedAsync(secret);
+
                 var slot = await FindSlotMatchingSecretAndRepairAsync(secret);
                 if (slot is null) return false;
                 var masterDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, secret);
@@ -253,10 +279,11 @@ public class OsAutoUnlockService(
         {
             foreach (var slot in await GetSlotsAsync())
             {
-                await keySlotRepo.DeleteAsync(slot.SlotId);
+                await SlotDoors.DeleteSlotAsync(keySlotRepo, _mirror, slot.SlotId);
                 didAnything = true;
             }
             await keySlotRepo.EnsureOsAutoUnlockUniqueIndexAsync();
+            await SlotDoors.RewriteAsync(_mirror);
 
             try
             {
@@ -311,9 +338,62 @@ public class OsAutoUnlockService(
         }
 
         foreach (var slot in slots.Where(slot => slot.SlotId != matchingSlot.SlotId))
-            await keySlotRepo.DeleteAsync(slot.SlotId);
+            await SlotDoors.DeleteSlotAsync(keySlotRepo, _mirror, slot.SlotId);
         await keySlotRepo.EnsureOsAutoUnlockUniqueIndexAsync();
         return matchingSlot;
+    }
+
+    // ── the sealed node, database closed (spec 4.7, 5.2 step 6) ───────────────────────────────
+
+    /// <summary>The boot door of the <c>os_auto_unlock</c> slot that the DPAPI secret opens, newest first; null when none does.</summary>
+    private async Task<(BootDoor Door, byte[] MasterDek)?> OpenDoorAsync(byte[] secret)
+    {
+        var doors = (await _sealedHost!.ListDoorsAsync())
+            .Where(d => d.Kind == BootDoorKinds.Slot && d.SlotType == "os_auto_unlock")
+            .OrderByDescending(d => d.DoorId);
+        foreach (var door in doors)
+        {
+            try
+            {
+                return (door, MasterKeyManager.UnwrapMasterDek(door.EncryptedMasterDek, door.Iv, secret));
+            }
+            catch (CryptographicException)
+            {
+                // A stale door: try the next one.
+            }
+        }
+        return null;
+    }
+
+    private async Task<BootDoor?> FindDoorMatchingSecretAsync(byte[] secret)
+    {
+        var found = await OpenDoorAsync(secret);
+        if (found is null) return null;
+        Array.Clear(found.Value.MasterDek);
+        return found.Value.Door;
+    }
+
+    /// <summary>
+    /// The unlock at start on a sealed node: the secret opens the boot door, the DEK goes through <c>TryUnlockWithDekAsync</c>, which
+    /// checks the sentinel and the door in the OPENED database and closes it again on any refusal (the order of the plain path is reversed
+    /// because there is nothing to read the sentinel from while the database is closed).
+    /// </summary>
+    private async Task<bool> TryAutoUnlockSealedAsync(byte[] secret)
+    {
+        var found = await OpenDoorAsync(secret);
+        if (found is null) return false;
+        var (door, masterDek) = found.Value;
+        try
+        {
+            if (!await _sealedHost!.TryUnlockWithDekAsync(masterDek, door)) return false;
+            try { await _sealedHost.SetDekFingerprintAsync(door.DoorId, DekFingerprint.Of(masterDek)); }
+            catch { /* best effort: the next rewrite learns it from the door that was used */ }
+            return true;
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
     }
 
     private async Task<List<MasterKeyStore>> GetSlotsAsync() =>

@@ -3,6 +3,9 @@ using System.Security.Cryptography;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Rekey.Steps;
+using BeeMemoryBank.Storage.Sealed;
+using BeeMemoryBank.Vault.Sealed;
+using BeeMemoryBank.Vault.Metadata;
 using Dapper;
 using Microsoft.Data.Sqlite;
 
@@ -20,6 +23,12 @@ public sealed class RekeyOldMaterial
     /// <summary>The first 16 bytes of every old ciphertext and wrapper, for the byte search.</summary>
     public required IReadOnlySet<Int128> CiphertextPrefixes { get; init; }
 }
+
+/// <summary>
+/// What the D1 check of a re-keyed SEALED vault needs besides the old material (docs/design/step-b-spec.md 13.2): the page keys of the new vault, those
+/// of the old vault, and the database key service bound to the OLD boot store (its wrappers are what an attacker with the old directory holds).
+/// </summary>
+public sealed record SealedRekeyCheckInput(IVaultKeySource NewKeys, IVaultKeySource OldKeys, IDatabaseKeyService OldBootKeys);
 
 /// <summary>
 /// The D1-attacker check of verify (rekey-offline.md §2 step 4, §4 "old-key access"): every old master, every entity
@@ -41,6 +50,7 @@ public static class RekeyD1Check
         ("tbl_node_data_key", "wrapped_key"), ("tbl_search_index_key", "wrapped_key"),
         ("tbl_key_slot", "encrypted_master_dek"), ("tbl_agent", "encrypted_dek"),
         ("tbl_projection_matrix", "encrypted_matrix"), ("tbl_recovery_box", "wrapped"), ("tbl_dek_retired_link", "wrapped"),
+        ("tbl_metadata_key", "wrapped"),
     ];
 
     public static async Task<RekeyOldMaterial> GatherAsync(SqliteConnection live, SqliteConnection? liveChat, RekeyKeys keys)
@@ -125,6 +135,14 @@ public static class RekeyD1Check
                 && old.DataKeys.Any(o => o.Key.AsSpan().SequenceEqual(now)))
                 problems.Add(new("tbl_node_data_key", r.Name, "still holds the old data key (D1)"));
         }
+        // Metadata keys (step-a-spec 4.1): the re-key writes a new one under the new key; none may open under an old master.
+        foreach (var r in await db.QueryAsync<(string KeyId, long Generation, string Fp, byte[] W, byte[] Iv)>(
+                     "SELECT key_id, generation, dek_fingerprint, wrapped, iv FROM tbl_metadata_key"))
+            if (MetadataKeyCrypto.TryUnwrap(new MetadataKeyRow(r.KeyId, (int)r.Generation, r.Fp, r.W, r.Iv), old.Masters) is { } mek)
+            {
+                CryptographicOperations.ZeroMemory(mek);
+                Opened("tbl_metadata_key", r.KeyId, "master key");
+            }
         foreach (var r in await db.QueryAsync<(long Id, byte[] W, byte[] Iv)>("SELECT slot_id, encrypted_master_dek, iv FROM tbl_key_slot"))
             if (old.Masters.Any(k => Opens(() => DekManager.UnwrapVersioned(r.W, r.Iv, k)))) Opened("tbl_key_slot", r.Id.ToString(), "master key");
         foreach (var r in await db.QueryAsync<(long Id, byte[] W, byte[] Iv)>("SELECT id, encrypted_dek, dek_iv FROM tbl_agent WHERE encrypted_dek IS NOT NULL"))
@@ -144,6 +162,94 @@ public static class RekeyD1Check
                 "SELECT COUNT(*) FROM tbl_dek_rotation_state WHERE chain_encrypted_new_dek IS NOT NULL OR chain_iv IS NOT NULL") is var chains and > 0)
             problems.Add(new("tbl_dek_rotation_state", "*", $"{chains} rotation(s) keep chain material"));
         return problems;
+    }
+
+    /// <summary>
+    /// The D1 check of a re-keyed sealed vault (spec 13.2), over what <see cref="CheckBytes"/> cannot see because the pages of the new files are
+    /// encrypted: (1) no 16-byte prefix of any old ciphertext or wrapper in the PLAIN IMAGE of either file (read page by page in memory; no plain file
+    /// exists); (2) no page key of the old vault, and no key that a wrapper of the OLD boot store gives to any old master key, opens either new file;
+    /// (3) the old boot store has no wrapper that the NEW master key opens. Run after the scrub and the new boot store, with every connection to the
+    /// new files closed.
+    /// </summary>
+    public static async Task<IReadOnlyList<RekeyProblem>> CheckSealedAsync(
+        string newDir, SealedRekeyCheckInput input, RekeyKeys keys, RekeyOldMaterial old, CancellationToken ct)
+    {
+        var problems = new List<RekeyProblem>();
+        var files = new[] { (VaultStoreFiles.Database, DbPurposes.Vault), (VaultStoreFiles.Chat, DbPurposes.Chat) }
+            .Where(f => File.Exists(Path.Combine(newDir, f.Item1))).ToList();
+
+        if (old.CiphertextPrefixes.Count > 0)
+            foreach (var (file, purpose) in files)
+            {
+                var key = input.NewKeys.GetPageKey(purpose);
+                try
+                {
+                    using var image = PlainImageReader.Open(Path.Combine(newDir, file), key);
+                    if (FirstOldPrefix(image, old) is { } offset)
+                        problems.Add(new(file, $"image offset {offset}", "holds old ciphertext bytes (D1)"));
+                }
+                finally { CryptographicOperations.ZeroMemory(key); }
+            }
+
+        foreach (var (file, purpose) in files)
+        {
+            var key = input.OldKeys.GetPageKey(purpose);
+            try
+            {
+                if (SealedRekeyRun.Opens(Path.Combine(newDir, file), key)) problems.Add(new(file, "*", "opens with the old vault's page key"));
+            }
+            finally { CryptographicOperations.ZeroMemory(key); }
+        }
+
+        var number = 0;
+        foreach (var oldDek in keys.OldCandidates)
+        {
+            ct.ThrowIfCancellationRequested();
+            number++;
+            var dbk = await input.OldBootKeys.TryUnwrapAsync(oldDek, ct).ConfigureAwait(false);
+            if (dbk is null) continue;
+            try
+            {
+                foreach (var (file, purpose) in files)
+                {
+                    var key = input.OldBootKeys.DerivePageKey(dbk, purpose);
+                    try
+                    {
+                        if (SealedRekeyRun.Opens(Path.Combine(newDir, file), key))
+                            problems.Add(new(file, $"old master key {number}", "opens with a database key the old boot store's wrapper gives"));
+                    }
+                    finally { CryptographicOperations.ZeroMemory(key); }
+                }
+            }
+            finally { CryptographicOperations.ZeroMemory(dbk); }
+        }
+
+        var underNew = await input.OldBootKeys.TryUnwrapAsync(keys.CampaignDek, ct).ConfigureAwait(false);
+        if (underNew is not null)
+        {
+            CryptographicOperations.ZeroMemory(underNew);
+            problems.Add(new("boot store", "old", "the old boot store has a wrapper that the new master key opens"));
+        }
+        return problems;
+    }
+
+    private static long? FirstOldPrefix(Stream image, RekeyOldMaterial old)
+    {
+        var buffer = new byte[1 << 20];
+        var carried = 0;
+        long done = 0;
+        while (true)
+        {
+            var read = image.Read(buffer, carried, buffer.Length - carried);
+            if (read == 0) return null;
+            var total = carried + read;
+            for (var i = 0; i + Prefix <= total; i++)
+                if (old.CiphertextPrefixes.Contains(BinaryPrimitives.ReadInt128LittleEndian(buffer.AsSpan(i, Prefix))))
+                    return done + i;
+            carried = Math.Min(Prefix - 1, total);
+            done += total - carried;
+            Buffer.BlockCopy(buffer, total - carried, buffer, 0, carried);
+        }
     }
 
     /// <summary>

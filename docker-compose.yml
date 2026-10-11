@@ -43,6 +43,10 @@ services:
       # To print one fixed address instead (for example one behind your own proxy), set BMB_MCP_URL
       # in .env, e.g. https://bee.example.com/mcp. Empty = not set.
       - BMB_MCP_URL=${BMB_MCP_URL:-}
+      # OPTIONAL, OFF unless the owner turns "Start unlocked after a restart" on in the app (docs/deployment.md): the file that holds
+      # its secret, mounted read-only as a Docker secret from OUTSIDE the data folder (see "secrets:" below). Nothing here switches it on;
+      # a restore into a fresh folder or onto another machine starts the server locked even with this file mounted.
+      # - BMB_AUTO_UNLOCK_KEY_FILE=/run/secrets/bmb-auto-unlock-key
       # Uncomment when a reverse proxy (Caddy, nginx, Apache) sits in front of the Web port — which
       # it must, on anything but localhost, because the session cookie is Secure and needs TLS.
       # Docker publishes the port by DNAT through the bridge, so the node sees the BRIDGE GATEWAY as
@@ -50,6 +54,11 @@ services:
       # then shares one bucket: one person fumbling their password locks everyone out of login.
       # Loopback trust does not help here — proxied traffic never arrives on loopback.
       # - BMB_TRUSTED_PROXIES=172.16.0.0/12
+    # OPTIONAL, with BMB_AUTO_UNLOCK_KEY_FILE above: the key file as a Docker secret (read-only, outside the data volume). Create it on the
+    # host with a random 64-character hex string, chmod 0400, e.g.:  openssl rand -hex 32 > ./bmb-auto-unlock.key && chmod 0400 ./bmb-auto-unlock.key
+    # secrets:
+    #   - source: bmb_auto_unlock_key
+    #     target: bmb-auto-unlock-key
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5300/health"]
       interval: 30s
@@ -57,3 +66,8 @@ services:
       start_period: 15s
       retries: 3
     restart: unless-stopped
+
+# OPTIONAL, with BMB_AUTO_UNLOCK_KEY_FILE: keep this file out of every backup of the data folder.
+# secrets:
+#   bmb_auto_unlock_key:
+#     file: ./bmb-auto-unlock.key

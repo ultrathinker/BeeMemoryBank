@@ -108,7 +108,8 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
             NodeId = id, DisplayName = "Blind copy", Ed25519PublicKey = new byte[32], Status = "A",
             CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         });
-        await whitelist.RecordProtocolVersionAsync(id, SyncProtocolVersion.Current + 1, DateTime.UtcNow);
+        // Step A: a 2.6 node applies protocol 4 (docs/design/step-a-spec.md 5.6); the first protocol none of them applies is 5.
+        await whitelist.RecordProtocolVersionAsync(id, SyncProtocolVersion.Current + 2, DateTime.UtcNow);
         using (var api = _api.CreateClient())
             await BlindNodeAlarmsTests.JudgedAlarmsAsync(api);
 

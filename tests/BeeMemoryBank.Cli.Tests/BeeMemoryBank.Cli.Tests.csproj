@@ -17,6 +17,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Step B red tests: a gate and a key holder that answer only what the mirror asks (one source in tests/shared). -->
+    <Compile Include="..\shared\SealedTestFakes.cs" Link="Shared\SealedTestFakes.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="FluentAssertions" />
   </ItemGroup>

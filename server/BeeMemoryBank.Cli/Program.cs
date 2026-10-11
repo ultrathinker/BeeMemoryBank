@@ -1,5 +1,10 @@
 using System.CommandLine;
+using System.CommandLine.Builder;
+using System.CommandLine.Parsing;
 using BeeMemoryBank.Cli.Commands;
+
+// Where the master password comes from on an encrypted folder (docs/design/step-b-spec.md 5.9): read before the parser runs.
+BeeMemoryBank.Cli.CliSealed.Capture(args);
 
 var defaultDataPath = Environment.GetEnvironmentVariable("BMB_DATA_PATH")
     ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bmb", "data");
@@ -12,6 +17,10 @@ dataOption.AddAlias("-d");
 
 var root = new RootCommand("BeeMemoryBank — personal knowledge base with E2E encryption");
 root.AddGlobalOption(dataOption);
+
+// The password of an encrypted folder, for the verbs that read or write the vault in this process (the verbs with their own --password use that).
+var sealedPasswordStdinOpt = new Option<bool>("--password-stdin",
+    "Read the master password from the first line of stdin (an encrypted folder only; otherwise it is asked for on the terminal)");
 
 // ─── bmb init ───────────────────────────────────────────────────────────────
 
@@ -108,6 +117,7 @@ var articleCmd = new Command("article", "Article management");
 var listPathOpt = new Option<string?>("--path", "Filter by tree path (e.g. /Work)");
 var listCmd = new Command("list", "List articles");
 listCmd.AddOption(listPathOpt);
+listCmd.AddOption(sealedPasswordStdinOpt);
 listCmd.SetHandler(async (data, path) =>
 {
     Environment.Exit(await ArticleCommand.HandleListAsync(data, path));
@@ -122,6 +132,7 @@ var getCmd = new Command("get", "Article metadata (with --content — decrypt bo
 getCmd.AddArgument(getIdArg);
 getCmd.AddOption(getContentOpt);
 getCmd.AddOption(getPasswordOpt);
+getCmd.AddOption(sealedPasswordStdinOpt);
 getCmd.SetHandler(async (data, id, showContent, password) =>
 {
     Environment.Exit(await ArticleCommand.HandleGetAsync(data, id, showContent, password));
@@ -186,6 +197,7 @@ root.AddCommand(agentCmd);
 var snapshotCmd = new Command("snapshot", "Snapshot management (Phase 6)");
 
 var snapshotCreateCmd = new Command("create", "Create a snapshot");
+snapshotCreateCmd.AddOption(sealedPasswordStdinOpt);
 snapshotCreateCmd.SetHandler(async (data) =>
 {
     Environment.Exit(await SnapshotCommand.HandleCreateAsync(data));
@@ -193,6 +205,7 @@ snapshotCreateCmd.SetHandler(async (data) =>
 snapshotCmd.AddCommand(snapshotCreateCmd);
 
 var snapshotListCmd = new Command("list", "List snapshots");
+snapshotListCmd.AddOption(sealedPasswordStdinOpt);
 snapshotListCmd.SetHandler(async (data) =>
 {
     Environment.Exit(await SnapshotCommand.HandleListAsync(data));
@@ -296,6 +309,10 @@ var userCmd = new Command("user", "User management");
 userCmd.AddCommand(userResetPasswordCmd);
 root.AddCommand(userCmd);
 
+// ─── bmb vault ──────────────────────────────────────────────────────────────
+
+VaultCommand.AddTo(root, dataOption, sealedPasswordStdinOpt);
+
 // ─── bmb rekey ──────────────────────────────────────────────────────────────
 
 var rekeyPasswordStdinOpt = new Option<bool>("--password-stdin", "Read the owner's password from the first line of stdin");
@@ -309,4 +326,45 @@ rekeyCmd.SetHandler(async (data, passwordStdin, progressJson) =>
 }, dataOption, rekeyPasswordStdinOpt, rekeyProgressJsonOpt);
 root.AddCommand(rekeyCmd);
 
-return await root.InvokeAsync(args);
+// ─── bmb sync ───────────────────────────────────────────────────────────────
+// The metadata activation of Step A (docs/design/step-a-spec.md 5.3, 5.4), through the running node's Api.
+
+var syncCmd = new Command("sync", "Sync of this node with its network");
+var readinessCmd = new Command("readiness", "Can metadata encryption be switched on? Lists every device and what blocks it");
+readinessCmd.SetHandler(async (data) =>
+{
+    Environment.Exit(await SyncActivationCommand.ReadinessAsync(data));
+}, dataOption);
+syncCmd.AddCommand(readinessCmd);
+
+var activatePasswordStdinOpt = new Option<bool>("--password-stdin", "Read the master password from the first line of stdin");
+var activateYesOpt = new Option<bool>("--yes", "Confirm the one-way switch (take a backup first; it is the only way back).");
+var activateCmd = new Command("activate", "Switch metadata encryption on for the whole network (one way)");
+activateCmd.AddOption(activatePasswordStdinOpt);
+activateCmd.AddOption(activateYesOpt);
+activateCmd.SetHandler(async (data, passwordStdin, yes) =>
+{
+    var resolved = BeeMemoryBank.Cli.PasswordInput.Resolve(null, passwordStdin, "Master password: ",
+        Console.In, Console.IsInputRedirected, Console.Error);
+    if (resolved is null) Environment.Exit(1);
+    Environment.Exit(await SyncActivationCommand.ActivateAsync(data, resolved!, yes));
+}, dataOption, activatePasswordStdinOpt, activateYesOpt);
+syncCmd.AddCommand(activateCmd);
+root.AddCommand(syncCmd);
+
+// A refusal of an encrypted folder is one sentence and exit code 1, not an unhandled exception.
+return await new CommandLineBuilder(root)
+    .UseDefaults()
+    .UseExceptionHandler((ex, context) =>
+    {
+        if (ex is BeeMemoryBank.Cli.CliVaultException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            context.ExitCode = 1;
+            return;
+        }
+        Console.Error.WriteLine(ex.ToString());
+        context.ExitCode = 1;
+    })
+    .Build()
+    .InvokeAsync(args);

@@ -17,11 +17,21 @@ public sealed record MyStanding(
     [property: JsonPropertyName("reseed_needed")] bool ReseedNeeded,
     [property: JsonPropertyName("peers")] IReadOnlyList<PeerProtocolSeen> Peers,
     // Why this node's master DEK must be treated as exposed (BlindState.DekExposureKey), or null.
-    [property: JsonPropertyName("dek_exposure")] string? DekExposure = null);
+    [property: JsonPropertyName("dek_exposure")] string? DekExposure = null,
+    // Step A (docs/design/step-a-spec.md 5.1, A.6): what the responder advertises, whether it applied the metadata
+    // activation, and on a blind responder what it holds (no note count, by design).
+    [property: JsonPropertyName("capabilities")] IReadOnlyList<string>? Capabilities = null,
+    [property: JsonPropertyName("app_version")] string? AppVersion = null,
+    [property: JsonPropertyName("activated")] bool? Activated = null,
+    [property: JsonPropertyName("store")] BeeMemoryBank.Sync.Metadata.BlindStoreSummary? Store = null);
 
 public sealed record PeerProtocolSeen(
     [property: JsonPropertyName("node_id")] Guid NodeId,
     [property: JsonPropertyName("display_name")] string DisplayName,
     [property: JsonPropertyName("last_protocol_version")] int? LastProtocolVersion,
     [property: JsonPropertyName("last_protocol_seen_at")] DateTime? LastProtocolSeenAt,
-    [property: JsonPropertyName("created_at")] DateTime CreatedAt);
+    [property: JsonPropertyName("created_at")] DateTime CreatedAt,
+    // Step A (spec 5.2, A.6): the capabilities and application version the responder last saw from this peer, and when.
+    [property: JsonPropertyName("capabilities")] IReadOnlyList<string>? Capabilities = null,
+    [property: JsonPropertyName("app_version")] string? AppVersion = null,
+    [property: JsonPropertyName("capabilities_seen_at")] DateTime? CapabilitiesSeenAt = null);

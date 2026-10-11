@@ -35,6 +35,12 @@ public class AdminModel(ApiClient api, IHttpClientFactory httpClientFactory) : P
     public bool OsAutoUnlockEnabled { get; set; }
     public bool OsAutoUnlockSupported { get; set; }
 
+    /// <summary>What the node says about its database (docs/design/step-b-spec.md 6.7); null when it did not answer.</summary>
+    public VaultStatusDto? VaultStatus { get; set; }
+
+    /// <summary>The role of this node (spec 11.0): <c>desktop</c> shows the OS auto-unlock card, <c>server</c> sends to the encryption page.</summary>
+    public string VaultRole => VaultStatus?.AutoUnlock?.Role ?? "desktop";
+
     /// <summary>
     /// What can put the master DEK back after a Lock (GET /api/session/lock-impact). Null when
     /// the API could not answer — the Lock card then says nothing rather than claiming the node
@@ -53,6 +59,16 @@ public class AdminModel(ApiClient api, IHttpClientFactory httpClientFactory) : P
     public JsonElement? UpdateStatus { get; set; }
     public JsonElement? UpdateCheck { get; set; }
     public string? CheckedManifestJson { get; set; }
+
+    /// <summary>
+    /// The "Metadata encryption" card (docs/design/step-a-spec.md 5.3): this node's readiness report. On a page load only
+    /// what this node itself observed (it calls nobody); after "Ask every device now" the full report.
+    /// </summary>
+    public JsonElement? MetadataReadiness { get; set; }
+    public bool MetadataReadinessCheckedAll { get; set; }
+
+    /// <summary>The held part of the sync status (spec 6.9): changes received and not applied yet.</summary>
+    public JsonElement? HeldEvents { get; set; }
 
     // Search-subsystem latency + index-health diagnostics. Shapes/counts/timings only --
     // the API never returns query text or article content here (see SearchMetricsEndpoints).
@@ -322,6 +338,26 @@ public class AdminModel(ApiClient api, IHttpClientFactory httpClientFactory) : P
         return RedirectToPage(new { err = $"Compaction failed: {err}" });
     }
 
+    public async Task<IActionResult> OnPostCheckMetadataReadinessAsync()
+    {
+        var report = await api.GetMetadataReadinessAsync(askPeers: true);
+        if (report is null) return RedirectToPage(new { err = "Could not get the readiness report." });
+        TempData["MetadataReadiness"] = report.Value.GetRawText();
+        return RedirectToPage();
+    }
+
+    public async Task<IActionResult> OnPostActivateMetadataAsync(string masterPassword, bool backupTaken)
+    {
+        if (!backupTaken)
+            return RedirectToPage(new { err = "Take a fresh backup of this node first, keep it offline, and tick the box." });
+        var (ok, error, answer) = await api.ActivateMetadataAsync(masterPassword);
+        if (ok)
+            return RedirectToPage(new { msg = "Metadata encryption is on. Every device switches as it syncs." });
+        if (answer is { ValueKind: JsonValueKind.Object } a && a.TryGetProperty("blockers", out var blockers))
+            TempData["MetadataReadiness"] = JsonSerializer.Serialize(new { activated = false, activation = (object?)null, ready = false, blockers, peers = Array.Empty<object>() });
+        return RedirectToPage(new { err = error ?? "The activation failed." });
+    }
+
     public async Task<IActionResult> OnPostProposeDekRotationAsync(string masterPassword)
     {
         var (ok, commitId, err) = await api.ProposeDekRotationAsync(masterPassword);
@@ -427,14 +463,32 @@ public class AdminModel(ApiClient api, IHttpClientFactory httpClientFactory) : P
             api.GetUpdateStatusAsync().ContinueWith(t => UpdateStatus = t.Result),
             api.GetSearchMetricsAsync().ContinueWith(t => SearchMetrics = t.Result),
             api.GetLockImpactAsync().ContinueWith(t => LockImpact = t.Result),
+            LoadMetadataCardAsync(),
             LoadDevicesCardAsync(),
             api.GetAutoUnlockStatusAsync().ContinueWith(t =>
             {
                 OsAutoUnlockEnabled = t.Result.Enabled;
                 OsAutoUnlockSupported = t.Result.Supported;
             }),
+            api.GetVaultStatusAsync().ContinueWith(t => VaultStatus = t.Result),
         };
         await Task.WhenAll(tasks);
+    }
+
+    private async Task LoadMetadataCardAsync()
+    {
+        HeldEvents = await api.GetHeldEventsAsync();
+        if (TempData["MetadataReadiness"] is string checkedReport && !string.IsNullOrEmpty(checkedReport))
+        {
+            try
+            {
+                MetadataReadiness = JsonSerializer.Deserialize<JsonElement>(checkedReport);
+                MetadataReadinessCheckedAll = true;
+                return;
+            }
+            catch (JsonException) { /* stale TempData: fall back to the quick look */ }
+        }
+        MetadataReadiness = await api.GetMetadataReadinessAsync(askPeers: false);
     }
 
     private async Task LoadDevicesCardAsync()

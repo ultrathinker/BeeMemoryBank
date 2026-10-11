@@ -13,6 +13,9 @@ public partial class MaintenanceMiddleware(RequestDelegate next, MaintenanceMode
         "/api/snapshots/restore/continue-without-backup",
         "/api/snapshots/restore/cancel",
         "/api/session/unlock",
+        // "Encrypt this node" (docs/design/step-b-spec.md 10.9) puts the node in maintenance for its whole run, and its page polls these two.
+        "/api/vault/status",
+        "/api/vault/seal/progress",
         // Distributed-seeding handshake: when WE are the originator and just entered
         // maintenance for our own apply-phase, peers still need to authenticate against us
         // to download the snapshot from /api/snapshots/restore/{guid}/file. Both endpoints

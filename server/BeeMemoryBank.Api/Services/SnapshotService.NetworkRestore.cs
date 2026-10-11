@@ -18,10 +18,15 @@ namespace BeeMemoryBank.Api.Services;
 
 public partial class SnapshotService
 {
+    /// <param name="masterDek">The master DEK the join has just unwrapped: after activation the archive's database is sealed under it
+    /// (docs/design/step-a-spec.md 11). The caller clears it.</param>
+    /// <param name="requireEncrypted">The host declared protocol 4: a plain archive from it is refused (fail closed).</param>
     public async Task<(long CpSeq, long LamportTs)> RestoreForJoinAsync(
         string tarGzPath,
         byte[] signature,
-        byte[] producerPublicKey)
+        byte[] producerPublicKey,
+        byte[]? masterDek = null,
+        bool requireEncrypted = false)
     {
         var manifestBytes = await ExtractManifestFromTarGzAsync(tarGzPath);
 
@@ -53,6 +58,7 @@ public partial class SnapshotService
         var tempDir = SnapshotStaging.NewDirectory(_dataPath);
         try
         {
+            await RequireNoPlainDatabaseOnSealedNodeAsync(tarGzPath);
             await ExtractTarGzAsync(tarGzPath, tempDir, new FileInfo(tarGzPath).Length);
             await VerifyManifestAsync(tempDir);
 
@@ -60,7 +66,17 @@ public partial class SnapshotService
             if (!File.Exists(extractedDb))
                 throw new InvalidOperationException("Snapshot does not contain a database file");
 
-            await DecryptDbIfNeededAsync(extractedDb);
+            // A join archive of an activated host is a BMBCH1 container under the DEK the joiner holds; anything else is the plain (or, for a
+            // restore of a backup, the BMBDB2) file of today. A plain archive from a host that seals its metadata is refused.
+            var joinCipher = BeeMemoryBank.Sync.JoinSnapshotCipher.CipherOf(manifest.RootElement);
+            if (joinCipher is not null && _connFactory.IsSealed)
+                throw new InvalidOperationException(
+                    "A join archive is opened by a new node; this node's database is encrypted and takes no join archive. Nothing was changed.");
+            if (joinCipher is null) await DecryptDbIfNeededAsync(extractedDb);
+            // An encrypted node only gets here with a BMBDB container its own key (or an envelope) opened, now a sealed staging copy: there is no
+            // plain archive to judge, and the plain-database check below reads with a plain connection.
+            if (!_connFactory.IsSealed)
+                await BeeMemoryBank.Sync.JoinSnapshotCipher.OpenAsync(joinCipher, extractedDb, masterDek, requireEncrypted);
 
             // Shared with SnapshotJoinClient — see SnapshotTables for why one list rather than the
             // three that had already drifted apart.
@@ -80,7 +96,7 @@ public partial class SnapshotService
                 // Path.GetTempPath() reflects $TMPDIR / TEMP env vars and theoretically could contain
                 // a single quote on user-controlled installs.
                 using var attachCmd = conn.CreateCommand();
-                attachCmd.CommandText = $"ATTACH DATABASE '{extractedDb.Replace("'", "''")}' AS snap";
+                attachCmd.CommandText = _connFactory.AttachStatement(extractedDb, "snap");
                 attachCmd.ExecuteNonQuery();
 
                 using var tx = conn.BeginTransaction();
@@ -141,6 +157,8 @@ public partial class SnapshotService
                 }
             }
 
+            MarkActivatedIfImported();
+
             var mediaDir = Path.Combine(_dataPath, "media");
             Directory.CreateDirectory(mediaDir);
             var extractedMedia = Path.Combine(tempDir, "media");
@@ -156,9 +174,24 @@ public partial class SnapshotService
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+            await CleanupStagingOrFailAsync(tempDir);
         }
+    }
+
+    /// <summary>
+    /// The activation table is replicated in a join snapshot, but importing its row does not run
+    /// the event applier. Flip the in-memory policy before the join can return, so no content is
+    /// authored as protocol 3 during the policy's periodic database recheck interval.
+    /// </summary>
+    private void MarkActivatedIfImported()
+    {
+        if (_protocolPolicy is null) return;
+
+        using var conn = _connFactory.CreateConnection();
+        using var command = conn.CreateCommand();
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM tbl_metadata_activation)";
+        if (Convert.ToInt64(command.ExecuteScalar()) == 1)
+            _protocolPolicy.MarkActivated();
     }
 
     public async Task ApplyNetworkRestoreAsync(
@@ -213,6 +246,7 @@ public partial class SnapshotService
 
         try
         {
+            await RequireNoPlainDatabaseOnSealedNodeAsync(snapshotFilePath);
             await ExtractTarGzAsync(snapshotFilePath, tempDir, new FileInfo(snapshotFilePath).Length);
 
             var extractedDb = Path.Combine(tempDir, DbFileName);
@@ -260,7 +294,7 @@ public partial class SnapshotService
                 // Path.GetTempPath() reflects $TMPDIR / TEMP env vars and theoretically could contain
                 // a single quote on user-controlled installs.
                 using var attachCmd = conn.CreateCommand();
-                attachCmd.CommandText = $"ATTACH DATABASE '{extractedDb.Replace("'", "''")}' AS snap";
+                attachCmd.CommandText = _connFactory.AttachStatement(extractedDb, "snap");
                 attachCmd.ExecuteNonQuery();
 
                 using var tx = conn.BeginTransaction();
@@ -473,8 +507,7 @@ public partial class SnapshotService
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, recursive: true);
+            await CleanupStagingOrFailAsync(tempDir);
         }
         }
         catch (Exception ex) when (backupCreated && File.Exists(backupPath))
@@ -482,8 +515,7 @@ public partial class SnapshotService
             _logger?.LogWarning(ex, "Network restore failed — attempting to restore DB from backup {Path}", backupPath);
             try
             {
-                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-                File.Copy(backupPath, dbPath, overwrite: true);
+                await ReplaceLiveDatabaseAsync(() => File.Copy(backupPath, dbPath, overwrite: true));
                 _logger?.LogInformation("DB restored from backup after failed network restore");
             }
             catch (Exception restoreEx)

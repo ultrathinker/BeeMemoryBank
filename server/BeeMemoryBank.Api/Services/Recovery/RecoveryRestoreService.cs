@@ -32,8 +32,10 @@ public sealed record RestoreBlindPeer(Guid NodeId, string DisplayName, byte[] Pu
 /// Peers the source named that no anchor under the master key vouches for: restored INACTIVE
 /// (<see cref="RestoredPeerStatus.Unconfirmed"/>) until the user confirms or re-pairs them.
 /// </param>
+/// <param name="Replay">A restore from a baseline: what the replay of the deltas did (docs/design/step-a-spec.md 12); null otherwise.</param>
 public sealed record RestoreResult(Guid NodeId, byte[] PublicKey, AnchorVerification Anchor, int RetiredKeys, long LamportTs,
-    int RemainingBoxes = 0, string? Claim = null, IReadOnlyList<RestoredPeerRef>? UnconfirmedPeers = null);
+    int RemainingBoxes = 0, string? Claim = null, IReadOnlyList<RestoredPeerRef>? UnconfirmedPeers = null,
+    BaselineReplayResult? Replay = null);
 
 /// <summary>A peer named in a restore result; <paramref name="WasSuperadmin"/>: as the source listed it.</summary>
 public sealed record RestoredPeerRef(Guid NodeId, string DisplayName, bool WasSuperadmin);
@@ -67,7 +69,7 @@ public enum RestoreBoxPolicy
 /// the anchor is checked and the search index and embeddings are queued for a rebuild. The new slot is
 /// published as this device's box; the strong box follows at the first login.
 /// </summary>
-public class RecoveryRestoreService(
+public partial class RecoveryRestoreService(
     IServiceScopeFactory scopes,
     BeeMemoryBank.Sync.LamportClock clock,
     ILogger<RecoveryRestoreService> logger)
@@ -155,8 +157,8 @@ public class RecoveryRestoreService(
         }
         finally
         {
-            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
-            catch (IOException) { /* a temp folder; the OS cleans the temp folder */ }
+            if (!SnapshotStaging.TryCleanupDirectory(dir))
+                throw new IOException("The clear recovery staging files could not be removed. The recovery restore requires repair and was not reported as successful.");
         }
     }
 
@@ -169,7 +171,9 @@ public class RecoveryRestoreService(
         string databasePath, RecoverySet? recoverySet, RestoreIdentity who, CancellationToken ct = default,
         RestoreBoxPolicy boxes = RestoreBoxPolicy.Default)
     {
-        var evidence = await DatabaseRestoreEvidence.ReadAsync(databasePath);
+        DbConnectionFactory vault;
+        using (var scope = scopes.CreateScope()) vault = scope.ServiceProvider.GetRequiredService<DbConnectionFactory>();
+        var evidence = await DatabaseRestoreEvidence.ReadAsync(databasePath, vault);
         return await RestoreCoreAsync(databasePath, recoverySet, who, blind: null, evidence, sp =>
         {
             ImportTables(sp.GetRequiredService<DbConnectionFactory>(), databasePath,
@@ -211,7 +215,7 @@ public class RecoveryRestoreService(
     private async Task<RestoreResult> RestoreCoreAsync(
         string databaseForKeys, RecoverySet? recoverySet, RestoreIdentity who, RestoreBlindPeer? blind,
         RestoreEvidence evidence, Func<IServiceProvider, Task> import, CancellationToken ct,
-        RestoreBoxPolicy boxes)
+        RestoreBoxPolicy boxes, BaselineRestoreRun? baseline = null, IReadOnlyDictionary<Guid, long>? pullPositions = null)
     {
         if (string.IsNullOrWhiteSpace(who.AdminUsername) || string.IsNullOrWhiteSpace(who.DisplayName))
             throw new ArgumentException("Admin username and device name are required.");
@@ -225,23 +229,25 @@ public class RecoveryRestoreService(
                 throw new InvalidOperationException("This node is already initialized; restore needs a fresh node.");
 
             // 1. Keys first, from the copy, before anything is written here.
+            var target = sp.GetRequiredService<DbConnectionFactory>();
             if (recoverySet == null)
             {
-                using var source = new SqliteConnection($"Data Source={databaseForKeys};Mode=ReadOnly;Pooling=False");
-                source.Open();
+                using var source = target.OpenPackageFile(databaseForKeys);
                 recoverySet = await RecoverySetBuilder.BuildAsync(source);
             }
             using var keys = await ResolveKeysAsync(recoverySet, who.Password, boxes, ct);
+            // A restore from a baseline reads its database only now: the baseline opens with a metadata key, and only the keys the
+            // password just recovered open that (docs/design/step-a-spec.md 12 steps 3 and 4). Still nothing is written here.
+            if (baseline is not null) databaseForKeys = await baseline.OpenDatabaseAsync(keys, ct, target);
             // Several unlinked keys: which is newest is not proven, so nothing will be confirmed. The key to
             // write under is still best taken from the data itself: the one that opens the newest body.
-            if (!keys.HeadProven && NewestBodyHead(databaseForKeys, keys) is { } byData)
+            if (!keys.HeadProven && NewestBodyHead(target, databaseForKeys, keys) is { } byData)
                 keys.UseHead(byData);
 
             // The clock the restored node must start above, checked before anything is written.
             long maxImported;
-            using (var source = new SqliteConnection($"Data Source={databaseForKeys};Mode=ReadOnly;Pooling=False"))
+            using (var source = target.OpenPackageFile(databaseForKeys))
             {
-                source.Open();
                 // What is imported, and nothing a producer says about its clock: the restored node only has to
                 // end above the rows it takes over (no event is imported), and an unsigned claim would let a
                 // hostile source push its clock to the edge.
@@ -431,6 +437,11 @@ public class RecoveryRestoreService(
                 tx.Commit();
             }
 
+            // 3b. A restore from a baseline replays the deltas now, through the ordinary applier, with the package's whitelist and the
+            // opened metadata keys (spec 12 step 6). The identity and the admin exist; the peers are written below, with their final status.
+            BaselineReplayResult? replay = null;
+            if (baseline is not null) replay = await baseline.ReplayAsync(sp, StepAsync, ct);
+
             // 4. Strictly above every imported Lamport value, so this node's next write wins over them.
             clock.RaiseTo(maxImported);
             var lamport = clock.Tick();
@@ -449,7 +460,10 @@ public class RecoveryRestoreService(
             // peer active (superadmin as the source claimed) and demoted the unvouched ones afterwards, so a cut in
             // between left them trusted. The floor makes the clock above durable: no imported row carries an event,
             // and every start rebuilds the clock from the event log and the floor (LamportFloor).
-            var unconfirmedPeers = await WritePeersAsync(connFactory, evidence.Manifest, blind, nodeId, anchor, lamport);
+            // A replay cut short by its limit has pulled only that far from the blind node: the first sync takes the rest from there.
+            var unconfirmedPeers = await WritePeersAsync(connFactory, evidence.Manifest,
+                blind is not null && baseline?.IncompleteAt is { } reached ? blind with { CpSeq = reached } : blind,
+                nodeId, anchor, lamport, pullPositions);
             sp.GetService<SpkiPinRegistry>()?.Invalidate();
             await StepAsync("peers-written");
 
@@ -468,6 +482,7 @@ public class RecoveryRestoreService(
                 RestoreBootstrapMarker.Clear(conn, tx);
                 tx.Commit();
             }
+            baseline?.LowerMarkers(connFactory);
 
             logger.LogInformation(
                 "Restore complete: node {Node}, {Retired} older key(s) kept, anchor {Anchor} ({Confirmed})",
@@ -475,7 +490,7 @@ public class RecoveryRestoreService(
             // Without its trust comparison: it was made before the peer rows existed, so Vouches would read it as "every
             // node vouched for". The per-row answer is UnconfirmedPeers (and the rows' status).
             return new RestoreResult(nodeId, publicKey, anchor with { Trust = null }, keys.Retired.Count, lamport, keys.RemainingBoxes,
-                UnconfirmedPeers: unconfirmedPeers);
+                UnconfirmedPeers: unconfirmedPeers, Replay: replay);
         }
         finally
         {
@@ -573,7 +588,7 @@ public class RecoveryRestoreService(
     /// </summary>
     internal static async Task<IReadOnlyList<RestoredPeerRef>> WritePeersAsync(
         DbConnectionFactory connFactory, RestoreManifest? manifest, RestoreBlindPeer? blind, Guid self, AnchorVerification anchor,
-        long lamportFloor)
+        long lamportFloor, IReadOnlyDictionary<Guid, long>? pullPositions = null)
     {
         var now = DateTime.UtcNow;
         var peers = (manifest?.Whitelist ?? []).Where(p => p.NodeId != self).GroupBy(p => p.NodeId).Select(g => g.First()).ToList();
@@ -618,6 +633,15 @@ public class RecoveryRestoreService(
         // only replays events the appliers already resolve (LWW, idempotent). So every peer starts at 0 — a
         // peer whose log was compacted below that answers 410 and asks for a snapshot, never silence.
 
+        // A restore from a baseline takes over the pull positions the signed baseline manifest carries (docs/design/step-a-spec.md 12
+        // step 8): the baseline is encrypted under a key only a master-key holder has, and it was produced with nothing held back, so the
+        // state it holds reflects those peers' logs up to them. A position is only written for a peer this restore wrote.
+        foreach (var (node, seq) in pullPositions ?? new Dictionary<Guid, long>())
+        {
+            if (seq <= 0 || node == self || node == blind?.NodeId || peers.All(p => p.NodeId != node)) continue;
+            await SyncPositionRepository.UpsertAsync(conn, tx, new SyncPosition { RemoteNodeId = node, LastSequenceNum = seq, UpdatedAt = now });
+        }
+
         // What this node pulled from the blind node: everything the package covered (its own signed checkpoint —
         // the one position the producer speaks for itself about; whatever it withheld comes from the peers).
         if (blind != null)
@@ -632,10 +656,9 @@ public class RecoveryRestoreService(
     }
 
     // Of several unproven heads, the one that opens the most recently written body (by content version).
-    private static string? NewestBodyHead(string databasePath, RecoveredKeys keys)
+    private static string? NewestBodyHead(DbConnectionFactory target, string databasePath, RecoveredKeys keys)
     {
-        using var conn = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
-        conn.Open();
+        using var conn = target.OpenPackageFile(databasePath);
         var bodies = conn.Query<(string Id, byte[] Dek, byte[] Iv)>(
             @"SELECT a.id, b.encrypted_dek, b.dek_iv FROM tbl_article_body b JOIN tbl_article a ON a.id = b.article_id
               ORDER BY a.lamport_ts DESC LIMIT 20");
@@ -682,7 +705,7 @@ public class RecoveryRestoreService(
         using (var off = conn.CreateCommand()) { off.CommandText = "PRAGMA foreign_keys = OFF"; off.ExecuteNonQuery(); }
         using (var attach = conn.CreateCommand())
         {
-            attach.CommandText = $"ATTACH DATABASE '{databasePath.Replace("'", "''")}' AS snap";
+            attach.CommandText = connFactory.AttachStatement(databasePath, "snap");
             attach.ExecuteNonQuery();
         }
         try

@@ -4,6 +4,7 @@ using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Infrastructure.AutoUnlock;
 using BeeMemoryBank.Infrastructure.Secrets;
 
 namespace BeeMemoryBank.Infrastructure.OsAutoUnlock;
@@ -39,6 +40,14 @@ public sealed class UpdateUnlockHandoff(SessionService session, string dataPath,
     private const int HeaderLength = 1 + sizeof(long);
 
     private readonly Func<DateTime> _utcNow = utcNow ?? (() => DateTime.UtcNow);
+
+    // Step B (docs/design/step-b-spec.md 4.1, 4.7): the hand-off is not a door - it yields a DEK. On a sealed node whose database is closed
+    // there is no sentinel to read first, so the DEK goes through the sealed unlock, which opens the database with it, checks the sentinel
+    // there and closes again on any refusal. Attached by the sealed-vault composition; absent on a plain node.
+    private ISealedAutoUnlockHost? _sealedHost;
+
+    /// <summary>Attaches the sealed-node collaborator (the composition calls this once, at start).</summary>
+    public void AttachSealedNode(ISealedAutoUnlockHost? host) => _sealedHost = host;
 
     public string FilePath => Path.Combine(dataPath, "update-unlock.dat");
     public bool IsSupported => _secretStore.IsSupported;
@@ -106,6 +115,18 @@ public sealed class UpdateUnlockHandoff(SessionService session, string dataPath,
             if (now >= expiresUtc || expiresUtc - now > Lifetime) return false;
 
             var dek = payload.AsSpan(HeaderLength).ToArray();
+            if (_sealedHost is { IsSealed: true, IsUsable: false } host)
+            {
+                try
+                {
+                    return await host.TryUnlockWithDekAsync(dek, null);
+                }
+                finally
+                {
+                    Array.Clear(dek);
+                }
+            }
+
             var sentinel = await nodeRepo.GetSentinelAsync();
             if (sentinel == null || !MasterKeyManager.VerifySentinel(sentinel, dek))
             {

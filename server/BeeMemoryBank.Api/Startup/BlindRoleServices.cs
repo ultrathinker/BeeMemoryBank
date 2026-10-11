@@ -3,6 +3,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Metadata;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace BeeMemoryBank.Api.Startup;
@@ -16,7 +17,7 @@ namespace BeeMemoryBank.Api.Startup;
 /// <para>What differs stays in each host: the snapshot's key operations (the Api's are session-backed, the blind host's are the external key),
 /// the full node's other registrations, and the order around these calls.</para>
 /// </summary>
-public static class BlindRoleServices
+public static partial class BlindRoleServices
 {
     /// <summary>
     /// What a blind node has instead of the DEK-bound services (plan 3.4, 3.5): its identity key in a file, a rotation applier with nothing
@@ -42,7 +43,15 @@ public static class BlindRoleServices
         // Log trimming without an event (plan 5.4) - a blind node has no compaction of its own.
         services.AddSingleton<BlindLogTrimmer>();
         services.AddHostedService(sp => sp.GetRequiredService<BlindLogTrimmer>());
+
+        // Step A (docs/design/step-a-spec.md 9.4, 15.2): the relay opener over the Vault's, no held events, the blind store
+        // (hook H1), then the format-2 package services of this role (hook H2, track 2).
+        services.AddBlindMetadataHost(dataPath);
+        AddBlindRoleFormat2Services(services, dataPath);
     }
+
+    /// <summary>Hook H2 (spec 15.2), track 2: <c>Startup/BlindRoleServices.Format2.cs</c>, linked into the BlindNode host.</summary>
+    static partial void AddBlindRoleFormat2Services(IServiceCollection services, string dataPath);
 
     /// <summary>
     /// A blind node is dialled by every full device (plan 4.4), over HTTPS with its self-signed certificate.
@@ -77,7 +86,9 @@ public static class BlindRoleServices
                 sp.GetRequiredService<ILogger<SnapshotService>>(),
                 sp.GetRequiredService<IRestoreReplayShieldRepository>(),
                 sp.GetRequiredService<IWhitelistRepository>(),
-                keyOperations(sp)));
+                keyOperations(sp),
+                sp.GetService<ISyncProtocolPolicy>(),
+                sp.GetService<IVaultGate>()));
     }
 
     /// <summary>The media folder next to the database (created now) and its options.</summary>

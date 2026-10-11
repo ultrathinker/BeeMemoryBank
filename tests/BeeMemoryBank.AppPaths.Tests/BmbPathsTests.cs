@@ -6,8 +6,27 @@ using Xunit;
 
 namespace BeeMemoryBank.AppPaths.Tests;
 
-public class BmbPathsTests
+[Collection("LocalAppData")] // these tests set LOCALAPPDATA, as LegacyDataRescueTests does: one at a time
+public class BmbPathsTests : IDisposable
 {
+    private static readonly string SandboxRoot = Path.Combine(Path.GetTempPath(), "BmbPathsTests-" + Guid.NewGuid().ToString("N"));
+    private readonly string? _originalLocalAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+    private readonly string? _originalAppData = Environment.GetEnvironmentVariable("APPDATA");
+
+    public BmbPathsTests()
+    {
+        // BmbPaths creates the data root and its folders on first use. Point them at a fresh, empty folder so these tests
+        // never create folders in the owner's real BeeMemoryBankData (BMB-184).
+        Environment.SetEnvironmentVariable("LOCALAPPDATA", Path.Combine(SandboxRoot, "Local"));
+        Environment.SetEnvironmentVariable("APPDATA", Path.Combine(SandboxRoot, "Roaming"));
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("LOCALAPPDATA", _originalLocalAppData);
+        Environment.SetEnvironmentVariable("APPDATA", _originalAppData);
+    }
+
     [Fact]
     public void Root_AndDependentPaths_AreNeverUnderBaseDirectory()
     {

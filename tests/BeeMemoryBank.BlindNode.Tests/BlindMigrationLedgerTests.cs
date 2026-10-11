@@ -35,7 +35,7 @@ public class BlindMigrationLedgerTests
         var files = SourceFiles();
         files.Should().NotBeEmpty("the scan must see the migrations it guards");
 
-        var embedded = BlindLib.GetManifestResourceNames().Where(n => n.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)).ToList();
+        var embedded = BlindLib.GetManifestResourceNames().Where(n => n.StartsWith(Prefix, StringComparison.Ordinal) && n.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)).ToList();
         embedded.Should().BeEquivalentTo(files.Select(f => Prefix + Path.GetFileName(f)),
             "the runner matches a ledger row to a resource by this exact name; a missing or renamed one is a ghost");
 

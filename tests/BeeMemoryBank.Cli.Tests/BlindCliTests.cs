@@ -74,11 +74,54 @@ public class BlindCliTests : IDisposable
         text.Should().Contain("hub");
         // The numeric fields of the status JSON, not just its strings.
         text.Should().Contain("protocol 3");
-        text.Should().Contain("12 articles, 3 blobs");
+        text.Should().Contain("3 blobs");
+        text.Should().NotContain("12", "a node that still reports a note count (2.5) does not get it printed: no note count from 2.6.0 on");
+        text.Should().NotContain("article");
         text.Should().Contain("lag 0 events");
         handler.Calls.Should().ContainSingle(c => c.Url.PathAndQuery == "/api/blind/status");
         handler.Roles.Should().OnlyContain(r => r == "superadmin",
             "the /api/blind routes are .RequireSuperadmin(); the CLI on the box is the node's local administrator");
+    }
+
+    /// <summary>
+    /// Step A (step-a-spec 10.1): what a blind node holds is shown as baseline age, delta count and storage size, never as
+    /// a note count. An activated node that has no format-2 baseline yet says so.
+    /// </summary>
+    [Fact]
+    public async Task Status_ShowsBaselineAgeDeltasAndSize_NeverANoteCount()
+    {
+        var created = DateTime.UtcNow.AddHours(-3).ToString("O");
+        var handler = new ScriptedHandler
+        {
+            Answer = (200, $$"""
+                {"node_name":"BlindNode","node_id":"b11d0000-0000-8000-8000-000000000000","role":"blind",
+                 "version":"2.6.0","protocol":4,"data_path":"/app/data","activated":true,
+                 "stored":{"blobs":3,"bytes":4096},"free_bytes":1000000,
+                 "baseline":{"id":"0f0f0f0f-0000-4000-8000-000000000000","producer":"aaaa0000-0000-4000-8000-000000000000",
+                             "created_at":"{{created}}","age_seconds":10800,"key_generation":2,"container_bytes":2048},
+                 "deltas":{"count":812,"bytes":1048576},"legacy_copies":[],
+                 "peers":[],"jobs":[]}
+                """),
+        };
+        var sw = new StringWriter();
+        (await BlindCommand.HandleStatusAsync(_tempDir, Options(handler), sw)).Should().Be(0);
+
+        var text = sw.ToString();
+        text.Should().Contain("Metadata:  sealed (activated)");
+        text.Should().Contain("Baseline:  3 h old, key generation 2");
+        text.Should().Contain("Deltas:    812 (1.0 MB)");
+        text.Should().Contain("Stored:    3 blobs, 4.0 KB");
+        text.Should().NotContain("article");
+
+        handler.Answer = (200, """
+            {"node_name":"BlindNode","role":"blind","version":"2.6.0","protocol":4,"activated":true,
+             "stored":{"blobs":0,"bytes":10},"baseline":null,"deltas":{"count":5,"bytes":100},
+             "legacy_copies":["/app/data/beememorybank.db.pre-seed"],"peers":[],"jobs":[]}
+            """);
+        sw = new StringWriter();
+        (await BlindCommand.HandleStatusAsync(_tempDir, Options(handler), sw)).Should().Be(0);
+        sw.ToString().Should().Contain("Baseline:  none yet (waiting for a format-2 reseed)");
+        sw.ToString().Should().Contain("Legacy:    /app/data/beememorybank.db.pre-seed");
     }
 
     [Fact]

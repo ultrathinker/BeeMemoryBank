@@ -67,6 +67,45 @@ If the vault was **locked** when the password was reset, the `master_password_ch
 node restarts before anyone signs in, that one announcement is skipped; change the password on the other nodes
 by hand if you want them to follow.
 
+## After sealed metadata is turned on
+
+Turning on sealed metadata ([encryption.md](encryption.md)) adds a **metadata key** that seals titles, folder paths, tags and comments
+in the events and in the baselines nodes hand to blind copies. It changes nothing about forgotten passwords:
+
+- **Changing or resetting a password needs nothing more.** The metadata keys are wrapped under the master key, not under any password, so a
+  reset that re-wraps the master key under the new password leaves them as they were.
+- **A restore recovers them from the same material.** Recovery boxes and the links to retired master keys open the master key and the
+  chain of older ones; each metadata key row then opens with the master key of its fingerprint. Every package, backup and join carries all
+  the metadata key rows in the clear control tables (they open only with the master key), so no extra step and no extra secret is needed
+  after a master key rotation: the new rotation makes a new metadata key and the old ones stay readable.
+- **If every slot, recovery box, link and authorised peer is lost,** the metadata is unrecoverable, exactly as the bodies are. A blind node,
+  a phone backup or a backup folder cannot open it for you: they hold the baseline sealed under keys only the master key opens.
+
+How a restore from a blind node, a phone backup or a backup folder uses them is described in
+[snapshot-restore.md](snapshot-restore.md#restore-from-a-baseline-and-the-deltas-after-it).
+
+## On an encrypted node
+
+When the owner has used **Encrypt this node** ([encryption.md](encryption.md#an-encrypted-node-the-database-key-and-the-boot-store)), the database
+file is encrypted and the ways into it live twice: in the database, and as copies in the small `beememorybank.boot.db` file (the
+*boot store*) that a locked node reads before anyone has unlocked it.
+
+- **Forgotten password: nothing changes for you.** The recovery key is one of the ways in (a `recovery` slot, copied to the boot
+  store like the others). *Forgot your password? Use a recovery key* works on a locked node: the page opens the database for the
+  moment it needs, with the key the recovery key yields, writes the new password's slot, rewrites the boot store, and closes it
+  again. The node stays locked if it was locked, and open if it was open. Signing in with the new password is what unlocks it.
+- **Lost boot store, database still there.** The encrypted database cannot be opened without the boot store, and the node says so
+  and refuses to start rather than guess. Ways back, in this order of preference: restore the newest **snapshot** (a snapshot opens
+  with your master password or recovery key and does not depend on the boot store), join again from a peer that has the data, or
+  restore from a blind copy. Prevent it: every product backup path (snapshots, the update's pre-update copy) already includes the
+  boot store, and a copy of the data folder must contain it too ([deployment.md](deployment.md#backing-up-and-restoring-the-data-folder)).
+- **Lost everything but a recovery box on a blind node.** The restore described in [snapshot-restore.md](snapshot-restore.md) builds a
+  new node, which can be encrypted again afterwards.
+- **No back door.** Without a password, a recovery key, an auto-unlock the owner switched on, a peer or a recovery box, the data is
+  gone, exactly as the bodies already were. A server that restarts stays locked until one of those is used, unless the owner
+  switched on *Start unlocked after a restart* ([deployment.md](deployment.md#start-unlocked-after-a-restart-servers)); a restore
+  never switches that on.
+
 ## How it is built
 
 - `POST /api/session/recover-access` on the API, called only by the Web page (it requires the internal key and is

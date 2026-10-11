@@ -25,6 +25,9 @@ public class LoginModel(ApiClient api) : PageModel
 
     public string? ErrorMessage { get; set; }
 
+    /// <summary>True when the node's database is encrypted and closed: the password opens it (docs/design/step-b-spec.md 4.5, 5.6).</summary>
+    public bool EncryptedAndClosed { get; private set; }
+
     public RestoreProgressDto? RestoreProgress { get; set; }
     public DekRotationProgressDto? DekRotationProgress { get; set; }
 
@@ -41,6 +44,7 @@ public class LoginModel(ApiClient api) : PageModel
     {
         ReturnUrl = returnUrl ?? "/Tree";
         Recovered = recovered;
+        EncryptedAndClosed = (await api.GetVaultStatusAsync())?.IsClosed ?? false;
         RestoreProgress = await api.GetRestoreProgressAsync();
         DekRotationProgress = await api.GetDekRotationProgressAsync();
         await ShowRestoredNoticeAsync(restored);

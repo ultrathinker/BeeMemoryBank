@@ -28,6 +28,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Migrations\*.sql" />
+    <!-- The boot store of a sealed node (docs/design/step-b-spec.md 2.3): its own migrations, its own ledger, never run by the vault MigrationRunner. -->
+    <EmbeddedResource Include="BootMigrations\*.sql" />
   </ItemGroup>
 
   <ItemGroup>

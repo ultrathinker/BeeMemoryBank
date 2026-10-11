@@ -312,6 +312,63 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AnActivatedVault_StaysActivated_AndSealsWithOneNewMetadataKeyUnderTheNewKey()
+    {
+        // step-a-spec 4.1: every metadata key of the old vault is wrapped under an old DEK. The re-keyed vault keeps its
+        // activation and gets one generation-1 key under D_c; nothing is logged.
+        var oldKeyId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+        await DisposeAsync();
+        await BuildVaultAsync(conn => PlantMetadataAsync(conn, oldKeyId, activated: true));
+
+        var outcome = await RunAsync();
+        outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
+
+        using var node = new NodeAt(_d);
+        (await node.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue();
+        var ring = node.Services.GetRequiredService<BeeMemoryBank.Vault.Metadata.IMetadataKeyRing>();
+        ring.Current.Should().NotBeNull("the owner's password opens the new metadata key");
+        ring.Current!.Generation.Should().Be(1);
+        ring.Current.KeyId.Should().NotBe(oldKeyId);
+        node.Services.GetRequiredService<BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy>().SealsMetadata.Should().BeTrue();
+
+        using var conn = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Mode=ReadOnly;Pooling=False");
+        conn.Open();
+        conn.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_metadata_key").Should().Be(1);
+        conn.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_metadata_activation").Should().Be(1);
+        conn.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_event WHERE event_type = 'metadata_key_set'").Should().Be(0, "the re-keyed node is alone");
+        RekeyReport.TryRead(_d).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task AVaultNotActivated_KeepsNoMetadataKey()
+    {
+        await DisposeAsync();
+        await BuildVaultAsync(conn => PlantMetadataAsync(conn, Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)), activated: false));
+
+        var outcome = await RunAsync();
+        outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
+
+        using var conn = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Mode=ReadOnly;Pooling=False");
+        conn.Open();
+        conn.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_metadata_key").Should().Be(0, "a key wrapped under an old DEK opens nothing");
+    }
+
+    private async Task PlantMetadataAsync(SqliteConnection conn, string keyId, bool activated)
+    {
+        var now = DateTime.UtcNow.ToString("O");
+        await conn.ExecuteAsync(
+            @"INSERT INTO tbl_metadata_key (key_id, generation, dek_fingerprint, epoch_hint, wrapped, iv, author_node_id, created_at, lamport_ts, event_id)
+              VALUES (@keyId, 1, @fp, 0, @w, @iv, @n, @now, 1, @e)",
+            new { keyId, fp = new string('0', 64), w = RandomNumberGenerator.GetBytes(48), iv = RandomNumberGenerator.GetBytes(12),
+                n = _nodeId.ToString(), now, e = Guid.NewGuid().ToString() });
+        if (activated)
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_metadata_activation (activation_id, key_id, generation, activated_at, author_node_id, event_id, lamport_ts, applied_at)
+                  VALUES (@a, @keyId, 1, @now, @n, @e, 1, @now)",
+                new { a = Guid.NewGuid().ToString(), keyId, now, n = _nodeId.ToString(), e = Guid.NewGuid().ToString() });
+    }
+
+    [Fact]
     public async Task ALegacyPlaintextIdentitySeed_IsSealedUnderTheNewKey()
     {
         // A node from before identity sealing: its seed is stored in the clear (v=0).

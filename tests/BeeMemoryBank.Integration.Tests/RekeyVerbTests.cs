@@ -82,7 +82,8 @@ public sealed class RekeyVerbTests : IAsyncLifetime
         Directory.CreateDirectory(to);
         foreach (var f in Directory.EnumerateFiles(from))
         {
-            if (f.EndsWith("-shm") || f.EndsWith("-wal") || Path.GetFileName(f) == "node.lock") continue;
+            // .instance.lock is the running host's exclusive lock (InstanceGuard): on Linux and macOS it cannot be copied, and it holds no data.
+            if (f.EndsWith("-shm") || f.EndsWith("-wal") || Path.GetFileName(f) is "node.lock" or ".instance.lock") continue;
             File.Copy(f, Path.Combine(to, Path.GetFileName(f)));
         }
         foreach (var dir in Directory.EnumerateDirectories(from)) CopyTree(dir, Path.Combine(to, Path.GetFileName(dir)));
@@ -95,7 +96,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
     // ------------------------------------------------------------ doubles for the steps that are not R1's
 
     /// <summary>L's KeyMaterialStep, reduced to what the D1 check needs: D_c installed, old key material gone.</summary>
-    private sealed class KeyMaterialDouble : IRekeyStep, IRekeyOwnerCredentialConsumer
+    internal sealed class KeyMaterialDouble : IRekeyStep, IRekeyOwnerCredentialConsumer
     {
         private int _slot;
         private string _password = "";
@@ -136,7 +137,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
     }
 
     /// <summary>R2's ChatRekeyStep, reduced: chat rows dropped, every remaining node data key replaced under D_c.</summary>
-    private sealed class ChatDouble(bool fail = false) : IRekeyStep
+    internal sealed class ChatDouble(bool fail = false) : IRekeyStep
     {
         public string Name => "ChatRekey";
 
@@ -157,7 +158,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
         public Task<IReadOnlyList<RekeyProblem>> VerifyAsync(RekeyContext ctx) => Task.FromResult<IReadOnlyList<RekeyProblem>>([]);
     }
 
-    private sealed class PeerRevokeDouble(Func<RekeyContext, Task>? sabotage = null) : IRekeyStep
+    internal sealed class PeerRevokeDouble(Func<RekeyContext, Task>? sabotage = null) : IRekeyStep
     {
         public string Name => "PeerRevoke";
 
@@ -171,7 +172,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
         public Task<IReadOnlyList<RekeyProblem>> VerifyAsync(RekeyContext ctx) => Task.FromResult<IReadOnlyList<RekeyProblem>>([]);
     }
 
-    private sealed class EventLogResetDouble(bool verifyFails = false) : IRekeyStep
+    internal sealed class EventLogResetDouble(bool verifyFails = false) : IRekeyStep
     {
         public string Name => "EventLogReset";
 
@@ -187,7 +188,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
             Task.FromResult<IReadOnlyList<RekeyProblem>>(verifyFails ? [new("tbl_event", "*", "an injected verify failure")] : []);
     }
 
-    private sealed class PreflightDouble(bool block = false) : IRekeyPreflight
+    internal sealed class PreflightDouble(bool block = false) : IRekeyPreflight
     {
         public Task<RekeyPreflightReport> RunAsync(string sourceDir, SqliteConnection liveMain, SqliteConnection? liveChat, RekeyKeys keys, CancellationToken ct) =>
             Task.FromResult(new RekeyPreflightReport(block ? [new("tbl_article_body", "x", "an unopenable key")] : [], [], 0));

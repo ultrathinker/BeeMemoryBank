@@ -17,12 +17,32 @@ follow [IOS-DISTRIBUTION.md](IOS-DISTRIBUTION.md).
 | background | `Platforms/iOS/IosBlindBackground.cs`, `Services/IosBackgroundRounds.cs` | two BGTaskScheduler tasks (below) |
 | "no contact" warning | `Services/BlindSilenceAlarm.cs`, `Platforms/iOS/IosSilenceNotifier.cs` | one pending local notification, three days after the last contact with the node, moved forward by every sync |
 | first-run after a wipe | `Services/IosBlindRuntime.cs` | iOS gives an app no way to restart itself: "Disconnect and wipe" ends with a new composition in the same process (like the desktop copies), and the screen moves over to it |
-| screen | `Pages/BlindHomePage.xaml(.cs)` | the Android screen's counterpart, plus the number of notes, the last contact, the newest problem, the background state and when the silence warning would come |
+| screen | `Pages/BlindHomePage.xaml(.cs)` | the Android screen's counterpart, plus the store line (the age of the restore point, the changes held since it and the bytes stored: never a note count), the last contact, the newest problem, the background state and when the silence warning would come |
 
 Why a project of its own and not a second target of the Android project: an iOS build needs a Mac with Xcode, and a multi-targeted Android
 project would no longer restore on the Linux and Windows machines that build the Android app; the Android project's guards
 (`ForbiddenReferencesTests`, `BlindManifestTests`, `AppBoundaryTests`) read its project, assets and output, which stay as they were; and the iOS
 life cycle shares almost nothing with WorkManager and a foreground service.
+
+## After sealed metadata is turned on
+
+When the owner turns on sealed metadata ([../encryption.md](../encryption.md)), the copy changes in four ways, all in the libraries it shares
+with the Android, Windows and macOS copies (`Blind.PhoneClient`, `Blind.AppCore`); the iPhone head only shows the result:
+
+- **What it holds.** A copy that already loaded learns of the activation by sync and goes back to its first load (the screen says "First
+  load: running"): it downloads a sealed baseline instead of a database, and the first adoption removes the plain content the old load held
+  (the database is vacuumed with secure delete). From then on the copy stores titles, paths, tags and comments only inside the baseline,
+  which it cannot open, and relays the sealed changes it pulls as received.
+- **What the screen shows.** The store line replaces the number of notes: *Restore point: made 2 d ago. Changes since: 12. Stored: 4 MiB.*
+  Before the first load it says none yet; if the database cannot be read at that moment it says unknown, never zero.
+- **Newer baselines.** The hourly long job asks the node it calls for a newer baseline (`GET /api/blind/replica?have=<id>`): 304 when it holds
+  the newest, otherwise it fetches the blobs the baseline lists, adopts it and drops the changes of its log that the baseline now covers.
+  A failed update is shown like a failed backup and does not hold a due backup back.
+- **Backups.** A backup is the sealed package of the node the copy calls, the copy's own events and its pairing record, made as before; the
+  computer restores from it with the master password alone ([../snapshot-restore.md](../snapshot-restore.md)).
+
+An iPhone that has not been updated to 2.6 keeps working until the owner turns sealed metadata on; after that the node refuses it (426) until
+the app is updated.
 
 ## Pairing and TLS
 

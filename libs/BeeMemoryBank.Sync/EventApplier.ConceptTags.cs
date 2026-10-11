@@ -30,20 +30,14 @@ public partial class EventApplier
             }
             catch (Exception ex)
             {
-                // Tag names stay out of these lines (the tag name IS the identifier for tags, and
-                // the log runs on blind nodes too) — the event id names the event instead. The
-                // exception object stays out as well: a provider renders its message after the
-                // template, and the generator's and repository's messages carry the tag name.
-                // The type alone says which leg failed.
+                // Tag names are identifiers and this applier can run on blind nodes. Keep both
+                // the tag and provider exception messages out of plaintext logs.
                 logger.LogWarning("Event {EventId}: failed to regenerate the embedding of a renamed concept tag ({ExceptionType})",
                     evt.EventId, ex.GetType().Name);
             }
         }
         catch (InvalidOperationException)
         {
-            // The exception is dropped deliberately: the repository's message is
-            // "Concept tag '<name>' not found" — the name must not reach the logger, whose
-            // providers render attached exceptions in plaintext.
             logger.LogWarning("Event {EventId}: skipping concept_tag_rename, the old concept was not found or already renamed", evt.EventId);
         }
     }
@@ -57,7 +51,6 @@ public partial class EventApplier
         }
         catch (InvalidOperationException)
         {
-            // Exception dropped: its message names the tag (see the rename catch above).
             logger.LogWarning("Event {EventId}: skipping concept_tag_merge, the source concept was not found or already merged", evt.EventId);
         }
     }
@@ -71,7 +64,6 @@ public partial class EventApplier
         }
         catch (InvalidOperationException)
         {
-            // Exception dropped: its message names the tag (see the rename catch above).
             logger.LogWarning("Event {EventId}: skipping concept_tag_delete, the concept was not found or already deleted", evt.EventId);
         }
     }

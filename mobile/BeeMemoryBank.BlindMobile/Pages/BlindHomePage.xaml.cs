@@ -21,6 +21,11 @@ public partial class BlindHomePage : ContentPage
     private readonly BlindHeavyWork _work;
     private readonly BlindActivity _activity;
     private readonly IBlindPaths _paths;
+    private readonly BlindStoreStats _stats;
+    private static readonly TimeSpan StoreEvery = TimeSpan.FromSeconds(15);
+    private DateTimeOffset _storeAt = DateTimeOffset.MinValue;
+    private BlindStoreInfo? _store;
+    private bool _readingStore;
     private IDispatcherTimer? _timer;
     private bool _applying;
     private bool _refreshPending;
@@ -28,13 +33,14 @@ public partial class BlindHomePage : ContentPage
     private string _wipeName = "";
     private DateTimeOffset _backupAskedAt = DateTimeOffset.MinValue;
 
-    public BlindHomePage(IBlindAppController app, BlindHeavyWork work, BlindActivity activity, IBlindPaths paths)
+    public BlindHomePage(IBlindAppController app, BlindHeavyWork work, BlindActivity activity, IBlindPaths paths, BlindStoreStats stats)
     {
         InitializeComponent();
         _app = app;
         _work = work;
         _activity = activity;
         _paths = paths;
+        _stats = stats;
         SchedulePicker.ItemsSource = new[] { "Off", "Daily", "Weekly" };
     }
 
@@ -93,12 +99,33 @@ public partial class BlindHomePage : ContentPage
             var code = status.AwaitingAnswer ? _app.PairingCode() : null;
             var backupRunning = _activity.IsActive(BlindActivity.Heavy) || _activity.IsActive(BlindActivity.BackupService)
                 || DateTimeOffset.UtcNow - _backupAskedAt < TimeSpan.FromSeconds(10);
-            Show(BlindHomeView.Build(status, code, backupRunning), status.DisplayName);
+            Show(BlindHomeView.Build(status, code, backupRunning, _store), status.DisplayName);
+            ReadStoreSoon(status);
         }
         catch (Exception ex)
         {
             ShowProblem(ex);
         }
+    }
+
+    /// <summary>Reads what the copy holds now and then, off the UI thread (docs/design/step-a-spec.md 10.2); the line shows the last answer.</summary>
+    private void ReadStoreSoon(BlindAppStatus status)
+    {
+        if (_readingStore || DateTimeOffset.UtcNow - _storeAt < StoreEvery) return;
+        if (!status.InitialLoadDone) { _store = null; return; }
+        _readingStore = true;
+        _storeAt = DateTimeOffset.UtcNow;
+        _ = Task.Run(async () =>
+        {
+            var summary = await _stats.GetAsync();
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                _readingStore = false;
+                _store = summary;
+                try { StoreLabel.Text = BlindHomeView.StoreText(summary, _app.GetStatus(), DateTimeOffset.UtcNow); }
+                catch (Exception ex) { ShowProblem(ex); }
+            });
+        });
     }
 
     private void Show(BlindHomeView view, string? displayName)
@@ -109,6 +136,7 @@ public partial class BlindHomePage : ContentPage
         NodeLabel.Text = view.Node;
         PairLabel.Text = view.Pair;
         LoadLabel.Text = view.Load;
+        StoreLabel.Text = view.Store;
         SyncLabel.Text = view.Sync;
         BackupLabel.Text = view.Backup;
         if (view.Job != null) ShowJob(view.Job, view.JobProgress);

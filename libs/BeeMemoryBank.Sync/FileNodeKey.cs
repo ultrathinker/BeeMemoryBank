@@ -21,13 +21,24 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
     public const string FileName = "node-identity.key";
 
     private const int SeedLength = 32;
+    private const int ReplaceSharingViolationAttempts = 10;
 
     // Anything beyond owner read/write means another account on the box can read the key.
     private const UnixFileMode NotOwnerOnly =
         UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
         UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
 
+    // How long a start waits for another start that is replacing the torn file. That one generates a key, writes,
+    // flushes and renames: milliseconds, seconds on a slow disk. Past this the start fails and the next one retries.
+    private static readonly TimeSpan DefaultReplaceLockWait = TimeSpan.FromSeconds(30);
+
     public string Path { get; } = path;
+
+    /// <summary>The file held (never written) while a torn key file is replaced, beside the key: see <see cref="LoadOrCreate"/>.</summary>
+    internal string ReplaceLockPath => Path + ".lock";
+
+    /// <summary>Test seam: how long <see cref="LoadOrCreate"/> waits for the replace lock.</summary>
+    internal TimeSpan ReplaceLockWait { get; init; } = DefaultReplaceLockWait;
 
     public bool Exists => File.Exists(Path);
 
@@ -55,7 +66,16 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
     /// <para>Two starts that both find no file (review A2-d) do not both win: the new seed is
     /// renamed into place without replacing anything, in one atomic step on every platform
     /// (<see cref="OwnerOnlyFile.MoveNoReplace"/>), and the start whose rename finds the other's
-    /// seed there takes that one. Only a file that exists but holds no seed is replaced.</para>
+    /// seed there takes that one.</para>
+    ///
+    /// <para>Only a file that exists but holds no seed is replaced, and that cannot be one atomic
+    /// step: no system call replaces a file only if it is still the torn one, so two starts that
+    /// both saw it torn both renamed their seed over it, and the first went on with an identity
+    /// that was no longer in the file (BMB-190). Such a start therefore takes an exclusive lock
+    /// on a file beside the key (<see cref="ReplaceLockPath"/>), looks at the key again, and only
+    /// if it is still torn replaces it; a start that waited finds the winner's seed and takes it.
+    /// The lock goes with the process, so a crash never leaves a key file that cannot be
+    /// repaired.</para>
     /// </summary>
     public byte[] LoadOrCreate(out bool created)
     {
@@ -66,7 +86,18 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
         }
         created = true;
         if (File.Exists(Path))
-            return WriteNewSeed(replaceExisting: true);
+        {
+            using var replaceLock = HoldReplaceLock();
+            // Looked at again with the lock held: the start that had it first has replaced the torn file by now.
+            if (TryReadSeed(out var current))
+            {
+                created = false;
+                return PublicKeyOfAndClear(current);
+            }
+            if (File.Exists(Path))
+                return WriteNewSeed(replaceExisting: true);
+            // Gone while this start waited (removed by hand): create it like a start that found no file.
+        }
         try
         {
             return WriteNewSeed(replaceExisting: false);
@@ -77,6 +108,42 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
             if (!TryReadWinner(out var winner)) throw;
             created = false;
             return PublicKeyOfAndClear(winner);
+        }
+    }
+
+    /// <summary>
+    /// Takes the exclusive hold on <see cref="ReplaceLockPath"/> and keeps it until disposed. The file is only ever
+    /// held, never written, and stays beside the key afterwards: deleting a lock file while others wait for it would
+    /// let a late start lock a new one next to the old. A second holder is refused with a sharing violation on
+    /// Windows (write access with FileShare.Read, as <c>.instance.lock</c> does) and with an exclusive flock on
+    /// Linux and macOS (.NET turns FileShare.None into one; flock belongs to the open file, so two starts in one
+    /// process exclude each other too, which fcntl byte-range locks would not).
+    /// </summary>
+    /// <exception cref="IOException">The lock stayed held for <see cref="ReplaceLockWait"/>: the torn file was left as it is.</exception>
+    internal FileStream HoldReplaceLock()
+    {
+        OwnerOnlyFile.RefuseLink(ReplaceLockPath);
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.OpenOrCreate, Access = FileAccess.Write, BufferSize = 1,
+            Share = OperatingSystem.IsWindows() ? FileShare.Read : FileShare.None
+        };
+        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        var started = Environment.TickCount64;
+        while (true)
+        {
+            try
+            {
+                return new FileStream(ReplaceLockPath, options);
+            }
+            catch (IOException ex) when (ex is not DirectoryNotFoundException)
+            {
+                if (Environment.TickCount64 - started >= ReplaceLockWait.TotalMilliseconds)
+                    throw new IOException(
+                        $"Node identity key {Path} is held by another start that is replacing it ({ReplaceLockPath} " +
+                        $"was locked for {(int)ReplaceLockWait.TotalSeconds} s); the key was left as it is. Start again.", ex);
+            }
+            Thread.Sleep(Random.Shared.Next(10, 40));
         }
     }
 
@@ -193,7 +260,7 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
 
             // Not File.Move(overwrite: false): on Linux and macOS that checks and then renames, which replaces, so two
             // first starts both "won" and one kept an identity that was not in the file (BMB-188).
-            if (replaceExisting) File.Move(temp, Path, overwrite: true);
+            if (replaceExisting) MoveReplacingTornKeyWithRetry(temp);
             else OwnerOnlyFile.MoveNoReplace(temp, Path);
         }
         catch when (tempCreated)
@@ -207,6 +274,33 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
             Array.Clear(seed);
         }
         return publicKey;
+    }
+
+    /// <summary>
+    /// Windows refuses to replace a file while another process has a read handle that did not share delete access.
+    /// A competing start can leave that handle open briefly between finding the torn key and taking the replace lock.
+    /// Keep the lock while retrying the transient denial, so no second start can choose a different replacement.
+    /// </summary>
+    private void MoveReplacingTornKeyWithRetry(string temp)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(temp, Path, overwrite: true);
+                return;
+            }
+            catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows() && attempt < ReplaceSharingViolationAttempts)
+            {
+                Thread.Sleep(50);
+            }
+            catch (UnauthorizedAccessException ex) when (OperatingSystem.IsWindows())
+            {
+                throw new IOException(
+                    $"Node identity key {Path} could not be replaced because another process kept it open; " +
+                    "the torn key was left as it is. Start again.", ex);
+            }
+        }
     }
 
     /// <summary>The public half of the seed in the file.</summary>

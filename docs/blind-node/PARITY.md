@@ -45,3 +45,21 @@ registration of `ApiServices.cs` / `AddStorage` / `AddCore` / `AddSync` (the las
 * `POST /api/sync/probe-relay`, `GET /api/sync/snapshot/for-join`, `GET/POST /api/sync/invisible`, `GET /api/sync/quarantine`:
   mapped by `MapSyncEndpoints` on a blind node today; unchanged here so the mesh behaves as before.
 * The data volume keeps `chat.db` (an empty file the old Api created); the new host neither creates nor opens it.
+
+## Step A (2.6.0): sealed metadata
+
+Before the activation reaches it, a 2.6.0 blind node behaves as 2.5.1, with one exception from 2.6.0 on: the status, the console
+page and `bmb blind status` show no note count (they show the baseline's age, the delta count and the storage size). After the
+activation:
+
+| | before | after |
+|--|--|--|
+| seed | format 1, a database swapped in | format 2 only, adopted into the blind store; the log and push positions are kept |
+| replica, restore package | format 1 | format 2 (`?have=` gives 304 or a `baseline` package); 503 with `Retry-After` while no sealed baseline is held |
+| content in the database | materialised from clear events | none: purged at the first adoption, sealed events relayed as received ([OPERATIONAL-TABLES.golden.txt](OPERATIONAL-TABLES.golden.txt)) |
+| log trim | read by every peer and covered by the anchor | also covered by the current baseline; nothing while there is none |
+| anchor status | digest recomputed, "confirmed" | no digest, "checked by a restoring full node" |
+| backups | database copy and media | also `baselines/current/` |
+
+The routes do not change (the same 47 in [ROUTES.golden.txt](ROUTES.golden.txt)). Checked by `BlindFormat2HostTests`,
+`BlindFormat2BackupTests`, `BaselineStoreTests`, `Format2PackageTests` and the composition tests above.

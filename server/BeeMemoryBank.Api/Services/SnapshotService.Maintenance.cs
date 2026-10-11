@@ -107,33 +107,36 @@ public partial class SnapshotService
         await using var fs = File.OpenRead(tarGzPath);
         await using var gz = new GZipStream(fs, CompressionMode.Decompress);
         using var tar = new TarReader(gz);
+        byte[]? manifest = null;
 
         while (await tar.GetNextEntryAsync() is { } entry)
         {
-            if (entry.Name == ManifestFileName)
+            if (entry.Name == ManifestFileName && entry.DataStream is not null && manifest is null)
             {
-                await using var stream = entry.DataStream!;
+                await using var stream = entry.DataStream;
                 using var ms = new MemoryStream();
                 await stream.CopyToAsync(ms);
-                return ms.ToArray();
+                manifest = ms.ToArray();
             }
         }
 
-        throw new InvalidOperationException("Snapshot does not contain manifest.json");
+        await gz.CopyToAsync(Stream.Null);
+        return manifest ?? throw new InvalidOperationException("Snapshot does not contain manifest.json");
     }
 
-    private static void FilterSecretsFrom(string tempDbPath, IReadOnlyCollection<string>? alsoKeep = null)
+    /// <summary>
+    /// A working copy of the database (a staging copy, an extracted snapshot database) opened like the vault itself: keyed with the vault's page key
+    /// on a sealed node, plain otherwise (<see cref="DbConnectionFactory.OpenFile"/>; docs/design/step-b-spec.md 7.2, 7.5 rule S). Not pooled,
+    /// which is load-bearing, not tidiness: Microsoft.Data.Sqlite pools by default, so Dispose would only return the connection to the pool and
+    /// the native handle would stay open on the file. Every caller here deletes or replaces that file immediately afterwards, and on Windows
+    /// deleting a file with an open handle fails outright — which is why snapshot creation threw IOException locally while Linux CI, where
+    /// unlink on an open file just works, stayed green.
+    /// </summary>
+    internal SqliteConnection OpenStaged(string path, bool readOnly = false) => _connFactory.OpenFile(path, readOnly);
+
+    private void FilterSecretsFrom(string tempDbPath, IReadOnlyCollection<string>? alsoKeep = null)
     {
-        // Pooling=False is load-bearing, not tidiness. Microsoft.Data.Sqlite pools by default, so
-        // Dispose only returns the connection to the pool and the native handle stays open on the
-        // file. Every caller here deletes or replaces that file immediately afterwards, and on
-        // Windows deleting a file with an open handle fails outright — which is why snapshot
-        // creation threw IOException locally while Linux CI, where unlink on an open file just
-        // works, stayed green. These are one-shot connections to a throwaway file; pooling buys
-        // nothing and costs the delete.
-        var cs = $"Data Source={tempDbPath};Pooling=False";
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
+        using var conn = OpenStaged(tempDbPath);
         using var pragmaCmd = conn.CreateCommand();
         // secure_delete: what is deleted below is zeroed as it goes, not just unlinked — the final
         // VACUUM rewrites the file anyway, this keeps the in-between journal free of it too.
@@ -211,19 +214,21 @@ public partial class SnapshotService
     /// Rewrites the copy from its live rows only, as a single self-contained file: rollback journal
     /// (deleted when done) rather than WAL, so no -wal file holds pages the archive would not show.
     /// </summary>
-    private static void Compact(SqliteConnection conn)
+    private void Compact(SqliteConnection conn)
     {
         using var cmd = conn.CreateCommand();
         // temp_store=FILE: VACUUM builds its copy in the temp store, which defaults to memory in the current native SQLite
-        // (SQLite3 Multiple Ciphers); the restored archive can be as large as the vault.
-        cmd.CommandText = "PRAGMA temp_store = FILE; PRAGMA journal_mode = DELETE; VACUUM;";
+        // (SQLite3 Multiple Ciphers); the restored archive can be as large as the vault. Not on a sealed node: the engine does not encrypt
+        // temporary files, so the keyed connection keeps its temporary pages in memory (spec 7.1).
+        cmd.CommandText = _connFactory.IsSealed
+            ? "PRAGMA journal_mode = DELETE; VACUUM;"
+            : "PRAGMA temp_store = FILE; PRAGMA journal_mode = DELETE; VACUUM;";
         cmd.ExecuteNonQuery();
     }
 
-    private static void CompactInPlace(string dbPath)
+    private void CompactInPlace(string dbPath)
     {
-        using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=False");
-        conn.Open();
+        using var conn = OpenStaged(dbPath);
         Compact(conn);
     }
 
@@ -267,6 +272,8 @@ public partial class SnapshotService
             if (totalExtracted > maxTotalSize)
                 throw new InvalidOperationException($"Tar archive exceeds maximum extracted size ({maxTotalSize / (1024 * 1024)}MB)");
         }
+
+        await gz.CopyToAsync(Stream.Null);
     }
 
     private static async Task VerifyManifestAsync(string dir)

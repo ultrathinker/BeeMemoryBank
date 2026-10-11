@@ -38,12 +38,18 @@ public abstract class SyncTestFixture : IAsyncLifetime
     public ICommentRepository CommentRepo { get; private set; } = null!;
     public INodeIdentityRepository NodeRepo { get; private set; } = null!;
     public HardDeleteService HardDeleteService { get; private set; } = null!;
+    /// <summary>Step A: this node's protocol policy (per node, as in a host), the drain requests and the activation observers.</summary>
+    public BeeMemoryBank.Sync.Metadata.SyncProtocolPolicy ProtocolPolicy { get; private set; } = null!;
+    public RecordingHeldEventDrain Drain { get; } = new();
+    public List<BeeMemoryBank.Sync.Metadata.IMetadataActivationObserver> ActivationObservers { get; } = [];
+    public BeeMemoryBank.Vault.Metadata.MetadataKeyRing KeyRing { get; private set; } = null!;
+    public RecordingBaselineScheduler BaselineScheduler { get; } = new();
     protected const string Password = "syncTestPassword";
 
     public virtual async Task InitializeAsync()
     {
         DapperConfig.Configure();
-        Factory = DbConnectionFactory.CreateInMemory($"bmb_sync_{Guid.NewGuid():N}");
+        Factory = CreateFactory();
         var runner = new MigrationRunner(Factory);
         await runner.RunMigrationsAsync();
 
@@ -59,15 +65,18 @@ public abstract class SyncTestFixture : IAsyncLifetime
         TombstoneRepo = new TombstoneRepository(Factory);
         ConflictRepo = new ConflictVersionRepository(Factory);
 
+        ProtocolPolicy = new BeeMemoryBank.Sync.Metadata.SyncProtocolPolicy(Factory);
         Clock = new LamportClock();
         var maxTs = await EventLogRepo.GetMaxLamportTimestampAsync();
         Clock.Initialize(maxTs);
 
         Session = new SessionService(keySlotRepo);
+        KeyRing = new BeeMemoryBank.Vault.Metadata.MetadataKeyRing(Factory, Session);
         InitService = new InitializationService(NodeRepo, keySlotRepo, userRepo, Factory);
         CommentRepo = new CommentRepository(Factory, new CallerScopeHolder());
         var commentRepo = CommentRepo;
-        EventLogger = new EventLogger(NodeRepo, EventLogRepo, Clock, new BeeMemoryBank.Core.Services.NullActorProvider(), new BeeMemoryBank.Sync.SyncTrigger(), Session, new BlobRepository(Factory));
+        EventLogger = new EventLogger(NodeRepo, EventLogRepo, Clock, new BeeMemoryBank.Core.Services.NullActorProvider(), new BeeMemoryBank.Sync.SyncTrigger(), Session, new BlobRepository(Factory),
+            ProtocolPolicy, KeyRing);
         var mediaRepo = new MediaRepository(Factory, new CallerScopeHolder());
         var folderRepo = new BeeMemoryBank.Storage.Sqlite.FolderRepository(Factory, new CallerScopeHolder());
         var versionRepo = new ArticleVersionRepository(Factory, new CallerScopeHolder());
@@ -96,15 +105,27 @@ public abstract class SyncTestFixture : IAsyncLifetime
             new FakeEmbeddingGenerator(), HardDeleteService, null,
             replayShieldRepo, restoreEventStateRepo, CreateRestoreInitiator(),
             dekRotationStateRepo, new NullDekRotationApplier(), folderAccess, Factory, new BlobRepository(Factory),
-            CreateApplierLogger());
+            CreateApplierLogger(),
+            ProtocolPolicy, Drain, ActivationObservers, CreateEnvelopeOpener(), BaselineScheduler);
     }
 
     /// <summary>
-    /// The logger the applier is built with. A test that asserts on the applier's own log lines
-    /// overrides this to capture them.
+    /// What this node does with a sealed event (step-a-spec 6.3): a full node opens it with its key ring. A test of a blind
+    /// host overrides this with the relay opener.
     /// </summary>
-    protected virtual Microsoft.Extensions.Logging.ILogger<EventApplier> CreateApplierLogger()
-        => Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance;
+    /// <summary>
+    /// The database. A "restart" test builds a second fixture over the first one's database (and lets the first one own it).
+    /// </summary>
+    protected virtual DbConnectionFactory CreateFactory() => DbConnectionFactory.CreateInMemory($"bmb_sync_{Guid.NewGuid():N}");
+
+    protected virtual bool OwnsFactory => true;
+
+    /// <summary>The applier's logger; a log canary test (step-a-spec 16.2 item 9) overrides it with a capturing one.</summary>
+    protected virtual Microsoft.Extensions.Logging.ILogger<EventApplier> CreateApplierLogger() =>
+        Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance;
+
+    protected virtual BeeMemoryBank.Sync.Metadata.IEnvelopeOpener CreateEnvelopeOpener() =>
+        new BeeMemoryBank.Vault.Metadata.VaultEnvelopeOpener(Session, KeyRing);
 
     /// <summary>
     /// The restore initiator the applier is built with. A test that drives the auto-accept dispatch
@@ -131,6 +152,18 @@ public abstract class SyncTestFixture : IAsyncLifetime
         return await EventApplier.ApplyAsync(evt);
     }
 
+    public sealed class RecordingBaselineScheduler : BeeMemoryBank.Sync.Metadata.IBaselineScheduler
+    {
+        public List<string> Reasons { get; } = [];
+        public void RequestEarly(string reasonCode) { lock (Reasons) Reasons.Add(reasonCode); }
+    }
+
+    public sealed class RecordingHeldEventDrain : BeeMemoryBank.Sync.Metadata.IHeldEventDrain
+    {
+        public int Requests;
+        public void RequestDrain() => Interlocked.Increment(ref Requests);
+    }
+
     private sealed class NullRestoreInitiator : BeeMemoryBank.Sync.IRestoreInitiator
     {
         public Task AcceptRestoreAsync(string eventId, BeeMemoryBank.Sync.RestoreNetworkEventPayload payload, BeeMemoryBank.Core.Models.SyncEvent restoreEvent)
@@ -148,7 +181,7 @@ public abstract class SyncTestFixture : IAsyncLifetime
     public Task DisposeAsync()
     {
         Session.Lock();
-        Factory.Dispose();
+        if (OwnsFactory) Factory.Dispose();
         return Task.CompletedTask;
     }
 }

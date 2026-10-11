@@ -167,7 +167,29 @@
     </p>
 </div>
 
-@if (Model.OsAutoUnlockSupported)
+<h3 style="margin-bottom:12px;"><sl-icon name="lock"></sl-icon> Database encryption</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        @if (Model.VaultStatus is { IsSealed: true })
+        {
+            <text>This node's database is encrypted.</text>
+        }
+        else
+        {
+            <text>This node's database is a plain file. You can encrypt it, so that a stolen disk or a copy of the data folder shows nothing.</text>
+        }
+        @if (Model.VaultRole == "server")
+        {
+            <text> Whether this server opens the vault by itself after a restart is set there too.</text>
+        }
+    </p>
+    <sl-button href="/VaultEncryption" variant="default" size="small">
+        <sl-icon slot="prefix" name="lock"></sl-icon> Database encryption
+    </sl-button>
+</div>
+
+@* On a server the OS card is not offered for turning on (docs/design/step-b-spec.md 11.2): the checkbox of the encryption page is. A slot made earlier still shows. *@
+@if (Model.OsAutoUnlockSupported && (Model.VaultRole != "server" || Model.OsAutoUnlockEnabled))
 {
     // The node runs on the machine it is served from, so the platform is this process's own.
     var isMac = OperatingSystem.IsMacOS();
@@ -192,6 +214,14 @@
             <strong>Anyone with access to this @(isMac ? "macOS" : "Windows") user account will be able to open the
             vault without a password</strong> once this is enabled. Only enable it on a machine
             you trust and control physically.
+            @if (Model.VaultStatus is { IsSealed: true })
+            {
+                <div id="os-auto-unlock-sealed-warning" style="margin-top:8px;">
+                    Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without your password.
+                    If someone gets this computer or its disk, their protection rests only on your @(isMac ? "macOS" : "Windows") account password
+                    (and on disk encryption, if you use it).
+                </div>
+            }
         </sl-alert>
 
         @if (Model.OsAutoUnlockEnabled)
@@ -209,7 +239,7 @@
             <sl-badge variant="neutral" pill style="margin-bottom:12px;">not configured</sl-badge>
             <form method="post" asp-page-handler="EnableAutoUnlock">
                 <sl-button type="submit" variant="primary" size="small" class="btn-confirm-click"
-                           data-confirm="Enable OS auto-unlock? Anyone with access to this @(isMac ? "macOS" : "Windows") account will be able to open the vault without a password.">
+                           data-confirm="Enable OS auto-unlock? Anyone with access to this @(isMac ? "macOS" : "Windows") account will be able to open the vault without a password.@(Model.VaultStatus is { IsSealed: true } ? " Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without your password. If someone gets this computer or its disk, their protection rests only on your " + (isMac ? "macOS" : "Windows") + " account password (and on disk encryption, if you use it)." : "")">
                     <sl-icon slot="prefix" name="key"></sl-icon> Enable auto-unlock
                 </sl-button>
             </form>

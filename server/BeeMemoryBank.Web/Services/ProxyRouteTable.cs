@@ -183,6 +183,12 @@ public static class ProxyRouteTable
         // deny-by-default is the point.
         ["keys/add-recovery"] = new("/api/keys/add-recovery", [new("POST", UserRoles.Superadmin)]),
 
+        // ── The encrypted database (docs/design/step-b-spec.md 10.9): the page follows the migration; every other call of the page is a form post.
+        //    "vault/seal" covers seal/progress; the status is the unauthenticated one the login page reads server-side. ──
+        ["vault/status"] = new("/api/vault/status", [new("GET", null)]),
+        ["vault/seal"] = new("/api/vault/seal", [new("GET", UserRoles.Superadmin)]),
+        ["vault/pre-encryption"] = new("/api/vault/pre-encryption", [new("GET", UserRoles.Superadmin)]),
+
         // ── Remote accounts: the whole API surface is superadmin-only (its group filter),
         //    and the entry states that so refusals stay local. ──
         ["remote-accounts"] = new("/api/remote-accounts",

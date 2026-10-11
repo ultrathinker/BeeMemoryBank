@@ -35,6 +35,12 @@ public sealed class FullVault(IServiceProvider services)
 
     public async Task<VaultState> GetStateAsync()
     {
+        // An encrypted phone whose database is closed is a locked vault: "claimed" is read inside the database, which only an unlock opens
+        // (docs/design/step-b-spec.md 5.8).
+        if (services.GetService<BeeMemoryBank.Vault.Sealed.PhoneVaultLifecycle>() is { IsSealed: true } &&
+            services.GetService<BeeMemoryBank.Core.Interfaces.IVaultGate>() is { IsUsable: false })
+            return VaultState.Locked;
+
         using var scope = services.CreateScope();
         // "Claimed", not "initialized": a half-written database (a restore or a join that stopped) is somebody's vault, never an empty
         // phone to set up again (InitializationService.IsClaimedAsync explains why).

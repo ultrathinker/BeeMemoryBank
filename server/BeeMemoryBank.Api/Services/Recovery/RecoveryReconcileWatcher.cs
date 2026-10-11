@@ -22,6 +22,9 @@ public class RecoveryReconcileWatcher(
         using var timer = new PeriodicTimer(Interval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
+            // The recovery tables are in the vault database (docs/design/step-b-spec.md 5.5).
+            await scopes.WaitUsableAsync(stoppingToken);
+
             try
             {
                 var current = CurrentFingerprint();
@@ -37,6 +40,10 @@ public class RecoveryReconcileWatcher(
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
+            }
+            catch (VaultSealedException)
+            {
+                logger.LogDebug("Recovery reconciliation watcher stopped a tick: the database was closed");
             }
             catch (Exception ex)
             {

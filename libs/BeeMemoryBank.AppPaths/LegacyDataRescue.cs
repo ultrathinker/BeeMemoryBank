@@ -138,8 +138,12 @@ public static class LegacyDataRescue
     /// <param name="targetVaultDir">
     /// New stable vault directory — typically <see cref="BmbPaths.DefaultVaultDir"/>.
     /// </param>
+    /// <param name="logRoot">
+    /// Folder whose <c>migration\</c> and <c>logs\</c> subfolders receive the rescue log. <c>null</c> means
+    /// <see cref="BmbPaths.Root"/>; tests pass their own folder so they never write into the owner's data folder.
+    /// </param>
     /// <returns>A <see cref="RescueResult"/> describing what happened.</returns>
-    public static RescueResult TryRescue(string legacyDir, string targetVaultDir)
+    public static RescueResult TryRescue(string legacyDir, string targetVaultDir, string? logRoot = null)
     {
         // ----------------------------------------------------------------
         // Step 1 — Validate legacy source
@@ -206,7 +210,7 @@ public static class LegacyDataRescue
             if (targetStatus != SqliteFileStatus.ValidSqlite)
             {
                 // Case 1: target empty/invalid, legacy valid — copy to target.
-                return ExecuteRescue(legacyDir, targetVaultDir, isRecovery: false);
+                return ExecuteRescue(legacyDir, targetVaultDir, isRecovery: false, logRoot: logRoot);
             }
 
             // Both valid — are they the same database?
@@ -221,7 +225,7 @@ public static class LegacyDataRescue
             var recoveredVaultId = $"recovered-{DateTime.Now:yyyyMMdd-HHmmss}";
             // BmbPaths.VaultDir will create the directory.
             var recoveredVaultDir = BmbPaths.VaultDir(recoveredVaultId);
-            return ExecuteRescue(legacyDir, recoveredVaultDir, isRecovery: true);
+            return ExecuteRescue(legacyDir, recoveredVaultDir, isRecovery: true, logRoot: logRoot);
         }
         finally
         {
@@ -237,7 +241,7 @@ public static class LegacyDataRescue
     /// <summary>
     /// Performs the actual copy: legacy → temp sibling → atomic rename into target.
     /// </summary>
-    private static RescueResult ExecuteRescue(string legacyDir, string targetVaultDir, bool isRecovery)
+    private static RescueResult ExecuteRescue(string legacyDir, string targetVaultDir, bool isRecovery, string? logRoot)
     {
         // Use a temp sibling directory so that a mid-copy failure leaves the target
         // directory absent rather than partially populated.
@@ -322,7 +326,7 @@ public static class LegacyDataRescue
                     {
                         var recoveredVaultId = $"recovered-{DateTime.Now:yyyyMMdd-HHmmss}";
                         var recoveredVaultDir = BmbPaths.VaultDir(recoveredVaultId);
-                        return ExecuteRescue(legacyDir, recoveredVaultDir, isRecovery: true);
+                        return ExecuteRescue(legacyDir, recoveredVaultDir, isRecovery: true, logRoot: logRoot);
                     }
 
                     return RescueResult.Failed(
@@ -334,7 +338,7 @@ public static class LegacyDataRescue
             Directory.Move(tempDir, targetVaultDir);
 
             // Write migration log.
-            WriteMigrationLog(legacyDir, targetVaultDir, fileCount, totalBytes, isRecovery, null);
+            WriteMigrationLog(legacyDir, targetVaultDir, fileCount, totalBytes, isRecovery, null, logRoot);
 
             var msg = isRecovery
                 ? $"Legacy data rescued to recovered vault '{targetVaultDir}' ({fileCount} files, {totalBytes} bytes)."
@@ -347,7 +351,7 @@ public static class LegacyDataRescue
         catch (Exception ex)
         {
             CleanupTemp(tempDir);
-            WriteMigrationLog(legacyDir, targetVaultDir, fileCount, totalBytes, isRecovery, ex.Message);
+            WriteMigrationLog(legacyDir, targetVaultDir, fileCount, totalBytes, isRecovery, ex.Message, logRoot);
             return RescueResult.Failed(
                 $"Rescue copy failed: {ex.Message}");
         }
@@ -531,8 +535,9 @@ public static class LegacyDataRescue
     }
 
     /// <summary>
-    /// Writes the migration log to BOTH <see cref="BmbPaths.MigrationDir"/> and
-    /// <see cref="BmbPaths.LogsDir"/>.
+    /// Writes the migration log to BOTH <c>migration\</c> and <c>logs\</c> under <paramref name="logRoot"/>
+    /// (<see cref="BmbPaths.Root"/> when null), the folders <see cref="BmbPaths.MigrationDir"/> and
+    /// <see cref="BmbPaths.LogsDir"/> name.
     /// </summary>
     private static void WriteMigrationLog(
         string legacyDir,
@@ -540,7 +545,8 @@ public static class LegacyDataRescue
         int fileCount,
         long totalBytes,
         bool isRecovery,
-        string? error)
+        string? error,
+        string? logRoot)
     {
         try
         {
@@ -559,12 +565,16 @@ public static class LegacyDataRescue
 
             var content = sb.ToString();
 
+            var root = logRoot ?? BmbPaths.Root;
+
             // Primary location: migration\
-            var migrationDir = BmbPaths.MigrationDir;
+            var migrationDir = Path.Combine(root, "migration");
+            Directory.CreateDirectory(migrationDir);
             File.WriteAllText(Path.Combine(migrationDir, $"rescue-{timestamp}.log"), content);
 
             // Secondary location: logs\
-            var logsDir = BmbPaths.LogsDir;
+            var logsDir = Path.Combine(root, "logs");
+            Directory.CreateDirectory(logsDir);
             File.WriteAllText(Path.Combine(logsDir, $"rescue-{timestamp}.log"), content);
         }
         catch

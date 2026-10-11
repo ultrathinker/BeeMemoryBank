@@ -4,7 +4,7 @@ namespace BeeMemoryBank.Rekey;
 /// The fate of every table of the copy (rekey-offline.md §8.3). The orchestrator refuses to run on a database with a
 /// table that is not listed here, so a new migration cannot slip a table past the re-key.
 /// <para><see cref="Main"/> is re-cut from the live design's <c>CampaignTables</c> lists (45f08e8c, 7f277546) and
-/// <c>SnapshotTables.Replicated</c>, checked against the schema migrations 001..034 build. The comment on each group
+/// <c>SnapshotTables.Replicated</c>, checked against the schema migrations 001..039 build. The comment on each group
 /// names the step that carries its fate out.</para>
 /// </summary>
 public static class RekeyTables
@@ -44,12 +44,18 @@ public static class RekeyTables
             "tbl_recovery_box", "tbl_recovery_box_check", "tbl_recovery_box_pending_retire", "tbl_dek_retired_link",
             "tbl_event", "tbl_sync_quarantine", "tbl_sync_position", "tbl_sync_push_position",
             "tbl_restore_event_state", "tbl_restore_replay_shield", "tbl_state_anchor",
+            // A blind host's adopted baseline and its blob list (migration 039, step-a-spec 9.1): positioned in the old log
+            // (local_cut). A full node holds none; cleared with the log all the same.
+            "tbl_baseline", "tbl_baseline_blob",
         ]),
         // KeyMaterialStep (L): the sentinel and identity key, the owner's slot (others removed), agents' wrapped
         // DEKs, node data keys (retired-master-dek:* removed; chat re-wrapped by ChatRekeyStep), rotation chain columns.
         (TableFate.KeyMaterial,
         [
             "tbl_node_identity", "tbl_key_slot", "tbl_agent", "tbl_node_data_key", "tbl_dek_rotation_state",
+            // The metadata keys (migration 037): every row is wrapped under an old DEK. An activated vault gets one new
+            // generation-1 key under D_c; nothing is logged, the re-keyed node is alone (step-a-spec 4.1).
+            "tbl_metadata_key",
         ]),
         // Kept as they are: nothing in them is sealed under the DEK. The whitelist is revoked by PeerRevokeStep (L).
         (TableFate.Plaintext,
@@ -61,6 +67,8 @@ public static class RekeyTables
             "tbl_favorite", "tbl_remote_api_token", "tbl_remote_subscription",
             "tbl_audit_log", "tbl_hard_delete_audit", "tbl_compaction_log",
             "tbl_whitelist", "tbl_blind_state", "tbl_blind_restore_code",
+            // The activation record (migration 037): ids only; the vault stays activated after a re-key.
+            "tbl_metadata_activation",
             // The full-text index of titles, paths and tag names (plaintext columns) and its shadow tables.
             "fts_article", "fts_article_config", "fts_article_data", "fts_article_docsize", "fts_article_idx",
             "fts_folder", "fts_folder_config", "fts_folder_data", "fts_folder_docsize", "fts_folder_idx",

@@ -2,6 +2,7 @@ using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Vault.Sealed;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -15,8 +16,15 @@ public class UserService(
     FolderAccessService folderAccess,
     IRemoteApiTokenRepository? remoteTokenRepo = null,
     IAgentRepository? agentRepo = null,
-    IRecoveryBoxPublisher? recoveryBoxes = null)
+    IRecoveryBoxPublisher? recoveryBoxes = null,
+    IDbConnectionFactory? factory = null,
+    IUnlockMaterialMirror? mirror = null)
 {
+    // Step B (docs/design/step-b-spec.md 3.6, 4.3): every key slot this service creates or deletes is a door of a sealed node. The
+    // pending door is written before the sealed insert commits, the copies of a deleted slot's door are retired before the delete, and
+    // the boot store is rewritten when the operation is done. With no mirror (or on a plain node, where the mirror does nothing) this is
+    // the plain repository call it replaces.
+
     // Roles are rows in tbl_role. The only role this service special-cases
     // is "superadmin", because that is the one that owns a key slot; every other role is just a
     // string that decides which folder rules apply.
@@ -82,7 +90,7 @@ public class UserService(
                 ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
                 CreatedAt = DateTime.UtcNow
             };
-            slot.SlotId = await keySlotRepo.CreateAsync(slot);
+            await SlotDoors.CreateSlotAsync(keySlotRepo, factory, mirror, slot, masterDek);
 
             // Every UserService path that gives a password a slot — self-service and admin password
             // change, provisioning at login, creating or promoting a superadmin — comes through here,
@@ -176,7 +184,7 @@ public class UserService(
         if (user.KeySlotId.HasValue)
         {
             var newSlotId = await CreateUserKeySlotAsync(newPassword, providedDek);
-            await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
+            await SlotDoors.DeleteSlotAsync(keySlotRepo, mirror, user.KeySlotId.Value);
             user.KeySlotId = newSlotId;
         }
         else if (user.Role == UserRoles.Superadmin && (providedDek != null || session.IsUnlocked))
@@ -199,6 +207,7 @@ public class UserService(
         await userRepo.UpdateAsync(user);
         await userRepo.BumpSecurityStampAsync(user.Id);
         await RevokeRemoteTokensAsync(user.Id);
+        await SlotDoors.RewriteAsync(mirror);
     }
 
     /// <summary>
@@ -225,11 +234,13 @@ public class UserService(
         // redundant one, so drop it.
         if (!await userRepo.TryAssignKeySlotAsync(user.Id, slotId))
         {
-            await keySlotRepo.DeleteAsync(slotId);
+            await SlotDoors.DeleteSlotAsync(keySlotRepo, mirror, slotId);
+            await SlotDoors.RewriteAsync(mirror);
             return false;
         }
 
         user.KeySlotId = slotId;
+        await SlotDoors.RewriteAsync(mirror);
         return true;
     }
 
@@ -260,6 +271,7 @@ public class UserService(
             user.KeySlotId = await CreateUserKeySlotAsync(password);
 
         user.Id = await userRepo.CreateAsync(user);
+        await SlotDoors.RewriteAsync(mirror);
         return user;
     }
 
@@ -374,7 +386,7 @@ public class UserService(
         if (user.KeySlotId.HasValue)
         {
             await EnsureAnotherSuperadminHoldsAKeySlotAsync(userId, "delete");
-            await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
+            await SlotDoors.DeleteSlotAsync(keySlotRepo, mirror, user.KeySlotId.Value);
         }
 
         // Strip the wrapped master DEK from every agent this user owns. Deleting the account
@@ -406,6 +418,7 @@ public class UserService(
             try
             {
                 await userRepo.DeleteAsync(userId, releasedUsername);
+                await SlotDoors.RewriteAsync(mirror);
                 return;
             }
             catch (UsernameConflictException)
@@ -474,7 +487,7 @@ public class UserService(
                 // for why that ordering matters.
                 await EnsureAnotherSuperadminHoldsAKeySlotAsync(userId, "demote");
 
-                await keySlotRepo.DeleteAsync(user.KeySlotId.Value);
+                await SlotDoors.DeleteSlotAsync(keySlotRepo, mirror, user.KeySlotId.Value);
                 user.KeySlotId = null;
             }
             else if (role == UserRoles.Superadmin && !user.KeySlotId.HasValue)
@@ -542,6 +555,8 @@ public class UserService(
         if (passwordChanged)
             await RevokeRemoteTokensAsync(userId);
 
+        // A demotion drops the user's slot and the wrapped DEK of their agents; a promotion with a password gives a slot.
+        await SlotDoors.RewriteAsync(mirror);
         return passwordChanged;
     }
 

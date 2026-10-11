@@ -5,6 +5,8 @@ using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Blind.Format2;
+using BeeMemoryBank.Sync.Metadata;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -19,7 +21,7 @@ public sealed record BlindClaimResponse(Guid BlindNodeId, string DisplayName, st
 /// Who the restored node trusts and how far it has pulled come from the package's signed
 /// blind-manifest.json, not from here.
 /// </summary>
-public sealed record BlindRestoreEvents(IReadOnlyList<SyncEvent> Events);
+public sealed record BlindRestoreEvents(List<SyncEvent> Events);
 
 /// <summary>
 /// Restore from a blind node (plan 6.7). Only a node in the blind role answers; everywhere else these
@@ -54,7 +56,8 @@ public static class BlindRestoreEndpoints
             .RequireInternalKey().RequireSuperadmin().WithTags("BlindRestore");
 
         // GET /api/blind/restore/package — the blind package (BlindPackageBuilder: the signed peer snapshot,
-        // tbl_hard_delete_audit, projections nulled, blind-manifest.json), signed by this node.
+        // tbl_hard_delete_audit, projections nulled, blind-manifest.json), signed by this node. Once activated
+        // (step-a-spec 8.7, 9.7) a format-2 full package with blobs instead, or 503 while there is no sealed baseline.
         app.MapGet("/api/blind/restore/package", async (
             HttpContext ctx, INodeRole role, BlindRestoreCodeService codes, BlindPackageBuilder builder,
             INodeIdentityRepository nodeRepo, CancellationToken ct) =>
@@ -64,6 +67,20 @@ public static class BlindRestoreEndpoints
                 return Results.Unauthorized();
 
             var identity = await nodeRepo.GetAsync() ?? throw new InvalidOperationException("Node not initialized");
+            if (ctx.RequestServices.GetService<ISyncProtocolPolicy>() is { SealsMetadata: true })
+            {
+                if (await BlindEndpoints.ServableBaselineAsync(ctx, ct) is not { } baseline)
+                    return BlindEndpoints.NoSealedBaseline(ctx);
+                var v2 = await ctx.RequestServices.GetRequiredService<IBlindPackageV2Writer>().WriteAsync(
+                    new BlindPackageV2Request(BlindPackageKinds.Full, Guid.NewGuid(), baseline, IncludesUpTo: null, IncludeBlobs: true), ct);
+                try { File.Delete(v2.FilePath + ".sig"); } catch (IOException) { }
+                ctx.Response.Headers["X-BMB-Snapshot-Signature"] = Convert.ToBase64String(v2.DetachedSignature);
+                ctx.Response.Headers["X-BMB-Snapshot-Producer"] = identity.NodeId.ToString();
+                ctx.Response.Headers["X-BMB-Snapshot-Producer-Key"] = Convert.ToBase64String(identity.Ed25519PublicKey);
+                var sealedStream = new FileStream(v2.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    bufferSize: 81920, FileOptions.DeleteOnClose | FileOptions.Asynchronous);
+                return Results.File(sealedStream, "application/gzip", "bmb-blind-restore.tar.gz");
+            }
             // A blind node is never a superadmin, in its own package as anywhere else.
             var package = await builder.BuildAsync(Guid.NewGuid(), includesUpTo: null, producerIsSuperadmin: false, ct);
             // The join import checks the sidecar signature; the embedded one is checked first (RestoreFromPackageAsync).
@@ -92,7 +109,7 @@ public static class BlindRestoreEndpoints
             // Wire hygiene: this node's stored events carry actor fields and transported entity
             // ids locally; a restoring device re-derives both, so they do not travel (SyncWire).
             return Results.Json(
-                new BlindRestoreEvents(SyncWire.Strip(await eventLog.GetAllAfterSequenceAsync(0, MaxEvents))),
+                new BlindRestoreEvents(SyncWire.Strip(await eventLog.GetAllAfterSequenceAsync(0, MaxEvents)).ToList()),
                 SyncWire.Options);
         }).WithMetadata(new SkipInternalKey()).WithTags("BlindRestore");
 

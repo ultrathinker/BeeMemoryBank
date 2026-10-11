@@ -7,6 +7,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Infrastructure.OsAutoUnlock;
 using BeeMemoryBank.Infrastructure.Secrets;
+using Microsoft.AspNetCore.Mvc;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -14,6 +15,24 @@ public static class SessionEndpoints
 {
     /// <summary>The one answer to every refused recovery-key reset; the Web page shows it verbatim.</summary>
     internal const string RecoverAccessRefusal = "The username or the recovery key is not correct.";
+
+    /// <summary>The one answer of a closed sealed node to a login that opened nothing (docs/design/step-b-spec.md 4.5): no oracle for names or roles.</summary>
+    private static IResult SealedLoginRefusal() => Results.Json(
+        new ErrorResponse("Invalid password, or this server is locked: only an administrator can open it.", "session_locked_or_invalid"), statusCode: 401);
+
+    /// <summary>503 <c>vault_busy</c> while a closed database is held for a file copy (spec 5.10): no door is used, no boot-store row is written.</summary>
+    private static IResult BusyAnswer() => new BusyResult();
+
+    private sealed class BusyResult : IResult
+    {
+        public async Task ExecuteAsync(HttpContext httpContext)
+        {
+            httpContext.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            httpContext.Response.Headers.RetryAfter = "5";
+            await httpContext.Response.WriteAsJsonAsync(
+                new ErrorResponse("This node is being backed up for a few seconds: try again shortly.", "vault_busy"));
+        }
+    }
 
     public static void MapSessionEndpoints(this WebApplication app)
     {
@@ -29,8 +48,10 @@ public static class SessionEndpoints
 
         var group = app.MapGroup("/api/session").WithTags("Session").RequireInternalKey();
 
-        group.MapPost("/unlock", async (UnlockRequest req, SessionService session) =>
+        group.MapPost("/unlock", async (UnlockRequest req, SessionService session, [FromServices] IVaultGate? gate) =>
         {
+            // A closed database held for a file copy is not unlocked, not even to look at the password (spec 5.10).
+            if (gate is { IsHeld: true }) return BusyAnswer();
             var success = await session.UnlockAsync(req.Password);
             if (!success)
                 return Results.Json(new ErrorResponse("Invalid password"), statusCode: 401);
@@ -42,10 +63,20 @@ public static class SessionEndpoints
         }).RequireNonAgent().WithMetadata(new SkipInternalKey());
 
         group.MapPost("/login", async (LoginRequest req, SessionService session, UserService userService, IUserRepository userRepo, RecoveryTriggers recovery,
-            RecoveryAccessState recoveryAccess, IWhitelistRepository whitelistRepo, IEventLogger eventLogger) =>
+            RecoveryAccessState recoveryAccess, IWhitelistRepository whitelistRepo, IEventLogger eventLogger, [FromServices] IVaultGate? gate) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.Json(new ErrorResponse("Username and password are required"), statusCode: 400);
+
+            // A sealed node whose database is closed has no user table to read (docs/design/step-b-spec.md 4.5): the password alone opens it,
+            // and the user name is checked afterwards. A wrong password, a non-superadmin's password and an unknown user all get the same answer.
+            var openedByThisLogin = false;
+            if (gate is { IsSealed: true, IsUsable: false })
+            {
+                if (gate.IsHeld) return BusyAnswer();
+                if (!await session.UnlockAsync(req.Password)) return SealedLoginRefusal();
+                openedByThisLogin = true;
+            }
 
             var allUsers = await userRepo.ListActiveAsync();
             if (allUsers.Count == 0)
@@ -76,7 +107,15 @@ public static class SessionEndpoints
 
             var user = await userService.AuthenticateAsync(req.Username, req.Password);
             if (user == null)
+            {
+                // The password opened the database, but it is not this user's: closed again, and the answer is the one a wrong password gets.
+                if (openedByThisLogin)
+                {
+                    session.Lock();
+                    return SealedLoginRefusal();
+                }
                 return Results.Json(new ErrorResponse("Invalid username or password"), statusCode: 401);
+            }
 
             bool isUnlocked = session.IsUnlocked;
 
@@ -146,7 +185,8 @@ public static class SessionEndpoints
             INodeIdentityRepository nodeRepo,
             IWhitelistRepository whitelistRepo,
             IEventLogger eventLogger,
-            ILoggerFactory loggerFactory) =>
+            ILoggerFactory loggerFactory,
+            [FromServices] IVaultGate? gate) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.RecoveryKey)
                 || string.IsNullOrWhiteSpace(req.NewPassword))
@@ -161,10 +201,21 @@ public static class SessionEndpoints
             if (!recoveryAccess.TryAcquire(ip, req.Username))
                 return Results.Json(new ErrorResponse("Too many attempts. Try again later."), statusCode: 429);
 
+            // A closed sealed database is opened for this one reset by the recovery key's door and closed again at the end of the handler;
+            // the session is not unlocked (spec 3.7, 5.7). No recovery slot accepts the key: the database stays closed and the refusal below is
+            // the same as for any wrong key.
+            var sealedClosed = gate is { IsSealed: true, IsUsable: false };
+            if (sealedClosed && gate!.IsHeld) return BusyAnswer();
+            await using var recoveryLease = sealedClosed ? await session.OpenForRecoveryAsync(req.RecoveryKey) : null;
+
             RecoveryResetResult result;
             try
             {
-                result = await userService.ResetPasswordWithRecoveryKeyAsync(req.Username, req.RecoveryKey, req.NewPassword);
+                // A closed database that no recovery door opened has no user table to look at: the answer is the generic refusal, without
+                // touching the database (the door check above did the same Argon2id work as a right key).
+                result = sealedClosed && recoveryLease is null
+                    ? new RecoveryResetResult(RecoveryResetOutcome.WrongKey, null)
+                    : await userService.ResetPasswordWithRecoveryKeyAsync(req.Username, req.RecoveryKey, req.NewPassword);
             }
             catch (System.Security.SecurityException ex)
             {
@@ -178,9 +229,14 @@ public static class SessionEndpoints
             if (!result.Succeeded)
             {
                 // Audit what the caller is not told, and never what they typed: no key, no password, and
-                // no username that does not belong to an account.
-                await auditRepo.LogAsync("user", result.UserId?.ToString() ?? "-", "user_password_recovery_refused", "web",
-                    $"Password reset with a recovery key refused from {ip} ({(result.Outcome == RecoveryResetOutcome.WrongKey ? "key" : "account")})");
+                // no username that does not belong to an account. A closed database has no audit table to write: the log says it instead.
+                var reason = result.Outcome == RecoveryResetOutcome.WrongKey ? "key" : "account";
+                if (sealedClosed && recoveryLease is null)
+                    loggerFactory.CreateLogger("BeeMemoryBank.Api.Endpoints.SessionEndpoints")
+                        .LogWarning("Password reset with a recovery key refused from {Ip} ({Reason}); the encrypted database is closed, so no audit entry was written.", ip, reason);
+                else
+                    await auditRepo.LogAsync("user", result.UserId?.ToString() ?? "-", "user_password_recovery_refused", "web",
+                        $"Password reset with a recovery key refused from {ip} ({reason})");
                 return Results.Json(new ErrorResponse(RecoverAccessRefusal), statusCode: 401);
             }
 
@@ -206,8 +262,8 @@ public static class SessionEndpoints
             return Results.Ok(new SessionStatusResponse(false));
         }).RequireSuperadmin().RequireNonAgent();
 
-        group.MapGet("/status", (SessionService session) =>
-            Results.Ok(new SessionStatusResponse(session.IsUnlocked))).WithMetadata(new SkipInternalKey());
+        group.MapGet("/status", (SessionService session, [FromServices] IVaultGate? gate) =>
+            Results.Ok(new SessionStatusResponse(session.IsUnlocked, gate?.IsSealed ?? false, (gate?.State ?? VaultState.Plain).ToString()))).WithMetadata(new SkipInternalKey());
 
         // GET /api/session/lock-impact — what would undo the Lock above, for the UI to state
         // before the click. Lock is advisory (SECURITY.md, "Trust Model"): it wipes the master

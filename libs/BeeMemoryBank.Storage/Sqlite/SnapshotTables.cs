@@ -33,6 +33,20 @@ public static class SnapshotTables
         "tbl_comment", "tbl_article_version",
         // Blind-node recovery material (migration 027): sealed, safe for peers, and needed by any
         // node seeded or joined after the events that filled it were compacted away.
+        "tbl_recovery_box", "tbl_dek_retired_link", "tbl_state_anchor", "tbl_sealed_secret",
+        // The metadata keys, wrapped under the master DEK, and the activation record (migration 037, step-a-spec 4.1):
+        // a joiner starts activated with the keys it opens after its first unlock.
+        "tbl_metadata_key", "tbl_metadata_activation"
+    ];
+
+    /// <summary>
+    /// The clear control tables a format-2 package carries in <c>control.db</c> beside the encrypted baseline
+    /// (step-a-spec 8.4): the metadata keys and the activation, and the recovery material a restore needs before it can
+    /// open anything. Every entry is also in <see cref="Replicated"/>; nothing here holds human-authored metadata.
+    /// </summary>
+    public static readonly string[] Control =
+    [
+        "tbl_metadata_key", "tbl_metadata_activation",
         "tbl_recovery_box", "tbl_dek_retired_link", "tbl_state_anchor", "tbl_sealed_secret"
     ];
 

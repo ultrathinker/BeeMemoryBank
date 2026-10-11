@@ -203,6 +203,33 @@ public class OwnerOnlyFileTests : IDisposable
         OwnerOnlyFile.IsOwnerOnly(path).Should().BeTrue();
     }
 
+    /// <summary>
+    /// A non-system drive root commonly supplies these inherit-only generic ACEs. The .NET rule constructor does not
+    /// accept their generic masks, so copying them into a protected owner-only DACL used to prevent all staging from
+    /// being created below such a folder.
+    /// </summary>
+    [WindowsAclFact]
+    public void CreateDirectory_AndCreateNew_BelowGenericInheritOnlyParent_AreOwnerOnly()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var parent = Path.Combine(_dir, "generic-parent");
+        Directory.CreateDirectory(parent);
+        WindowsAcl.AddGenericInheritOnlyRules(parent);
+        var stagingDirectory = Path.Combine(parent, "staging");
+        var stagingFile = Path.Combine(parent, "secret.bin");
+
+        OwnerOnlyFile.CreateDirectory(stagingDirectory);
+        using (var file = OwnerOnlyFile.CreateNew(stagingFile)) file.WriteByte(1);
+
+        WindowsAcl.IsDirectoryProtected(stagingDirectory).Should().BeTrue();
+        WindowsAcl.DirectoryUsersCanRead(stagingDirectory).Should().BeFalse();
+        WindowsAcl.DirectoryOwnerHasFullControl(stagingDirectory).Should().BeTrue();
+        WindowsAcl.IsProtected(stagingFile).Should().BeTrue();
+        WindowsAcl.UsersCanRead(stagingFile).Should().BeFalse();
+        WindowsAcl.OwnerHasFullControl(stagingFile).Should().BeTrue();
+        OwnerOnlyFile.IsOwnerOnly(stagingFile).Should().BeTrue();
+    }
+
     [WindowsAclFact]
     public void CreateNew_OnAVolumeWithoutAcls_StillCreatesTheFile_InsteadOfFailingEverySnapshotThere()
     {

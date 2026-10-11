@@ -57,6 +57,14 @@ public class SyncWorker : Worker
             return false;
         }
 
+        // An encrypted phone whose database is closed (the app is in the background) cannot store an event: the cycle waits for the next unlock
+        // (docs/design/step-b-spec.md 5.5, 12.1).
+        if (services.GetService<IVaultGate>() is { IsSealed: true, IsUsable: false })
+        {
+            Services.SyncHeartbeat.RecordCycle(true, 0, null, "wm-sealed");
+            return false;
+        }
+
         var scopeFactory = services.GetRequiredService<IServiceScopeFactory>();
         using var scope = scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;

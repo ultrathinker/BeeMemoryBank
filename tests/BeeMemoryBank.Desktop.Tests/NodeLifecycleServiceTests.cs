@@ -55,6 +55,12 @@ public class NodeLifecycleServiceTests
         OperatingSystem.IsWindows() ? "BeeMemoryBank.Node.Tests.StubProcess.exe" : "BeeMemoryBank.Node.Tests.StubProcess");
 
     /// <summary>
+    /// A fresh folder for the bmbd output log and the rescue log of one test (BMB-184): the service must never write
+    /// into the owner's real BeeMemoryBankData, nor rotate the logs in it.
+    /// </summary>
+    private static string NewLogRoot() => Path.Combine(Path.GetTempPath(), "bmb-nls-logs-" + Guid.NewGuid().ToString("N"));
+
+    /// <summary>
     /// Launches the stub via `dotnet stub.dll [extraArgs]` with a redirected stdin, and
     /// returns the started process (whose StandardInput the caller owns) plus its OS pid.
     /// </summary>
@@ -237,7 +243,7 @@ public class NodeLifecycleServiceTests
         {
             await File.WriteAllTextAsync(Path.Combine(dataDir, ".runtime.json"),
                 $"{{\"pid\":{Environment.ProcessId},\"frontUrl\":\"http://127.0.0.1:{port}\"}}");
-            var svc = new NodeLifecycleService();
+            var svc = new NodeLifecycleService { TestOnly_LogRootOverride = NewLogRoot() };
 
             var result = await svc.StartOrAttachAsync(dataDir, progress: null, CancellationToken.None);
 
@@ -285,7 +291,8 @@ public class NodeLifecycleServiceTests
         var svc = new NodeLifecycleService
         {
             TestOnly_NodeExePathOverride = StubExePath,
-            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2)
+            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2),
+            TestOnly_LogRootOverride = NewLogRoot(),
         };
 
         int? spawnedPid = null;
@@ -336,6 +343,29 @@ public class NodeLifecycleServiceTests
     /// untouched even though a perfectly valid legacy database is present.
     /// </summary>
     [Fact]
+    public async Task StartOrAttachAsync_WritesTheNodeOutputLog_UnderTheInjectedLogRoot()
+    {
+        // BMB-184: the hosted node's output log goes to the folder the service is given, never to the owner's
+        // BeeMemoryBankData (where a test run would also rotate the existing bmbd-*.log files).
+        var logRoot = NewLogRoot();
+        var dataDir = Path.Combine(Path.GetTempPath(), "bmb-nls-logroot-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dataDir);
+
+        var svc = new NodeLifecycleService
+        {
+            TestOnly_NodeExePathOverride = StubExePath,
+            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2),
+            TestOnly_LogRootOverride = logRoot,
+        };
+
+        var result = await svc.StartOrAttachAsync(dataDir, progress: null, CancellationToken.None);
+
+        result.Success.Should().BeFalse("the stub never satisfies the readiness probe, so this must time out");
+        Directory.GetFiles(Path.Combine(logRoot, "logs"), "bmbd-*.log").Should().ContainSingle(
+            "the hosted node's output is logged under the injected root");
+    }
+
+    [Fact]
     public async Task StartOrAttachAsync_NonDefaultVaultDir_DoesNotRescueLegacyData_EvenWithValidLegacyDb()
     {
         if (!File.Exists(StubExePath))
@@ -368,7 +398,8 @@ public class NodeLifecycleServiceTests
         var svc = new NodeLifecycleService
         {
             TestOnly_NodeExePathOverride = StubExePath,
-            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2)
+            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2),
+            TestOnly_LogRootOverride = NewLogRoot(),
         };
         int? spawnedPid = null;
         svc.TestOnly_OnHostedProcessStarted = pid => spawnedPid = pid;
@@ -447,7 +478,8 @@ public class NodeLifecycleServiceTests
         var svc = new NodeLifecycleService
         {
             TestOnly_NodeExePathOverride = StubExePath,
-            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2)
+            TestOnly_ReadinessTimeout = TimeSpan.FromSeconds(2),
+            TestOnly_LogRootOverride = NewLogRoot(),
         };
         int? spawnedPid = null;
         svc.TestOnly_OnHostedProcessStarted = pid => spawnedPid = pid;

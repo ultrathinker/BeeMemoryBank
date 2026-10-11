@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Metadata;
 using BeeMemoryBank.Sync.Recovery;
 using Dapper;
 
@@ -28,8 +29,13 @@ public class RecoveryStatusService(
     RecoveryBoxQueries queries,
     IWhitelistRepository whitelist,
     IDbConnectionFactory connFactory,
-    ICurrentKeyFingerprintSource? keySource = null)
+    ICurrentKeyFingerprintSource? keySource = null,
+    INodeRole? role = null,
+    ISyncProtocolPolicy? protocolPolicy = null)
 {
+    /// <summary>What an activated blind host says instead of a digest verdict (step-a-spec 10.3).</summary>
+    public const string CheckedByARestoringNode = "checked by a restoring full node";
+
     /// <param name="slotId">The signed-in superadmin's key slot: whose password the cleanup tried.</param>
     public async Task<RecoveryStatus> GetAsync(int? slotId)
     {
@@ -69,9 +75,16 @@ public class RecoveryStatusService(
     /// The newest anchor and whether this node's rows still reproduce its digest at the anchor's cut.
     /// Needs no DEK — the digest is over ids, versions and ciphertext hashes — so a blind node can say
     /// "my copy is intact as of this date" (it cannot check the anchor's MAC; a restore does that).
+    ///
+    /// <para>Step A (step-a-spec 10.3): an activated blind host holds no content tables, only a sealed baseline and
+    /// deltas, so there is nothing to compute a digest over: it reports the anchor with <c>StateMatches = null</c> and a
+    /// restoring full node checks it after its replay.</para>
     /// </summary>
-    public async Task<(AnchorStatus Anchor, bool StateMatches)?> NewestAnchorStateAsync()
+    public async Task<(AnchorStatus Anchor, bool? StateMatches)?> NewestAnchorStateAsync()
     {
+        if (role?.IsBlind == true && protocolPolicy?.SealsMetadata == true)
+            return await NewestAnchorAsync() is { } newest ? (newest, null) : null;
+
         using var conn = connFactory.CreateConnection();
         var row = await conn.QuerySingleOrDefaultAsync<(string AnchorId, string CreatedAt, string Fp, string Author, string Vector, string Digest)?>(
             @"SELECT anchor_id, created_at, dek_fingerprint, author_node_id, position_vector, digest

@@ -200,6 +200,7 @@ public class ConceptTagService(
     public Task RemoveFromArticleAsync(Guid articleId, string conceptName) => repo.RemoveFromArticleAsync(articleId, conceptName);
     public async Task RenameAsync(string name, string newName)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         await repo.RenameAsync(name, newName);
         try
         {
@@ -214,12 +215,14 @@ public class ConceptTagService(
 
     public async Task MergeAsync(string source, string target)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         await repo.MergeAsync(source, target);
         await eventLogger.LogConceptTagMergeAsync(source, target);
     }
 
     public async Task DeleteAsync(string name)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         await repo.DeleteAsync(name);
         await eventLogger.LogConceptTagDeleteAsync(name);
     }

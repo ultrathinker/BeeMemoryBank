@@ -84,7 +84,9 @@ public sealed record RekeySwapJournal(
 /// <param name="DataDir">The data directory to start on: D, holding the old or the new vault.</param>
 /// <param name="FirstStartAfterSwap">D is a re-keyed vault that has not started yet: the re-key lock is expected, and
 /// <see cref="RekeySwapResolver.CompleteFirstStart"/> removes it with the journal once the start succeeded.</param>
-public sealed record RekeySwapResolution(string DataDir, bool FirstStartAfterSwap);
+/// <param name="Seal">What the start did about an interrupted "Encrypt this node" (docs/design/step-b-spec.md 10.6); null when this start
+/// resolved nothing of the kind (and always null for a start that joined others already past the gate).</param>
+public sealed record RekeySwapResolution(string DataDir, bool FirstStartAfterSwap, SealSwapResolution? Seal = null);
 
 /// <summary>
 /// Called by every process that resolves the data directory, before anything creates or opens it: finishes a swap a

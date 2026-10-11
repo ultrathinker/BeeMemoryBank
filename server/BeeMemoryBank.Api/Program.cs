@@ -51,6 +51,16 @@ var dataPath = builder.Configuration["BeeMemoryBank:DataPath"]
 // or a node's child alike).
 var (rekeySwap, vaultLease) = BeeMemoryBank.AppPaths.VaultStartup.Enter(dataPath);
 dataPath = rekeySwap.DataDir;
+// Step B (docs/design/step-b-spec.md 2.5, 5.2 steps 1-2): the seal journal was resolved with the re-key's above. A data directory that cannot start
+// (an encrypted database with a plain companion, a half of a sealed pair, a leftover of an interrupted encryption that cannot be placed safely) is
+// refused by name before anything is created, opened, swept or served: the node stays up only to say why.
+var brokenStart = BeeMemoryBank.Vault.Sealed.BrokenStart.For(dataPath, rekeySwap.Seal);
+if (brokenStart is not null)
+{
+    var exitCode = BeeMemoryBank.Api.Startup.BrokenStartHost.Run(builder, brokenStart);
+    GC.KeepAlive(vaultLease);
+    return exitCode;
+}
 // One node process per data folder: the lease above is shared by design, so it would let a second container on the same
 // volume start and write different events under this node's id (week review F4).
 var instanceLock = BeeMemoryBank.AppPaths.InstanceGuard.AcquireOrExit(dataPath);
@@ -78,12 +88,15 @@ if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"))
 
 
 builder.AddBeeApiServices(dataPath);
+// The sealed-database support of a full node (not on a blind host): the gate, the boot store, the relay of a closed node, the open steps.
+builder.AddSealedVault(dataPath, BeeMemoryBank.Vault.Sealed.SealedStartState.For(dataPath, rekeySwap.Seal));
 
 var app = builder.Build();
 app.Lifetime.ApplicationStopped.Register(instanceLock.Dispose); // the folder is free again once this host has stopped
 app.Services.GetRequiredService<BeeMemoryBank.AppPaths.VaultLease>(); // the lease now lives, and ends, with the host
 
 app.UseLoopbackForwardedHeaders();
+app.AttachSealedNode();
 await app.RunBeeApiStartupTasksAsync(dataPath);
 // The first start on a swapped-in vault succeeded: the re-key journal and lock go.
 BeeMemoryBank.AppPaths.RekeySwapResolver.CompleteFirstStart(dataPath);
@@ -91,6 +104,7 @@ app.UseBeeApiPipeline();
 app.MapBeeApiEndpoints();
 
 app.Run();
+return 0;
 
 // Required for WebApplicationFactory in tests
 public partial class Program { }

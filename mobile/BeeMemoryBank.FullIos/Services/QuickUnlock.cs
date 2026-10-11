@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.FullIos.Services;
@@ -100,6 +101,18 @@ public sealed class QuickUnlock(IUnlockKeyStore store, IServiceProvider services
         try
         {
             masterDek = MasterKeyManager.UnwrapMasterDek(wrapped, iv, unlockKey);
+
+            // An encrypted phone: the sentinel is inside the database, which this key opens first, through the gate's no-password door (spec 12.2).
+            // The key store gave the unlock key and nothing else; the database key and the page keys never leave the gate.
+            if (services.GetService<PhoneVaultLifecycle>() is { IsSealed: true } phone)
+            {
+                var opened = await phone.UnlockWithQuickKeyAsync(masterDek);
+                Array.Clear(masterDek);
+                if (opened) return QuickUnlockResult.Unlocked;
+                store.Forget();
+                return QuickUnlockResult.TurnedOff;
+            }
+
             byte[]? sentinel;
             using (var scope = services.CreateScope())
                 sentinel = await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetSentinelAsync();

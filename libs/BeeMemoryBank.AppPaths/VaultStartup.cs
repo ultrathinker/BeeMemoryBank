@@ -64,6 +64,10 @@ public static class VaultStartup
                 {
                     if (Refusal(d) is { } late) throw new VaultInUseException(late);
                     resolved = RekeySwapResolver.Resolve(d);
+                    // An interrupted "Encrypt this node" (docs/design/step-b-spec.md 10.6) is finished, undone or refused by name here too,
+                    // under the same exclusive lease and before anything opens or creates a file of the data folder.
+                    if (SealSwapResolver.Resolve(resolved.DataDir) is { Action: not SealResolveAction.None } seal)
+                        resolved = resolved with { Seal = seal };
                 }
             }
 

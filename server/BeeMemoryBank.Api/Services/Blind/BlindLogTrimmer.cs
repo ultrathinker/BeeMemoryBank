@@ -1,6 +1,8 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Sync;
-using Dapper;
+using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Blind.Format2;
+using BeeMemoryBank.Sync.Metadata;
 
 namespace BeeMemoryBank.Api.Services;
 
@@ -31,56 +33,40 @@ public sealed class BlindLogTrimmer(IServiceScopeFactory scopeFactory, ILogger<B
         }
     }
 
-    /// <summary>Trims once; returns the new cut-off, or null when nothing could go.</summary>
+    /// <summary>
+    /// Trims once; returns the new cut-off, or null when nothing could go. The rule is the blind store's
+    /// (<see cref="BaselineStore.TrimLogAsync"/>): read by every peer and covered by the newest anchor, as before Step A;
+    /// once activated also covered by the current baseline, and nothing at all while there is none (step-a-spec 9.5).
+    /// </summary>
     public async Task<long?> TrimAsync()
     {
-        // Deletes from the event log: never while a reseed cutover reads it (EventWriteGate).
-        using var _ = await EventWriteGate.Instance.EnterAsync();
         using var scope = scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;
-        var events = sp.GetRequiredService<IEventLogRepository>();
-
-        // How far every active peer says it has read from us — its own report, never the delivery
-        // watermark, which moves when a page is merely served and so would let the log be cut ahead
-        // of a peer that has applied nothing yet (Codex round 2, security #3). One that never
-        // reported pins the log whole: it would otherwise be cut off before its first pull.
-        var peers = await sp.GetRequiredService<ISyncPushPositionRepository>().GetAllActivePeersWithPushPositionsAsync();
-        if (peers.Count == 0) return null;
-        var readByAll = peers.Min(p => p.ReportedSeq ?? 0);
-
-        var cutoff = Math.Min(readByAll, await LastAnchorCoversUpToAsync(sp.GetRequiredService<IDbConnectionFactory>()));
-        if (cutoff <= (await events.GetLastCompactionCpAsync() ?? 0)) return null;
-
-        var removed = await events.DeleteUpToAsync(cutoff);
-        using (var conn = sp.GetRequiredService<IDbConnectionFactory>().CreateConnection())
-            await conn.ExecuteAsync(
-                @"INSERT INTO tbl_compaction_log (compacted_at, cp_before, cp_after, events_removed, reason)
-                  VALUES (@at, NULL, @cutoff, @removed, 'blind local trim')",
-                new { at = DateTime.UtcNow.ToString("O"), cutoff, removed });
-        logger.LogInformation("Blind log trimmed up to {Cutoff}: {Removed} events", cutoff, removed);
+        var activated = sp.GetService<ISyncProtocolPolicy>()?.SealsMetadata ?? false;
+        var store = sp.GetService<IBaselineStore>();
+        var factory = sp.GetRequiredService<IDbConnectionFactory>();
+        if (store is not null && await BaselineStore.HasAdoptedAsync(factory) && !await BaselineStore.IsOpaqueAsync(factory))
+        {
+            // The first adoption's purge did not finish (no space for the rebuild, a reader, a crash): do it now, at start-up
+            // and on every run, until the node can say its store holds no readable content (spec 9.3). It needs only that a
+            // baseline was adopted - not that its files are servable now (a damaged or half-switched current/ must not keep
+            // readable rows on the disk) and not that the activation was imported yet (a seed that failed after its adoption).
+            try
+            {
+                await store.PurgeLegacyContentAsync();
+            }
+            catch (Exception ex) when (ex is IOException or Microsoft.Data.Sqlite.SqliteException)
+            {
+                logger.LogWarning(ex, "Blind store: the purge of earlier readable content is still unfinished; retrying in {Interval}", Interval);
+            }
+        }
+        // The trim, unlike the purge, is bounded by a baseline this node can serve: none (or a damaged one) means nothing goes.
+        var current = store is not null ? await store.GetCurrentAsync() : null;
+        var (cutoff, _) = await BaselineStore.TrimLogAsync(
+            factory,
+            sp.GetRequiredService<IEventLogRepository>(),
+            sp.GetRequiredService<ISyncPushPositionRepository>(),
+            activated, current?.LocalCut, logger);
         return cutoff;
-    }
-
-    /// <summary>
-    /// The highest sequence below which every event is covered by the newest state anchor (plan 5.5):
-    /// its position vector says, per source node, up to which Lamport time the anchored state
-    /// includes that node's events. A restore checks what is newer than the anchor against the
-    /// events' own signatures, so those must stay. No anchor yet — nothing is covered, nothing goes.
-    /// </summary>
-    private static async Task<long> LastAnchorCoversUpToAsync(IDbConnectionFactory db)
-    {
-        using var conn = db.CreateConnection();
-        var vector = await conn.ExecuteScalarAsync<string?>(
-            "SELECT position_vector FROM tbl_state_anchor ORDER BY lamport_ts DESC, created_at DESC LIMIT 1");
-        if (vector is null) return 0;
-
-        var firstUncovered = await conn.ExecuteScalarAsync<long?>(
-            @"SELECT MIN(e.sequence_num) FROM tbl_event e
-              WHERE NOT EXISTS (SELECT 1 FROM json_each(@vector) v
-                                WHERE upper(v.key) = upper(e.node_id) AND e.lamport_ts <= v.value)",
-            new { vector });
-        return firstUncovered is { } seq
-            ? seq - 1
-            : await conn.ExecuteScalarAsync<long>("SELECT COALESCE(MAX(sequence_num), 0) FROM tbl_event");
     }
 }

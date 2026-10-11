@@ -125,7 +125,9 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
             new FakeEmbeddingGenerator(), hardDeleteServiceB, null,
             replayShieldRepoB, restoreEventStateRepoB, new NullRestoreInitiator(),
             dekRotationStateRepoB, new NullDekRotationApplier(), folderAccessB, _bFactory, new BlobRepository(_bFactory),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<EventApplier>.Instance,
+            new BeeMemoryBank.Sync.Metadata.SyncProtocolPolicy(_bFactory), new BeeMemoryBank.Sync.Metadata.NoHeldEventDrain(), [],
+            new BeeMemoryBank.Vault.Metadata.VaultEnvelopeOpener(sessionB, new BeeMemoryBank.Vault.Metadata.MetadataKeyRing(_bFactory, sessionB)));
     }
 
     public async Task DisposeAsync()

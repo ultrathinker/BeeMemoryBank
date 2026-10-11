@@ -29,9 +29,16 @@ public class StateAnchorScheduler(
         using var timer = new PeriodicTimer(Tick);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
+            // The anchor is built from the vault database (docs/design/step-b-spec.md 5.5).
+            await scopes.WaitUsableAsync(stoppingToken);
+
             try
             {
                 await PublishIfDueAsync(DateTime.UtcNow);
+            }
+            catch (VaultSealedException)
+            {
+                logger.LogDebug("State anchor tick stopped: the database was closed");
             }
             catch (Exception ex)
             {

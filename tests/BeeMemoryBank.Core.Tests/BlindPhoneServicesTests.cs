@@ -249,6 +249,43 @@ public sealed class BlindPhoneServicesTests : IDisposable
     }
 
     [Fact]
+    public async Task HeavyWork_AfterTheFirstLoad_AsksForANewerBaseline_AndSaysSoInTheLogWhenOneCame()
+    {
+        await PairAsync();
+        _replica.NewerBaseline = true;
+
+        await _heavy.RunAsync(forceBackup: false, CancellationToken.None);
+
+        _replica.Updates.Should().Be(1);
+        _log.Latest(20).Select(e => e.Message).Should().Contain("A newer baseline was installed.");
+    }
+
+    [Fact]
+    public async Task HeavyWork_BeforeTheFirstLoadIsDone_AsksForNoUpdate()
+    {
+        await PairAsync();
+        _replica.Pending = true;
+
+        await _heavy.RunAsync(forceBackup: true, CancellationToken.None);
+
+        _replica.Updates.Should().Be(0, "the first load is how a copy gets its first baseline");
+    }
+
+    [Fact]
+    public async Task HeavyWork_ABaselineUpdateThatFails_IsNotedAndDoesNotHoldBackTheBackup()
+    {
+        await PairAsync();
+        _replica.UpdateFails = true;
+
+        await _heavy.RunAsync(forceBackup: true, CancellationToken.None);
+
+        _heavy.LastFailure.Should().NotBeNull();
+        _heavy.LastFailure!.Title.Should().Be("Baseline update");
+        _heavy.LastFailure.Message.Should().Contain("signature");
+        _runner.Backups().Should().ContainSingle("a failed update is not a reason to skip the backup that is due");
+    }
+
+    [Fact]
     public async Task HeavyWork_ReplicaNotAvailableYet_SaysWhatItWaitsFor_AndDoesNotBackUpNothing()
     {
         await PairAsync();
@@ -294,7 +331,18 @@ public sealed class BlindPhoneServicesTests : IDisposable
     private sealed class Replica : IBlindReplicaSource
     {
         public int Calls;
+        public int Updates;
+        public bool NewerBaseline;
+        public bool UpdateFails;
         public bool Pending;
+
+        public Task<bool> UpdateBaselineAsync(BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct)
+        {
+            Updates++;
+            if (UpdateFails) throw new InvalidDataException("the baseline's signature does not verify");
+            return Task.FromResult(NewerBaseline);
+        }
+
         public Task FetchAndInstallAsync(BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct)
         {
             if (Pending) throw new BlindFeaturePendingException("the first download of the blind package (GET /api/blind/replica)");

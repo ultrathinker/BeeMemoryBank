@@ -1,0 +1,130 @@
+@using System.Text.Json
+@model BeeMemoryBank.Web.Pages.AdminModel
+@{
+    // docs/design/step-a-spec.md 5.3, 5.4: the readiness report, the blockers in words and the one-way switch.
+    var report = Model.MetadataReadiness;
+    var activated = report is { } r0 && r0.TryGetProperty("activated", out var a0) && a0.GetBoolean();
+    var checkedAll = Model.MetadataReadinessCheckedAll;
+    var ready = report is { } r1 && r1.TryGetProperty("ready", out var ready0) && ready0.GetBoolean();
+    static string StatusWords(string? status) => status switch
+    {
+        "ready" => "ready",
+        "not_capable" => "runs an older version: update it to 2.6.0 or newer",
+        "stale" => "not seen for more than 14 days",
+        _ => "never seen by this node or the devices it asked",
+    };
+    static string BlockerWords(JsonElement b)
+    {
+        var code = b.GetProperty("code").GetString();
+        var name = b.TryGetProperty("display_name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
+        return code switch
+        {
+            "peer_not_ready" => $"{name}: {StatusWords(b.TryGetProperty("status", out var s) ? s.GetString() : null)}",
+            "vault_locked" => "This node is locked.",
+            "not_superadmin" => "A device does not see this node as a superadmin.",
+            "rotation_pending" => "A key rotation is in progress; finish or cancel it first.",
+            "events_held" => "This node holds changes it has not applied yet. Unlock it and wait until they are applied.",
+            "already_activated" => "Metadata encryption is already on.",
+            _ => code ?? "",
+        };
+    }
+}
+
+<!-- Metadata encryption (Step A) -->
+<h3 style="margin-bottom:12px;"><sl-icon name="incognito"></sl-icon> Metadata encryption</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:760px;">
+    @if (Model.HeldEvents is { } held && held.TryGetProperty("count", out var heldCount) && heldCount.GetInt32() > 0)
+    {
+        <p class="text-sm" style="margin-bottom:12px;">
+            <sl-icon name="hourglass-split"></sl-icon>
+            @heldCount.GetInt32() @(heldCount.GetInt32() == 1 ? "change waits" : "changes wait") for unlock: this node has received
+            @(heldCount.GetInt32() == 1 ? "it" : "them") and passes @(heldCount.GetInt32() == 1 ? "it" : "them") on, and applies
+            @(heldCount.GetInt32() == 1 ? "it" : "them") once it is unlocked.
+        </p>
+    }
+    @if (report is null)
+    {
+        <p class="text-muted text-sm">The state of metadata encryption is unavailable right now.</p>
+    }
+    else if (activated)
+    {
+        var activation = report.Value.GetProperty("activation");
+        <p class="text-sm" style="margin-bottom:8px;">
+            <strong>On</strong>@(activation.ValueKind == JsonValueKind.Object ? $" since {activation.GetProperty("activated_at").GetString()}" : "").
+            Titles, folder and tag names, file names and the shape of the tree travel encrypted between devices, and blind
+            copies hold them only encrypted.
+        </p>
+        <p class="text-muted text-sm">
+            This cannot be switched off. The way back is restoring the backup taken before the switch, which loses
+            every change made since.
+        </p>
+    }
+    else
+    {
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Today titles, folder and tag names, file names and the shape of the tree travel between devices in clear, and
+            blind copies (the blind node, phones, desktop blind copies) store them readable. Switching metadata encryption
+            on encrypts all of it for the whole network. It needs every device on version 2.6.0 or newer; a device on an
+            older version stops syncing until it is updated.
+        </p>
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            <strong>Before you switch it on, take a fresh backup of this node and keep it offline.</strong> The switch is
+            one way; restoring that backup is the only way back, and the backup itself holds your titles in clear.
+        </p>
+
+        var peers = report.Value.GetProperty("peers");
+        if (peers.GetArrayLength() > 0)
+        {
+            <table class="table text-sm" style="margin-bottom:12px;">
+                <thead><tr><th>Device</th><th>Kind</th><th>Status</th><th>Version</th><th>Last seen</th></tr></thead>
+                <tbody>
+                @foreach (var p in peers.EnumerateArray())
+                {
+                    var status = p.GetProperty("status").GetString();
+                    <tr>
+                        <td>@p.GetProperty("display_name").GetString()</td>
+                        <td>@(p.GetProperty("kind").GetString() == "blind" ? "blind copy" : "full node")</td>
+                        <td>@StatusWords(status)</td>
+                        <td>@(p.GetProperty("app_version").ValueKind == JsonValueKind.String ? p.GetProperty("app_version").GetString() : "-")</td>
+                        <td>@(p.GetProperty("seen_at").ValueKind == JsonValueKind.String ? p.GetProperty("seen_at").GetString() : "never")</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        }
+
+        var blockers = report.Value.GetProperty("blockers");
+        if (blockers.GetArrayLength() > 0)
+        {
+            <p class="text-sm" style="margin-bottom:4px;"><strong>Not yet:</strong></p>
+            <ul class="text-sm" style="margin-bottom:12px;">
+                @foreach (var b in blockers.EnumerateArray())
+                {
+                    <li>@BlockerWords(b)</li>
+                }
+            </ul>
+        }
+
+        <form method="post" asp-page-handler="CheckMetadataReadiness" style="margin-bottom:12px;">
+            <sl-button type="submit" size="small" variant="default">
+                <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Ask every device now
+            </sl-button>
+        </form>
+
+        @if (checkedAll && ready)
+        {
+            <form method="post" asp-page-handler="ActivateMetadata" style="display:flex;flex-direction:column;gap:12px;">
+                <sl-checkbox name="backupTaken" value="true" required>I took a fresh backup of this node and keep it offline</sl-checkbox>
+                <sl-input name="masterPassword" type="text" inputmode="text" autocomplete="off"
+                          class="bmb-secret" data-1p-ignore data-lpignore="true" required
+                          label="Master password"></sl-input>
+                <div>
+                    <sl-button type="submit" variant="danger" class="btn-confirm-click"
+                        data-confirm="Switch metadata encryption on for the whole network? This cannot be undone; the backup you took is the only way back.">
+                        <sl-icon slot="prefix" name="shield-lock"></sl-icon> Switch metadata encryption on
+                    </sl-button>
+                </div>
+            </form>
+        }
+    }
+</div>

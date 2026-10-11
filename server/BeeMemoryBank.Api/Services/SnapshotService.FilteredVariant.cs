@@ -1,5 +1,6 @@
 using System.Formats.Tar;
 using System.IO.Compression;
+using BeeMemoryBank.Core.IO;
 
 namespace BeeMemoryBank.Api.Services;
 
@@ -15,10 +16,10 @@ public partial class SnapshotService
     /// </summary>
     public async Task CreateFilteredVariantAsync(string sourceArchivePath, string destinationArchivePath)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"bmb-filter-{Guid.NewGuid():N}");
+        var tempDir = SnapshotStaging.NewDirectory(_dataPath);
         try
         {
-            Directory.CreateDirectory(tempDir);
+            await RequireNoPlainDatabaseOnSealedNodeAsync(sourceArchivePath);
             await ExtractTarGzAsync(sourceArchivePath, tempDir, new FileInfo(sourceArchivePath).Length);
 
             var dbPath = Path.Combine(tempDir, DbFileName);
@@ -29,9 +30,18 @@ public partial class SnapshotService
 
             FilterSecretsFrom(dbPath);
 
-            // Keeps the archive encrypted when this node can (unlocked); a locked vault leaves the variant plain, as before.
-            if (_keys is not null)
+            // Keeps the archive encrypted when this node can (unlocked); a locked vault leaves the variant plain, as before. On an encrypted node
+            // the variant is built from the sealed staging copy's plain image in memory, and a locked vault makes no variant at all.
+            if (_connFactory.IsSealed)
+            {
+                var pageKey = _connFactory.CopyPageKey()!;
+                try { await _keys!.EncryptSealedDatabaseAsync(dbPath, pageKey); }
+                finally { Array.Clear(pageKey); }
+            }
+            else if (_keys is not null)
+            {
                 await _keys.ReEncryptDatabaseIfUnlockedAsync(dbPath);
+            }
 
             var mediaDir = Path.Combine(tempDir, "media");
             var mediaFiles = Directory.Exists(mediaDir)
@@ -72,10 +82,7 @@ public partial class SnapshotService
         }
         finally
         {
-            if (Directory.Exists(tempDir))
-            {
-                try { Directory.Delete(tempDir, recursive: true); } catch { /* ignore */ }
-            }
+            await CleanupStagingOrFailAsync(tempDir);
         }
     }
 }

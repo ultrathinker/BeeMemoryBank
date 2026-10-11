@@ -20,4 +20,13 @@ public interface IDekRotationApplier
     /// was locked.
     /// </summary>
     Task RetryPendingAutoAcceptsAsync();
+
+    /// <summary>
+    /// Finishes a rotation this node started and could not finish at once (its new metadata key was not published yet, or the process
+    /// ended after the DEK commit): the completion audit, the <c>Completed</c> step and the post-rotation compaction, from the durable
+    /// record the rotation's own transaction wrote. Called after the publication has been retried at every unlock; the applier also
+    /// repeats it by itself. Idempotent, never throws, does nothing where there is nothing to finish. A host that never starts a
+    /// rotation has nothing to do.
+    /// </summary>
+    Task FinishPendingCompletionAsync() => Task.CompletedTask;
 }

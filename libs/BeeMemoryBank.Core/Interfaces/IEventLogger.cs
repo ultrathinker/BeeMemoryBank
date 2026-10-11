@@ -9,6 +9,18 @@ namespace BeeMemoryBank.Core.Interfaces;
 /// </summary>
 public interface IEventLogger
 {
+    /// <summary>
+    /// Begins one operation that changes local state and then logs sealed content (an article, comment, folder, media or concept tag
+    /// change, a hard delete), and returns its scope; dispose it when the operation, event included, is done. Where the node seals its
+    /// metadata (docs/design/step-a-spec.md 4.4) this (1) throws <c>MetadataKeyPublishPendingException</c> BEFORE the caller has changed
+    /// anything while the new metadata key of a DEK rotation is not published yet, and (2) keeps that rotation from committing its
+    /// DEK swap until the scope ends, so an event sealed for this operation is never appended under a key the rotation retired. The
+    /// scope is reentrant for one logical flow (services call each other). Call it as the first statement of the operation and await it
+    /// directly: <c>using var authoring = await eventLogger.BeginAuthoringAsync();</c>. Not <c>async</c> in an implementation: see the
+    /// remarks of the barrier. The default holds nothing back.
+    /// </summary>
+    ValueTask<IDisposable> BeginAuthoringAsync() => new(Services.NullAuthoringScope.Instance);
+
     Task LogCreateAsync(Article article, EncryptedArticleBody body, string[] conceptTags, IDbTransaction? transaction = null);
     Task LogUpdateAsync(Article article, EncryptedArticleBody? body, string[] conceptTags, IDbTransaction? transaction = null);
     /// <summary>

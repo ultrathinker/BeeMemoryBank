@@ -39,25 +39,30 @@ public partial class ApiClient
     public async Task<bool> HasPeerNewerProtocolAsync() => (await GetSyncAlertsAsync()).PeerNewerProtocol;
 
     /// <summary>
-    /// The two sync states the layout warns about, from one <c>/api/sync/status</c> call: a peer on a newer protocol, and
-    /// "this node cannot catch up" (a full peer compacted past it; the sentence to show, or null).
+    /// The sync states the layout shows, from one <c>/api/sync/status</c> call: a peer on a newer protocol, "this node
+    /// cannot catch up" (a full peer compacted past it; the sentence to show, or null), and changes received but not
+    /// applied yet (Step A, docs/design/step-a-spec.md 6.9: the sentence and whether it is a warning, or null).
     /// </summary>
-    public async Task<(bool PeerNewerProtocol, string? SnapshotRequired)> GetSyncAlertsAsync()
+    public async Task<(bool PeerNewerProtocol, string? SnapshotRequired, (string Message, bool Warning)? Held)> GetSyncAlertsAsync()
     {
         try
         {
             var doc = await http.GetFromJsonAsync<JsonDocument>("/api/sync/status", JsonOpts);
-            if (doc == null) return (false, null);
+            if (doc == null) return (false, null, null);
             var root = doc.RootElement;
             var newer = root.TryGetProperty("peerNewerProtocol", out var prop) && prop.ValueKind == JsonValueKind.True;
             var required = root.TryGetProperty("snapshotRequired", out var req) && req.ValueKind == JsonValueKind.Object
                 && req.TryGetProperty("message", out var message)
                 ? message.GetString()
                 : null;
-            return (newer, required);
+            (string, bool)? held = root.TryGetProperty("held", out var h) && h.ValueKind == JsonValueKind.Object
+                && h.TryGetProperty("message", out var heldMessage) && heldMessage.ValueKind == JsonValueKind.String
+                ? (heldMessage.GetString()!, h.TryGetProperty("warning", out var w) && w.ValueKind == JsonValueKind.True)
+                : null;
+            return (newer, required, held);
         }
         catch { }
-        return (false, null);
+        return (false, null, null);
     }
 
     public async Task<JsonNode?> GetAsync(string path)

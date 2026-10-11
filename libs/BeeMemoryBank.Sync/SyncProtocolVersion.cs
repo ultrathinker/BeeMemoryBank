@@ -14,6 +14,10 @@ public static class SyncProtocolVersion
     ///     pushes to it. The event format itself is unchanged, so 1 and 2 events still apply.
     ///     Peers declare this in /api/sync/authenticate and report-position; the receiving node
     ///     keeps the last value per whitelist row for the PC's check before adding a blind node.
+    /// 4 — Step A (docs/design/step-a-spec.md 3, 5.6): content events travel sealed (outer type "sealed"), control
+    ///     events in clear. Every 2.6 node READS it from the start; a node DECLARES and writes it only once it has applied
+    ///     the owner's activation, which is what <see cref="Metadata.ISyncProtocolPolicy.Declared"/> says. Until then a 2.6
+    ///     node declares 3, so a 2.5 node goes on pulling from it during the rollout.
     /// </summary>
     public const int Current = 3;
 
@@ -28,6 +32,6 @@ public static class SyncProtocolVersion
 
     public static bool IsCompatiblePeer(int? peerProtocolVersion) => peerProtocolVersion >= MinPeer;
 
-    /// <summary>Event protocol versions this build can apply.</summary>
-    public static bool CanApply(int eventProtocolVersion) => eventProtocolVersion is 1 or 2 or 3;
+    /// <summary>Event protocol versions this build can apply: 1-3 as before, and 4 on every node, activated or not.</summary>
+    public static bool CanApply(int eventProtocolVersion) => eventProtocolVersion is 1 or 2 or 3 or 4;
 }

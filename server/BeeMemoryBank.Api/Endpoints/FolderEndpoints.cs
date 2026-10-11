@@ -5,6 +5,7 @@ using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Exceptions;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -36,7 +37,7 @@ public static class FolderEndpoints
                 var folder = await folderSvc.CreateAsync(req.Path);
                 return Results.Ok(new FolderCreateResult(folder.Id, folder.Path, folder.Name));
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
@@ -140,7 +141,7 @@ public static class FolderEndpoints
                     : "Permission denied for this rename operation.";
                 return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 403);
             }
@@ -191,7 +192,7 @@ public static class FolderEndpoints
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
@@ -280,6 +281,9 @@ public static class FolderEndpoints
                 if (folder != null)
                     await folderSvc.EnsureDeletableAsync(folder.Id);
 
+                // Keep the article purge and the folder event in one authoring scope. A DEK
+                // rotation must wait for the whole composite operation, not only the article pass.
+                using var authoring = await svc.BeginAuthoringAsync();
                 var deleted = await svc.DeleteByPathAsync(path);
 
                 if (folder != null)
@@ -295,7 +299,7 @@ public static class FolderEndpoints
                     : "Cannot delete: folder contains restricted sub-folders.";
                 return Results.Json(new ErrorResponse(message), statusCode: 403);
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 403);
             }

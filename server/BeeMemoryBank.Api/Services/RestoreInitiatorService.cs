@@ -88,6 +88,18 @@ public class RestoreInitiatorService : IRestoreInitiator
         );
     }
 
+    /// <summary>
+    /// Why this node must not start a network restore now, or null (docs/design/step-a-spec.md 6.8): it holds changes it
+    /// received but has not applied, which the restore would replace before they were ever read.
+    /// </summary>
+    public async Task<string?> InitiationRefusalAsync()
+    {
+        using var scope = _scopeFactory.CreateScope();
+        return scope.ServiceProvider.GetService<BeeMemoryBank.Sync.Metadata.IHeldEventStatus>() is { } held && await held.AnyHeldAsync()
+            ? BeeMemoryBank.Sync.Metadata.HeldEventStatus.RefusalMessage("start the restore")
+            : null;
+    }
+
     public async Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent)
     {
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
@@ -618,6 +630,12 @@ public class RestoreInitiatorService : IRestoreInitiator
                     identity.Ed25519PrivateKey, identity.Ed25519PrivateKeyIV, identity.Ed25519PrivateKeyV,
                     identity.NodeId, () => _sessionService.GetMasterDek(), challengePayload);
 
+                // What this node declares and advertises (docs/design/step-a-spec.md 5.1, 5.6): an activated peer accepts
+                // protocol 4, or 3 with the envelope capability.
+                int declared;
+                using (var policyScope = _scopeFactory.CreateScope())
+                    declared = policyScope.ServiceProvider.GetService<BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy>()?.Declared
+                               ?? SyncProtocolVersion.Current;
                 using var authReq = new HttpRequestMessage(HttpMethod.Post, $"{resolvedUrl}/api/sync/authenticate")
                 {
                     Content = JsonContent.Create(new
@@ -625,7 +643,9 @@ public class RestoreInitiatorService : IRestoreInitiator
                         NodeId = identity.NodeId,
                         ChallengeB64 = challengeData.Challenge,
                         SignatureB64 = Convert.ToBase64String(signature),
-                        ProtocolVersion = SyncProtocolVersion.Current
+                        ProtocolVersion = declared,
+                        Capabilities = BeeMemoryBank.Sync.Metadata.MetadataCapabilities.Advertised,
+                        AppVersion = BeeMemoryBank.Sync.Metadata.BuildVersion.Current,
                     })
                 };
                 if (!string.IsNullOrEmpty(originalHost))

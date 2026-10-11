@@ -11,6 +11,7 @@ using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Hosting.AspNetCore;
 using Microsoft.Extensions.Logging;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Metadata;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -67,15 +68,19 @@ public static class SyncEndpoints
     public static void MapSyncEndpoints(this WebApplication app)
     {
         // ─── Identity (no auth) ─────────────────────────────────────────────────
-        app.MapGet("/api/sync/identity", async (INodeIdentityRepository nodeRepo) =>
+        app.MapGet("/api/sync/identity", async (INodeIdentityRepository nodeRepo, ISyncProtocolPolicy policy) =>
         {
             var identity = await nodeRepo.GetAsync();
             if (identity == null) return Results.Problem("Node is not initialized.", statusCode: 503);
+            // The protocol this node declares (3 until it applied the metadata activation, 4 after) and what this build
+            // advertises (docs/design/step-a-spec.md 5.1); older nodes ignore the two new fields.
             return Results.Ok(new SyncIdentityResponse(
                 identity.NodeId,
                 identity.DisplayName,
                 Convert.ToBase64String(identity.Ed25519PublicKey),
-                SyncProtocolVersion.Current));
+                policy.Declared,
+                MetadataCapabilities.Advertised,
+                BuildVersion.Current));
         }).WithTags("Sync");
 
         // ─── Sentinel (no auth — encrypted, useless without DEK) ───────────────
@@ -116,6 +121,7 @@ public static class SyncEndpoints
             SyncAuthRequest req,
             SyncTokenStore store,
             IWhitelistRepository whitelist,
+            ISyncProtocolPolicy policy,
             ILoggerFactory loggerFactory,
             HttpContext httpCtx) =>
         {
@@ -189,21 +195,27 @@ public static class SyncEndpoints
             // a version onto someone else's row and so steer the PC's pre-flight for blind nodes.
             if (req.ProtocolVersion is { } declared)
                 await whitelist.RecordProtocolVersionAsync(req.NodeId, declared, DateTime.UtcNow);
+            // What it advertises (docs/design/step-a-spec.md 5.2), recorded even when it is nothing: a 2.5 node sends no
+            // capabilities, and the readiness report of the activation must see it as one.
+            await whitelist.RecordCapabilitiesAsync(req.NodeId, req.Capabilities ?? [], req.AppVersion, DateTime.UtcNow);
 
             // Protocol 3 is a boundary, not a hint (SyncProtocolVersion.MinPeer): an older peer
             // would accept a blind node's events and seal the DEK for it, so it gets no token and
             // with it none of the data endpoints. Recorded above first, so the PC's pre-flight
-            // sees why this peer stopped syncing.
-            if (!SyncProtocolVersion.IsCompatiblePeer(req.ProtocolVersion))
+            // sees why this peer stopped syncing. After the metadata activation (spec 5.6) the bar is
+            // protocol 4, or 3 with the envelope capability: a 2.5 node is cut off.
+            if (!policy.IsCompatiblePeer(req.ProtocolVersion, req.Capabilities))
             {
-                logger.LogWarning("Auth 426 for {NodeId} ({Display}): protocol {Version} is below {Min}; upgrade that node",
-                    req.NodeId, entry.DisplayName, req.ProtocolVersion?.ToString() ?? "(none)", SyncProtocolVersion.MinPeer);
+                logger.LogWarning("Auth 426 for {NodeId}: protocol {Version} is not accepted by this node; upgrade that node",
+                    req.NodeId, req.ProtocolVersion?.ToString() ?? "(none)");
                 return Results.Problem(
-                    $"Sync protocol {SyncProtocolVersion.MinPeer} or newer is required; update this node.",
+                    policy.SealsMetadata
+                        ? "This network encrypts its metadata; update this node to version 2.6 or newer."
+                        : $"Sync protocol {SyncProtocolVersion.MinPeer} or newer is required; update this node.",
                     statusCode: StatusCodes.Status426UpgradeRequired);
             }
 
-            var token = store.IssueToken(req.NodeId, req.ProtocolVersion!.Value);
+            var token = store.IssueToken(req.NodeId, req.ProtocolVersion!.Value, req.Capabilities);
             return Results.Ok(new SyncAuthResponse(token));
         }).WithTags("Sync");
 
@@ -214,6 +226,7 @@ public static class SyncEndpoints
             IEventLogRepository eventLogRepo,
             ISyncPushPositionRepository pushPositionRepo,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
+            ISyncProtocolPolicy policy,
             long afterSequence = 0,
             int limit = 1000) =>
         {
@@ -240,6 +253,17 @@ public static class SyncEndpoints
 
             var events = await eventLogRepo.GetAfterSequenceAsync(afterSequence, limit);
 
+            // Protocol-1..3 content after activation (docs/design/step-a-spec.md 5.7): a blind requester gets content only
+            // sealed or inside a baseline, historic rows included. Such rows are left out, and the page is filled with the
+            // rows it may have: the log is read on until `limit` of them are found or it ends, because a page cut first
+            // and filtered after could come back empty while a sealed row waits further on, and a client that follows the
+            // last row it was given would ask for the same page forever. The next baseline carries what the left-out rows
+            // changed.
+            long? endOfLog = null;
+            if (policy.SealsMetadata && BlindNodeId.IsBlind(nodeId))
+                (events, endOfLog) = await FillBlindPageAsync(eventLogRepo, events, limit);
+            var offeredAll = events.Count;
+
             // Even at the count-based `limit` (1000 by default), events aren't uniformly
             // sized — a burst of near-max-size media_create events (~27MB each once base64-encoded)
             // could otherwise balloon this single response to tens of gigabytes. Trim to a
@@ -261,9 +285,14 @@ public static class SyncEndpoints
                 events = trimmed;
             }
 
-            // Record the highest sequence we sent, so delivery-status knows this node is up to date
-            if (events.Count > 0)
-                await pushPositionRepo.UpdatePositionAsync(nodeId, events[^1].SequenceNum);
+            // Record the highest sequence we sent, so delivery-status knows this node is up to date. A blind requester that
+            // was offered everything it may have (the log ended, nothing sendable was cut by the limit or the size budget)
+            // is up to date over the rows left out too, as on the push side.
+            var sentThrough = events.Count > 0 ? events[^1].SequenceNum : (long?)null;
+            if (endOfLog is { } end && events.Count == offeredAll && end > (sentThrough ?? afterSequence))
+                sentThrough = end;
+            if (sentThrough is { } through)
+                await pushPositionRepo.UpdatePositionAsync(nodeId, through);
 
             // Wire hygiene: the envelope fields no receiver reads (actorType, actorName,
             // viaAgentName, entity_id — unsigned and overwritten or re-derived on every apply)
@@ -303,6 +332,31 @@ public static class SyncEndpoints
             if (invisibleMode.IsInvisible)
                 return Results.StatusCode(503);
 
+            // After activation (docs/design/step-a-spec.md 11) the archive's database is a container under the master DEK: it needs an
+            // unlocked vault, no received event may wait to be applied (the snapshot would miss it), and the cache is keyed by the key
+            // it is sealed under. Resolved from the request services, not as parameters: a blind host also maps this route.
+            var sealForJoin = ctx.RequestServices.GetService<BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy>()?.SealsMetadata == true;
+            if (ctx.RequestServices.GetService<BeeMemoryBank.Sync.Metadata.IHeldEventStatus>() is { } heldStatus
+                && await heldStatus.AnyHeldAsync(ctx.RequestAborted))
+            {
+                return Results.Json(new
+                {
+                    error = "EVENTS_HELD",
+                    message = "Some received changes are not applied on this node yet, so a join snapshot would miss them. Unlock this node and wait for them to be applied, then try again."
+                }, statusCode: 409);
+            }
+            string? joinKey = null;
+            if (sealForJoin)
+            {
+                joinKey = snapshotService.JoinKeyFingerprint();
+                if (joinKey is null)
+                    return Results.Json(new
+                    {
+                        error = "NODE_LOCKED",
+                        message = "This node is locked. Unlock it (sign in on its web UI) and try the join again."
+                    }, statusCode: 423);
+            }
+
             var existingPos = await syncPositionRepo.GetAsync(requesterNodeId);
             if (existingPos != null)
             {
@@ -313,7 +367,7 @@ public static class SyncEndpoints
                 }, statusCode: 409);
             }
 
-            var cached = cache.TryGet();
+            var cached = cache.TryGet(joinKey);
             string filePath;
             string sigPath;
             long cpSeq;
@@ -338,7 +392,10 @@ public static class SyncEndpoints
                     filterSecrets: true,
                     sign: true,
                     cpSequenceNum: headSeq,
-                    encryptDb: false); // joining node has no master DEK yet — ship plaintext over auth'd TLS
+                    // Before activation the joining node has no master DEK yet — plaintext over authenticated TLS, as always. After
+                    // activation the database is sealed under the DEK the joiner has just been handed (BMBCH1, purpose "join").
+                    encryptDb: false,
+                    sealForJoin: sealForJoin);
 
                 filePath = snapshotService.GetSnapshotPath(snapInfo.FileName);
                 sigPath = $"{filePath}.sig";
@@ -348,7 +405,7 @@ public static class SyncEndpoints
                     ?? throw new InvalidOperationException("Node not initialized");
                 producerId = identity.NodeId;
 
-                cache.Set(filePath, sigPath, cpSeq, producerId, lamportTs);
+                cache.Set(filePath, sigPath, cpSeq, producerId, lamportTs, joinKey);
             }
 
             if (!File.Exists(filePath))
@@ -379,7 +436,9 @@ public static class SyncEndpoints
             IWhitelistRepository whitelist,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             long sequence,
-            int? protocolVersion) =>
+            int? protocolVersion,
+            string? capabilities,
+            string? appVersion) =>
         {
             if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
@@ -423,6 +482,10 @@ public static class SyncEndpoints
             // in the meantime should not stay "old" in the PC's pre-flight until it re-authenticates.
             if (protocolVersion is { } declared)
                 await whitelist.RecordProtocolVersionAsync(nodeId, declared, DateTime.UtcNow);
+            // Refreshed only when sent (spec 5.2): authentication, which always comes first, records what a peer that sends
+            // nothing has.
+            if (capabilities is not null)
+                await whitelist.RecordCapabilitiesAsync(nodeId, MetadataCapabilities.Parse(capabilities), appVersion, DateTime.UtcNow);
             return Results.Ok();
         }).WithTags("Sync");
 
@@ -437,6 +500,7 @@ public static class SyncEndpoints
             INodeIdentityRepository nodeRepo,
             INodeRole role,
             IDbConnectionFactory db,
+            ISyncProtocolPolicy policy,
             IServiceProvider services) =>
         {
             if (await AuthenticatePeerAsync(ctx, store) is not { } callerId) return Results.Unauthorized();
@@ -448,11 +512,18 @@ public static class SyncEndpoints
             if (rows.FirstOrDefault(r => r.NodeId == callerId) is not { } caller) return Results.Unauthorized();
             var reseedNeeded = role.IsBlind
                 && await services.GetRequiredService<BeeMemoryBank.Sync.Blind.BlindState>().GetReseedNeededAsync() != null;
+            // Step A (docs/design/step-a-spec.md 5.1, 5.3): what this node advertises and whether it applied the activation,
+            // what it last saw from each peer (the caller's readiness report merges it), and on a blind node what it holds.
+            var storeSource = services.GetService<IBlindStoreSummarySource>();
             return Results.Ok(new BeeMemoryBank.Sync.Blind.MyStanding(
-                self.NodeId, SyncProtocolVersion.Current, caller.IsSuperadmin, reseedNeeded,
+                self.NodeId, policy.Declared, caller.IsSuperadmin, reseedNeeded,
                 rows.Select(r => new BeeMemoryBank.Sync.Blind.PeerProtocolSeen(
-                    r.NodeId, r.DisplayName, r.LastProtocolVersion, r.LastProtocolSeenAt, r.CreatedAt)).ToList(),
-                await new BeeMemoryBank.Sync.Blind.BlindState(db).GetDekExposureAsync()));
+                    r.NodeId, r.DisplayName, r.LastProtocolVersion, r.LastProtocolSeenAt, r.CreatedAt,
+                    r.LastCapabilitiesSeenAt is null ? null : MetadataCapabilities.Parse(r.LastCapabilities),
+                    r.LastAppVersion, r.LastCapabilitiesSeenAt)).ToList(),
+                await new BeeMemoryBank.Sync.Blind.BlindState(db).GetDekExposureAsync(),
+                MetadataCapabilities.Advertised, BuildVersion.Current, policy.SealsMetadata,
+                storeSource is null ? null : await storeSource.GetSummaryAsync()));
         }).WithTags("Sync");
 
         // ─── Apply events (push from remote) ─────────────────────────────────────
@@ -465,7 +536,7 @@ public static class SyncEndpoints
             ISyncQuarantineRepository quarantineRepo,
             ILoggerFactory loggerFactory) =>
         {
-            if (await AuthenticatePeerAsync(ctx, store) is null) return Results.Unauthorized();
+            if (await AuthenticatePeerAsync(ctx, store) is not { } pusherId) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
             // `ctx.Request.ContentLength is > 10MB` is NOT a usable guard here:
@@ -511,7 +582,7 @@ public static class SyncEndpoints
             // onto user-facing work after the handler — the risk the old handler-wide `using`
             // elevation warned was "one refactor away".
             var logger = loggerFactory.CreateLogger("SyncEndpoints");
-            int applied = 0, skipped = 0, dropped = 0;
+            int applied = 0, skipped = 0, dropped = 0, held = 0;
             long? lastAppliedSeq = null;
             var acceptedPrefixEnded = false;
             await scopeHolder.RunAsSystemAsync(async () =>
@@ -520,14 +591,19 @@ public static class SyncEndpoints
                 {
                     try
                     {
-                        var result = await applier.ApplyAsync(evt);
+                        // The pusher and the event's place in its log are stored with the row (step-a-spec 6.1).
+                        var result = await applier.ApplyAsync(evt,
+                            new BeeMemoryBank.Sync.Metadata.ApplyContext(ReceivedFrom: pusherId, ReceivedSeq: evt.SequenceNum));
                         if (result == EventApplyResult.SilentlyDropped)
                         {
                             dropped++;
                         }
                         else
                         {
+                            // A held event is here durably and applies after unlock (spec 6.2): accepted, so the
+                            // pusher's cursor moves over it, whatever version the pusher runs.
                             applied++;
+                            if (result == EventApplyResult.Held) held++;
                         }
                         if (!acceptedPrefixEnded)
                         {
@@ -586,7 +662,7 @@ public static class SyncEndpoints
                     }
                 }
             });
-            return Results.Ok(new SyncApplyResult(applied, skipped, lastAppliedSeq, dropped));
+            return Results.Ok(new SyncApplyResult(applied, skipped, lastAppliedSeq, dropped, held));
         }).WithTags("Sync");
 
         // ─── Blob transport (protocol 2) ─────────────────────────────────────────
@@ -701,10 +777,12 @@ public static class SyncEndpoints
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             INodeIdentityRepository nodeRepo,
             PeerNewerProtocolState peerNewerProtocolState,
-            SnapshotRequiredState snapshotRequiredState) =>
+            SnapshotRequiredState snapshotRequiredState,
+            IHeldEventStatus heldStatus) =>
         {
             var identity = await nodeRepo.GetAsync();
             var totalEvents = await eventLogRepo.GetTotalCountAsync();
+            var held = await heldStatus.GetSummaryAsync();
             var positions = await syncPositionRepo.GetAllAsync();
             var whitelist = await whitelistRepo.GetAllActiveAsync();
             var remoteNodes = whitelist.Where(n => !string.IsNullOrEmpty(n.ApiAddress)).ToList();
@@ -741,6 +819,21 @@ public static class SyncEndpoints
                         message = SnapshotRequiredState.Describe(required.RemoteUrl, required.LastCompactionCp, required.CurrentHeadSeq)
                     }
                     : null,
+                // Received but not applied yet (docs/design/step-a-spec.md 6.6, 6.9): the received position covers them,
+                // the applied one stops before the first.
+                held = new
+                {
+                    count = held.Held,
+                    locked = held.HeldLocked,
+                    key = held.HeldKey,
+                    order = held.HeldOrder,
+                    oldest_at = held.OldestHeldAt,
+                    applied_through_seq = held.AppliedThroughSequence,
+                    head_seq = held.HeadSequence,
+                    quarantined_after_receipt = held.QuarantinedAfterReceipt,
+                    warning = HeldEventStatus.NeedsWarning(held, DateTime.UtcNow),
+                    message = HeldEventStatus.Describe(held, DateTime.UtcNow),
+                },
                 nodes = nodeStatuses
             });
         // Network topology — peer node ids, display names and, in /status, their API addresses. Every browser consumer already reaches it through an /api-proxy route that requires the superadmin role, so this only stops a signed-in user calling the API directly.
@@ -1078,6 +1171,30 @@ public static class SyncEndpoints
     /// Rejects a blob-hash list that is absent, oversized, or contains anything but well-formed
     /// lowercase-hex SHA-256 strings — so the repository only ever sees values that can be keys.
     /// </summary>
+    /// <summary>
+    /// The page a blind requester gets after the metadata activation (docs/design/step-a-spec.md 5.7): the rows of the
+    /// log after its cursor that it may have (everything except protocol-1..3 content), at most <paramref name="limit"/>,
+    /// in order. <paramref name="first"/> is the first <paramref name="limit"/> rows after the cursor; the log is read on
+    /// until enough rows are found or it ends. <c>EndOfLog</c> is the last sequence read when the log ended inside the
+    /// scan and the page holds every row the requester may have (so it is up to date over the rows left out), else null.
+    /// </summary>
+    private static async Task<(List<SyncEvent> Page, long? EndOfLog)> FillBlindPageAsync(
+        IEventLogRepository eventLogRepo, List<SyncEvent> first, int limit)
+    {
+        var page = new List<SyncEvent>();
+        var batch = first;
+        long? lastRead = null;
+        while (true)
+        {
+            if (batch.Count > 0) lastRead = batch[^1].SequenceNum;
+            page.AddRange(batch.Where(e => !EventClasses.IsClearContent(e.ProtocolVersion, e.EventType)));
+            if (page.Count > limit) return (page.GetRange(0, limit), null);
+            if (batch.Count < limit) return (page, lastRead); // the log ended inside this batch
+            if (page.Count == limit) return (page, null);
+            batch = await eventLogRepo.GetAfterSequenceAsync(batch[^1].SequenceNum, limit);
+        }
+    }
+
     private static bool ValidateHashList(List<string>? hashes, out IResult problem)
     {
         problem = Results.Empty;

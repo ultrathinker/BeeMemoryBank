@@ -7,6 +7,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Hosting.AspNetCore;
+using BeeMemoryBank.Core.Exceptions;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -292,6 +293,8 @@ public static class ArticleEndpoints
                 return Results.Json(new ErrorResponse("Passphrase must be at least 4 characters."), statusCode: 400);
             try
             {
+                // Article protection and comment re-sealing are one composite authoring operation.
+                using var authoring = await svc.BeginAuthoringAsync();
                 await svc.ProtectAsync(id, req.Passphrase, string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim());
                 // Comments go behind the passphrase too (BMB-36).
                 await ctx.RequestServices.GetRequiredService<CommentService>().ReprotectAsync(id, null, req.Passphrase);
@@ -300,7 +303,7 @@ public static class ArticleEndpoints
                 unlockCache.Remember(CallerKey(ctx), id, req.Passphrase);
                 return Results.Ok(new { protected_ = true });
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
@@ -313,6 +316,8 @@ public static class ArticleEndpoints
             if (ThrottlePassphraseAttempt(ctx, id) is { } throttled) return throttled;
             try
             {
+                // Article unprotection and comment re-sealing are one composite authoring operation.
+                using var authoring = await svc.BeginAuthoringAsync();
                 await svc.UnprotectAsync(id, req.Passphrase);
                 PassphraseAttemptSucceeded(ctx, id);
                 await ctx.RequestServices.GetRequiredService<CommentService>().ReprotectAsync(id, req.Passphrase, null);
@@ -323,7 +328,7 @@ public static class ArticleEndpoints
             {
                 return Results.Json(new ErrorResponse("Wrong passphrase."), statusCode: 401);
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
@@ -338,6 +343,8 @@ public static class ArticleEndpoints
             if (ThrottlePassphraseAttempt(ctx, id) is { } throttled) return throttled;
             try
             {
+                // Keep the article and comment passphrase changes behind one rotation barrier scope.
+                using var authoring = await svc.BeginAuthoringAsync();
                 await svc.ChangePassphraseAsync(id, req.OldPassphrase, req.NewPassphrase, string.IsNullOrWhiteSpace(req.Hint) ? null : req.Hint.Trim());
                 PassphraseAttemptSucceeded(ctx, id);
                 await ctx.RequestServices.GetRequiredService<CommentService>().ReprotectAsync(id, req.OldPassphrase, req.NewPassphrase);
@@ -348,7 +355,7 @@ public static class ArticleEndpoints
             {
                 return Results.Json(new ErrorResponse("Wrong current passphrase."), statusCode: 401);
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
@@ -494,6 +501,12 @@ public static class ArticleEndpoints
         try
         {
             await ctx.RequestServices.GetRequiredService<CommentService>().ReprotectAsync(id, null, passphrase);
+        }
+        catch (MetadataKeyPublishPendingException)
+        {
+            // This is the one authoring refusal that must reach the global 503 mapper. The unlock
+            // itself is read-only, but legacy-comment sealing is a real sealed write.
+            throw;
         }
         catch (Exception)
         {

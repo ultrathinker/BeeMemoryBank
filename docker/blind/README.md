@@ -67,6 +67,11 @@ docker exec -i bmb-blind bmb blind init \
     --s3-access-key AKIA… < ./blind-secrets.env      # the file: chmod 600, then delete it
 ```
 
+The console's own state file (`blind/console.json` in the data volume, which holds the console password's
+hash and the sign-in log) is read before any change. A missing file is a node with no console password yet, so
+the first one may be set without a current one. A file that cannot be read, or is damaged, refuses every sign-in
+and every change to the console password; the change is refused with the reason. Fix the file or restore it, then try again.
+
 The restic password defaults to the console password: when `init` (or the console page) sets or
 changes the console password on a node that has no restic password of its own and no repository
 yet, the same value becomes the restic password. A different one can be entered before the first

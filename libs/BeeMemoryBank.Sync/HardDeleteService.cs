@@ -83,6 +83,9 @@ public class HardDeleteService(
 
     public async Task<HardDeleteResult> DeleteArticleAsync(Guid articleId, int? userId, int? agentId, CancellationToken ct)
     {
+        // The purge is irreversible and its event is logged after the commit: refused before anything is purged while the new
+        // metadata key of a DEK rotation is not published, otherwise the purge would happen and no peer would ever hear of it.
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var conn = factory.CreateConnection();
         conn.Open();
         using var trans = conn.BeginTransaction();
@@ -120,6 +123,7 @@ public class HardDeleteService(
 
     public async Task<HardDeleteResult> DeleteFolderAsync(string folderPath, int? userId, int? agentId, CancellationToken ct)
     {
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var conn = factory.CreateConnection();
         conn.Open();
         using var trans = conn.BeginTransaction();

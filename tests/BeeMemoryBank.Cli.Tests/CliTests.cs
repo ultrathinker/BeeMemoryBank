@@ -88,6 +88,44 @@ public class CliTests : IDisposable
             .And.Contain("checkpoint 8").And.Contain("Wipe this node and join again");
     }
 
+    [Fact]
+    public async Task Status_ShowsChangesThatWaitToBeApplied()
+    {
+        // Step A (docs/design/step-a-spec.md 6.9): a sealed row the running node holds while it is locked.
+        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await using (var services = await CliServiceProvider.CreateAsync(_tempDir))
+        {
+            using var scope = services.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.IEventLogRepository>().AppendAsync(
+                new BeeMemoryBank.Core.Models.SyncEvent
+                {
+                    EventId = Guid.NewGuid(), NodeId = Guid.NewGuid(), LamportTs = 5, EventType = "sealed", Payload = "{}",
+                    Signature = new byte[64], ProtocolVersion = 4, CreatedAt = DateTime.UtcNow,
+                },
+                null,
+                new BeeMemoryBank.Core.Models.EventRowLocal(ApplyState: BeeMemoryBank.Core.Models.EventApplyStates.Held,
+                    HoldReason: "locked", OriginSuperadmin: false));
+        }
+
+        var sw = new StringWriter();
+        var result = await StatusCommand.HandleAsync(_tempDir, sw);
+
+        result.Should().Be(0);
+        sw.ToString().Should().Contain("Held:").And.Contain("1 change waits to be applied until this node is unlocked")
+            .And.Contain("locked 1, key 0, order 0");
+    }
+
+    [Fact]
+    public async Task Status_SaysNothingAboutHeldChanges_WhenNoneWait()
+    {
+        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+
+        var sw = new StringWriter();
+        await StatusCommand.HandleAsync(_tempDir, sw);
+
+        sw.ToString().Should().NotContain("Held:");
+    }
+
     // ───────────────────── unlock ─────────────────────
 
     [Fact]

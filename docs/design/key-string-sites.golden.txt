@@ -1,0 +1,15 @@
+# Allow-list of the source files that may handle a database page key as text or give it to the SQLite engine
+# (docs/design/step-b-spec.md 3.3, 15.1.3 (d), 18). One repository-relative path per line; text after '#' is the reason.
+#
+# KeyStringSitesTests (tests/BeeMemoryBank.Storage.Tests/Sealed) fails when a source file outside this list uses
+#   SqlCipherScheme.Password, SqlCipherScheme.VacuumIntoTarget, sqlite3_key, sqlite3_key_v2 or sqlite3_rekey.
+# A new entry is a review question: "does this site clear the key, and keep it out of a log line, an exception and a cache key?"
+#
+# The product opens sealed files through DbConnectionFactory / OpenFile / SealedSqlite.OpenKeyed, which give the key to the engine in a
+# byte array that is zeroed at once and never build a connection string with it (Microsoft.Data.Sqlite keeps every connection string in
+# its pool registry after ClearPool, so a Password= in the string could not be flushed when the vault closes).
+libs/BeeMemoryBank.Storage/Sealed/SealedSqlite.cs           # the one place that calls sqlite3_key_v2
+libs/BeeMemoryBank.Storage/Sealed/PlainImageImporter.cs     # spec 8.2: VACUUM INTO under the page key for an image with no page reserve
+libs/BeeMemoryBank.Rekey/RekeyRunner.cs                     # spec 13.2: the re-key target is a VACUUM INTO under the new vault's page key
+libs/BeeMemoryBank.Vault/Sealed/SealMigrationService.cs     # spec 10.4 step 5: VACUUM INTO the sealed targets (track 3)
+libs/BeeMemoryBank.Storage/Sqlite/DbConnectionFactory.cs    # spec 7.4: ATTACH of a staging copy under the vault's page key (AttachStatement)

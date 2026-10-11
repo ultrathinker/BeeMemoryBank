@@ -187,6 +187,14 @@ public class BlindNodeCompositionTests
     [InlineData("BeeMemoryBank.Api.Services.SessionSnapshotKeyOperations", "full snapshot encryption with the session key")]
     [InlineData("BeeMemoryBank.Api.Services.BlindPreflight", "the PC-side pre-flight of a blind node")]
     [InlineData("BeeMemoryBank.Api.Services.BlindNodeManager", "the PC-side management of blind nodes")]
+    // Step A (docs/design/step-a-spec.md 4.5, 7.1, 16.3 item 10): a blind node relays sealed events and keeps a sealed baseline;
+    // nothing that could open either may be in it.
+    [InlineData("BeeMemoryBank.Vault.Metadata.IMetadataKeyRing", "a blind node holds no metadata key")]
+    [InlineData("BeeMemoryBank.Vault.Metadata.MetadataKeyRing", "a blind node holds no metadata key")]
+    [InlineData("BeeMemoryBank.Vault.Metadata.MetadataKeyCrypto", "it unwraps no metadata key")]
+    [InlineData("BeeMemoryBank.Vault.Metadata.VaultEnvelopeOpener", "it opens no sealed event; it has the relay opener")]
+    [InlineData("BeeMemoryBank.Vault.Metadata.MetadataEnvelope", "it seals and opens no envelope")]
+    [InlineData("BeeMemoryBank.Vault.Metadata.ChunkedContainer", "it decrypts no baseline")]
     public void TheBlindCodeDoesNotContain(string fullTypeName, string why)
     {
         FindType(fullTypeName).Should().BeNull(why);

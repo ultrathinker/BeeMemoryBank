@@ -3,6 +3,7 @@ using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Core.Exceptions;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -67,7 +68,7 @@ public static class HardDeleteEndpoints
                 return Results.Ok(result);
             }
             catch (KeyNotFoundException ex) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 404); }
-            catch (InvalidOperationException ex) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 400); }
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 400); }
         });
 
         group.MapPost("/restore/folder/{id:guid}", async (Guid id, RestoreService svc, SessionService session) =>
@@ -81,7 +82,7 @@ public static class HardDeleteEndpoints
                 return Results.Ok(result);
             }
             catch (KeyNotFoundException ex) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 404); }
-            catch (InvalidOperationException ex) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 400); }
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 400); }
         });
 
         group.MapGet("/audit", async (HardDeleteService svc, SessionService session, int page = 1, int pageSize = 100) =>

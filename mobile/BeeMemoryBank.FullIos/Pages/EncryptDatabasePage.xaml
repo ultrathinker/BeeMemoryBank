@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Pages.EncryptDatabasePage"
+             Title="Database encryption">
+    <ScrollView>
+        <VerticalStackLayout Padding="20,8,20,20" Spacing="8">
+            <Label x:Name="StatusLabel" Style="{StaticResource Muted}" />
+
+            <VerticalStackLayout x:Name="Form" Spacing="8">
+                <Label Style="{StaticResource Muted}"
+                       Text="Keep the app open and the iPhone plugged in or charged while the database is encrypted. If you stop it half-way, the app finishes or undoes it the next time it starts." />
+                <Entry x:Name="PasswordEntry" Placeholder="Master password" IsPassword="True" AutomationId="EncryptPasswordEntry" />
+                <HorizontalStackLayout x:Name="OnlyCopyRow" Spacing="8" IsVisible="False">
+                    <CheckBox x:Name="OnlyCopyCheck" VerticalOptions="Center" />
+                    <Label Text="This iPhone holds the only copy of these notes; encrypting cannot be undone" VerticalOptions="Center" Style="{StaticResource Muted}" />
+                </HorizontalStackLayout>
+                <Label x:Name="ErrorLabel" TextColor="Red" IsVisible="False" />
+                <ProgressBar x:Name="Progress" Progress="0" IsVisible="False" />
+                <Label x:Name="StepLabel" Style="{StaticResource Muted}" IsVisible="False" />
+                <Button x:Name="EncryptButton" Text="Encrypt this iPhone's database" Clicked="OnEncrypt" AutomationId="EncryptDatabaseButton" />
+            </VerticalStackLayout>
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

@@ -38,12 +38,20 @@ public class PlainDatabaseCompatibilityTests : IDisposable
         var path = FixtureCopy("beememorybank.db");
         var factory = new DbConnectionFactory(path);
         var migrationsBefore = await CountAsync(factory, "SELECT COUNT(*) FROM tbl_migration");
+        var appliedBefore = await ReadLedgerAsync(factory);
 
         await new MigrationRunner(factory).RunMigrationsAsync();
 
         migrationsBefore.Should().BeGreaterThan(30);
-        (await CountAsync(factory, "SELECT COUNT(*) FROM tbl_migration")).Should().Be(migrationsBefore,
-            "the fixture holds the full 2.5.1 schema: nothing is pending, no 'ghost' migration is re-applied");
+        // 2.6.0 added migrations after the fixture's 36: exactly those are pending now (Step A 037-039, Step B 040), nothing else;
+        // no 'ghost' migration of the 2.5.1 set is re-applied (its applied_at stays).
+        var embedded = typeof(MigrationRunner).Assembly.GetManifestResourceNames()
+            .Count(n => n.StartsWith("BeeMemoryBank.Storage.Migrations.", StringComparison.Ordinal) && n.EndsWith(".sql", StringComparison.OrdinalIgnoreCase));
+        (await CountAsync(factory, "SELECT COUNT(*) FROM tbl_migration")).Should().Be(embedded,
+            "the fixture holds the full 2.5.1 schema: only the migrations added since are applied");
+        var appliedAfter = await ReadLedgerAsync(factory);
+        foreach (var (version, appliedAt) in appliedBefore)
+            appliedAfter[version].Should().Be(appliedAt, $"migration {version} was not re-applied");
         using var conn = factory.CreateConnection();
         (await conn.QuerySingleAsync<string>("PRAGMA integrity_check")).Should().Be("ok");
         (await conn.QueryAsync<string>("PRAGMA foreign_key_check")).Should().BeEmpty();
@@ -191,6 +199,12 @@ public class PlainDatabaseCompatibilityTests : IDisposable
     {
         using var conn = factory.CreateConnection();
         return await conn.QuerySingleAsync<int>(sql);
+    }
+
+    private static async Task<Dictionary<int, string>> ReadLedgerAsync(DbConnectionFactory factory)
+    {
+        using var conn = factory.CreateConnection();
+        return (await conn.QueryAsync<(int Version, string AppliedAt)>("SELECT version, applied_at FROM tbl_migration")).ToDictionary(r => r.Version, r => r.AppliedAt);
     }
 
     private static async Task<byte[]> ReadHeaderAsync(string path)

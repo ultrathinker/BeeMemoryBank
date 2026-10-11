@@ -57,6 +57,11 @@ public class SessionUnlockCallSiteGuardTests
             "OS auto-unlock: unwraps the master DEK from the DPAPI-protected os_auto_unlock slot and " +
             "verifies it against the sentinel before installing it. Unlocking IS the feature.",
 
+        ["libs/BeeMemoryBank.Infrastructure/AutoUnlock/ServerAutoUnlockService.cs"] =
+            "\"Start unlocked after a restart\" on a server (docs/design/step-b-spec.md 11.2): unwraps the master DEK from the " +
+            "server_auto_unlock slot with the secret in the key file, only when the slot, the key file and the local enable record agree, " +
+            "and verifies it against the sentinel before installing it. Unlocking IS the feature; it is off until the owner turns it on.",
+
         ["libs/BeeMemoryBank.Infrastructure/OsAutoUnlock/UpdateUnlockHandoff.cs"] =
             "Desktop update restart: re-installs the master DEK the same user's running node handed over " +
             "minutes earlier (DPAPI, one-shot, expiring, sentinel-verified). Unlocking IS the feature.",
@@ -107,6 +112,14 @@ public class SessionUnlockCallSiteGuardTests
 
         ["mobile/BeeMemoryBank.FullIos/Services/FullSelfCheck.cs"] =
             "The iPhone app's measuring run: unlocks a scratch vault of its own, in a composition of its own, never the app's.",
+
+        ["libs/BeeMemoryBank.Vault/Sealed/PhoneVaultLifecycle.cs"] =
+            "Both phone apps' unlock path on an encrypted database: the typed password, or the one the Keystore released behind the fingerprint, " +
+            "opens the session and then the gate (spec 12.1). The pages call it; nothing else does.",
+
+        ["server/BeeMemoryBank.Cli/CliSealed.cs"] =
+            "`bmb` verbs on an encrypted folder: the operator's own password (prompt or environment) opens the session of this one-shot process " +
+            "before the database is opened. Same one-shot process as AgentCommand.",
 
         ["mobile/BeeMemoryBank.FullIos/Pages/UnlockPage.xaml.cs"] =
             "The iPhone app's unlock screen (calls FullVault.UnlockAsync with the typed password).",

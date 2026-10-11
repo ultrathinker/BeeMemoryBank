@@ -74,8 +74,8 @@ public class KeyDerivationMemoryBudgetTests
         {
             try
             {
-                // One iteration keeps the test fast; memory is what is being budgeted.
-                KeyDerivation.DeriveKek("p", KeyDerivation.GenerateSalt(), memory: 262_144, iterations: 1, parallelism: 1);
+                // The minimum accepted iteration count keeps the test as light as an untrusted derivation may be.
+                KeyDerivation.DeriveKek("p", KeyDerivation.GenerateSalt(), memory: 262_144, iterations: 2, parallelism: 1);
             }
             catch (KdfBusyException) { }
         });

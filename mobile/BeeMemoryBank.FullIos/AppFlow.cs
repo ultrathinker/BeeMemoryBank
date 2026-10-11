@@ -1,6 +1,8 @@
 using BeeMemoryBank.FullIos.Pages;
 using BeeMemoryBank.FullIos.Platforms.iOS;
 using BeeMemoryBank.FullIos.Services;
+using BeeMemoryBank.Storage.Sealed;
+using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.FullIos;
@@ -42,7 +44,25 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
         }
         try
         {
-            await Task.Run(() => FullNodeServices.PrepareAsync(services));
+            var start = services.GetService<PhoneStart>();
+            if (start is { CanStart: false })
+            {
+                // The reason, in words (spec 2.5); nothing was opened, created, changed or deleted.
+                (Window?.Page as StartPage)?.ShowProblem(start.Broken!.Message);
+                return;
+            }
+
+            // An encrypted phone cannot read its database before the unlock page has opened it (spec 5.8): the schema, the folders and the pragmas
+            // run at each open (FullNodeServices.AddOpenWork). A plain phone prepares its database now, as it always did.
+            if (start is { Mode: VaultStoreMode.Sealed })
+            {
+                FullNodeServices.SweepStaging(services);
+                await PhoneVaultLifecycle.PrepareSealedStartAsync(services);
+            }
+            else
+            {
+                await Task.Run(() => FullNodeServices.PrepareAsync(services));
+            }
         }
         catch (Exception ex)
         {
@@ -166,7 +186,7 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
             catch (Exception ex) { logger.LogWarning(ex, "The last round before the background failed"); }
             finally
             {
-                if (lockNow) MainThread.BeginInvokeOnMainThread(vault.Lock);
+                if (lockNow) await LockForBackgroundAsync();
             }
         });
     }
@@ -186,6 +206,15 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
         }
         StartIdleTimer();
         sync.Start();
+    }
+
+    /// <summary>The lock as the app leaves the screen: on an encrypted phone the database closes with it, before iOS suspends the app (spec 5.4, 12.2).</summary>
+    private async Task LockForBackgroundAsync()
+    {
+        if (services.GetService<PhoneVaultLifecycle>() is { } lifecycle)
+            await lifecycle.OnBackgroundAsync();
+        else
+            MainThread.BeginInvokeOnMainThread(vault.Lock);
     }
 
     private void StartIdleTimer()

@@ -19,7 +19,10 @@ public class CompactionService(
     INodeIdentityRepository nodeRepo,
     SnapshotJoinCache cache,
     DbConnectionFactory connFactory,
-    ILogger<CompactionService> logger)
+    ILogger<CompactionService> logger,
+    // Step A (docs/design/step-a-spec.md 6.8): no compaction while rows wait to be applied. Optional and last so the direct
+    // constructions in tests keep compiling; DI supplies it.
+    BeeMemoryBank.Sync.Metadata.IHeldEventStatus? heldStatus = null)
 {
     /// <summary>
     /// How many of the most recent events survive a compaction, and therefore also how far a peer
@@ -179,6 +182,10 @@ public class CompactionService(
     private async Task<CompactionResult> ExecuteCoreAsync(
         long? explicitCp, string reason, bool acceptCuttingOffPeers)
     {
+        // A held row is received but not applied: cutting the log below it would lose it for good.
+        if (heldStatus != null && await heldStatus.AnyHeldAsync())
+            throw new ConflictException(BeeMemoryBank.Sync.Metadata.HeldEventStatus.RefusalMessage("compact the log"));
+
         var preview = await PreviewAsync();
 
         // The peer-safety check runs on EVERY path, not only when the caller lets the preview

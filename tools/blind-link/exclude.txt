@@ -68,3 +68,22 @@ api:Services/Recovery/StateAnchorScheduler.cs
 api:Services/Recovery/StrongBoxService.cs
 api:Services/Recovery/SessionKeyFingerprintSource.cs
 api:Services/AuditLogPruningHostedService.cs
+
+# Step A (docs/design/step-a-spec.md 15): full-node-only files of the three tracks. A blind node never produces a baseline,
+# never activates, never opens a sealed event; its format-2 services come from the blind role (Startup/BlindRoleServices.Format2.cs).
+# track 1: activation and readiness endpoints, the full node's metadata composition
+api:Endpoints/SyncActivationEndpoints.cs
+api:Startup/ApiServices.Metadata.cs
+# track 2: the format-2 writer a full hub serves with (hook H3)
+api:Startup/ApiServices.Format2.cs
+# track 3: baseline production and scheduling, the full node's baseline source and activation observer (hook H4)
+api:Services/Blind/BaselineProducer.cs
+api:Services/Blind/BaselineScheduler.cs
+api:Services/Blind/FullNodeActivationObserver.cs
+api:Services/Blind/FullNodeBaselineSource.cs
+api:Services/SnapshotService.Baseline.cs
+api:Startup/ApiServices.Baselines.cs
+# The full node's watch over the blind nodes it manages (alarms of the Blind nodes page, the hub trust probe). Never needed by a
+# blind node; added when the linked set was recomputed for Step A (the checked-in set already left them out).
+api:Services/Blind/BlindAlarmService.cs
+api:Services/Blind/HubTrustProbe.cs

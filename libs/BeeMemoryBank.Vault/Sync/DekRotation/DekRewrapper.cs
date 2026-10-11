@@ -4,7 +4,9 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Boot;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Vault.Sealed;
 using Dapper;
 using Microsoft.Extensions.Logging;
 
@@ -35,8 +37,18 @@ public static class DekRewrapper
     /// stops before its transaction opens and can be retried — committing with a hook's data still
     /// under the retiring DEK would make that data unreadable after the next restart.
     /// </summary>
-    public static async Task RunPreRewrapHooksAsync(
+    public static Task RunPreRewrapHooksAsync(
         IServiceProvider services, Microsoft.Extensions.Logging.ILogger? logger, CancellationToken ct = default)
+    {
+        // Step B (docs/design/step-b-spec.md 3.5): the rewrap below keeps the boot store of a sealed node in step. Its callers have only
+        // this call and RewrapAllAsync in common, in the same logical flow, so the mirror is picked out of the services here - synchronously,
+        // so that it reaches the caller's flow - and used by RewrapAllAsync. Nothing is registered on a plain node: both are null.
+        SealedRotationHooks.Capture(services);
+        return RunPreRewrapHooksCoreAsync(services, logger, ct);
+    }
+
+    private static async Task RunPreRewrapHooksCoreAsync(
+        IServiceProvider services, Microsoft.Extensions.Logging.ILogger? logger, CancellationToken ct)
     {
         var hooks = (IEnumerable<IDekRotationHook>?)services.GetService(typeof(IEnumerable<IDekRotationHook>)) ?? [];
         foreach (var hook in hooks)
@@ -58,6 +70,19 @@ public static class DekRewrapper
         }
     }
 
+    /// <param name="createNextMetadataKey">
+    /// Step A (docs/design/step-a-spec.md 4.4, owner decision 5): on the initiator of an activated network, the next metadata key
+    /// generation is created INSIDE this transaction, wrapped under the new DEK, together with the durable marker
+    /// (<see cref="BeeMemoryBank.Vault.Metadata.MetadataKeyPublishMarker"/>). There is then no committed state with a new DEK and no new key row, and a
+    /// failure to create it rolls the rotation back. Logging its <c>metadata_key_set</c> event is the next step
+    /// (<see cref="BeeMemoryBank.Vault.Metadata.MetadataKeyPublishService"/>). Honoured on the initiator only: a peer creates nothing, whatever the caller passes.
+    /// </param>
+    /// <param name="completionRecord">
+    /// What the initiator still has to finish after this transaction (the completion audit, the <c>Completed</c> step, the
+    /// post-rotation compaction). Written INSIDE this transaction, with the number of agent keys it removed filled in, so a committed
+    /// rotation always has its unfinished work on record: a crash or a restart after the commit loses nothing, whatever the memory
+    /// of the process held (see <see cref="DekRotationCompletionRecord"/>). Null for a peer, which has nothing to finish.
+    /// </param>
     /// <returns>
     /// <c>agentsDeleted</c> counts only agents that carried a wrapped master DEK (auto-unlock
     /// agents); agents without key material survive a rotation untouched.
@@ -73,8 +98,15 @@ public static class DekRewrapper
         string? chainEncryptedNewDekB64 = null,
         string? chainIvB64 = null,
         Action<DekRotationFlowStep, int, string>? progress = null,
-        Microsoft.Extensions.Logging.ILogger? logger = null)
+        Microsoft.Extensions.Logging.ILogger? logger = null,
+        bool createNextMetadataKey = false,
+        DekRotationCompletionRecord? completionRecord = null,
+        SealedRotationHooks? sealedHooks = null)
     {
+        // Step B: the mirror of a sealed node (null elsewhere; both members do nothing on a plain node). Explicit argument first, else what
+        // RunPreRewrapHooksAsync captured for this flow.
+        sealedHooks ??= SealedRotationHooks.Current;
+        var mirror = sealedHooks.Mirror;
         int agentsDeleted = 0;
         int slotsDeleted = 0;
         var tally = new RewrapTally();
@@ -176,8 +208,11 @@ public static class DekRewrapper
                 // silently fails sentinel verification and returns false forever afterward. An
                 // enabled-looking but non-functional feature is worse than requiring the admin to
                 // notice and re-enable it.
+                //
+                // server_auto_unlock is the server checkbox's slot (docs/design/step-b-spec.md 11.2 item 6): the same argument, and a rotation
+                // always switches the checkbox off - the owner turns it on again if they want it.
                 slotsDeleted = await conn.ExecuteAsync(
-                    "DELETE FROM tbl_key_slot WHERE slot_type IN ('recovery', 'os_auto_unlock')", transaction: tx);
+                    "DELETE FROM tbl_key_slot WHERE slot_type IN ('recovery', 'os_auto_unlock', 'server_auto_unlock')", transaction: tx);
             }
 
             Report(progress, DekRotationFlowStep.Finalizing, 85,
@@ -197,6 +232,18 @@ public static class DekRewrapper
             // the per-row rewrap: a seed that opens under neither key cannot be fixed here, and
             // aborting would only make the node unrecoverable.
             ReWrapNodeIdentitySeed(conn, tx, oldDek, newDek, tally, logger);
+
+            // The next metadata key, in this very transaction (see createNextMetadataKey): a rotation that commits has its key.
+            if (isInitiator && createNextMetadataKey)
+            {
+                var nodeId = conn.ExecuteScalar<string?>("SELECT node_id FROM tbl_node_identity LIMIT 1", transaction: tx)
+                    ?? throw new InvalidOperationException("Node is not initialized.");
+                BeeMemoryBank.Vault.Metadata.MetadataKeyPublishMarker.CreateNextGeneration(conn, tx, newDek, newEpoch, nodeId);
+            }
+
+            // The work that is left once this transaction has committed, on record in the same commit (see completionRecord).
+            if (completionRecord is not null)
+                DekRotationCompletionRecord.Write(conn, tx, completionRecord with { AgentsDeleted = agentsDeleted });
 
             // Mark Applied INSIDE the rotation tx. If the process crashes between
             // tx.Commit() and the swap, the DB+state agree (Applied + new sentinel);
@@ -230,17 +277,46 @@ public static class DekRewrapper
                 },
                 tx);
 
+            // Rule 1 of the write protocol (docs/design/step-b-spec.md 3.5, 4.3), before the sealed transaction commits: the database key
+            // wrapped under the new DEK, and on the initiator its slot rewrapped under it. A failure here rolls the rotation back: a rotation
+            // that commits without its wrapper would leave a sealed node nobody can open after a restart.
+            if (mirror != null)
+            {
+                await mirror.AddDbKeyWrapperAsync(newDek);
+                if (isInitiator)
+                {
+                    var slot = await conn.QuerySingleAsync<(string SlotType, byte[]? Salt, long? Memory, long? Iterations, long? Parallelism)>(
+                        "SELECT slot_type, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot WHERE slot_id = @slotId",
+                        new { slotId = initiatorSlotId!.Value }, tx);
+                    await mirror.AddPendingDoorAsync(new PendingDoor(BootDoorKinds.Slot, initiatorSlotId.Value, slot.SlotType, newWrappedSlotDek!,
+                        newWrappedSlotIv!, slot.Salt, (int?)slot.Memory, (int?)slot.Iterations, (int?)slot.Parallelism, null, null,
+                        DekFingerprint.Of(newDek)));
+                }
+            }
+
             tx.Commit();
         }
         catch
         {
             tx.Rollback();
+            // Rule 3 on failure: the rewrite drops the pending rows of a rotation that did not happen.
+            await SlotDoors.RewriteAsync(mirror, logger);
             throw;
         }
 
         sessionService.SwapMasterDek(newDek);
         // Do NOT clear newDek — ownership transferred to SessionService.
         Array.Clear(oldDek, 0, oldDek.Length);
+
+        // Rule 3 after the commit: doors, wrappers (the old one goes when nothing needs it any more, spec 3.4) and the mirrors. The session
+        // holds the new DEK now, so it is the current one. Then the server checkbox: the commit deleted its slot, so its enable record and a
+        // node-created key file go too; a failure is logged and the stale rule of 11.2 removes what is left at the next start.
+        await SlotDoors.RewriteAsync(mirror, logger);
+        if (sealedHooks.ServerAutoUnlock is { } serverAutoUnlock)
+        {
+            try { await serverAutoUnlock.DisableLocalAsync(); }
+            catch (Exception ex) { logger?.LogWarning(ex, "The local state of the server checkbox could not be removed after the rotation; the next start removes it."); }
+        }
 
         var completedMsg = isInitiator
             ? $"DEK rotation completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Auto-unlock agent keys removed: {agentsDeleted}."

@@ -568,14 +568,14 @@ internal sealed class FailingEventLogRepository(IEventLogRepository inner) : IEv
 {
     public bool FailAppend { get; set; }
 
-    public Task AppendAsync(SyncEvent evt, IDbTransaction? transaction = null)
+    public Task AppendAsync(SyncEvent evt, IDbTransaction? transaction = null, EventRowLocal? local = null)
     {
         if (FailAppend)
             throw new InvalidOperationException("Injected event log failure");
-        return inner.AppendAsync(evt, transaction);
+        return inner.AppendAsync(evt, transaction, local);
     }
 
-    public Task<bool> AppendIfNotExistsAsync(SyncEvent evt) => inner.AppendIfNotExistsAsync(evt);
+    public Task<bool> AppendIfNotExistsAsync(SyncEvent evt, EventRowLocal? local = null) => inner.AppendIfNotExistsAsync(evt, local);
     public Task<bool> ExistsAsync(Guid eventId) => inner.ExistsAsync(eventId);
     public Task<long> GetMaxLamportTimestampAsync() => inner.GetMaxLamportTimestampAsync();
     public Task<List<SyncEvent>> GetAfterSequenceAsync(long afterSequenceNum, int limit = 1000) => inner.GetAfterSequenceAsync(afterSequenceNum, limit);
@@ -594,4 +594,11 @@ internal sealed class FailingEventLogRepository(IEventLogRepository inner) : IEv
     public Task<long?> GetSequenceAtRankAsync(int rank) => inner.GetSequenceAtRankAsync(rank);
     public Task<int> CountEventsAfterSequenceAsync(long seqNum) => inner.CountEventsAfterSequenceAsync(seqNum);
     public Task<SyncEvent?> GetByIdAsync(string eventId) => inner.GetByIdAsync(eventId);
+    public Task<bool> AnyHeldAsync() => inner.AnyHeldAsync();
+    public Task<List<long>> GetHeldSequencesAsync(long afterSequenceNum, int limit) => inner.GetHeldSequencesAsync(afterSequenceNum, limit);
+    public Task<HeldEventRow?> GetHeldAsync(long sequenceNum) => inner.GetHeldAsync(sequenceNum);
+    public Task MarkHeldAppliedAsync(long sequenceNum, string? localType, Guid? localArticleId, string? entityId, string? actorType, string? actorName)
+        => inner.MarkHeldAppliedAsync(sequenceNum, localType, localArticleId, entityId, actorType, actorName);
+    public Task SetHoldReasonAsync(long sequenceNum, string reason) => inner.SetHoldReasonAsync(sequenceNum, reason);
+    public Task SetApplyStateAsync(long sequenceNum, int applyState) => inner.SetApplyStateAsync(sequenceNum, applyState);
 }

@@ -1,7 +1,13 @@
 # ADR 0005: Plaintext Folder Paths and Article Titles as Metadata
 
 ## Status
-Accepted
+Accepted. **Superseded in part by [ADR 0009](0009-metadata-confidentiality.md)** (Step A, 2.6.0, once activated):
+metadata no longer travels in clear in sync events, blind copies, join snapshots, replica packages or blind
+backups. What follows still describes the full node's own database until Step B, which ships in the same release
+2.6.0 and applies once the owner encrypts a node.
+**Superseded in part by [ADR 0010](0010-database-closed-until-unlock.md)** (Step B, shipped in 2.6.0 with Step A): on a node
+the owner has encrypted, the database file, its WAL and every snapshot are page-encrypted and closed until unlock. Inside the
+open database the columns stay plain, for the reasons below.
 
 ## Context
 BeeMemoryBank encrypts article content at rest using envelope encryption: each article body has

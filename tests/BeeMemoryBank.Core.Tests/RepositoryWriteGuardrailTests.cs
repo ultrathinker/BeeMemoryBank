@@ -160,6 +160,10 @@ public class RepositoryWriteGuardrailTests
         // who it talked to, written after the peer authenticated. Never replicated, no event.
         new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "IWhitelistRepository", "RecordProtocolVersionAsync",
             "Records the protocol an authenticated peer declared; a local observation, never replicated."),
+        // Step A (docs/design/step-a-spec.md 5.2): the same kind of observation, the capabilities and version a peer showed
+        // at authenticate and report-position; the readiness report reads them. Never replicated, no event.
+        new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "IWhitelistRepository", "RecordCapabilitiesAsync",
+            "Records the capabilities and version an authenticated peer showed; a local observation, never replicated."),
 
         // ── Agents: node-local identity, "created, authenticated, and revoked per-node. They are
         // never synchronized to other nodes." (file header of AgentEndpoints.cs). No AgentService
@@ -255,6 +259,12 @@ public class RepositoryWriteGuardrailTests
             "Blind node trusting a restored device locally: a blind node cannot publish whitelist_add, by design."),
         new("server/BeeMemoryBank.Api/Endpoints/BlindRestoreEndpoints.cs", "IWhitelistRepository", "UpdateAsync",
             "Blind node trusting a restored device locally: a blind node cannot publish whitelist_update, by design."),
+
+        // ── Blind node format-2 seed (step-a-spec 8.6, 9.2): the peers a package's signed blind manifest names are taken into
+        // this node's whitelist locally, as the format-1 seed does (BlindSeedService.cs builds them through the concrete
+        // repository). A blind node authors no event, so there is none to log.
+        new("server/BeeMemoryBank.Api/Services/Blind/BlindSeedService.Format2.cs", "IWhitelistRepository", "CreateAsync",
+            "Blind node taking the peers of a verified format-2 seed package locally: a blind node cannot publish whitelist_add, by design."),
     ];
 
     /// <summary>

@@ -12,6 +12,10 @@ namespace BeeMemoryBank.Api.Services.BlindBackup;
 /// Api keeps writing (peers sync at any moment), a raw copy could catch a half-written page.
 /// The vacuumed copy lands in a staging directory that is wiped both in a finally and at
 /// construction — a crashed backup must not leave a second copy of the vault lying around.</para>
+///
+/// <para>Step A (docs/design/step-a-spec.md 9.8): after the first format-2 adoption the database holds no metadata, and the
+/// current sealed baseline (<c>baselines/current/</c>) goes into every snapshot with it, so a backup folder is a restore
+/// source (section 12). Between the activation and that first adoption a backup holds what it held before; the status says so.</para>
 /// </summary>
 public sealed class BlindBackupService(
     IDbConnectionFactory connFactory,
@@ -36,6 +40,7 @@ public sealed class BlindBackupService(
     private string StageDir => Path.Combine(dataPath, "blind", "stage");
     private string StageDb => Path.Combine(StageDir, "beememorybank.db");
     private string MediaDir => Path.Combine(dataPath, "media");
+    private string BaselineDir => Path.Combine(dataPath, "baselines", "current");
 
     public BlindBackupService CleanupStaleStage()
     {
@@ -118,6 +123,7 @@ public sealed class BlindBackupService(
             var args = new List<string> { "backup", "--json", "--host", ResticHost, "--tag", "bmb" };
             args.Add(StageDb);
             if (Directory.Exists(MediaDir)) args.Add(MediaDir);
+            if (Directory.Exists(BaselineDir)) args.Add(BaselineDir);
             var backup = await RunResticAsync(new ResticCall(s, args, ctx), ct);
             if (backup.ExitCode != 0)
                 throw new InvalidOperationException($"restic backup failed ({backup.ExitCode}): {Truncate(backup.Stderr, 400)}");

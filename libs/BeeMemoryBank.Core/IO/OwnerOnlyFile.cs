@@ -96,6 +96,32 @@ public static class OwnerOnlyFile
     }
 
     /// <summary>
+    /// The folder counterpart of <see cref="TryTighten"/> for an existing folder that is ours to keep: on Windows its ACL becomes the owner-only
+    /// DACL that <see cref="CreateDirectory"/> gives a new folder, inherited by what is created inside (SQLite creates the journal and the WAL
+    /// of a database beside it, and they take that ACL); on Linux and macOS its mode becomes 0700. A change that is refused throws: the caller
+    /// fails rather than write into a folder others can read.
+    /// </summary>
+    public static void TightenFolder(string path) => TightenFolder(path, VolumeKeepsAcls);
+
+    /// <param name="volumeKeepsAcls">Whether the volume of the path keeps a per-file ACL at all (test seam).</param>
+    internal static void TightenFolder(string path, Func<string, bool> volumeKeepsAcls)
+    {
+        const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        if (!OperatingSystem.IsWindows())
+        {
+            // A folder made here is 0700 already; only one that others can enter is changed (an old install's, or a mount's that allows it).
+            if ((File.GetUnixFileMode(path) & ~OwnerOnly) != 0) File.SetUnixFileMode(path, OwnerOnly);
+            return;
+        }
+
+        // A FAT32 or exFAT volume has no ACL to set (see CreateNew): there is nothing to tighten.
+        if (!volumeKeepsAcls(path)) return;
+        var info = new DirectoryInfo(path);
+        var current = info.GetAccessControl();
+        if (!IsOwnerOnly(current)) info.SetAccessControl(TightenedFolder(current));
+    }
+
+    /// <summary>
     /// Whether the volume <paramref name="path"/> is on keeps an ACL per file: false for the FAT family (FAT, FAT32, exFAT), true for
     /// everything else, and when the volume cannot be told (a network path): then the ACL step runs, and fails the way it did before.
     /// </summary>
@@ -271,7 +297,7 @@ public static class OwnerOnlyFile
     private const string SystemSid = "S-1-5-18";
 
     [SupportedOSPlatform("windows")]
-    private static bool IsOwnerOnly(FileSecurity security)
+    private static bool IsOwnerOnly(FileSystemSecurity security)
     {
         if (!security.AreAccessRulesProtected) return false;
         var me = CurrentUser().Value;
@@ -302,7 +328,7 @@ public static class OwnerOnlyFile
             if (rule.AccessControlType == AccessControlType.Allow && BroadSids.Contains(rule.IdentityReference.Value))
                 continue;
             result.AddAccessRule(new FileSystemAccessRule(
-                rule.IdentityReference, rule.FileSystemRights, InheritanceFlags.None, PropagationFlags.None, rule.AccessControlType));
+                rule.IdentityReference, SpecificRights(rule.FileSystemRights), InheritanceFlags.None, PropagationFlags.None, rule.AccessControlType));
         }
         foreach (var sid in new[] { CurrentUser(), new SecurityIdentifier(SystemSid) })
             result.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, AccessControlType.Allow));
@@ -321,11 +347,41 @@ public static class OwnerOnlyFile
             if (rule.AccessControlType == AccessControlType.Allow && BroadSids.Contains(rule.IdentityReference.Value))
                 continue;
             result.AddAccessRule(new FileSystemAccessRule(
-                rule.IdentityReference, rule.FileSystemRights, Inherit, PropagationFlags.None, rule.AccessControlType));
+                rule.IdentityReference, SpecificRights(rule.FileSystemRights), Inherit, PropagationFlags.None, rule.AccessControlType));
         }
         foreach (var sid in new[] { CurrentUser(), new SecurityIdentifier(SystemSid) })
             result.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, Inherit, PropagationFlags.None, AccessControlType.Allow));
         return result;
+    }
+
+    /// <summary>
+    /// Replaces Windows generic access bits with their file-specific equivalents before recreating an ACE. The .NET
+    /// rule constructors rightly reject generic bits, but NTFS drive-root inheritance commonly supplies them (notably
+    /// GENERIC_ALL for CREATOR OWNER and GENERIC_READ | GENERIC_EXECUTE for Users). Mapping keeps an applicable
+    /// named-account rule while producing a valid protected DACL.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static FileSystemRights SpecificRights(FileSystemRights rights)
+    {
+        const uint GenericRead = 0x80000000;
+        const uint GenericWrite = 0x40000000;
+        const uint GenericExecute = 0x20000000;
+        const uint GenericAll = 0x10000000;
+        var original = unchecked((uint)(int)rights);
+        var specific = original & ~(GenericRead | GenericWrite | GenericExecute | GenericAll);
+
+        if ((original & GenericAll) != 0)
+            specific |= unchecked((uint)FileSystemRights.FullControl);
+        if ((original & GenericRead) != 0)
+            specific |= unchecked((uint)FileSystemRights.Read) | unchecked((uint)FileSystemRights.Synchronize);
+        if ((original & GenericWrite) != 0)
+            specific |= unchecked((uint)FileSystemRights.Write) | unchecked((uint)FileSystemRights.ReadPermissions)
+                | unchecked((uint)FileSystemRights.Synchronize);
+        if ((original & GenericExecute) != 0)
+            specific |= unchecked((uint)FileSystemRights.ExecuteFile) | unchecked((uint)FileSystemRights.ReadPermissions)
+                | unchecked((uint)FileSystemRights.ReadAttributes) | unchecked((uint)FileSystemRights.Synchronize);
+
+        return unchecked((FileSystemRights)(int)specific);
     }
 
     [SupportedOSPlatform("windows")]

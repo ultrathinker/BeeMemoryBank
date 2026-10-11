@@ -42,6 +42,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _nodeText = "";
     private string _pairText = "";
     private string _loadText = "";
+    private string _storeText = "";
+    private static readonly TimeSpan StoreEvery = TimeSpan.FromSeconds(15);
+    private readonly Func<CancellationToken, Task<BlindStoreInfo?>>? _storeSource;
+    private BlindStoreInfo? _storeSummary;
+    private DateTimeOffset _storeAt = DateTimeOffset.MinValue;
+    private bool _readingStore;
     private string _syncText = "";
     private string _backupText = "";
     private string _jobText = "";
@@ -75,9 +81,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <param name="post">Runs an action on the UI thread; the default runs it at once (tests).</param>
     /// <param name="problem">Where a failed command or refresh is written besides the notice on the screen (the error log); tests pass nothing.</param>
     /// <param name="statusArea">What the platform calls the place of the app's icon in the window's own words: "tray" or "menu bar".</param>
+    /// <param name="store">What the copy holds (docs/design/step-a-spec.md 10.2), asked now and then off the UI thread for the store line; none means the line stays "unknown".</param>
     public MainViewModel(IBlindAppController app, IBlindWorkRequests work, IBlindAutostart autostart,
-        Func<string, byte[]> qr, Action<Action>? post = null, Action<string, Exception>? problem = null, string statusArea = "tray")
+        Func<string, byte[]> qr, Action<Action>? post = null, Action<string, Exception>? problem = null, string statusArea = "tray",
+        Func<CancellationToken, Task<BlindStoreInfo?>>? store = null)
     {
+        _storeSource = store;
         StatusArea = statusArea;
         _problem = problem;
         _app = app;
@@ -132,6 +141,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public string NodeText { get => _nodeText; private set => Set(ref _nodeText, value); }
     public string PairText { get => _pairText; private set => Set(ref _pairText, value); }
     public string LoadText { get => _loadText; private set => Set(ref _loadText, value); }
+
+    /// <summary>The restore point's age, the changes since it and the bytes stored; never a note count (docs/design/step-a-spec.md 10.2).</summary>
+    public string StoreText { get => _storeText; private set => Set(ref _storeText, value); }
     public string SyncText { get => _syncText; private set => Set(ref _syncText, value); }
     public string BackupText { get => _backupText; private set => Set(ref _backupText, value); }
     public string JobText { get => _jobText; private set => Set(ref _jobText, value); }
@@ -284,6 +296,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 ? $"Calls {status.Endpoint}"
                 : "Not paired yet: do steps 1 and 2 below.";
             LoadText = LoadTextFor(status);
+            StoreText = BlindHomeView.StoreText(_storeSummary, status, DateTimeOffset.UtcNow);
+            ReadStoreSoon(status);
             SyncText = $"Last sync: {When(status.LastSyncAt)}";
             BackupText = $"Last backup: {When(status.LastBackupAt)}";
 
@@ -324,6 +338,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             _applying = false;
         }
+    }
+
+    /// <summary>Asks for what the copy holds now and then, off the UI thread; the line shows the last answer.</summary>
+    private void ReadStoreSoon(BlindAppStatus status)
+    {
+        if (_storeSource is null || _readingStore || DateTimeOffset.UtcNow - _storeAt < StoreEvery) return;
+        if (!status.InitialLoadDone) { _storeSummary = null; return; }
+        _readingStore = true;
+        _storeAt = DateTimeOffset.UtcNow;
+        _ = Task.Run(async () =>
+        {
+            var summary = await _storeSource(CancellationToken.None);
+            _post(() =>
+            {
+                _readingStore = false;
+                _storeSummary = summary;
+                try { StoreText = BlindHomeView.StoreText(summary, _app.GetStatus(), DateTimeOffset.UtcNow); }
+                catch (Exception ex) { CommandFailed(ex); }
+            });
+        });
     }
 
     private void ApplyPairing(BlindAppStatus status)

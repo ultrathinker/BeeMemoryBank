@@ -66,7 +66,11 @@ public class SnapshotTablesCoverageTests
         "tbl_recovery_box_pending_retire", "tbl_recovery_box_check",
 
         // One-time restore codes a blind node issued (migration 031) — a credential and its log.
-        "tbl_blind_restore_code"
+        "tbl_blind_restore_code",
+
+        // A blind host's adopted baseline and its blob list (migration 039, step-a-spec 9.1): the baseline itself travels
+        // in format-2 packages as encrypted files, never as rows of a snapshot.
+        "tbl_baseline", "tbl_baseline_blob"
     ];
 
     [Fact]
@@ -120,6 +124,19 @@ public class SnapshotTablesCoverageTests
         SnapshotTables.Replicated.Should().Contain("tbl_comment");
         SnapshotTables.Replicated.Should().Contain("tbl_article_version");
         SnapshotTables.Replicated.Should().Contain("tbl_article_body");
+    }
+
+    [Fact]
+    public void TheControlTables_AreExactlyTheClearRecoveryAndKeyTables_AndAllReplicated()
+    {
+        // step-a-spec 8.4: control.db of a format-2 package holds these and nothing else; a table added here travels
+        // in clear beside the encrypted baseline, so the list is pinned.
+        SnapshotTables.Control.Should().BeEquivalentTo(new[]
+        {
+            "tbl_metadata_key", "tbl_metadata_activation",
+            "tbl_recovery_box", "tbl_dek_retired_link", "tbl_state_anchor", "tbl_sealed_secret",
+        });
+        SnapshotTables.Replicated.Should().Contain(SnapshotTables.Control);
     }
 
     private static List<string> ReadSchemaTableNames()

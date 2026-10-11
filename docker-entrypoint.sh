@@ -4,6 +4,15 @@
 # same shape as docker/blind/entrypoint.sh).
 set -e
 
+# docker stop sends SIGTERM to this script (PID 1); pass it on so both hosts shut down cleanly (the Api closes its database)
+# instead of being SIGKILLed after the stop timeout. The trap goes first: PID 1 has no default SIGTERM handler, so a TERM
+# that arrives before the trap is installed is dropped and the container never stops by itself (BMB-185). Until the hosts
+# start below, $api and $web are empty and a TERM only sets $stopping, which is passed on once they are running.
+stopping=
+api=
+web=
+trap 'stopping=1; kill -TERM "$api" "$web" 2>/dev/null || true' TERM INT
+
 mkdir -p /app/data/temp /app/data/media
 
 # Auto-generate BMB_INTERNAL_KEY if not set — protects API from unauthorized local processes
@@ -39,10 +48,10 @@ api=$!
 ) &
 web=$!
 
-# docker stop sends SIGTERM to this script (PID 1); pass it on so both hosts shut down cleanly (the Api closes its database)
-# instead of being SIGKILLed after the stop timeout.
-stopping=
-trap 'stopping=1; kill -TERM "$api" "$web" 2>/dev/null || true' TERM INT
+# A TERM that came in during the starts reached no host: pass it on now.
+if [ -n "$stopping" ]; then
+    kill -TERM "$api" "$web" 2>/dev/null || true
+fi
 
 set +e
 wait -n "$api" "$web"

@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
 using Microsoft.Data.Sqlite;
 
@@ -67,6 +68,36 @@ public static class RestoreEvidenceFromManifest
 }
 
 /// <summary>
+/// The evidence in a format-2 package's signed <c>blind-manifest.json</c> (docs/design/step-a-spec.md 8.3): the serving node's whitelist
+/// with keys, superadmin flags and pins, and its pull positions. <c>IncludesUpTo</c> is left out: the serving node's position is the
+/// package's own log head, which the deltas cover.
+/// </summary>
+public static class RestoreEvidenceFromManifestV2
+{
+    public static RestoreManifest Of(BeeMemoryBank.Sync.Blind.Format2.BlindManifestV2 manifest)
+    {
+        if (manifest.Whitelist.Any(p => p.LamportTs < 0))
+            throw new InvalidDataException("The package's manifest carries a whitelist row with a negative version.");
+        return new RestoreManifest(
+            manifest.Whitelist
+                .Select(p => (p, Key: TryBase64(p.PublicKeyB64)))
+                .Where(x => x.Key is { Length: 32 })
+                .Select(x => new RestorePeer(x.p.NodeId, x.p.DisplayName, x.Key!, x.p.ApiAddress, x.p.IsSuperadmin, x.p.TlsSpki,
+                    x.p.LamportTs, x.p.SourceNodeId, x.p.TlsTrust))
+                .ToList(),
+            manifest.Positions.GroupBy(p => p.RemoteNodeId).ToDictionary(g => g.Key, g => g.Max(p => p.LastSequence)),
+            IncludesUpTo: null,
+            manifest.SeedId.ToString());
+    }
+
+    private static byte[]? TryBase64(string? value)
+    {
+        try { return value == null ? null : Convert.FromBase64String(value); }
+        catch (FormatException) { return null; }
+    }
+}
+
+/// <summary>
 /// Reads a restore's evidence from a database copy (a blind node's backup, plan 6.8): its active
 /// whitelist with superadmin flags, the node that wrote the copy (a node never lists itself), its pull
 /// positions, and the signed events it still held.
@@ -75,13 +106,17 @@ public static class DatabaseRestoreEvidence
 {
     private const int MaxEvents = 200_000;
 
-    public static async Task<RestoreEvidence> ReadAsync(string databasePath)
+    /// <param name="vault">This node's factory: a copy that is a staging copy of an encrypted vault (no SQLite header) is opened keyed
+    /// (docs/design/step-b-spec.md 7.5); a package or backup copy of a blind node is plain by design and opened plain either way.</param>
+    public static async Task<RestoreEvidence> ReadAsync(string databasePath, DbConnectionFactory? vault = null)
     {
         var peers = new List<RestorePeer>();
         Dictionary<Guid, long> positions;
-        using (var conn = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly;Pooling=False"))
+        using (var conn = vault is null
+                   ? new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly;Pooling=False")
+                   : vault.OpenPackageFile(databasePath))
         {
-            conn.Open();
+            if (conn.State != System.Data.ConnectionState.Open) conn.Open();
             var tables = (await conn.QueryAsync<string>("SELECT name FROM sqlite_master WHERE type = 'table'"))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 

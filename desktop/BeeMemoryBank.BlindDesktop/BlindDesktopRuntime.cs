@@ -24,12 +24,16 @@ public sealed class BlindDesktopRuntime : IAsyncDisposable
         Scheduler = services.GetRequiredService<BlindTimerScheduler>();
         Autostart = services.GetRequiredService<IBlindAutostart>();
         Notifications = services.GetRequiredService<TrayNotifications>();
+        Stats = services.GetRequiredService<BlindStoreStats>();
     }
 
     public IBlindAppController App { get; }
     public BlindTimerScheduler Scheduler { get; }
     public IBlindAutostart Autostart { get; }
     public TrayNotifications Notifications { get; }
+
+    /// <summary>What the copy holds, for the screen's store line (docs/design/step-a-spec.md 10.2).</summary>
+    public BlindStoreStats Stats { get; }
     public IServiceProvider Services => _services;
 
     /// <param name="window">The top level the save-file dialog opens over.</param>

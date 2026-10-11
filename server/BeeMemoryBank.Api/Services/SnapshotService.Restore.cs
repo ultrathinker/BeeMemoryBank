@@ -42,14 +42,27 @@ public partial class SnapshotService
         "tbl_restore_replay_shield", "tbl_event", "tbl_sync_quarantine"
     ];
 
+    /// <summary>
+    /// A <c>server_auto_unlock</c> key slot that arrives with a restored database is deleted in the staging copy before it replaces the live one
+    /// (docs/design/step-b-spec.md 11.2 item 2): the slot is per server and data of the server that made the snapshot, and a restore never turns
+    /// "start unlocked after a restart" on. The boot store retires its door at the rewrite after the swap. Nothing to do for an archive without
+    /// such a row.
+    /// </summary>
+    private static void RemoveServerAutoUnlockSlots(SqliteConnection staged, SqliteTransaction? tx)
+    {
+        using var cmd = staged.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "DELETE FROM tbl_key_slot WHERE slot_type = 'server_auto_unlock'";
+        cmd.ExecuteNonQuery();
+    }
+
     /// <summary>Table names present in a database file, read without pooling the handle.</summary>
-    private static HashSet<string> ReadTableNames(string dbPath)
+    private HashSet<string> ReadTableNames(string dbPath)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // Pooling=False for the same reason as everywhere else in this file: the file is moved
-        // or deleted moments later, and a pooled handle keeps it locked on Windows.
-        using var conn = new SqliteConnection($"Data Source={dbPath.Replace("'", "''")};Pooling=False");
-        conn.Open();
+        // Not pooled, for the same reason as everywhere else in this file: the file is moved or deleted moments later, and a pooled handle
+        // keeps it locked on Windows. Keyed on an encrypted node.
+        using var conn = OpenStaged(dbPath);
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
         using var reader = cmd.ExecuteReader();
@@ -70,9 +83,9 @@ public partial class SnapshotService
         if (!safeName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Invalid snapshot file name");
 
-        var filePath = Path.Combine(SnapshotsDir, safeName);
-        if (!File.Exists(filePath))
-            throw new FileNotFoundException($"Snapshot {safeName} not found");
+        // snapshots/ first, then pre-encryption/: the way-back snapshot of a node that was encrypted is restored by its file name (spec 10.7).
+        var filePath = FindRestorableSnapshot(safeName)
+            ?? throw new FileNotFoundException($"Snapshot {safeName} not found");
 
         // Coordinate with CompactionService — both flows bulk-rewrite tbl_event.
         // Lock acquisition is the very first statement inside the try, so any failure
@@ -86,6 +99,7 @@ public partial class SnapshotService
             // In the data folder and owner-only, not the OS temp folder: the extracted database is the vault in clear.
             tempDir = SnapshotStaging.NewDirectory(_dataPath);
 
+            await RequireNoPlainDatabaseOnSealedNodeAsync(filePath);
             await ExtractTarGzAsync(filePath, tempDir, new FileInfo(filePath).Length);
 
             await VerifyManifestAsync(tempDir);
@@ -96,7 +110,7 @@ public partial class SnapshotService
             if (!File.Exists(extractedDb))
                 throw new InvalidOperationException("Snapshot does not contain a database file");
 
-            await DecryptDbIfNeededAsync(extractedDb);
+            await DecryptDbIfNeededAsync(extractedDb, masterPassword);
 
             var archiveTables = ReadTableNames(extractedDb);
 
@@ -143,8 +157,9 @@ public partial class SnapshotService
                     if (_keys is null)
                         throw new InvalidOperationException(
                             "A standalone restore needs the node's key operations to store its new identity key.");
-                    (wrappedPrivKey, privKeyIv, privKeyVersion) =
-                        _keys.SealIdentitySeedForRestore(stagingPath, newNodeId, privKey, masterPassword);
+                    (wrappedPrivKey, privKeyIv, privKeyVersion) = _connFactory.IsSealed
+                        ? _keys.SealIdentitySeedForRestore(stagingPath, newNodeId, privKey, masterPassword, p => OpenStaged(p))
+                        : _keys.SealIdentitySeedForRestore(stagingPath, newNodeId, privKey, masterPassword);
                 }
                 catch
                 {
@@ -158,12 +173,11 @@ public partial class SnapshotService
                     Array.Clear(privKey);
                 }
 
-                // Pooling=False — same reason as FilterSecretsFrom: the staging file is moved or
+                // Not pooled — same reason as FilterSecretsFrom: the staging file is moved or
                 // deleted right after this block, and a pooled handle would keep it locked on
                 // Windows long after Dispose.
-                using (var stagingConn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={stagingPath.Replace("'", "''")};Pooling=False"))
+                using (var stagingConn = OpenStaged(stagingPath))
                 {
-                    stagingConn.Open();
                     using var tx = stagingConn.BeginTransaction();
                     try
                     {
@@ -175,6 +189,7 @@ public partial class SnapshotService
                         // table" and would make every older backup unrestorable; the quarantine
                         // wipe already carried its own try/catch for exactly this reason, and
                         // every table in this list is subject to the same schema-age problem.
+                        RemoveServerAutoUnlockSlots(stagingConn, tx);
                         foreach (var table in NetworkStateTablesToWipe)
                         {
                             if (!archiveTables.Contains(table)) continue;
@@ -250,12 +265,11 @@ public partial class SnapshotService
                 }
 
                 // Now stagingPath has the fully-prepared DB (snapshot data + new local identity).
-                // Atomically replace the live DB, retrying past transient pooled-handle locks —
-                // see SwapDbFileWithRetryAsync for why clear-then-swap must be one gesture.
-                await SwapDbFileWithRetryAsync(
-                    () => File.Move(stagingPath, dbPath, overwrite: true),
-                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools,
-                    _logger);
+                // On an encrypted node the boot store learns the restored doors first and is rewritten after the swap (spec 8.4).
+                await using var sealedSwap = await BeginSealedSwapAsync(stagingPath, masterPassword);
+                // Atomically replace the live DB behind the connection barrier, retrying past transient pooled-handle
+                // locks — see ReplaceLiveDatabaseAsync and SwapDbFileWithRetryAsync.
+                await ReplaceLiveDatabaseAsync(() => File.Move(stagingPath, dbPath, overwrite: true));
 
                 // Atomic media swap after DB swap
                 var mediaDirR = Path.Combine(_dataPath, "media");
@@ -303,10 +317,10 @@ public partial class SnapshotService
                         File.Copy(f, Path.Combine(mediaStagingDirNs, Path.GetFileName(f)), overwrite: true);
                 }
 
-                await SwapDbFileWithRetryAsync(
-                    () => File.Copy(extractedDb, dbPath, overwrite: true),
-                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools,
-                    _logger);
+                using (var extractedConn = OpenStaged(extractedDb))
+                    RemoveServerAutoUnlockSlots(extractedConn, tx: null);
+                await using var sealedSwapNs = await BeginSealedSwapAsync(extractedDb, masterPassword);
+                await ReplaceLiveDatabaseAsync(() => File.Copy(extractedDb, dbPath, overwrite: true));
 
                 var mediaDirNs = Path.Combine(_dataPath, "media");
                 var mediaOldDirNs = Path.Combine(_dataPath, "media.old");
@@ -352,18 +366,19 @@ public partial class SnapshotService
         }
         finally
         {
-            // Never let scratch-directory cleanup decide the outcome of a restore. The database has
-            // already been replaced by this point, so throwing here turns a completed restore into
-            // a 500 and tells the operator it failed — and on Windows this delete genuinely can
-            // fail transiently, since SQLite's -wal/-shm sidecars linger for a moment after the
-            // connection that read the archive closes. The sweep on the next start clears anything
-            // left behind; every other temp cleanup in this file already takes the same view.
-            if (tempDir != null && Directory.Exists(tempDir))
+            // The extracted database is the vault in clear, so its folder must be gone before the restore is reported. The database has
+            // already been replaced by this point: a folder that stays (SQLite's -wal/-shm sidecars can linger for a moment after the
+            // archive's connection closes, which the retries cover) is a repair-required failure, and a sealed gate is closed for it
+            // (CleanupStagingOrFailAsync). It is never a restore reported as done.
+            try
             {
-                try { Directory.Delete(tempDir, recursive: true); }
-                catch (Exception ex) { _logger?.LogWarning(ex, "Failed to delete restore temp dir {TempDir}", tempDir); }
+                if (tempDir != null)
+                    await CleanupStagingOrFailAsync(tempDir);
             }
-            HeavyOperationLock.Instance.Release();
+            finally
+            {
+                HeavyOperationLock.Instance.Release();
+            }
         }
     }
 }

@@ -30,11 +30,11 @@ public class BlindPasswordChangeSettingsFailureTests : IAsyncLifetime
     private static Task<HttpResponseMessage> SetAsync(HttpClient client, string password, string? current = null) =>
         client.PostAsJsonAsync("/api/blind/console/password", new { newPassword = password, currentPassword = current });
 
-    private static async Task ShouldBeRefusedPlainlyAsync(HttpResponseMessage response)
+    private static async Task ShouldBeRefusedPlainlyAsync(HttpResponseMessage response, string reason = "settings")
     {
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var error = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString();
-        error.Should().Contain("was not changed").And.Contain("settings").And.Contain("try again",
+        error.Should().Contain("was not changed").And.Contain(reason).And.Contain("try again",
             "what is wrong, that nothing changed, and what to do");
     }
 
@@ -88,7 +88,7 @@ public class BlindPasswordChangeSettingsFailureTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task AFolderThatCannotBeEntered_IsNotTakenForNoSettingsFile()
+    public async Task AFolderThatCannotBeEntered_RefusesTheChange_AndKeepsThePassword()
     {
         if (OperatingSystem.IsWindows()) return;
         using var client = _factory.CreateClient();
@@ -99,7 +99,10 @@ public class BlindPasswordChangeSettingsFailureTests : IAsyncLifetime
         {
             if (CanRead(SettingsFile)) return; // root ignores modes
 
-            await ShouldBeRefusedPlainlyAsync(await SetAsync(client, "console-pw-two", current: "console-pw-one"));
+            // The console state file lives in the same folder, so its read is the first to fail (BMB-85). The settings file's
+            // own unreadable case is ASettingsFileTheNodeMayNotRead_RefusesTheChange_AndKeepsThePassword above.
+            await ShouldBeRefusedPlainlyAsync(await SetAsync(client, "console-pw-two", current: "console-pw-one"),
+                reason: "console.json cannot be read");
         }
         finally
         {

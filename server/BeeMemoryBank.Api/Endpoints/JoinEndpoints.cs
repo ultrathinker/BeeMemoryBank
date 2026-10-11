@@ -4,6 +4,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Metadata;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -25,7 +26,8 @@ public static class JoinEndpoints
             IWhitelistRepository whitelistRepo,
             IUserRepository userRepo,
             IEventLogger eventLogger,
-            SessionService session) =>
+            SessionService session,
+            ISyncProtocolPolicy protocolPolicy) =>
         {
             // 1. Verify that this node is initialized
             var identity = await nodeRepo.GetAsync();
@@ -43,6 +45,14 @@ public static class JoinEndpoints
             if (BlindNodeId.IsBlind(req.NodeId))
                 return Results.BadRequest(new ErrorResponse(
                     "A blind node cannot join with the master password; pair it with its blind pairing code"));
+
+            // After activation a joiner must be able to read what it is about to be sent: the join snapshot is sealed, and the
+            // node's own events are protocol 4 (docs/design/step-a-spec.md 11). A 2.5 joiner sends neither the protocol nor the
+            // capability and is refused here, before the password is derived and before any row is written.
+            if (protocolPolicy.SealsMetadata && !protocolPolicy.IsCompatiblePeer(req.ProtocolVersion, req.Capabilities))
+                return Results.Json(
+                    new ErrorResponse("This network uses encrypted metadata: update this device to 2.6 or newer."),
+                    statusCode: StatusCodes.Status426UpgradeRequired);
 
             // 2. Validate password: try EVERY password-bearing slot, not just the first one found.
             // Fresh nodes have a "user" slot instead of legacy "password". Accept both
@@ -208,7 +218,7 @@ public static class JoinEndpoints
                     identity.NodeId,
                     identity.DisplayName,
                     Convert.ToBase64String(identity.Ed25519PublicKey),
-                    BeeMemoryBank.Sync.SyncProtocolVersion.Current),
+                    protocolPolicy.Declared),
                 KeySlot: new JoinKeySlot(
                     Convert.ToBase64String(passwordSlot.EncryptedMasterDek),
                     Convert.ToBase64String(passwordSlot.IV),

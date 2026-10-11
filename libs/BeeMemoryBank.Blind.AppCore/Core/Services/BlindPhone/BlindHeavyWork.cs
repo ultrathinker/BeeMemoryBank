@@ -61,6 +61,15 @@ public sealed class BlindHeavyWork(
                 if (!state.InitialLoadDone) return message;
             }
 
+            // A newer baseline from the node this copy calls (docs/design/step-a-spec.md 13.3): this pass is the only place that downloads one.
+            // A failure is noted for the screen and does not hold back a backup that is due.
+            await GuardedAsync("update", "Baseline update", async (progress, token) =>
+            {
+                var updated = await replica.UpdateBaselineAsync(target, replicaWorkDirectory, progress, token);
+                if (updated) log.Add("update", "A newer baseline was installed.");
+                return updated ? "A newer baseline was installed." : "The baseline is current.";
+            }, ct);
+
             if (!forceBackup && !state.BackupDue(time.GetUtcNow())) return "Nothing due.";
             return await GuardedAsync("backup", "Backup", async (progress, token) =>
                 (await backups.RunAsync(progress, token)).Message, ct);

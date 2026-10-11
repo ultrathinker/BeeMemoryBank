@@ -21,6 +21,16 @@ public static class RekeyCommand
         }
 
         IRekeyProgress progress = progressJson ? new JsonLines(Console.Out) : new Human(Console.Error);
+
+        // A sealed folder (docs/design/step-b-spec.md 13.2): the owner's password opens the source through the boot doors for the length of the run,
+        // and the runner gets the page keys of the source, the key service of its boot store and the mirror that writes the new one.
+        await using var sealedSource = await SealedRekeySource.OpenAsync(dataPath, password);
+        if (sealedSource.Refusal is { } refusal)
+        {
+            await Console.Error.WriteLineAsync(refusal);
+            return (int)RekeyExit.PreflightRefused;
+        }
+
         var outcome = await RekeyRunner.RunAsync(new RekeyOptions
         {
             DataDir = dataPath,
@@ -28,6 +38,7 @@ public static class RekeyCommand
             Progress = progress,
             Steps = RekeyPlan.Steps.Select(f => f()).ToList(),
             Preflight = RekeyPlan.Preflight?.Invoke(),
+            Sealed = sealedSource.Options,
         }, ct);
 
         if (progressJson)

@@ -35,8 +35,11 @@ app.UseExceptionHandler(errorApp =>
         // The type→status pairs live in ExceptionStatusMap so a test can assert them
         // directly, rather than the pairs being reachable only through a request.
         var (statusCode, message) = BeeMemoryBank.Api.Helpers.ExceptionStatusMap.Map(feature?.Error);
+        var (code, retryAfter) = BeeMemoryBank.Api.Helpers.ExceptionStatusMap.Details(feature?.Error);
         context.Response.StatusCode = statusCode;
-        await context.Response.WriteAsJsonAsync(new ErrorResponse(message));
+        if (retryAfter is { } seconds)
+            context.Response.Headers.RetryAfter = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await context.Response.WriteAsJsonAsync(new ErrorResponse(message, code));
     });
 });
 
@@ -57,11 +60,19 @@ app.UseMiddleware<BeeMemoryBank.Api.Middleware.MaintenanceMiddleware>();
 var isBlind = app.Services.GetRequiredService<INodeRole>().IsBlind;
 if (!isBlind)
 {
-    // Agent bearer auth (non-blocking, auto-unlock)
+    // Agent bearer auth (non-blocking, auto-unlock; on a sealed node it opens a closed database through the agent's door, spec 4.6)
     app.UseMiddleware<BeeMemoryBank.Api.Middleware.AgentAuthMiddleware>();
 
-    // Ambient caller scope — resolves folder ACL once per request, repos filter reads automatically
-    app.UseMiddleware<BeeMemoryBank.Api.Middleware.CallerScopeMiddleware>();
+    // A sealed node whose database is closed serves the relay and a short allow-list and answers 503 vault_sealed to the rest, without
+    // touching the database (spec 5.6). Right after the agent auth, so an agent's request can open the database first; in front of everything
+    // that reads the vault. A plain node, a blind host and an open sealed node pass through.
+    app.UseMiddleware<BeeMemoryBank.Api.Middleware.SealedVaultMiddleware>();
+
+    // Ambient caller scope — resolves folder ACL once per request, repos filter reads automatically. The ACL is read from the database, so
+    // a request the closed gate lets through (the allow-list, /mcp) keeps the deny-all default instead.
+    app.UseWhen(
+        ctx => ctx.RequestServices?.GetService<IVaultGate>() is not { IsSealed: true, IsUsable: false },
+        branch => branch.UseMiddleware<BeeMemoryBank.Api.Middleware.CallerScopeMiddleware>());
 }
 
 // Validate MCP tool/call parameter names. The SDK silently drops unknown args,
@@ -108,6 +119,10 @@ if (app.Services.GetRequiredService<INodeRole>().IsBlind)
 }
 
 app.MapSessionEndpoints();
+// Step B: the status of the encrypted database, "Encrypt this node", the way-back snapshot. Mapped where the sealed composition is registered
+// (AddSealedVault, Program.cs): a host composed without it has none of these routes and, as before Step B, nothing of them to fail on.
+if (app.Services.GetService<BeeMemoryBank.Vault.Sealed.SealMigrationService>() is not null)
+    app.MapVaultEndpoints();
 app.MapArticleEndpoints();
 app.MapTreeEndpoints();
 app.MapConceptTagEndpoints();
@@ -128,6 +143,7 @@ app.MapUserEndpoints();
 app.MapJoinEndpoints();
 app.MapInitEndpoints();
 app.MapSyncEndpoints();
+app.MapSyncActivationEndpoints(); // Step A: readiness and the metadata activation (full nodes only)
 app.MapBlindReplicaEndpoint();
 app.MapBlindNodeManagementEndpoints();
 app.MapBlindPhonePairingEndpoints();

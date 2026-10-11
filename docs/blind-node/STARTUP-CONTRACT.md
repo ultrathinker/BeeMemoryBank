@@ -56,8 +56,11 @@ for the console and the CLI (internal key). Without `BMB_BLIND_HTTPS_PORT` the p
 ## Identity artifacts that must survive an upgrade (data volume)
 
 `beememorybank.db` (+ `-wal`/`-shm`), the node key file (`FileNodeKey.FileName`), the TLS pfx, `.internal-key`
-(development only), `blind-tmp/` (cleaned at start), backup settings and restic repository paths under
-`BlindPaths`. A new image must open all of them unchanged; the compatibility fixture (a copy of a real node's
+(development only), `blind-tmp/` (cleaned at start; it also holds the format-2 packages a restore request builds and the
+writer's staging), backup settings and restic repository paths under `BlindPaths`, and since 2.6.0 the sealed baseline in
+`baselines/current/` with its row in `tbl_baseline`. No startup step touches the baseline: a switch of its files that a crash
+cut short (`baselines/incoming-<id>/` staged, the row already switched) is finished the first time the store is read, and
+left-over `incoming-*` / `retired-*` folders are removed then. A new image must open all of them unchanged; the compatibility fixture (a copy of a real node's
 volume) is the test. The key file, the pfx and the backup settings are created owner-only (`OwnerOnlyFile`: 0600 on
 Linux/macOS; on Windows a protected DACL without Everyone/Users/Authenticated Users and the like, with the node's
 account and SYSTEM in full control, named accounts and Administrators kept).

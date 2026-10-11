@@ -8,6 +8,8 @@ using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Blind.Format2;
+using BeeMemoryBank.Sync.Metadata;
 using Dapper;
 using Microsoft.Data.Sqlite;
 
@@ -52,8 +54,12 @@ public sealed class BlindSeedAuthorityGoneException()
 /// in parts with resume, checked by SHA-256 and by the producer's signature, with free space
 /// verified before the first byte, one seed at a time, under its own size limit. The new database
 /// is assembled next to the live one and swapped in atomically; the previous one is kept.
+///
+/// <para>Step A (docs/design/step-a-spec.md 8, 9): a format-2 package is not a database. It is verified and adopted into the
+/// blind store instead (<c>BlindSeedService.Format2.cs</c>); once this node is activated a format-1 package is refused, so
+/// no plaintext metadata reaches it again.</para>
 /// </summary>
-public sealed class BlindSeedService(
+public sealed partial class BlindSeedService(
     string dataPath,
     SnapshotService snapshots,
     MaintenanceModeService maintenance,
@@ -212,6 +218,17 @@ public sealed class BlindSeedService(
         if (actual != upload.Sha256)
             throw new BlindSeedRejectedException("SHA-256 of the received package does not match.");
 
+        // Step A: the package's format decides the path. Once activated, only format 2 (spec 2, 8.7).
+        if (await PackageFormatAsync(upload.Path, ct) == BlindManifestV2.CurrentFormat)
+        {
+            await ApplyFormat2Async(upload, ct);
+            return;
+        }
+        using (var policyScope = scopeFactory.CreateScope())
+            if (policyScope.ServiceProvider.GetService<ISyncProtocolPolicy>() is { SealsMetadata: true })
+                throw new BlindSeedRejectedException(
+                    "This blind node is activated (metadata encryption): it takes format-2 packages only. Update the sending device to 2.6 or newer.");
+
         var dir = SeedDir(upload.SeedId);
         VerifiedSnapshot package;
         BlindManifest manifest;
@@ -256,7 +273,7 @@ public sealed class BlindSeedService(
         long? grantAt = null;
         if (upload.Authority is BlindSeedAuthority.PairingSecret)
             using (var staged = new DbConnectionFactory(cutover.StagedDbPath))
-                grantAt = GrantTime(await MaxLamportHeldAsync(staged), manifest);
+                grantAt = GrantTime(await MaxLamportHeldAsync(staged), manifest.Standing);
         cutover.StageMedia(Path.Combine(package.Directory, "media"));
         cutover.WriteMarker(manifest.SeedId, BlindSeedCutover.Staged);
 
@@ -488,7 +505,9 @@ public sealed class BlindSeedService(
                     await SnapshotService.SwapDbFileWithRetryAsync(cutover.SwitchFiles, ClearLivePool, logger);
                     FolderAccessService.InvalidateAll();
                     if (paired is { } p)
-                        await ApplyFirstSeedStandingAsync(manifest, p.KeyB64, p.GrantAt);
+                        await ApplyFirstSeedStandingAsync(manifest.ProducerNodeId,
+                            manifest.Whitelist.Single(peer => peer.NodeId == manifest.ProducerNodeId), manifest.Standing,
+                            p.KeyB64, p.GrantAt);
                     if (await ReplayAsync(tail) is { } failure)
                         throw new BlindSeedRejectedException(
                             $"Could not replay this node's own event {failure} on top of the package; nothing was changed. Send the seed again.");
@@ -601,11 +620,12 @@ public sealed class BlindSeedService(
     /// "issued before the code" from "issued after" by a node that has seen none of the producer's recent
     /// events, so an event with a higher clock still counts as newer.</para>
     /// </summary>
-    private async Task ApplyFirstSeedStandingAsync(BlindManifest manifest, string pairedKeyB64, long grantAt)
+    private async Task ApplyFirstSeedStandingAsync(
+        Guid producerNodeId, BlindManifestPeer claimed, IReadOnlyList<SyncEvent>? standing, string pairedKeyB64, long grantAt)
     {
         using var scope = scopeFactory.CreateScope();
         var applier = scope.ServiceProvider.GetRequiredService<EventApplier>();
-        foreach (var evt in manifest.Standing ?? [])
+        foreach (var evt in standing ?? [])
         {
             if (evt.EventType == EventTypes.WhitelistAdd
                 && JsonSerializer.Deserialize<WhitelistAddPayload>(evt.Payload)?.PublicKeyB64 != pairedKeyB64)
@@ -625,9 +645,8 @@ public sealed class BlindSeedService(
         }
 
         var whitelist = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
-        var claimed = manifest.Whitelist.Single(p => p.NodeId == manifest.ProducerNodeId);
         // CheckProducerAsync refused a blind seeder already; the grant keeps the invariant on its own.
-        if (BlindNodeId.IsBlind(manifest.ProducerNodeId))
+        if (BlindNodeId.IsBlind(producerNodeId))
             throw new InvalidOperationException("A blind node is never a superadmin; nothing is switched.");
         var pairedKey = Convert.FromBase64String(pairedKeyB64);
         var now = DateTime.UtcNow;
@@ -636,7 +655,7 @@ public sealed class BlindSeedService(
         // Every row the standing stream left is in the staged database the grant time was taken from,
         // so the grant is newer than any of them.
         var grant = new RowVersion(grantAt, self.NodeId);
-        if (await whitelist.GetByNodeIdAsync(manifest.ProducerNodeId, includeDeleted: true) is { } row)
+        if (await whitelist.GetByNodeIdAsync(producerNodeId, includeDeleted: true) is { } row)
         {
             // Where to reach it is not standing: the manifest's address and pin stand.
             if (!ConflictResolver.IncomingWins(row.Version, grant))
@@ -671,7 +690,7 @@ public sealed class BlindSeedService(
             });
         }
         logger.LogInformation("Blind seed: {Producer} used this node's pair code; it manages this node from now on (superadmin)",
-            manifest.ProducerNodeId);
+            producerNodeId);
     }
 
     /// <summary>
@@ -690,15 +709,15 @@ public sealed class BlindSeedService(
 
     /// <summary>
     /// The grant's Lamport time: one after the highest time the package holds (its rows) or carries (its
-    /// standing stream), in checked arithmetic. A package at the limit of what a Lamport time can hold
-    /// leaves no time after it and is refused.
+    /// standing stream), in checked arithmetic. It must remain below the exclusive restore ceiling, because
+    /// a seeded state must be recoverable through the normal restore path as well.
     /// </summary>
-    private static long GrantTime(long maxHeld, BlindManifest manifest)
+    private static long GrantTime(long maxHeld, IReadOnlyList<SyncEvent>? standing)
     {
-        var max = Math.Max(maxHeld, (manifest.Standing ?? []).Select(e => e.LamportTs).DefaultIfEmpty(0).Max());
-        if (max >= long.MaxValue)
+        var max = Math.Max(maxHeld, (standing ?? []).Select(e => e.LamportTs).DefaultIfEmpty(0).Max());
+        if (max >= BlindManifestV2.MaximumFirstSeedGrant)
             throw new BlindSeedRejectedException(
-                "The package carries a Lamport time at the limit of what can be represented; this node cannot take it.");
+                "The package carries a Lamport time that leaves no value for a restorable first-seed grant; this node cannot take it.");
         return checked(max + 1);
     }
 
@@ -732,16 +751,25 @@ public sealed class BlindSeedService(
         SqliteConnection.ClearPool(live);
     }
 
-    /// <summary>The highest Lamport time of any row this node holds, in every table that versions its rows.</summary>
-    private static async Task<long> MaxLamportHeldAsync(IDbConnectionFactory db)
+    /// <summary>
+    /// The highest Lamport time of any row this node holds, in every table that versions its rows. With
+    /// <paramref name="afterPurge"/> only of the rows the first adoption's purge leaves (spec 9.3): the operational tables, and
+    /// of the log everything but its protocol-1..3 content rows.
+    /// </summary>
+    private static async Task<long> MaxLamportHeldAsync(IDbConnectionFactory db, bool afterPurge = false)
     {
         using var conn = db.CreateConnection();
         var tables = await conn.QueryAsync<string>(
             @"SELECT m.name FROM sqlite_master m
               WHERE m.type = 'table' AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) WHERE name = 'lamport_ts')");
         long max = 0;
-        foreach (var table in tables)
-            max = Math.Max(max, await conn.ExecuteScalarAsync<long?>($"SELECT MAX(lamport_ts) FROM \"{table.Replace("\"", "\"\"")}\"") ?? 0);
+        foreach (var table in tables.Where(t => !afterPurge || BaselineStore.OperationalTables.Contains(t)))
+        {
+            var where = afterPurge && table == "tbl_event" ? " WHERE NOT (protocol_version < @p AND event_type IN @sealable)" : "";
+            max = Math.Max(max, await conn.ExecuteScalarAsync<long?>(
+                $"SELECT MAX(lamport_ts) FROM \"{table.Replace("\"", "\"\"")}\"{where}",
+                new { p = EventClasses.SealedProtocol, sealable = EventClasses.Sealable.ToArray() }) ?? 0);
+        }
         return max;
     }
 

@@ -8,6 +8,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync.Metadata;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 
@@ -32,6 +33,7 @@ public class SnapshotJoinClient
     private readonly string _dataDir;
     private readonly ILogger<SnapshotJoinClient> _logger;
     private readonly TimeSpan _requestTimeout;
+    private readonly ISyncProtocolPolicy? _protocolPolicy;
 
     /// <param name="requestTimeout">How long the challenge and the authentication may each take (<see cref="JoinHttp.RequestTimeout"/> by default).</param>
     public SnapshotJoinClient(
@@ -39,13 +41,15 @@ public class SnapshotJoinClient
         DbConnectionFactory connFactory,
         string dataDir,
         ILogger<SnapshotJoinClient> logger,
-        TimeSpan? requestTimeout = null)
+        TimeSpan? requestTimeout = null,
+        ISyncProtocolPolicy? protocolPolicy = null)
     {
         _http = http;
         _connFactory = connFactory;
         _dataDir = dataDir;
         _logger = logger;
         _requestTimeout = requestTimeout ?? JoinHttp.RequestTimeout;
+        _protocolPolicy = protocolPolicy;
     }
 
     /// <summary>
@@ -56,12 +60,17 @@ public class SnapshotJoinClient
     /// </summary>
     private static readonly TimeSpan SnapshotDownloadTimeout = TimeSpan.FromMinutes(30);
 
+    /// <param name="masterDek">The master DEK the join has just unwrapped. After activation the archive's database is sealed under it
+    /// (docs/design/step-a-spec.md 11) and is opened with it before anything is imported; the caller clears it.</param>
+    /// <param name="requireEncrypted">The host declared protocol 4 (it encrypts metadata): a plain archive from it is refused.</param>
     public async Task<(long CpSeq, long LamportTs)> DownloadAndImportAsync(
         string remoteUrl,
         Guid localNodeId,
         byte[] localPrivateKey,
         byte[] producerPublicKey,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        byte[]? masterDek = null,
+        bool requireEncrypted = false)
     {
         remoteUrl = remoteUrl.TrimEnd('/');
 
@@ -94,7 +103,9 @@ public class SnapshotJoinClient
                 NodeId = localNodeId,
                 ChallengeB64 = challenge.Challenge,
                 SignatureB64 = Convert.ToBase64String(challengeSig),
-                ProtocolVersion = SyncProtocolVersion.Current
+                ProtocolVersion = SyncProtocolVersion.Current,
+                // A fresh joiner has applied no activation, so it declares 3; an activated host takes it because of this (spec 5.6).
+                Capabilities = MetadataCapabilities.Advertised
             }, JsonOpts, t), ct, _requestTimeout);
         authResp.EnsureSuccessStatusCode();
         var authToken = (await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts, ct))?.Token
@@ -134,16 +145,18 @@ public class SnapshotJoinClient
             await using (var fs = File.Create(tempTarGz))
                 await snapResp.Content.CopyToAsync(fs, ct);
 
-            return await ImportSnapshotFileAsync(tempTarGz, signature, producerPublicKey, ct);
+            return await ImportSnapshotFileAsync(tempTarGz, signature, producerPublicKey, ct, masterDek, requireEncrypted);
         }
         finally
         {
-            TryDeleteTemp(() => { if (File.Exists(tempTarGz)) File.Delete(tempTarGz); });
+            if (!SnapshotStaging.TryCleanupFile(tempTarGz))
+                throw new IOException("The join archive could not be removed from staging. The join requires repair and was not reported as successful.");
         }
     }
 
     public async Task<(long CpSeq, long LamportTs)> ImportSnapshotFileAsync(
-        string tarGzPath, byte[] signature, byte[] producerPublicKey, CancellationToken ct = default)
+        string tarGzPath, byte[] signature, byte[] producerPublicKey, CancellationToken ct = default,
+        byte[]? masterDek = null, bool requireEncrypted = false)
     {
         var manifestBytes = await ExtractManifestFromTarGzAsync(tarGzPath, ct);
 
@@ -181,7 +194,12 @@ public class SnapshotJoinClient
             if (!File.Exists(extractedDb))
                 throw new InvalidOperationException("Snapshot does not contain a database file");
 
+            // An activated host sends the database sealed under the master DEK (docs/design/step-a-spec.md 11): opened here, and only then
+            // imported. A plain archive from a host that seals its metadata is refused (fail closed).
+            await JoinSnapshotCipher.OpenAsync(JoinSnapshotCipher.CipherOf(manifestDoc.RootElement), extractedDb, masterDek, requireEncrypted, ct);
+
             ImportTablesFromAttachedDb(extractedDb);
+            MarkActivatedIfImported();
 
             var mediaSource = Path.Combine(tempDir, "media");
             var mediaTarget = Path.Combine(_dataDir, "media");
@@ -198,18 +216,9 @@ public class SnapshotJoinClient
         }
         finally
         {
-            TryDeleteTemp(() => { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); });
+            if (!SnapshotStaging.TryCleanupDirectory(tempDir))
+                throw new IOException("The clear join staging files could not be removed. The join requires repair and was not reported as successful.");
         }
-    }
-
-    /// <summary>
-    /// Clean-up of a temp file or folder, never fatal: by then the import has committed (or has failed with its own error, which a
-    /// clean-up failure must not replace), and a scanner holding a just-extracted file (a sharing violation on Windows) is not a failed join.
-    /// </summary>
-    private static void TryDeleteTemp(Action delete)
-    {
-        try { delete(); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* left in the staging folder, which the next start sweeps */ }
     }
 
     private void ImportTablesFromAttachedDb(string extractedDbPath)
@@ -286,6 +295,22 @@ public class SnapshotJoinClient
             fkOn.CommandText = "PRAGMA foreign_keys = ON";
             fkOn.ExecuteNonQuery();
         }
+    }
+
+    /// <summary>
+    /// A snapshot import copies the activation row outside the event-applier path. Mark the
+    /// injected host policy synchronously, so a joining mobile or CLI node cannot author clear
+    /// content before its normal five-second database recheck observes that row.
+    /// </summary>
+    private void MarkActivatedIfImported()
+    {
+        if (_protocolPolicy is null) return;
+
+        using var conn = _connFactory.CreateConnection();
+        using var command = conn.CreateCommand();
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM tbl_metadata_activation)";
+        if (Convert.ToInt64(command.ExecuteScalar()) == 1)
+            _protocolPolicy.MarkActivated();
     }
 
     private static async Task<byte[]> ExtractManifestFromTarGzAsync(string tarGzPath, CancellationToken ct = default)

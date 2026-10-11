@@ -34,6 +34,8 @@ public class PendingEmbeddingProcessor(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            await scopeFactory.WaitUsableAsync(stoppingToken);
+
             try
             {
                 await ProcessPendingAsync(stoppingToken);
@@ -41,6 +43,11 @@ public class PendingEmbeddingProcessor(
             catch (ModelUnavailableException ex)
             {
                 logger.LogInformation("Embedding model is unavailable. Skipping pending embedding processing. Details: {Message}", ex.Message);
+            }
+            catch (VaultSealedException)
+            {
+                // The database closed in the middle of the iteration (a lock): nothing failed; the next one waits for the unlock (spec 5.5).
+                logger.LogDebug("{Service} stopped an iteration: the database was closed", GetType().Name);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

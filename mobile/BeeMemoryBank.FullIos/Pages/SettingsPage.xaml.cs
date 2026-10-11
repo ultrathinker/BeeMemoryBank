@@ -1,5 +1,6 @@
 using BeeMemoryBank.FullIos.Services;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Vault.Sealed;
 
 namespace BeeMemoryBank.FullIos.Pages;
 
@@ -9,14 +10,16 @@ public partial class SettingsPage : ContentPage
     private readonly AppFlow _flow;
     private readonly QuickUnlock _quick;
     private readonly FullVault _vault;
+    private readonly IServiceProvider _services;
     private bool _loading;
 
-    public SettingsPage(AppFlow flow, QuickUnlock quick, FullVault vault)
+    public SettingsPage(AppFlow flow, QuickUnlock quick, FullVault vault, IServiceProvider services)
     {
         InitializeComponent();
         _flow = flow;
         _quick = quick;
         _vault = vault;
+        _services = services;
         GracePicker.ItemsSource = AutoLockPolicy.GraceChoices.Select(AutoLockPolicy.Describe).ToList();
         IdlePicker.ItemsSource = AutoLockPolicy.IdleChoices.Select(AutoLockPolicy.Describe).ToList();
     }
@@ -32,6 +35,10 @@ public partial class SettingsPage : ContentPage
         QuickDetail.Text = _quick.IsAvailable
             ? $"A key that only {name} can release opens the vault; the master password is not stored. Adding a face or finger to this iPhone turns it off."
             : $"{name} is not set up on this iPhone.";
+        // Hidden until the native release gate of docs/design/step-b-spec.md 12.4 is green.
+        var encryptionOffered = PhoneVaultLifecycle.PhoneEncryptionAvailable && _services.GetService<PhoneVaultLifecycle>() is not null;
+        EncryptionSection.IsVisible = encryptionOffered;
+        EncryptionButton.IsVisible = encryptionOffered;
         GracePicker.SelectedIndex = Math.Max(0, Array.IndexOf(AutoLockPolicy.GraceChoices, _flow.Grace));
         IdlePicker.SelectedIndex = Math.Max(0, Array.IndexOf(AutoLockPolicy.IdleChoices, _flow.Idle));
         _loading = false;
@@ -81,6 +88,9 @@ public partial class SettingsPage : ContentPage
             await DisplayAlertAsync("New recovery key", ex.Message, "OK");
         }
     }
+
+    private async void OnEncryption(object? sender, EventArgs e) =>
+        await Navigation.PushAsync(_services.GetRequiredService<EncryptDatabasePage>());
 
     private void OnLock(object? sender, EventArgs e) => _flow.LockNow();
 }

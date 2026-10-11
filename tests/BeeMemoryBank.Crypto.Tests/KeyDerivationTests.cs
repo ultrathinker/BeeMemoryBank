@@ -38,4 +38,13 @@ public class KeyDerivationTests
         var kek = KeyDerivation.DeriveKek("test", SecureRandom.GetBytes(CryptoConstants.SaltSize));
         kek.Should().HaveCount(CryptoConstants.KeySize);
     }
+
+    [Fact]
+    public void DeriveKek_RejectsAOneGiBSlotBeforeArgonCanAllocateIt()
+    {
+        var act = () => KeyDerivation.DeriveKek("password", SecureRandom.GetBytes(CryptoConstants.SaltSize),
+            memory: 1_048_576, iterations: 20, parallelism: 16);
+
+        act.Should().Throw<System.Security.Cryptography.CryptographicException>();
+    }
 }

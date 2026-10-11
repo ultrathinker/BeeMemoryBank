@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -59,9 +60,16 @@ public sealed class ChatHistoryBackfillProcessor(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            // chat.db is not opened while a sealed node is closed (docs/design/step-b-spec.md 5.5).
+            await scopeFactory.WaitUsableAsync(stoppingToken);
+
             try
             {
                 await ProcessPendingAsync(stoppingToken);
+            }
+            catch (VaultSealedException)
+            {
+                logger.LogDebug("The chat history backfill stopped a tick: the database was closed");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

@@ -8,6 +8,7 @@ using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Extensions.Logging;
 #if ANDROID
 using BeeMemoryBank.Mobile.Platforms.Android;
@@ -76,6 +77,17 @@ public static class MauiProgram
             .AddSingleton<MobileUnlockHolder>()
             .AddLogging();
 
+        // Step B (docs/design/step-b-spec.md 5.8, 12.1): a phone that may be encrypted, is encrypted, or holds an interrupted encryption starts through the
+        // vault lifecycle - the interrupted swap is finished or undone, the folder diagnosed, the lease held. While encryption is hidden and the folder is
+        // plain this is skipped and the app starts exactly as it did before.
+        if (PhoneVaultLifecycle.NeedsGate(dataDir))
+        {
+            var phoneStart = PhoneVaultLifecycle.Begin(dataDir);
+            builder.Services.AddSingleton<IPhoneEnvironment, MauiPhoneEnvironment>();
+            builder.Services.AddPhoneVault(dataDir, phoneStart, PhoneVaultLifecycle.PhoneEncryptionAvailable);
+            builder.Services.AddAndroidOpenWork();
+        }
+
         // p5: friendly maintenance-mode messages for HTTP 503 from the BMB API. Only routes
         // through the named/DI HttpClient — raw `new HttpClient()` sites still see raw 503.
         builder.Services.AddTransient<Services.MaintenanceDetectingHandler>();
@@ -90,14 +102,16 @@ public static class MauiProgram
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient(),
                 sp.GetRequiredService<DbConnectionFactory>(),
                 dataDir,
-                sp.GetRequiredService<ILogger<SnapshotJoinClient>>()));
+                sp.GetRequiredService<ILogger<SnapshotJoinClient>>(),
+                protocolPolicy: sp.GetRequiredService<BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy>()));
         // A join by code downloads its snapshot over the join's key-pinned connection (NodeSetupService).
         builder.Services.AddTransient<Func<HttpClient, SnapshotJoinClient>>(sp => http =>
             new SnapshotJoinClient(
                 http,
                 sp.GetRequiredService<DbConnectionFactory>(),
                 dataDir,
-                sp.GetRequiredService<ILogger<SnapshotJoinClient>>()));
+                sp.GetRequiredService<ILogger<SnapshotJoinClient>>(),
+                protocolPolicy: sp.GetRequiredService<BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy>()));
 
 #if ANDROID
         builder.Services.AddSingleton<IBiometricService, BiometricService>();

@@ -28,7 +28,13 @@ public partial class SnapshotService
 
     // internal, not private: the integration tests read what a snapshot actually contains by
     // decrypting the archived database the same way restore does (InternalsVisibleTo in the csproj).
-    internal async Task DecryptDbIfNeededAsync(string extractedDbPath)
+    /// <param name="masterPassword">The password the restore was confirmed with: when this node's own key does not open the container and the archive
+    /// holds a key envelope (the pre-encryption snapshot, docs/design/step-b-spec.md 10.7), it opens the envelope's slots.</param>
+    /// <remarks>
+    /// On an encrypted node the container is opened in memory and the file is replaced by a sealed staging copy (encrypted with this node's page
+    /// key), never by a plain image (spec 8.4).
+    /// </remarks>
+    internal async Task DecryptDbIfNeededAsync(string extractedDbPath, string? masterPassword = null)
     {
         if (!IsDbEncrypted(await ReadEncryptionProbeAsync(extractedDbPath)))
             return;
@@ -37,7 +43,22 @@ public partial class SnapshotService
         if (_keys is null)
             throw new InvalidOperationException(
                 "Snapshot database is encrypted but the session is locked. Unlock the vault before restoring.");
-        await _keys.DecryptDatabaseIfNeededAsync(extractedDbPath);
+
+        if (_connFactory.IsSealed)
+        {
+            await DecryptToSealedStagingAsync(extractedDbPath, masterPassword);
+            return;
+        }
+
+        try
+        {
+            await _keys.DecryptDatabaseIfNeededAsync(extractedDbPath);
+        }
+        catch (InvalidOperationException ex) when (ex.InnerException is System.Security.Cryptography.CryptographicException)
+        {
+            // Not this vault's key: the way-back snapshot carries an envelope that the old password opens.
+            if (!await TryDecryptWithEnvelopeAsync(extractedDbPath, masterPassword)) throw;
+        }
     }
 
     internal static bool IsDbEncrypted(byte[] blob)
@@ -77,7 +98,11 @@ public partial class SnapshotService
                 $"Database file is {fileLength / (1024.0 * 1024.0):F1} MB, exceeds the 2 GB encryption limit. Use a smaller database.");
     }
 
-    internal static async Task EncryptDbFileAsync(string dbPath, byte[] masterDek, long maxDbSize = MaxEncryptableDbSize)
+    /// <param name="wipePlain">The plain file is overwritten and removed (<c>SecureFileWipe</c>) before the container is written under its name
+    /// (spec 10.4 step 3): a truncate would leave the plain blocks on the disk. The snapshot is not made when the wipe fails.</param>
+    /// <param name="afterOverwrite">Test seam of the wipe: the plain file at its original length, overwritten.</param>
+    internal static async Task EncryptDbFileAsync(string dbPath, byte[] masterDek, long maxDbSize = MaxEncryptableDbSize,
+        bool wipePlain = false, Action<string>? afterOverwrite = null)
     {
         // Size check BEFORE reading into memory: a database over the limit must fail with this
         // clear error, not with OutOfMemoryException from ReadAllBytesAsync. (The old guard
@@ -99,6 +124,8 @@ public partial class SnapshotService
                 {
                     gcm.Encrypt(iv, dbBytes, ct, tag, DbEncryptionAadV2);
                 }
+                if (wipePlain && !BeeMemoryBank.AppPaths.SecureFileWipe.TryWipe(dbPath, afterOverwrite))
+                    throw new IOException("The plain staging copy of the database could not be wiped; no snapshot was made.");
                 await using var fs = File.Create(dbPath);
                 fs.Write(Encoding.ASCII.GetBytes(DbEncryptionMagicV2));
                 fs.Write(salt);

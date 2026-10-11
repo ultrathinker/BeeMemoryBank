@@ -7,8 +7,9 @@
 #
 # Starts the image with nothing published (no host port is used, so runs cannot collide), waits for the image's own
 # HEALTHCHECK, asks the node inside the container for its version, and for the full node also checks the first-run page and
-# the baked-in search model. Then stops the container gracefully. It removes nothing: the stopped container stays, named in
-# the last line, for `docker logs` (on a CI runner it goes with the runner).
+# the baked-in search model. Then stops the container gracefully and removes it on success, failure, interruption, and
+# startup failure alike (a failure prints the last log lines first). With BMB_SMOKE_KEEP=1 the stopped container is kept
+# instead and named in the last line, for `docker logs`.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
@@ -24,17 +25,46 @@ esac
 
 fail() { echo "::error::smoke $kind $img: $*" >&2; exit 1; }
 
+# Only BMB_SMOKE_KEEP=1 keeps the container; anything else removes it.
+keep="${BMB_SMOKE_KEEP:-0}"
+
 name="bmb-smoke-${kind}-$$"
-docker run -d --name "$name" "$img" >/dev/null
+container_created=0
+
+container_present() {
+    docker inspect "$name" >/dev/null 2>&1
+}
+
 on_exit() {
     rc=$?
-    if [ "$rc" -ne 0 ]; then
+    # Do not let a second Ctrl-C interrupt the cleanup itself. Keep the EXIT trap
+    # installed until stop and remove have both had their chance to run.
+    trap - INT TERM
+    if [ "$rc" -ne 0 ] && container_present; then
         echo "--- last log lines of $name ---" >&2
         docker logs --tail 80 "$name" >&2 2>&1 || true
     fi
-    docker stop -t 30 "$name" >/dev/null 2>&1 || true
+    if [ "$container_created" -eq 1 ] || container_present; then
+        docker stop -t 30 "$name" >/dev/null 2>&1 || true
+        if [ "$keep" != 1 ]; then
+            docker rm "$name" >/dev/null 2>&1 || docker rm -f "$name" >/dev/null 2>&1 || true
+        fi
+    fi
+    trap - EXIT
+    exit "$rc"
 }
+
+# A stale name is not ours to remove. The PID-based name should make this only
+# a diagnostic, but checking it avoids cleaning up somebody else's container on
+# the rare name collision.
+if container_present; then
+    fail "container name already exists: $name"
+fi
 trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+docker run -d --name "$name" --label bmb.smoke=1 "$img" >/dev/null
+container_created=1
 
 status=starting
 for _ in $(seq 1 60); do                                   # up to 5 minutes
@@ -68,11 +98,19 @@ fi
 
 # docker stop must reach every process: the full node's entrypoint passes SIGTERM to the Api and the Web front, and a clean
 # stop of both exits 0. Reported, not failed: a slow shutdown is not a reason to hold a release.
-trap - EXIT
 docker stop -t 30 "$name" >/dev/null
 exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$name")"
 if [ "$kind" = full ] && [ "$exit_code" != 0 ]; then
     echo "::warning::smoke $kind $img: docker stop ended with exit code $exit_code, expected 0 (a clean stop of both hosts)"
 fi
 
-echo "smoke ok: $kind $img $got (stopped container: $name, exit code $exit_code)"
+if [ "$keep" = 1 ]; then
+    echo "smoke ok: $kind $img $got (stopped container: $name, exit code $exit_code)"
+else
+    docker rm "$name" >/dev/null || fail "could not remove the container $name"
+    echo "smoke ok: $kind $img $got (container removed, exit code $exit_code)"
+fi
+
+trap - INT TERM
+trap - EXIT
+exit 0

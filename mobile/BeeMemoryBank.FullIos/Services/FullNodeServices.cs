@@ -8,6 +8,7 @@ using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Vault.Sealed;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -53,27 +54,53 @@ public static class FullNodeServices
                 http,
                 sp.GetRequiredService<DbConnectionFactory>(),
                 paths.DataDirectory,
-                sp.GetRequiredService<ILogger<SnapshotJoinClient>>()));
+                sp.GetRequiredService<ILogger<SnapshotJoinClient>>(),
+                protocolPolicy: sp.GetRequiredService<BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy>()));
         services.AddScoped<NodeSetupService>();
         return services;
     }
 
     /// <summary>
     /// What every start does before a screen opens, as the Android app's: the schema, the system folders, the journal, and following a
-    /// superadmin peer's master-key rotation (the phone has no admin screen to accept one).
+    /// superadmin peer's master-key rotation (the phone has no admin screen to accept one). On a plain phone this is the whole start; on an
+    /// encrypted one the first part runs here and the second at every open of the database (<see cref="AddOpenWork"/>, spec 5.8).
     /// </summary>
     public static async Task PrepareAsync(IServiceProvider services)
     {
-        // What a join killed half-way left in the staging folder (the downloaded archive, the extracted database): removed at the next start.
+        SweepStaging(services);
+        await MigrateAsync(services);
+        await BootstrapFoldersAsync(services);
+        await PragmasAndClockAsync(services);
+    }
+
+    /// <summary>What a join killed half-way left in the staging folder (the downloaded archive, the extracted database): removed at the next start. Touches no database.</summary>
+    public static void SweepStaging(IServiceProvider services) =>
         SnapshotStaging.Sweep(Path.GetDirectoryName(services.GetRequiredService<MediaStorageOptions>().MediaDir)!);
 
-        await services.GetRequiredService<MigrationRunner>().RunMigrationsAsync();
-        await services.GetRequiredService<FolderBootstrapper>().RunIfNeededAsync();
+    /// <summary>
+    /// The start work that reads the database, as the open steps the vault gate runs at every open of an encrypted phone (spec 5.3 table 2, 5.8):
+    /// 100 the schema, 200 the system folders, 800 the pragmas, the rotation auto-arm and the Lamport clock.
+    /// </summary>
+    public static IServiceCollection AddOpenWork(this IServiceCollection services)
+    {
+        PhoneVaultLifecycle.AddOpenStep(services, new PhoneOpenWork(100, (sp, _) => MigrateAsync(sp)));
+        PhoneVaultLifecycle.AddOpenStep(services, new PhoneOpenWork(200, (sp, _) => BootstrapFoldersAsync(sp)));
+        PhoneVaultLifecycle.AddOpenStep(services, new PhoneOpenWork(800, (sp, _) => PragmasAndClockAsync(sp)));
+        return services;
+    }
 
-        using var conn = services.GetRequiredService<DbConnectionFactory>().CreateConnection();
-        await conn.ExecuteAsync("PRAGMA journal_mode=WAL;");
-        await conn.ExecuteAsync("PRAGMA synchronous=NORMAL;");
-        await PhoneRotationAutoArm.ArmAsync(conn);
+    private static Task MigrateAsync(IServiceProvider services) => services.GetRequiredService<MigrationRunner>().RunMigrationsAsync();
+
+    private static Task BootstrapFoldersAsync(IServiceProvider services) => services.GetRequiredService<FolderBootstrapper>().RunIfNeededAsync();
+
+    private static async Task PragmasAndClockAsync(IServiceProvider services)
+    {
+        using (var conn = services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+        {
+            await conn.ExecuteAsync("PRAGMA journal_mode=WAL;");
+            await conn.ExecuteAsync("PRAGMA synchronous=NORMAL;");
+            await PhoneRotationAutoArm.ArmAsync(conn);
+        }
 
         // The Lamport clock continues from the newest event this node holds; a fresh process starts it at zero otherwise.
         using var scope = services.CreateScope();

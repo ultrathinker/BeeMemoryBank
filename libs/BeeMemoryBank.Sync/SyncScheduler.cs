@@ -96,6 +96,9 @@ public class SyncScheduler(
     {
         logger.LogInformation("SyncScheduler started, interval {Interval}", Interval);
 
+        // A sealed node whose database is closed has nothing to repair or sync until it is unlocked (docs/design/step-b-spec.md 5.5).
+        await scopeFactory.WaitUsableAsync(stoppingToken);
+
         // Before anything is served or pushed from the log: hosts without the API startup (mobile)
         // run the repair here. See StoredEventRepair; a second run elsewhere finds nothing.
         try { await StoredEventRepair.RunAsync(scopeFactory, logger); }
@@ -107,6 +110,8 @@ public class SyncScheduler(
         var cycleStart = DateTime.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
+            await scopeFactory.WaitUsableAsync(stoppingToken);
+
             // A wipe or a reseed owns the tables right now: skip the whole cycle, the repair scrub
             // below included — it writes event rows like any applier.
             if (_paused)
@@ -140,6 +145,11 @@ public class SyncScheduler(
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
+            }
+            catch (VaultSealedException)
+            {
+                // The database closed in the middle of the cycle (a lock): nothing failed, the next iteration waits for the unlock.
+                logger.LogDebug("The sync cycle stopped: the database was closed");
             }
             catch (Exception ex)
             {

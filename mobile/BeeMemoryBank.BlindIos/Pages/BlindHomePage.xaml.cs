@@ -19,7 +19,7 @@ namespace BeeMemoryBank.BlindIos.Pages;
 public partial class BlindHomePage : ContentPage
 {
     private static readonly BlindBackupSchedule[] Schedules = BlindHomeView.Schedules;
-    private static readonly TimeSpan NotesEvery = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan StoreEvery = TimeSpan.FromSeconds(15);
 
     private readonly IosBlindHost _host;
     private readonly IosSilenceNotifier _silence;
@@ -31,9 +31,9 @@ public partial class BlindHomePage : ContentPage
     private string? _qrFor;
     private string _wipeName = "";
     private DateTimeOffset _backupAskedAt = DateTimeOffset.MinValue;
-    private DateTimeOffset _notesAt = DateTimeOffset.MinValue;
-    private long? _notes;
-    private bool _countingNotes;
+    private DateTimeOffset _storeAt = DateTimeOffset.MinValue;
+    private BlindStoreInfo? _store;
+    private bool _readingStore;
 #if DEBUG || BMB_E2E
     private bool _e2eCodeUsed;
 #endif
@@ -102,7 +102,7 @@ public partial class BlindHomePage : ContentPage
         var runtime = Runtime;
         _bound = runtime;
         _wasLoaded = null;
-        _notesAt = DateTimeOffset.MinValue;
+        _storeAt = DateTimeOffset.MinValue;
         runtime.App.Changed += OnAppChanged;
         runtime.Scheduler.UserJobReported += OnUserJobReported;
         await runtime.App.InitializeAsync();
@@ -155,9 +155,9 @@ public partial class BlindHomePage : ContentPage
             var status = runtime.App.GetStatus();
             var code = status.AwaitingAnswer ? runtime.App.PairingCode() : null;
             var backupRunning = runtime.Activity.IsActive(BlindActivity.Heavy) || DateTimeOffset.UtcNow - _backupAskedAt < TimeSpan.FromSeconds(10);
-            Show(BlindHomeView.Build(status, code, backupRunning), status);
+            Show(BlindHomeView.Build(status, code, backupRunning, _store), status);
             FollowFirstLoad(runtime, status);
-            CountNotesSoon(runtime, status);
+            ReadStoreSoon(runtime, status);
             _silence.Update(status);
         }
         catch (Exception ex)
@@ -174,7 +174,7 @@ public partial class BlindHomePage : ContentPage
         NodeLabel.Text = view.Node;
         PairLabel.Text = view.Pair;
         LoadLabel.Text = view.Load;
-        NotesLabel.Text = BlindHomeView.NotesText(_notes, status);
+        StoreLabel.Text = view.Store;
         SyncLabel.Text = IosHomeLines.LastContact(status, DateTimeOffset.UtcNow);
         BackupLabel.Text = view.Backup;
         if (view.Job != null)
@@ -238,27 +238,27 @@ public partial class BlindHomePage : ContentPage
         if (_wasLoaded == false && status.InitialLoadDone && status.IsPaired)
         {
             runtime.Scheduler.RequestSync();
-            _notesAt = DateTimeOffset.MinValue;
+            _storeAt = DateTimeOffset.MinValue;
         }
         _wasLoaded = status.InitialLoadDone;
     }
 
-    /// <summary>Counts the notes now and then, off the UI thread; the line shows the last count.</summary>
-    private void CountNotesSoon(IosBlindRuntime runtime, BlindAppStatus status)
+    /// <summary>Reads what the copy holds now and then, off the UI thread (docs/design/step-a-spec.md 10.2); the line shows the last answer.</summary>
+    private void ReadStoreSoon(IosBlindRuntime runtime, BlindAppStatus status)
     {
-        if (_countingNotes || DateTimeOffset.UtcNow - _notesAt < NotesEvery) return;
-        if (!status.InitialLoadDone) { _notes = null; return; }
-        _countingNotes = true;
-        _notesAt = DateTimeOffset.UtcNow;
+        if (_readingStore || DateTimeOffset.UtcNow - _storeAt < StoreEvery) return;
+        if (!status.InitialLoadDone) { _store = null; return; }
+        _readingStore = true;
+        _storeAt = DateTimeOffset.UtcNow;
         _ = Task.Run(async () =>
         {
-            var count = await runtime.Stats.CountNotesAsync();
+            var summary = await runtime.Stats.GetAsync();
             MainThread.BeginInvokeOnMainThread(() =>
             {
-                _countingNotes = false;
+                _readingStore = false;
                 if (!ReferenceEquals(runtime, Runtime)) return;
-                _notes = count;
-                try { NotesLabel.Text = BlindHomeView.NotesText(count, runtime.App.GetStatus()); }
+                _store = summary;
+                try { StoreLabel.Text = BlindHomeView.StoreText(summary, runtime.App.GetStatus(), DateTimeOffset.UtcNow); }
                 catch (Exception ex) { ShowProblem(ex); }
             });
         });

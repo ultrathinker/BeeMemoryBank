@@ -10,6 +10,7 @@ using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Sync.Blind;
@@ -19,7 +20,7 @@ namespace BeeMemoryBank.Sync.Blind;
 /// in the caller-owned work directory, so a stopped Android worker resumes with a byte range rather
 /// than accepting a new package in the middle of an old one.
 /// </summary>
-public sealed class BlindPhoneReplicaClient(
+public sealed partial class BlindPhoneReplicaClient(
     DbConnectionFactory liveFactory,
     INodeIdentityRepository identityRepo,
     INodeAuthSigner signer,
@@ -27,7 +28,8 @@ public sealed class BlindPhoneReplicaClient(
     string databasePath,
     ILogger<BlindPhoneReplicaClient> logger,
     Func<string, string, CancellationToken, Task>? copyMediaFile = null,
-    TimeProvider? time = null)
+    TimeProvider? time = null,
+    IServiceScopeFactory? scopes = null)
 {
     private const string InstallFailureFileName = "replica.install-failed.json";
     private const string BackupFailureFileName = "backup-package.failed.json";
@@ -47,8 +49,29 @@ public sealed class BlindPhoneReplicaClient(
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     public async Task FetchAndInstallAsync(
-        HttpClient http, BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct)
+        HttpClient http, BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
+        await FetchAsync(http, target, workDirectory, progress, ct, update: false);
+
+    /// <summary>
+    /// The newer baseline of the node this phone calls, when it has one (docs/design/step-a-spec.md 13.3): asks
+    /// <c>GET /api/blind/replica?have=&lt;the baseline this phone holds&gt;</c>, and on a <c>baseline</c> package fetches the blobs it lists,
+    /// adopts it and trims what it covers of the phone's log. Returns true when a newer baseline was installed; false when the phone holds the
+    /// node's current one, when it holds none yet (the first load is the way to get one) or when this client was built without the services
+    /// a format-2 install needs.
+    /// </summary>
+    public async Task<bool> UpdateBaselineAsync(
+        HttpClient http, BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
+        await FetchAsync(http, target, workDirectory, progress, ct, update: true);
+
+    private async Task<bool> FetchAsync(
+        HttpClient http, BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct, bool update)
     {
+        string? have = null;
+        if (update)
+        {
+            have = await HeldBaselineIdAsync(ct);
+            if (have is null) return false;
+        }
         var identity = await identityRepo.GetAsync()
             ?? throw new InvalidOperationException("The blind phone identity has not been recorded.");
         if (identity.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
@@ -57,17 +80,30 @@ public sealed class BlindPhoneReplicaClient(
         Directory.CreateDirectory(workDirectory);
         CleanupExtractionArtifacts(workDirectory);
         await ThrowIfBackingOffAsync(workDirectory, target.NodeId, ct);
-        var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct);
+        var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct, DeclaredProtocol());
         var partPath = Path.Combine(workDirectory, "replica.part");
         var metadataPath = Path.Combine(workDirectory, "replica.part.json");
         try
         {
-            var current = await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct);
+            var current = await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct, have: have);
+            if (current is null)
+            {
+                // 304: the node's baseline is the one this phone holds.
+                progress?.Report(1);
+                return false;
+            }
             try
             {
                 var extraction = Path.Combine(workDirectory, "verified-" + current.Sha256.ToLowerInvariant());
-                await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
-                await BuildAndSwitchDatabaseAsync(extraction, target, ct);
+                if (await IsFormat2Async(partPath, ct))
+                    await InstallFormat2Async(http, token, partPath, extraction, current, target, ct);
+                else if (update)
+                    throw new InvalidDataException("The node answered a baseline update with a format-1 package.");
+                else
+                {
+                    await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
+                    await BuildAndSwitchDatabaseAsync(extraction, target, ct);
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -84,6 +120,7 @@ public sealed class BlindPhoneReplicaClient(
             ClearInstallFailure(workDirectory);
             progress?.Report(1);
             logger.LogInformation("Installed verified blind replica {Hash} from {NodeId}", current.Sha256, target.NodeId);
+            return true;
         }
         catch (InvalidDataException)
         {
@@ -122,13 +159,13 @@ public sealed class BlindPhoneReplicaClient(
         Directory.CreateDirectory(workDirectory);
         CleanupBackupExtractions(workDirectory);
         await ThrowIfBackingOffAsync(workDirectory, target.NodeId, ct, BackupFailureFileName);
-        var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct);
+        var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct, DeclaredProtocol());
         var partPath = Path.Combine(workDirectory, BackupPartName);
         var metadataPath = partPath + ".json";
         PackageMetadata current;
         try
         {
-            current = await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct, beforeDownload);
+            current = (await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct, beforeDownload))!;
         }
         catch (InvalidDataException ex)
         {
@@ -142,9 +179,21 @@ public sealed class BlindPhoneReplicaClient(
         try
         {
             var extraction = Path.Combine(workDirectory, "backup-verified-" + current.Sha256.ToLowerInvariant());
-            await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
-            var anchors = await ReadAnchorIdsAsync(extraction, ct);
-            var boxes = await CountRecoveryBoxesAsync(extraction, ct);
+            string recoveryDb;
+            if (await IsFormat2Async(partPath, ct))
+            {
+                // Format 2 has no database: the anchors and the recovery boxes are in control.db (spec 8.4).
+                var verified = await VerifyFormat2Async(partPath, extraction, current, target, ct);
+                recoveryDb = verified.ControlDbPath
+                    ?? throw new InvalidDataException("The package carries no control.db; it is not a full package.");
+            }
+            else
+            {
+                await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
+                recoveryDb = Path.Combine(extraction, "beememorybank.db");
+            }
+            var anchors = await ReadAnchorIdsAsync(recoveryDb, ct);
+            var boxes = await CountRecoveryBoxesAsync(recoveryDb, ct);
             var archivePath = Path.Combine(workDirectory, BackupArchiveName);
             File.Move(partPath, archivePath, overwrite: true);
             if (File.Exists(metadataPath)) File.Delete(metadataPath);
@@ -175,9 +224,8 @@ public sealed class BlindPhoneReplicaClient(
     }
 
     /// <summary>The active recovery boxes of the extracted package's database; none when it has no such table.</summary>
-    private static async Task<int> CountRecoveryBoxesAsync(string extraction, CancellationToken ct)
+    private static async Task<int> CountRecoveryBoxesAsync(string db, CancellationToken ct)
     {
-        var db = Path.Combine(extraction, "beememorybank.db");
         if (!File.Exists(db)) return 0;
         await using var conn = new SqliteConnection($"Data Source={db};Mode=ReadOnly;Pooling=False");
         await conn.OpenAsync(ct);
@@ -187,9 +235,8 @@ public sealed class BlindPhoneReplicaClient(
     }
 
     /// <summary>The newest anchors of the extracted package (newest first); none when it has no such table.</summary>
-    private static async Task<IReadOnlyList<string>> ReadAnchorIdsAsync(string extraction, CancellationToken ct)
+    private static async Task<IReadOnlyList<string>> ReadAnchorIdsAsync(string db, CancellationToken ct)
     {
-        var db = Path.Combine(extraction, "beememorybank.db");
         if (!File.Exists(db)) return [];
         await using var conn = new SqliteConnection($"Data Source={db};Mode=ReadOnly;Pooling=False");
         await conn.OpenAsync(ct);
@@ -250,9 +297,9 @@ public sealed class BlindPhoneReplicaClient(
 
     private DateTimeOffset UtcNow() => (time ?? TimeProvider.System).GetUtcNow();
 
-    private static async Task<PackageMetadata> DownloadAsync(
+    private static async Task<PackageMetadata?> DownloadAsync(
         HttpClient http, BlindCallCode target, string token, string partPath, string metadataPath,
-        IProgress<double>? progress, CancellationToken ct, Action<long>? beforeDownload = null)
+        IProgress<double>? progress, CancellationToken ct, Action<long>? beforeDownload = null, string? have = null)
     {
         // A restart is only needed when authenticated resume state cannot describe the response.
         // A transport failure remains resumable: it is intentionally not caught here.
@@ -278,10 +325,17 @@ public sealed class BlindPhoneReplicaClient(
                 continue;
             }
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, $"{target.Address.TrimEnd('/')}/api/blind/replica");
+            var url = $"{target.Address.TrimEnd('/')}/api/blind/replica" + (have is null ? "" : $"?have={Uri.EscapeDataString(have)}");
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             if (offset > 0) request.Headers.Range = new RangeHeaderValue(offset, null);
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            // The node's baseline is the one this phone holds (docs/design/step-a-spec.md 8.7): nothing to download, and nothing partial is kept.
+            if (have is not null && response.StatusCode == HttpStatusCode.NotModified)
+            {
+                ResetPartial(partPath, metadataPath);
+                return null;
+            }
             if (offset > 0 && response.StatusCode != HttpStatusCode.PartialContent)
             {
                 ResetPartial(partPath, metadataPath);

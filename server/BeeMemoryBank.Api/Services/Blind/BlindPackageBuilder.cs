@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Metadata;
 using BeeMemoryBank.Core.Models;
 using Dapper;
 using Microsoft.Data.Sqlite;
@@ -17,6 +18,9 @@ public sealed record BlindPackage(string FilePath, string Sha256, long Length, B
 /// signed peer snapshot (secrets filtered; DB not encrypted, the receiver has no DEK) plus
 /// tbl_hard_delete_audit, with tbl_article.embedding_projection nulled (plan 3.6), and
 /// blind-manifest.json.
+///
+/// <para>Step A (docs/design/step-a-spec.md 2, 8.7): format 1 carries the vault's metadata in clear, so a node that has
+/// applied the metadata activation refuses to build one; it serves format 2 (<see cref="BlindPackageV2Builder"/>) or nothing.</para>
 /// </summary>
 public sealed class BlindPackageBuilder(
     SnapshotService snapshots,
@@ -26,7 +30,8 @@ public sealed class BlindPackageBuilder(
     IEventLogRepository events,
     IDbConnectionFactory db,
     IConfiguration config,
-    BlindTlsIdentity? tls = null)
+    BlindTlsIdentity? tls = null,
+    ISyncProtocolPolicy? protocolPolicy = null)
 {
     /// <summary>
     /// Kept on top of <c>SnapshotTables.Replicated</c>. The hard-delete audit is what lets a node
@@ -44,6 +49,8 @@ public sealed class BlindPackageBuilder(
         Guid seedId, long? includesUpTo, bool producerIsSuperadmin, CancellationToken ct = default,
         string? outputDirectory = null)
     {
+        if (protocolPolicy?.SealsMetadata == true)
+            throw new BlindFormat1RefusedException();
         var self = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
         var cp = await events.GetMaxSequenceAsync();
@@ -133,3 +140,7 @@ public sealed class BlindPackageBuilder(
         cmd.ExecuteNonQuery();
     }
 }
+
+/// <summary>An activated node builds no format-1 package (step-a-spec 2): the caller serves format 2 or answers 503.</summary>
+public sealed class BlindFormat1RefusedException()
+    : InvalidOperationException("This node is activated (metadata encryption): it builds no format-1 blind package.");

@@ -25,5 +25,11 @@ public enum DekRotationFlowStep
     Completed,
     Failed,
     NeedsAdminDecision,
-    NeedsNewRecoveryKey
+    NeedsNewRecoveryKey,
+
+    /// <summary>
+    /// The DEK swap is committed but the rotation's new metadata key is not published yet (docs/design/step-a-spec.md 4.4): not
+    /// complete, retried every minute and at every unlock. Last in the enum so the numbers of the others stay as they were.
+    /// </summary>
+    Completing
 }

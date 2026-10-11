@@ -111,8 +111,16 @@ libs/
 │   └── Migrations/          — `001_initial_schema.sql` (consolidated, 31 CREATE TABLE) + incremental `002`–`024` (roles, blob store, DEK-rotation resilience, whitelist versioning, sync quarantine, media content-addressing, …)
 │
 └── BeeMemoryBank.Sync/      — Distributed synchronization
-    └── SyncScheduler, SyncTrigger, SyncClient, EventLogger, EventApplier, LamportClock,
-        ConflictResolver, CleanupService, PendingEmbeddingProcessor, EventPayloads, EventSignature
+    ├── SyncScheduler, SyncTrigger, SyncClient, EventLogger, EventApplier, LamportClock,
+    │   ConflictResolver, CleanupService, PendingEmbeddingProcessor, EventPayloads, EventSignature
+    └── Metadata/            — metadata encryption, the parts every host shares (no key material): event classes,
+                               the sealed envelope's shape, the protocol policy, held-event status, the relay opener
+                               a blind host uses, MetadataHostServices (a blind composition's registrations)
+
+The Vault side of metadata encryption is `libs/BeeMemoryBank.Vault/Metadata/`: the in-memory key ring, MEK wrapping
+and derivation, sealing and opening (`MetadataEnvelope`, `VaultEnvelopeOpener`), the readiness report, the activation,
+the authoring of key and activation events, and the held-event drain. No blind host contains any of it
+(`docs/vault-split/vault-types.txt`).
 
 tests/
 ├── BeeMemoryBank.Core.Tests/       — 7 files (Article, Session, KeyManagement, TreeSearch, Initialization, Embedding)
@@ -168,7 +176,9 @@ This is a deliberate design choice. It rules out partial-sync topologies (a work
 | Per-article DEK | Isolation: compromising one DEK does not expose the rest |
 | Lamport clocks, not HLC | Sufficient for causal ordering; HLC adds complexity without benefit for this use case |
 | Pull-sync with push-on-save | Pull-based works behind NAT. Push-on-save (SyncTrigger) signals immediate sync after every write, reducing delay from 60s to near-instant for public nodes |
-| Metadata in plaintext | Search and navigation without decryption. Trade-off: a database leak reveals structure but not content |
+| Metadata in plaintext | Search and navigation without decryption. Trade-off: a database leak reveals structure but not content (unless the owner has encrypted the node's database, next row) |
+| Encrypted database file (2.6.0, opt-in per node) | `VACUUM INTO` a SQLCipher-4 copy of `beememorybank.db` and `chat.db` under page keys derived (HKDF) from a per-node database key (DBK) that only the master key unwraps; a plain `beememorybank.boot.db` beside them holds the wrapped DBK, the doors (password, recovery, agents, auto-unlock), the whitelist mirror and the relay inbox. `VaultGate` (Vault) is the one place that holds the keys: Closed, Opening, Importing, Open, Closing; connection factories throw `VaultSealedException` while it is not usable; hosted loops wait on it; `SealedVaultMiddleware` answers 503 `vault_sealed` for every route but a short allow-list and the relay set. The start passes `VaultStartup` / `SealSwapResolver` and `VaultStoreFiles.Diagnose` before anything opens a file. `SealMigrationService` is journalled (`seal-journal.json`), verified before the swap and idempotent at every kill point. Operator guide: `docs/sealed-database.md`; design: `docs/design/step-b-spec.md` |
+| Metadata encrypted in transit and on blind copies (2.6.0, one-way switch) | Sync protocol 4 seals every content event (title, path, tags, names, tree shape) under a metadata key wrapped by the master DEK; control events stay readable. Blind hosts relay sealed events without opening them; a locked full node holds them and applies them at unlock in log order. A full node's own tables stay readable (Step B). See docs/sync.md "Metadata Encryption (Protocol 4)" |
 | Per-media DEK | Images use the same envelope encryption as articles — per-file random DEK, wrapped by Master DEK. Encrypted .enc files stored on disk (not in SQLite) to avoid bloating the database |
 | Concept tags only | Articles have concept tags only (`tbl_concept_tag` + `tbl_article_concept_tag`). Legacy keyword tags (`tbl_tag` + `tbl_article_tag`) were removed in an earlier schema migration |
 | Batched content search | Full-text body search decrypts articles in batches of 50, not all at once — controls memory usage at scale |

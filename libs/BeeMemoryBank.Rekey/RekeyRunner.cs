@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sealed;
 using Dapper;
 using Microsoft.Data.Sqlite;
 
@@ -40,6 +42,11 @@ public sealed class RekeyOptions
     public DateTimeOffset? Now { get; init; }
     /// <summary>Tests only: called at each named point of the run.</summary>
     public Action<string>? Fault { get; init; }
+    /// <summary>
+    /// What a sealed vault needs besides the password (docs/design/step-b-spec.md 13.2). Required when D is sealed and refused when D is not:
+    /// the runner never guesses which one it was given.
+    /// </summary>
+    public RekeySealedOptions? Sealed { get; init; }
 }
 
 public sealed class NullRekeyProgress : IRekeyProgress
@@ -66,7 +73,10 @@ public static class RekeyRunner
     public const string CarryOverName = "CarryOver";
 
     public const string FaultAfterCopy = "after-copy", FaultAfterSteps = "after-steps", FaultAfterVerify = "after-verify",
-        FaultAfterScrub = "after-scrub";
+        FaultAfterScrub = "after-scrub", FaultAfterBootStore = "after-boot-store";
+
+    /// <summary>The report entry of a sealed vault's new database key and boot store, after the carry-over.</summary>
+    public const string SealedVaultName = "SealedVault";
 
     /// <summary>
     /// Where the report of a run that stopped before the swap goes: <c>&lt;D&gt;.rekey-report/rekey-report.json</c>, next to
@@ -112,6 +122,7 @@ public static class RekeyRunner
         using var rekeyLock = RekeyLock.TryAcquire(d);
         if (rekeyLock == null) return Fail(RekeyExit.FailedBeforeSwap, "Another re-key of this vault is running.");
         var succeeded = false;
+        IVaultKeySource? sealedSource = null;
         var newDir = RekeySwapJournal.NewDirFor(d);
         report.PastLock = true;
         NoFollow.DeleteTree(StoppedReportDirFor(d)); // an older run's
@@ -133,9 +144,19 @@ public static class RekeyRunner
                 return Fail(RekeyExit.FailedBeforeSwap,
                     "This build cannot re-key: the plan lacks " + string.Join(", ", missing.Concat(options.Preflight == null ? ["the pre-flight"] : [])) + ".");
 
+            // A sealed vault (spec 13.2) is opened only with the source's page keys the caller holds; a plain one must not be given any.
+            if (SealedRefusal(d, options.Sealed) is { } refusal) return Fail(RekeyExit.FailedBeforeSwap, refusal);
+            using var sealedRun = options.Sealed is null ? null : new SealedRekeyRun(options.Sealed);
+            if (sealedRun is not null)
+            {
+                sealedSource = sealedRun.Source;
+                foreach (var consumer in SealedConsumers(options)) consumer.SetSealedSource(sealedSource);
+            }
+
             progress.Report("lock", 1, 1);
-            using var live = OpenLive(Path.Combine(d, MainDb));
-            using var liveChat = File.Exists(Path.Combine(d, ChatDb)) ? OpenLive(Path.Combine(d, ChatDb)) : null;
+            using var live = sealedRun is null ? OpenLive(Path.Combine(d, MainDb)) : sealedRun.OpenSource(Path.Combine(d, MainDb), DbPurposes.Vault);
+            using var liveChat = !File.Exists(Path.Combine(d, ChatDb)) ? null
+                : sealedRun is null ? OpenLive(Path.Combine(d, ChatDb)) : sealedRun.OpenSource(Path.Combine(d, ChatDb), DbPurposes.Chat);
 
             // Keys: the owner's password opens the owner's slot to D2; D2 opens the retired keys.
             var owner = await OpenOwnerAsync(live, options.OwnerPassword);
@@ -160,16 +181,17 @@ public static class RekeyRunner
             DiscardNewDir(newDir);
             Directory.CreateDirectory(newDir);
             progress.Report("copy", 0, 2);
-            await VacuumIntoAsync(live, Path.Combine(newDir, MainDb));
-            if (liveChat != null) await VacuumIntoAsync(liveChat, Path.Combine(newDir, ChatDb));
+            await VacuumIntoAsync(live, Path.Combine(newDir, MainDb), sealedRun, DbPurposes.Vault);
+            if (liveChat != null) await VacuumIntoAsync(liveChat, Path.Combine(newDir, ChatDb), sealedRun, DbPurposes.Chat);
             progress.Report("copy", 2, 2);
             live.Close();
             liveChat?.Close();
             options.Fault?.Invoke(FaultAfterCopy);
 
             // Step 3: the plan's steps on the copy.
-            using (var main = OpenCopy(Path.Combine(newDir, MainDb)))
-            using (var chat = File.Exists(Path.Combine(newDir, ChatDb)) ? OpenCopy(Path.Combine(newDir, ChatDb)) : null)
+            using (var main = sealedRun is null ? OpenCopy(Path.Combine(newDir, MainDb)) : sealedRun.OpenNew(Path.Combine(newDir, MainDb), DbPurposes.Vault))
+            using (var chat = !File.Exists(Path.Combine(newDir, ChatDb)) ? null
+                       : sealedRun is null ? OpenCopy(Path.Combine(newDir, ChatDb)) : sealedRun.OpenNew(Path.Combine(newDir, ChatDb), DbPurposes.Chat))
             {
                 var nodeId = await main.ExecuteScalarAsync<string>("SELECT node_id FROM tbl_node_identity LIMIT 1");
                 var ctx = new RekeyContext(d, newDir, main, chat, keys, Guid.TryParse(nodeId, out var g) ? g : Guid.Empty, progress, ct);
@@ -198,12 +220,20 @@ public static class RekeyRunner
 
                 // Step 5: scrub both files.
                 progress.Report("scrub", 0, 1);
-                await ScrubAsync(main, MainDb);
-                if (chat != null) await ScrubAsync(chat, ChatDb);
+                await ScrubAsync(main, MainDb, keyed: sealedRun is not null);
+                if (chat != null) await ScrubAsync(chat, ChatDb, keyed: sealedRun is not null);
                 progress.Report("scrub", 1, 1);
             }
             SqliteConnection.ClearAllPools();
             options.Fault?.Invoke(FaultAfterScrub);
+
+            // A sealed vault gets its boot store now, from the scrubbed copy: new identity and doors, the new database key under the new
+            // master DEK only. The old boot store stays with the parked old directory.
+            if (sealedRun is not null)
+            {
+                await sealedRun.WriteBootStoreAsync(newDir, keys.CampaignDek, ct);
+                options.Fault?.Invoke(FaultAfterBootStore);
+            }
 
             // The carry-over comes before the last D1 scan (review release-b R1-8): whatever it brings from D into the new
             // vault is scanned with the rest. It never follows a link (R1-7); what it skipped is named in the report.
@@ -215,6 +245,13 @@ public static class RekeyRunner
 
             // The D1 byte check, on the scrubbed files: no old ciphertext survives anywhere in them.
             var leaks = RekeyD1Check.CheckBytes(newDir, oldMaterial);
+            if (sealedRun is not null)
+            {
+                // The sealed files' bytes are encrypted: read as the plain image, and nothing of the old vault may open them.
+                leaks = [.. leaks, .. sealedRun.VerifyNewFilesOpen(newDir), .. await RekeyD1Check.CheckSealedAsync(newDir, sealedRun.D1Input, keys, oldMaterial, ct)];
+                report.Steps.Add(new RekeyStepResult(SealedVaultName,
+                    new Dictionary<string, long> { ["dbk_generation"] = sealedRun.NewGeneration }, ["boot-store:written"]));
+            }
             if (leaks.Count > 0) return FailVerify(report, leaks);
             progress.Report("verify", 1, 1);
 
@@ -247,6 +284,8 @@ public static class RekeyRunner
         finally
         {
             SqliteConnection.ClearAllPools();
+            if (sealedSource is not null)
+                foreach (var consumer in SealedConsumers(options)) consumer.SetSealedSource(null);
             if (!succeeded)
             {
                 // D is in use as before: the copy goes (a crash that skips this leaves it for the next run to discard).
@@ -283,32 +322,86 @@ public static class RekeyRunner
     /// write. Not <see cref="SqliteOpenMode.ReadOnly"/>: SQLite cannot open a WAL database read-only when its -wal and
     /// -shm files are gone (a cleanly stopped node), and fails with a disk I/O error.
     /// </summary>
-    public static SqliteConnection OpenLive(string path)
+    public static SqliteConnection OpenLive(string path) => OpenLive(path, pageKey: null);
+
+    /// <summary>
+    /// <see cref="OpenLive(string)"/> for a sealed file: opened with its page key (<see cref="SealedSqlite.OpenKeyed"/>; a key that does not
+    /// open it is <see cref="VaultKeyMismatchException"/>), with temporary tables in memory because the engine does not encrypt temporary
+    /// files (spec 7.1).
+    /// </summary>
+    internal static SqliteConnection OpenLive(string path, byte[]? pageKey)
     {
-        var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        SqliteConnection conn;
+        if (pageKey is null)
         {
-            DataSource = path, Mode = SqliteOpenMode.ReadWrite, Pooling = false
-        }.ToString());
-        conn.Open();
+            conn = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path, Mode = SqliteOpenMode.ReadWrite, Pooling = false
+            }.ToString());
+            conn.Open();
+        }
+        else
+        {
+            conn = SealedSqlite.OpenKeyed(path, pageKey);
+            conn.Execute("PRAGMA temp_store = MEMORY");
+        }
         conn.Execute("PRAGMA locking_mode = EXCLUSIVE");
         conn.Execute("PRAGMA query_only = ON");
         conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master"); // takes the lock now
         return conn;
     }
 
-    private static SqliteConnection OpenCopy(string path)
+    private static SqliteConnection OpenCopy(string path) => OpenCopy(path, pageKey: null);
+
+    internal static SqliteConnection OpenCopy(string path, byte[]? pageKey)
     {
-        var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
-        conn.Open();
+        SqliteConnection conn;
+        if (pageKey is null)
+        {
+            conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+            conn.Open();
+        }
+        else
+        {
+            conn = SealedSqlite.OpenKeyed(path, pageKey);
+            conn.Execute("PRAGMA temp_store = MEMORY");
+        }
         conn.Execute("PRAGMA locking_mode = EXCLUSIVE");
         return conn;
     }
 
+    /// <summary>The steps and the pre-flight that open the source's files themselves.</summary>
+    private static IEnumerable<IRekeySealedSourceConsumer> SealedConsumers(RekeyOptions options) =>
+        options.Steps.OfType<IRekeySealedSourceConsumer>().Concat(options.Preflight is IRekeySealedSourceConsumer p ? [p] : []);
+
+    /// <summary>Why the run cannot go on, or null: a sealed D needs <see cref="RekeyOptions.Sealed"/>, a plain D takes none.</summary>
+    private static string? SealedRefusal(string d, RekeySealedOptions? sealedOptions)
+    {
+        var main = Path.Combine(d, MainDb);
+        if (sealedOptions is null)
+            return new FileInfo(main).Length > 0 && !VaultStoreFiles.HasSqliteMagic(main)
+                ? $"{d} holds an encrypted vault: it can only be re-keyed with its keys (open it with the master password through the node or bmb)."
+                : null;
+        var diagnosis = VaultStoreFiles.Diagnose(d);
+        return diagnosis.Mode == VaultStoreMode.Sealed ? null
+            : $"{d} is not an encrypted vault in a state a re-key can use ({diagnosis.Mode}{(diagnosis.Reason is null ? "" : ": " + diagnosis.Reason)}); nothing was changed.";
+    }
+
     /// <summary>VACUUM INTO writes only the target, but query_only refuses it: lifted for this one statement.</summary>
-    private static async Task VacuumIntoAsync(SqliteConnection conn, string target)
+    private static async Task VacuumIntoAsync(SqliteConnection conn, string target, SealedRekeyRun? sealedRun, string purpose)
     {
         await conn.ExecuteAsync("PRAGMA query_only = OFF");
-        try { await conn.ExecuteAsync("VACUUM INTO @target", new { target }); }
+        try
+        {
+            if (sealedRun is null) await conn.ExecuteAsync("VACUUM INTO @target", new { target });
+            else
+            {
+                // A copy under the NEW vault's page key (spec 13.2, 7.4). The statement text holds the key, so it is built here and nowhere else.
+                var key = sealedRun.NewPageKey(purpose);
+                try { await conn.ExecuteAsync("VACUUM INTO " + SqlCipherScheme.VacuumIntoTarget(target, key)); }
+                finally { CryptographicOperations.ZeroMemory(key); }
+            }
+        }
         finally { await conn.ExecuteAsync("PRAGMA query_only = ON"); }
     }
 
@@ -328,10 +421,12 @@ public static class RekeyRunner
     }
 
     /// <summary>§2 step 5: freed pages zeroed and dropped, the WAL (if any) emptied, checked.</summary>
-    private static async Task ScrubAsync(SqliteConnection conn, string file)
+    private static async Task ScrubAsync(SqliteConnection conn, string file, bool keyed = false)
     {
         await conn.ExecuteAsync("PRAGMA secure_delete = ON");
-        await conn.ExecuteAsync("PRAGMA temp_store = FILE"); // VACUUM's copy goes to files, not RAM (the native SQLite defaults to memory)
+        // VACUUM's copy goes to files, not RAM (the native SQLite defaults to memory). Not on a sealed file: the engine does not encrypt
+        // temporary files, so a keyed connection keeps its temporary pages in memory (spec 7.1).
+        if (!keyed) await conn.ExecuteAsync("PRAGMA temp_store = FILE");
         await conn.ExecuteAsync("VACUUM");
         var (busy, _, _) = await conn.QuerySingleAsync<(long, long, long)>("PRAGMA wal_checkpoint(TRUNCATE)");
         if (busy != 0) throw new InvalidOperationException($"The WAL checkpoint of {file} could not complete.");

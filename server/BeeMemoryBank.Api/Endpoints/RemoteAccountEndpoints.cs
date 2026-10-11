@@ -3,6 +3,7 @@ using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Core.Exceptions;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -104,7 +105,7 @@ public static class RemoteAccountEndpoints
                 var sub = await svc.AddSubscriptionAsync(req.RemoteAccountId, req.RemoteFolderId, req.RemoteFolderPath, req.MountPath);
                 return Results.Ok(new { id = sub.Id, mountPath = sub.MountPath });
             }
-            catch (InvalidOperationException ex)
+            catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException)
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }

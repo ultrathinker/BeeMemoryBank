@@ -32,7 +32,7 @@ namespace BeeMemoryBank.Api.Startup;
 ///
 /// <para>This is a move, not a rewrite: the statements are in their original order.</para>
 /// </summary>
-public static class ApiServices
+public static partial class ApiServices
 {
     public static void AddBeeApiServices(this WebApplicationBuilder builder, string dataPath)
     {
@@ -55,6 +55,10 @@ else
     builder.Services.AddOnnxEmbeddings(dataPath);
 builder.Services.AddImageTranscoder();
 builder.Services.AddSync();
+// Step A composition hooks (docs/design/step-a-spec.md 15.2): the format-2 writer a full hub serves with (H3, track 2),
+// then baselines, join and restore (H4, track 3). Each is implemented in a file of its own track.
+AddFormat2ApiServices(builder.Services, role, dataPath);
+AddBaselineServices(builder.Services, role, dataPath);
 builder.Services.AddRecoveryApi();
 builder.Services.AddSingleton<SyncTokenStore>();
 // Per-node, not per-process: see SyncChallengeRateLimiter.
@@ -332,4 +336,10 @@ services.AddSingleton(new BeeMemoryBank.Api.Helpers.McpToolRegistry(new[]
     typeof(BeeConceptTools)
 }));
     }
+
+    /// <summary>Hook H3 (spec 15.2), track 2: <c>Startup/ApiServices.Format2.cs</c>.</summary>
+    static partial void AddFormat2ApiServices(IServiceCollection services, INodeRole role, string dataPath);
+
+    /// <summary>Hook H4 (spec 15.2), track 3: <c>Startup/ApiServices.Baselines.cs</c>.</summary>
+    static partial void AddBaselineServices(IServiceCollection services, INodeRole role, string dataPath);
 }

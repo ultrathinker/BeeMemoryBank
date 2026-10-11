@@ -38,6 +38,8 @@ public class OsSecretStoreUnavailableEndpointTests : IAsyncLifetime
             builder.ConfigureLogging(logging => logging.AddProvider(Logs));
             builder.ConfigureTestServices(services =>
             {
+                // The OS card belongs to a desktop node (docs/design/step-b-spec.md 11.0); on a server the same route answers 409 role_server.
+                services.Replace(ServiceDescriptor.Singleton(typeof(BeeMemoryBank.Infrastructure.AutoUnlock.HostRole?), (BeeMemoryBank.Infrastructure.AutoUnlock.HostRole?)BeeMemoryBank.Infrastructure.AutoUnlock.HostRole.Desktop));
                 services.Replace(ServiceDescriptor.Singleton<IUserSecretStore>(Store));
                 services.Replace(ServiceDescriptor.Singleton(sp => new OsAutoUnlockService(
                     sp.GetRequiredService<IKeySlotRepository>(), sp.GetRequiredService<SessionService>(), DataPath, Store)));

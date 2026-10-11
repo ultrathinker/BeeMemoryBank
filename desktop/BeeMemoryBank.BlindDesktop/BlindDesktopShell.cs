@@ -54,7 +54,7 @@ public sealed class BlindDesktopShell : ITrayActions
         var runtime = BlindDesktopRuntime.Create(_platform, () => _window, () => Dispatcher.UIThread.Post(ReturnToFirstRun));
         _runtime = runtime;
         _viewModel = new MainViewModel(runtime.App, runtime.Scheduler, runtime.Autostart, QrCodePng.Create,
-            action => Dispatcher.UIThread.Post(action), ErrorLog.Write, _platform.StatusAreaName);
+            action => Dispatcher.UIThread.Post(action), ErrorLog.Write, _platform.StatusAreaName, runtime.Stats.GetAsync);
         _viewModel.QuitRequested += Quit;
         _window!.DataContext = _viewModel;
         runtime.App.Changed += RequestTrayRefresh;

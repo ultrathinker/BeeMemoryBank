@@ -3,7 +3,9 @@ using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Blind.Format2;
 using BeeMemoryBank.Sync.Recovery;
 using Dapper;
 using Microsoft.Data.Sqlite;
@@ -62,10 +64,16 @@ public sealed class AndroidBackupRestoreSource(
 
             var parts = await BlindPhoneBackupBody.ReadAsync(opened.PackagePath, Path.Combine(work, "body"), _limits, ct);
             var events = await ReadEventsAsync(parts.EventsPath, ct);
-            await CheckPairingAsync(seal, opened.NodeId, parts.PackagePath, events, keys!, Path.Combine(work, "check"), ct);
+            // A node that has activated Step A hands the phone a format-2 package (docs/design/step-a-spec.md 12): the baseline is sealed
+            // and there is no database to check the pairing against, so the pairing is checked against the package's signed whitelist
+            // and the anchors the phone holds; the restore then verifies the package and opens the baseline with the recovered keys.
+            if (await RecoveryRestoreService.IsFormat2PackageAsync(parts.PackagePath, ct))
+                await CheckPairingV2Async(seal, opened.NodeId, parts.PackagePath, events, keys!, ct);
+            else
+                await CheckPairingAsync(seal, opened.NodeId, parts.PackagePath, events, keys!, Path.Combine(work, "check"), ct);
 
             // The node the phone calls becomes this device's first peer, dialed pinned as the pairing recorded it.
-            return await restore.RestoreFromPackageAsync(parts.PackagePath, parts.Signature, seal.ProducerPublicKey, who,
+            return await restore.RestoreFromBlindPackageAsync(parts.PackagePath, parts.Signature, seal.ProducerPublicKey, who,
                 new RestoreBlindPeer(seal.ProducerNodeId, "Listening node", seal.ProducerPublicKey, seal.ProducerAddress,
                     CpSeq: 0, TlsSpki: string.IsNullOrEmpty(seal.ProducerTlsSpki) ? null : seal.ProducerTlsSpki,
                     TlsTrust: seal.ProducerTrust),
@@ -135,6 +143,66 @@ public sealed class AndroidBackupRestoreSource(
         if (!anchor.Vouches(seal.PairedBy))
             throw new InvalidDataException(
                 "No anchor under the master key vouches for the superadmin that paired this phone; its backup cannot say who produced it.");
+    }
+
+    /// <summary>
+    /// The pairing record's authority for a format-2 package: signed by the node that paired the phone, that node a superadmin in the
+    /// package's whitelist, and an anchor under the master key, found among the PHONE's events, whose own trust section lists that node
+    /// as a superadmin and was signed by one. The whole-state match of the format-1 check is not available before the baseline is
+    /// opened; the restore makes it after the replay and reports it (<see cref="RestoreResult.Anchor"/>). The package's own signature
+    /// is verified by the restore against the producer key the pairing record holds, before anything of it is read.
+    /// </summary>
+    private async Task CheckPairingV2Async(BlindPhoneBackupSeal seal, Guid phoneId, string packagePath,
+        IReadOnlyList<SyncEvent> events, RecoveredKeys keys, CancellationToken ct)
+    {
+        BlindManifestV2 manifest;
+        try
+        {
+            manifest = BlindManifestV2.Parse(await Format2Package.ReadEntryAsync(packagePath, BlindManifestV2.FileName, 4L * 1024 * 1024, ct)
+                ?? throw new InvalidDataException("Not a blind package: blind-manifest.json is missing."));
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException("Not a blind package: its manifest is not readable.", ex);
+        }
+        var publicKeys = new Dictionary<Guid, byte[]>();
+        foreach (var peer in manifest.Whitelist)
+        {
+            try { publicKeys[peer.NodeId] = Convert.FromBase64String(peer.PublicKeyB64); }
+            catch (FormatException) { /* a row without a usable key vouches for nothing */ }
+        }
+        var pairedBy = manifest.Whitelist.Where(p => p.NodeId == seal.PairedBy).ToList();
+        if (pairedBy is not [{ IsSuperadmin: true } signer] || !publicKeys.TryGetValue(signer.NodeId, out var signerKey)
+            || !Ed25519Signer.Verify(signerKey, seal.PairingStatement(phoneId), seal.PairingSignature))
+            throw new InvalidDataException("The phone's pairing record is not signed by a superadmin of this network; pair the phone again.");
+        if (!keys.HeadProven || !AnchorVouchesFor(events, publicKeys, keys.Current, seal.PairedBy))
+            throw new InvalidDataException(
+                "No anchor under the master key vouches for the superadmin that paired this phone; its backup cannot say who produced it.");
+    }
+
+    /// <summary>
+    /// Is there a state anchor among <paramref name="events"/> that a known node signed, that verifies under <paramref name="dek"/>, whose
+    /// signer was a superadmin at its cut and whose trust section lists <paramref name="nodeId"/> as a superadmin with the key held?
+    /// </summary>
+    internal static bool AnchorVouchesFor(IReadOnlyList<SyncEvent> events, IReadOnlyDictionary<Guid, byte[]> publicKeys, byte[] dek, Guid nodeId)
+    {
+        if (!publicKeys.TryGetValue(nodeId, out var nodeKey)) return false;
+        var fingerprint = DekFingerprint.Of(dek);
+        foreach (var evt in events)
+        {
+            if (evt.EventType != EventTypes.StateAnchor || !publicKeys.TryGetValue(evt.NodeId, out var key)) continue;
+            StateAnchorPayload? a;
+            try { a = JsonSerializer.Deserialize<StateAnchorPayload>(evt.Payload); }
+            catch (JsonException) { continue; }
+            if (a is not { PositionVector: not null } || a.DekFingerprint != fingerprint
+                || !Ed25519Signer.Verify(key, EventSignature.BuildPayload(evt), evt.Signature)
+                || !StateAnchorCrypto.Verify(dek, a.AnchorId, a.DekFingerprint, a.PositionVector, a.Digest, a.CreatedAt, a.Hmac)
+                || StateDigest.FormatOf(a.Digest) != StateDigest.FormatVersion)
+                continue;
+            if (StateDigest.TrustProves(a.Digest, evt.NodeId, key, superadmin: true) && StateDigest.TrustProves(a.Digest, nodeId, nodeKey, superadmin: true))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>The phone's events, read one at a time and stopped at the limit — never a whole oversized list in memory.</summary>

@@ -4,6 +4,8 @@ using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Blind.Format2;
+using BeeMemoryBank.Sync.Metadata;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -79,11 +81,19 @@ public static class BlindEndpoints
         }).WithTags("Blind");
     }
 
-    /// <summary>Mapped on every node: a hub serves replicas too (plan 10).</summary>
+    /// <summary>How long a caller waits before it asks an activated node without a sealed baseline again (spec 9.7).</summary>
+    public const int NoBaselineRetryAfterSeconds = 600;
+
+    /// <summary>
+    /// Mapped on every node: a hub serves replicas too (plan 10). Once activated (step-a-spec 8.7) the replica is format 2:
+    /// a <c>full</c> package, or with <c>?have=&lt;baseline id&gt;</c> 304 when that is still the baseline here, else a
+    /// <c>baseline</c> package (the caller fetches missing blobs with /api/sync/blobs/get). An activated node with nothing
+    /// sealed to serve answers 503 with Retry-After, never format 1.
+    /// </summary>
     public static void MapBlindReplicaEndpoint(this WebApplication app)
     {
         app.MapGet("/api/blind/replica", async (
-            HttpContext ctx, SyncTokenStore store, BlindReplicaPackageCache packages, INodeRole role, CancellationToken ct) =>
+            HttpContext ctx, SyncTokenStore store, BlindReplicaPackageCache packages, INodeRole role, string? have, CancellationToken ct) =>
         {
             if (await SyncEndpoints.AuthenticatePeerAsync(ctx, store) is not { } peer) return Results.Unauthorized();
             // Only for a blind peer: a full node joins through /api/join and gets the join snapshot,
@@ -96,6 +106,16 @@ public static class BlindEndpoints
             {
                 ctx.Response.Headers.RetryAfter = ((int)BlindReplicaPackageCache.AdmissionWindow.TotalSeconds).ToString();
                 return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+            }
+
+            if (ctx.RequestServices.GetService<ISyncProtocolPolicy>() is { SealsMetadata: true })
+            {
+                if (await ServableBaselineAsync(ctx, ct) is not { } baseline)
+                    return NoSealedBaseline(ctx);
+                if (have is not null && Guid.TryParse(have, out var held) && held == baseline.Files.Manifest.BaselineId)
+                    return Results.StatusCode(StatusCodes.Status304NotModified);
+                var kind = have is null ? BlindPackageKinds.Full : BlindPackageKinds.Baseline;
+                return await ServeAsync(ctx, await packages.AcquireV2Async(kind, baseline, ct), ct);
             }
 
             // The producer's row in the package is what makes it a reseed authority on the receiving
@@ -111,25 +131,42 @@ public static class BlindEndpoints
                 if (role.IsBlind || ctx.RequestServices.GetService<IReplicaProducerAuthority>() is not { } producerAuthority) return false;
                 return await producerAuthority.IsSuperadminAsync(buildCt);
             }, ct);
-            try
-            {
-                var package = lease.Package;
-                ctx.Response.Headers["X-BMB-Package-Sha256"] = package.Sha256;
-                // The detached signature, as the restore route sends it: an Android blind node keeps it with the
-                // package in its backups, so a restore from a backup checks the same two signatures.
-                ctx.Response.Headers["X-BMB-Snapshot-Signature"] = Convert.ToBase64String(await File.ReadAllBytesAsync(package.FilePath + ".sig", ct));
-                ctx.Response.Headers["X-BMB-Blind-Seed-Id"] = package.Manifest.SeedId.ToString();
-                var stream = new FileStream(package.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
-                    bufferSize: 81920, FileOptions.Asynchronous);
-                ctx.Response.OnCompleted(() => lease.DisposeAsync().AsTask());
-                return Results.File(stream, "application/gzip", "bmb-blind-package.tar.gz", enableRangeProcessing: true);
-            }
-            catch
-            {
-                await lease.DisposeAsync();
-                throw;
-            }
+            return await ServeAsync(ctx, lease, ct);
         }).WithTags("Blind");
+    }
+
+    private static async Task<IResult> ServeAsync(HttpContext ctx, BlindReplicaPackageCache.Lease lease, CancellationToken ct)
+    {
+        try
+        {
+            var package = lease.Served;
+            ctx.Response.Headers["X-BMB-Package-Sha256"] = package.Sha256;
+            // The detached signature, as the restore route sends it: an Android blind node keeps it with the
+            // package in its backups, so a restore from a backup checks the same two signatures.
+            ctx.Response.Headers["X-BMB-Snapshot-Signature"] = Convert.ToBase64String(await File.ReadAllBytesAsync(package.FilePath + ".sig", ct));
+            ctx.Response.Headers["X-BMB-Blind-Seed-Id"] = package.SeedId.ToString();
+            var stream = new FileStream(package.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
+                bufferSize: 81920, FileOptions.Asynchronous);
+            ctx.Response.OnCompleted(() => lease.DisposeAsync().AsTask());
+            return Results.File(stream, "application/gzip", "bmb-blind-package.tar.gz", enableRangeProcessing: true);
+        }
+        catch
+        {
+            await lease.DisposeAsync();
+            throw;
+        }
+    }
+
+    /// <summary>What this node can serve sealed (spec 9.7): a blind host's adopted baseline, a full hub's newest produced one.</summary>
+    internal static async Task<ServableBaseline?> ServableBaselineAsync(HttpContext ctx, CancellationToken ct) =>
+        ctx.RequestServices.GetService<IBaselineSource>() is { } source ? await source.GetServableAsync(ct) : null;
+
+    /// <summary>An activated node with no sealed baseline yet: 503 and Retry-After, never a format-1 package (spec 9.7).</summary>
+    internal static IResult NoSealedBaseline(HttpContext ctx)
+    {
+        ctx.Response.Headers.RetryAfter = NoBaselineRetryAfterSeconds.ToString();
+        return Results.Json(new { error = "NO_SEALED_BASELINE", message = "This node has no sealed baseline yet." },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     /// <summary>

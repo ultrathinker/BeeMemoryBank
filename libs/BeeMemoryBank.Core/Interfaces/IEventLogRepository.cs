@@ -5,9 +5,11 @@ namespace BeeMemoryBank.Core.Interfaces;
 
 public interface IEventLogRepository
 {
-    Task AppendAsync(SyncEvent evt, IDbTransaction? transaction = null);
+    /// <param name="local">The local columns (step-a-spec 6.1): an author's own sealed event keeps its opened type and article.</param>
+    Task AppendAsync(SyncEvent evt, IDbTransaction? transaction = null, EventRowLocal? local = null);
     /// <summary>Atomically inserts the event if not already present. Returns true if inserted, false if duplicate.</summary>
-    Task<bool> AppendIfNotExistsAsync(SyncEvent evt);
+    /// <param name="local">How this node holds it (applied, held, relayed) and who delivered it; null = applied, origin unknown.</param>
+    Task<bool> AppendIfNotExistsAsync(SyncEvent evt, EventRowLocal? local = null);
     Task<bool> ExistsAsync(Guid eventId);
     /// <summary>
     /// Where this node's Lamport clock starts: the newest event's time, or the durable floor a snapshot join or a
@@ -52,4 +54,19 @@ public interface IEventLogRepository
     /// </summary>
     Task<int> CountEventsAfterSequenceAsync(long seqNum);
     Task<SyncEvent?> GetByIdAsync(string eventId);
+
+    // ─── Held events (step-a-spec 6) ────────────────────────────────────────
+
+    /// <summary>True when any row is held (apply_state 1).</summary>
+    Task<bool> AnyHeldAsync();
+    /// <summary>Sequence numbers of held rows in log order, after <paramref name="afterSequenceNum"/>.</summary>
+    Task<List<long>> GetHeldSequencesAsync(long afterSequenceNum, int limit);
+    /// <summary>The row at <paramref name="sequenceNum"/> if it is held, with its receipt; null otherwise.</summary>
+    Task<HeldEventRow?> GetHeldAsync(long sequenceNum);
+    /// <summary>A held row applied: state 0, the opened view's type and article, the derived entity id and the actor columns.</summary>
+    Task MarkHeldAppliedAsync(long sequenceNum, string? localType, Guid? localArticleId, string? entityId, string? actorType, string? actorName);
+    /// <summary>A held row that still cannot apply now: the reason it waits for.</summary>
+    Task SetHoldReasonAsync(long sequenceNum, string reason);
+    /// <summary>A held row settled without applying: relayed (2) or quarantined after receipt (3).</summary>
+    Task SetApplyStateAsync(long sequenceNum, int applyState);
 }

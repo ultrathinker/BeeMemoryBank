@@ -1,12 +1,14 @@
 @inject BeeMemoryBank.Web.Services.ApiClient ApiClient
 
-@* The layout's sync warnings, from one /api/sync/status call: a peer on a newer protocol, and a node that cannot catch up. *@
+@* The layout's sync warnings, from one /api/sync/status call: a peer on a newer protocol, a node that cannot catch up,
+   and changes received but not applied yet. *@
 @{
     var hasNewer = false;
     string? snapshotRequired = null;
+    (string Message, bool Warning)? held = null;
     try
     {
-        (hasNewer, snapshotRequired) = await ApiClient.GetSyncAlertsAsync();
+        (hasNewer, snapshotRequired, held) = await ApiClient.GetSyncAlertsAsync();
     }
     catch {}
 }
@@ -23,5 +25,12 @@
     <sl-alert variant="danger" open style="margin:12px 16px 0;" data-testid="snapshot-required-alert">
         <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
         <strong>@snapshotRequired</strong>
+    </sl-alert>
+}
+@if (held is { } waiting)
+{
+    <sl-alert variant="@(waiting.Warning ? "warning" : "primary")" open style="margin:12px 16px 0;" data-testid="held-events-alert">
+        <sl-icon slot="icon" name="hourglass-split"></sl-icon>
+        @waiting.Message
     </sl-alert>
 }

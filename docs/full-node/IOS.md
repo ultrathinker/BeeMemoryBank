@@ -56,6 +56,14 @@ golden list keeps the blind libraries out of this one.
   random 256-bit key wraps the master key the way a password-derived key does in a key slot. A key that unwraps to anything but this
   vault's master key (checked against the vault's sentinel) is never installed: Face ID unlock turns itself off and the password is
   asked for (this happens after a master-key rotation on another node).
+* **Encrypting the database (2.6.0).** A phone can encrypt its database like any other node (`docs/sealed-database.md`, "Phones"): the
+  database key and the page keys exist only while the database is open and are never given to the Keychain. On an encrypted phone Face ID
+  unlock opens the database through the same door as a password: the Keychain key unwraps the master key, the master key unwraps the
+  database key inside the app, and the vault's sentinel is checked after the open (a key that no longer opens it turns Face ID unlock
+  off). The database closes whenever the app leaves the screen. The start sequence is `PhoneVaultLifecycle` (`libs/BeeMemoryBank.Vault/Sealed`),
+  which the tests in `tests/BeeMemoryBank.FullIos.Tests/PhoneVaultLifecycleTests.cs` drive on any OS with a fake Keychain. "Encrypt this
+  iPhone's database" (Settings) stays hidden until the native release gate of the step-b spec (12.4) has been run on a Mac and a device or
+  simulator; until then the app starts exactly as before.
 * **Locking.** The vault locks when the app leaves the screen - immediately by default; "after 1 minute" and "after 5 minutes" are
   choices, judged when the app comes back, because Argon2id costs seconds on a phone - and after 5 minutes on the screen without a touch
   or a keystroke (2 and 15 are choices). Locking throws away every page that showed a note. While the app is not active (app switcher,
@@ -64,6 +72,28 @@ golden list keeps the blind libraries out of this one.
   vault is already copied on every node of the network. The titles and folder paths are plaintext in the database, as on every node
   (ADR-0005); the file protection keeps them unreadable while the phone is off or not yet unlocked since it started. "Complete" protection
   was not chosen: SQLite keeps its files open across the moment the phone locks during the last sync round.
+
+## Encrypting the phone's database (2.6.0)
+
+The phone is a full node, so it can seal its own database like every node. Updating the app to 2.6.0 changes nothing
+by itself — the vault stays as it is until you start it — and Settings then offers an **Encrypt Database** page that
+runs the same migration as a computer's "Encrypt this node": a progress page keeps the screen on and the app in the
+foreground until it is done, and a phone killed midway is resolved at the next start. Two of the preflight checks are
+a phone's own:
+
+* the app must be in the **foreground**, with the battery at 30 % or on charge;
+* a phone makes no snapshot of itself, so the migration starts only if some peer already holds everything this phone
+  has (a full peer's sync position at or above this phone's head) — or you tick **"This phone holds the only copy of
+  these notes; encrypting cannot be undone"**.
+
+Until the release gate on real devices has passed, the page stays hidden and the release notes do not offer it.
+
+After the encryption, nothing changes in the hand. Face ID / Touch ID quick unlock still opens the sealed vault (the
+Keychain key remains one of its doors, and a key that no longer opens turns quick unlock off as before), and locking
+the app closes the database as it always did. A closed phone's app container holds the ciphertext and the small
+plaintext boot store — no names, no notes — still excluded from iCloud and computer backups. The way back on a phone
+is not a snapshot: it is removing the vault and joining again from a peer, which produces a plain vault you can
+encrypt again. [sealed-database.md](../sealed-database.md) is the full guide.
 
 ## Notes
 

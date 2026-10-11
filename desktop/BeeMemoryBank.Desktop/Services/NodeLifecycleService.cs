@@ -147,7 +147,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
             {
                 progress?.Report("Checking for legacy data to rescue...");
                 var legacyDataDir = Path.Combine(AppContext.BaseDirectory, "data");
-                var rescueResult = LegacyDataRescue.TryRescue(legacyDataDir, dataDir);
+                var rescueResult = LegacyDataRescue.TryRescue(legacyDataDir, dataDir, TestOnly_LogRootOverride);
                 if (rescueResult.Outcome == RescueOutcome.LegacyFoundButRescueFailed)
                 {
                     return NodeLifecycleResult.Error(
@@ -266,6 +266,9 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                     WorkingDirectory = Path.GetDirectoryName(nodeExePath)
                 };
                 startInfo.EnvironmentVariables["BMB_STDIN_LIFELINE"] = "1";
+                // The node a desktop application starts is a desktop node: it gets the OS auto-unlock card, not the server checkbox
+                // (docs/design/step-b-spec.md 11.0). This is the only place that sets BMB_HOST_ROLE; every other start is a server.
+                startInfo.EnvironmentVariables["BMB_HOST_ROLE"] = "desktop";
 
                 // Generate the shared internal-key secret HERE (Desktop is the parent process
                 // spawning bmbd) rather than letting bmbd invent its own: bmbd/Program.cs never
@@ -285,7 +288,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                 // Simple log rotation: leave at most 10 bmbd-*.log files
                 try
                 {
-                    var logsDir = BmbPaths.LogsDir;
+                    var logsDir = LogsDir;
                     var existingLogs = Directory.GetFiles(logsDir, "bmbd-*.log")
                         .Select(f => new FileInfo(f))
                         .OrderByDescending(f => f.LastWriteTimeUtc)
@@ -312,7 +315,7 @@ public sealed class NodeLifecycleService : INodeLifecycleService
                 }
 
                 var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-                var logPath = Path.Combine(BmbPaths.LogsDir, $"bmbd-{timestamp}.log");
+                var logPath = Path.Combine(LogsDir, $"bmbd-{timestamp}.log");
                 var logLock = new object();
 
                 var proc = new Process { StartInfo = startInfo };
@@ -583,6 +586,22 @@ public sealed class NodeLifecycleService : INodeLifecycleService
     /// readiness wait - lets a test capture the pid of a process that StartOrAttachAsync may
     /// later kill+clear on failure, without racing a same-name process scan.</summary>
     internal Action<int>? TestOnly_OnHostedProcessStarted { get; set; }
+
+    /// <summary>Overrides the BeeMemoryBankData folder the rescue log and the bmbd output logs are written under
+    /// (their <c>migration\</c> and <c>logs\</c> subfolders). Null in production (<see cref="BmbPaths.Root"/>); tests point
+    /// it at their own folder so they never write into, or rotate the logs of, the owner's real data folder (BMB-184).</summary>
+    internal string? TestOnly_LogRootOverride { get; set; }
+
+    /// <summary>The folder bmbd output logs go to (see <see cref="TestOnly_LogRootOverride"/>); created on demand.</summary>
+    private string LogsDir
+    {
+        get
+        {
+            var path = Path.Combine(TestOnly_LogRootOverride ?? BmbPaths.Root, "logs");
+            Directory.CreateDirectory(path);
+            return path;
+        }
+    }
 
     internal void TestOnly_SetHosted(Process proc, StreamWriter stdin)
     {

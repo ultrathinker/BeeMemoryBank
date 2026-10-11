@@ -1,7 +1,10 @@
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sealed;
+using BeeMemoryBank.Vault.Metadata;
 using Microsoft.Data.Sqlite;
 
 namespace BeeMemoryBank.Api.Services;
@@ -74,6 +77,83 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         }
     }
 
+    public async Task<bool> EncryptDatabaseAsync(string dbPath, bool wipePlain, Action<string>? afterOverwrite)
+    {
+        if (session is { IsUnlocked: false })
+            throw new InvalidOperationException(
+                "Cannot create an encrypted snapshot while the vault is locked. Unlock it first, " +
+                "or request an unencrypted snapshot explicitly.");
+
+        if (session is null) return false;
+        var masterDek = session.GetMasterDek();
+        try
+        {
+            await SnapshotService.EncryptDbFileAsync(dbPath, masterDek, wipePlain: wipePlain, afterOverwrite: afterOverwrite);
+            return true;
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
+    }
+
+    public async Task<bool> EncryptSealedDatabaseAsync(string sealedDbPath, byte[] pageKey)
+    {
+        if (session is { IsUnlocked: false })
+            throw new InvalidOperationException(
+                "Cannot create an encrypted snapshot while the vault is locked. Unlock it first, " +
+                "or request an unencrypted snapshot explicitly.");
+
+        if (session is null) return false;
+        var masterDek = session.GetMasterDek();
+        try
+        {
+            byte[] container;
+            // The plain image exists as bytes in memory only, and the reader's handle is closed before the container is written over the file.
+            await using (var image = PlainImageReader.Open(sealedDbPath, pageKey))
+                container = await Bmbdb2Container.EncryptAsync(image, image.Length, masterDek);
+            await File.WriteAllBytesAsync(sealedDbPath, container);
+            return true;
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
+    }
+
+    public async Task SealJoinSealedDatabaseAsync(string sealedDbPath, byte[] pageKey)
+    {
+        if (session is not { IsUnlocked: true })
+            throw new InvalidOperationException(
+                "Cannot create an encrypted join snapshot while the vault is locked. Unlock it first.");
+        var masterDek = session.GetMasterDek();
+        var containerPath = sealedDbPath + ".sealed";
+        try
+        {
+            var label = ChunkedContainer.DekKeyLabel(DekFingerprint.Of(masterDek));
+            await using (var image = PlainImageReader.Open(sealedDbPath, pageKey))
+            await using (var output = OwnerOnlyFile.CreateNew(containerPath))
+                await ChunkedContainer.EncryptAsync(image, output, ChunkedContainer.PurposeJoin, label, masterDek);
+            // Written over the staging path in place, like the BMBDB2 container: a replace-by-rename fails on Windows while anything (an
+            // indexer, a scanner) still has the old file open.
+            await using (var container = new FileStream(containerPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
+            await using (var target = new FileStream(sealedDbPath, FileMode.Create, FileAccess.Write, FileShare.Read, 81920, useAsync: true))
+                await container.CopyToAsync(target);
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+            if (File.Exists(containerPath)) File.Delete(containerPath);
+        }
+    }
+
+    public byte[] CopyMasterDek()
+    {
+        if (session is not { IsUnlocked: true })
+            throw new InvalidOperationException("The vault is locked: unlock it first.");
+        return session.GetMasterDek();
+    }
+
     public async Task DecryptDatabaseIfNeededAsync(string extractedDbPath)
     {
         if (session is not { IsUnlocked: true })
@@ -102,6 +182,43 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         }
     }
 
+    public async Task SealJoinDatabaseAsync(string dbPath)
+    {
+        if (session is not { IsUnlocked: true })
+            throw new InvalidOperationException(
+                "Cannot create an encrypted join snapshot while the vault is locked. Unlock it first.");
+        var masterDek = session.GetMasterDek();
+        // Beside the file, in the same owner-only staging folder; the swept prefix of the snapshot's working copy.
+        var sealedPath = dbPath + ".sealed";
+        try
+        {
+            var label = ChunkedContainer.DekKeyLabel(DekFingerprint.Of(masterDek));
+            await using (var plain = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
+            await using (var output = OwnerOnlyFile.CreateNew(sealedPath))
+                await ChunkedContainer.EncryptAsync(plain, output, ChunkedContainer.PurposeJoin, label, masterDek);
+            File.Move(sealedPath, dbPath, overwrite: true);
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+            if (File.Exists(sealedPath)) File.Delete(sealedPath);
+        }
+    }
+
+    public string? GetJoinKeyFingerprint()
+    {
+        if (session is not { IsUnlocked: true }) return null;
+        var masterDek = session.GetMasterDek();
+        try
+        {
+            return DekFingerprint.Of(masterDek);
+        }
+        finally
+        {
+            Array.Clear(masterDek);
+        }
+    }
+
     public async Task ReEncryptDatabaseIfUnlockedAsync(string dbPath)
     {
         if (session is not { IsUnlocked: true }) return;
@@ -117,11 +234,15 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
     }
 
     public (byte[] Wrapped, byte[] Iv, int Version) SealIdentitySeedForRestore(
-        string stagedDbPath, Guid newNodeId, byte[] seed, string? masterPassword)
+        string stagedDbPath, Guid newNodeId, byte[] seed, string? masterPassword) =>
+        SealIdentitySeedForRestore(stagedDbPath, newNodeId, seed, masterPassword, OpenPlainStaged);
+
+    public (byte[] Wrapped, byte[] Iv, int Version) SealIdentitySeedForRestore(
+        string stagedDbPath, Guid newNodeId, byte[] seed, string? masterPassword, Func<string, SqliteConnection> openStaged)
     {
         // The key that has to wrap the seed is the one the restored database will hand out at its next unlock — the key its own
         // slots hold — not necessarily the one this session holds.
-        var dek = FindStagedMasterDek(stagedDbPath, masterPassword)
+        var dek = FindStagedMasterDek(stagedDbPath, masterPassword, openStaged)
             ?? throw new InvalidOperationException(
                 "This snapshot cannot be restored: the master password does not open its key slots, so the node's new identity " +
                 "could not be stored under the snapshot's master key. Nothing was changed.");
@@ -136,13 +257,13 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         }
     }
 
-    // Same bounds SessionService enforces before it runs a key slot's KDF: a snapshot's slots are data from another database and
-    // choose their own cost.
-    private const int MinArgonMemory = 32768;
-    private const int MinArgonIterations = 2;
-    private const int MaxArgonMemory = 1_048_576;
-    private const int MaxArgonIterations = 20;
-    private const int MaxArgonParallelism = 16;
+    /// <summary>A plain staged database. Pooling=False: the staged file is moved over the live database moments later.</summary>
+    private static SqliteConnection OpenPlainStaged(string stagedDbPath)
+    {
+        var conn = new SqliteConnection($"Data Source={stagedDbPath.Replace("'", "''")};Pooling=False");
+        conn.Open();
+        return conn;
+    }
 
     /// <summary>
     /// The master DEK of the staged database, or null when none is found. Tried in this order: the session's key when it opens the
@@ -150,11 +271,9 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
     /// the session's key when the database has no sentinel to check it against (a vault from before sentinels — the same trust an
     /// unlock places in it). Whatever is returned is the caller's to wipe.
     /// </summary>
-    private byte[]? FindStagedMasterDek(string stagedDbPath, string? masterPassword)
+    public byte[]? FindStagedMasterDek(string stagedDbPath, string? masterPassword, Func<string, SqliteConnection> openStaged)
     {
-        // Pooling=False: the staged file is moved over the live database moments later.
-        using var conn = new SqliteConnection($"Data Source={stagedDbPath.Replace("'", "''")};Pooling=False");
-        conn.Open();
+        using var conn = openStaged(stagedDbPath);
 
         byte[]? sentinel;
         using (var cmd = conn.CreateCommand())
@@ -182,9 +301,8 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
             while (reader.Read())
             {
                 int memory = reader.GetInt32(3), iterations = reader.GetInt32(4), parallelism = reader.GetInt32(5);
-                if (memory < MinArgonMemory || iterations < MinArgonIterations
-                    || memory > MaxArgonMemory || iterations > MaxArgonIterations || parallelism > MaxArgonParallelism)
-                    continue;
+                try { KeyDerivation.ValidateUntrustedParameters(memory, iterations, parallelism); }
+                catch (System.Security.Cryptography.CryptographicException) { continue; }
 
                 byte[]? kek = null;
                 byte[]? dek = null;

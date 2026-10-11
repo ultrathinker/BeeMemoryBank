@@ -19,7 +19,8 @@ public class RecoveryEventPublisher(
     SessionService session,
     EventApplier applier,
     ISyncTrigger syncTrigger,
-    IOwnStandingProvider standing)
+    IOwnStandingProvider standing,
+    Metadata.ISyncProtocolPolicy? protocolPolicy = null)
 {
     private static readonly JsonSerializerOptions JsonOpts = new();
 
@@ -48,7 +49,8 @@ public class RecoveryEventPublisher(
             EntityId = EventEntityId.Derive(eventType, null, payloadJson),
             Payload = payloadJson,
             Signature = [],
-            ProtocolVersion = SyncProtocolVersion.Current,
+            // What this node declares (docs/design/step-a-spec.md 5.6); a recovery event is a control event, always clear.
+            ProtocolVersion = protocolPolicy?.Declared ?? SyncProtocolVersion.Current,
             CreatedAt = DateTime.UtcNow,
             ActorType = "system",
             ActorName = identity.DisplayName,

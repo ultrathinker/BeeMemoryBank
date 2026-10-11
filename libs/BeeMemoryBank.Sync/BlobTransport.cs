@@ -42,7 +42,17 @@ internal static class BlobTransport
         HttpClient http, string baseUrl, string token, IReadOnlyList<SyncEvent> events,
         IBlobRepository blobRepo, ILogger logger, CancellationToken ct)
     {
-        var referenced = BlobReferences.Collect(events);
+        await ShipHashesAsync(http, baseUrl, token, BlobReferences.Collect(events), blobRepo, logger, ct, $"{events.Count} event(s)");
+    }
+
+    /// <summary>
+    /// The same push for a list of blob hashes that no event names: the blobs of a baseline (<c>blobs.txt</c>), which a blind node must hold
+    /// before it adopts the baseline (docs/design/step-a-spec.md 8.7, 9.2).
+    /// </summary>
+    public static async Task ShipHashesAsync(
+        HttpClient http, string baseUrl, string token, IReadOnlyCollection<string> referenced,
+        IBlobRepository blobRepo, ILogger logger, CancellationToken ct, string ahead = "the next package")
+    {
         if (referenced.Count == 0) return;
 
         var missing = new HashSet<string>(StringComparer.Ordinal);
@@ -75,8 +85,8 @@ internal static class BlobTransport
         }
 
         if (shipped > 0)
-            logger.LogInformation("Blob transport: shipped {Shipped} blob(s) to {Base} ahead of {Events} event(s)",
-                shipped, baseUrl, events.Count);
+            logger.LogInformation("Blob transport: shipped {Shipped} blob(s) to {Base} ahead of {Ahead}",
+                shipped, baseUrl, ahead);
     }
 
     /// <summary>
@@ -89,12 +99,22 @@ internal static class BlobTransport
         HttpClient http, string baseUrl, string token, IReadOnlyList<SyncEvent> events,
         IBlobRepository blobRepo, ILogger logger, CancellationToken ct)
     {
-        var referenced = BlobReferences.Collect(events);
-        if (referenced.Count == 0) return;
+        await FetchHashesAsync(http, baseUrl, token, BlobReferences.Collect(events), blobRepo, logger, ct);
+    }
+
+    /// <summary>
+    /// The same fetch for a list of hashes no event names: the blobs of a baseline (<c>blobs.txt</c>), which a phone gets from the
+    /// node that serves the baseline before it adopts it (docs/design/step-a-spec.md 13.3). Returns how many of them are still missing.
+    /// </summary>
+    public static async Task<int> FetchHashesAsync(
+        HttpClient http, string baseUrl, string token, IReadOnlyCollection<string> referenced,
+        IBlobRepository blobRepo, ILogger logger, CancellationToken ct)
+    {
+        if (referenced.Count == 0) return 0;
 
         var have = await blobRepo.GetExistingAsync(referenced);
         var missing = referenced.Where(h => !have.Contains(h)).ToList();
-        if (missing.Count == 0) return;
+        if (missing.Count == 0) return 0;
 
         int fetched = 0, unavailable = 0;
         // Work through `missing` in fixed-size requests. The peer answers each with as many of the
@@ -152,8 +172,9 @@ internal static class BlobTransport
             }
         }
 
-        logger.LogInformation("Blob transport: fetched {Fetched} blob(s) from {Base} for {Events} event(s){Unavailable}",
-            fetched, baseUrl, events.Count, unavailable > 0 ? $", {unavailable} unavailable" : "");
+        logger.LogInformation("Blob transport: fetched {Fetched} blob(s) from {Base} of {Referenced} referenced{Unavailable}",
+            fetched, baseUrl, referenced.Count, unavailable > 0 ? $", {unavailable} unavailable" : "");
+        return unavailable;
     }
 
     // ─── Wire ───────────────────────────────────────────────────────────────────

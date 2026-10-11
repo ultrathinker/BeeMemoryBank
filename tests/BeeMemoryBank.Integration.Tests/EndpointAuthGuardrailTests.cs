@@ -19,6 +19,7 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         "/api/version",
         "/api/init/status",
         "/api/session/status",
+        "/api/vault/status",   // an allow-list route of a closed node (step-b-spec 5.6, 6.7): the login page reads it before anyone has signed in; no path, size or key
         "/api/session/unlock",
         "/api/session/login",
         "/api/sync/identity",

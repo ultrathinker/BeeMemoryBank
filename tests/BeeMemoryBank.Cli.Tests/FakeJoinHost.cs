@@ -6,9 +6,26 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Vault.Metadata;
 using Microsoft.Data.Sqlite;
 
 namespace BeeMemoryBank.Cli.Tests;
+
+/// <summary>How a <see cref="FakeJoinHost"/> behaves about metadata encryption (docs/design/step-a-spec.md 11).</summary>
+internal enum FakeHostActivation
+{
+    /// <summary>A 2.5.1 host, or a 2.6 host that has not activated: declares protocol 3 and sends a plain archive.</summary>
+    None,
+
+    /// <summary>An activated host: declares protocol 4 and seals the archive's database (BMBCH1, purpose join) under the DEK of its key slot.</summary>
+    Sealed,
+
+    /// <summary>A host that declares protocol 4 but sends a plain archive: a downgrade a joiner must refuse.</summary>
+    PlainWhileActivated,
+
+    /// <summary>An activated host whose archive is sealed under another key than the one its key slot hands over.</summary>
+    SealedUnderAnotherKey,
+}
 
 /// <summary>
 /// What a host answers to the rest of a <c>bmb join</c> after <c>/api/join</c> (BMB-81): the sync challenge, the
@@ -23,9 +40,11 @@ internal sealed class FakeJoinHost
     private static readonly Lazy<(byte[] Db, int MigrationVersion)> EmptyVault = new(BuildEmptyVault);
 
     /// <param name="badSignature">Serve the snapshot with a signature that does not verify (a damaged or forged one).</param>
-    public FakeJoinHost(Guid hostId, long cpSeq = 5, long lamportTs = 77, bool badSignature = false)
+    public FakeJoinHost(Guid hostId, long cpSeq = 5, long lamportTs = 77, bool badSignature = false,
+        FakeHostActivation activation = FakeHostActivation.None)
     {
         HostId = hostId;
+        Activation = activation;
         (PublicKey, _privateKey) = Ed25519Signer.GenerateKeyPair();
         CpSeq = cpSeq;
         (_snapshot, _signatureB64) = BuildSnapshot(cpSeq, lamportTs);
@@ -33,13 +52,15 @@ internal sealed class FakeJoinHost
     }
 
     private readonly byte[] _privateKey;
+    // The master DEK this host's key slot hands over (and an activated host seals its archive under).
+    private readonly byte[] _dek = MasterKeyManager.GenerateMasterDek();
     private readonly byte[] _snapshot;
     private readonly string _signatureB64;
 
     /// <summary>The <c>/api/join</c> answer of this host: a key slot for <paramref name="password"/>, and the other peers given (none by default).</summary>
     public string JoinResponseJson(string password, int? protocolVersion = null, IEnumerable<IReadOnlyDictionary<string, object>>? whitelist = null)
     {
-        var dek = MasterKeyManager.GenerateMasterDek();
+        var dek = _dek;
         var salt = KeyDerivation.GenerateSalt();
         var (encDek, iv) = MasterKeyManager.WrapMasterDek(dek, KeyDerivation.DeriveKek(password, salt));
         return JsonSerializer.Serialize(new
@@ -47,7 +68,7 @@ internal sealed class FakeJoinHost
             remoteNode = new
             {
                 nodeId = HostId, displayName = "Host", ed25519PublicKeyB64 = PublicKeyB64,
-                protocolVersion = protocolVersion ?? BeeMemoryBank.Sync.SyncProtocolVersion.Current
+                protocolVersion = protocolVersion ?? (Activation == FakeHostActivation.None ? BeeMemoryBank.Sync.SyncProtocolVersion.Current : 4)
             },
             keySlot = new
             {
@@ -97,6 +118,7 @@ internal sealed class FakeJoinHost
     public static string NewPin() => System.Buffers.Text.Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
 
     public Guid HostId { get; }
+    public FakeHostActivation Activation { get; }
     public byte[] PublicKey { get; }
     public string PublicKeyB64 => Convert.ToBase64String(PublicKey);
     public long CpSeq { get; }
@@ -126,15 +148,25 @@ internal sealed class FakeJoinHost
 
     private (byte[] TarGz, string SignatureB64) BuildSnapshot(long cpSeq, long lamportTs)
     {
-        var (db, migrationVersion) = EmptyVault.Value;
-        var manifest = Json(new
+        var (plain, migrationVersion) = EmptyVault.Value;
+        var db = plain;
+        var manifestFields = new Dictionary<string, object>();
+        if (Activation is FakeHostActivation.Sealed or FakeHostActivation.SealedUnderAnotherKey)
         {
-            version = 3,
-            cpSequenceNum = cpSeq,
-            lamportTsAtCp = lamportTs,
-            migrationVersion,
-            files = new Dictionary<string, string> { ["beememorybank.db"] = Convert.ToHexStringLower(SHA256.HashData(db)) }
-        });
+            var key = Activation == FakeHostActivation.Sealed ? _dek : MasterKeyManager.GenerateMasterDek();
+            using var container = new MemoryStream();
+            ChunkedContainer.EncryptAsync(new MemoryStream(plain), container, ChunkedContainer.PurposeJoin,
+                ChunkedContainer.DekKeyLabel(DekFingerprint.Of(_dek)), key).GetAwaiter().GetResult();
+            db = container.ToArray();
+            manifestFields["dbEncrypted"] = true;
+            manifestFields["dbCipher"] = "bmbch1";
+        }
+        manifestFields["version"] = 3;
+        manifestFields["cpSequenceNum"] = cpSeq;
+        manifestFields["lamportTsAtCp"] = lamportTs;
+        manifestFields["migrationVersion"] = migrationVersion;
+        manifestFields["files"] = new Dictionary<string, string> { ["beememorybank.db"] = Convert.ToHexStringLower(SHA256.HashData(db)) };
+        var manifest = Json(manifestFields);
 
         using var tarGz = new MemoryStream();
         using (var gz = new GZipStream(tarGz, CompressionLevel.Fastest, leaveOpen: true))

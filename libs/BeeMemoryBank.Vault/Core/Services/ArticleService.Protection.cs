@@ -33,6 +33,8 @@ public partial class ArticleService
         // Lock BEFORE reading the body, not merely before writing it: everything from here to the
         // final write is one read-modify-write over the article, and a concurrent edit landing in
         // the middle would be wrapped away or silently overwritten.
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var _ = await ArticleWriteLock.AcquireAsync(id);
 
         var current = await GetContentAsync(id);
@@ -59,6 +61,8 @@ public partial class ArticleService
             throw new InvalidOperationException("Article is not protected.");
 
         // Read and write under one lock — see ProtectAsync.
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var _ = await ArticleWriteLock.AcquireAsync(id);
 
         var wrapped = await GetContentAsync(id);
@@ -75,6 +79,8 @@ public partial class ArticleService
             throw new InvalidOperationException("Article is not protected.");
 
         // Lock before the read — see ProtectAsync.
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var _ = await ArticleWriteLock.AcquireAsync(id);
 
         var wrapped = await GetContentAsync(id);
@@ -111,6 +117,8 @@ public partial class ArticleService
 
         // Verify-then-write is a read-modify-write like the rest of this file; one lock over both,
         // or the passphrase could be verified against a body that is gone by the time we write.
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
         using var _ = await ArticleWriteLock.AcquireAsync(id);
 
         var currentWrapped = await GetContentAsync(id);

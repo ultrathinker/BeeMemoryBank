@@ -7,6 +7,8 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Boot;
+using BeeMemoryBank.Vault.Sealed;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -64,7 +66,8 @@ public static class AgentEndpoints
             IUserRepository userRepo,
             SessionService session,
             HttpContext ctx,
-            IAuditLogRepository auditRepo) =>
+            IAuditLogRepository auditRepo,
+            [Microsoft.AspNetCore.Mvc.FromServices] IUnlockMaterialMirror? mirror = null) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
@@ -109,6 +112,7 @@ public static class AgentEndpoints
                 OwnerUserId = ownerUserId
             };
 
+            string? dekFingerprint = null;
             if (owner.Role == UserRoles.Superadmin)
             {
                 // Get Master DEK from session (already unlocked)
@@ -123,6 +127,7 @@ public static class AgentEndpoints
                     agent.DekIV = iv;
                     agent.Salt = salt;
                     agent.KdfVersion = 1;
+                    dekFingerprint = DekFingerprint.Of(masterDek);
                 }
                 finally
                 {
@@ -131,6 +136,15 @@ public static class AgentEndpoints
             }
 
             agent.Id = await repo.CreateAsync(agent);
+
+            // Step B (docs/design/step-b-spec.md 3.6, 4.3): on a sealed node an agent that carries a wrapped DEK is a door of the boot store,
+            // so that the key can wake the node while it is closed. The mirror does nothing on a plain node.
+            if (mirror != null && agent.CanAutoUnlock)
+            {
+                await mirror.AddPendingDoorAsync(new PendingDoor(BootDoorKinds.Agent, agent.Id, null, agent.EncryptedDek!, agent.DekIV!, agent.Salt,
+                    null, null, null, agent.KeyHash, agent.KdfVersion, dekFingerprint));
+                await SlotDoors.RewriteAsync(mirror);
+            }
 
             // Agents are API keys with full vault access (scoped to owner's
             // ACL). Their lifecycle is security-critical — log creation +
@@ -149,7 +163,8 @@ public static class AgentEndpoints
             IAgentRepository repo,
             SessionService session,
             HttpContext ctx,
-            IAuditLogRepository auditRepo) =>
+            IAuditLogRepository auditRepo,
+            [Microsoft.AspNetCore.Mvc.FromServices] IUnlockMaterialMirror? mirror = null) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
@@ -167,7 +182,19 @@ public static class AgentEndpoints
                 return Results.Json(new ErrorResponse("Forbidden: You do not own this agent"), statusCode: 403);
             }
 
-            await repo.DeleteAsync(id);
+            // Rule 2 of the write protocol (spec 4.3): the copies of a revoked agent's door are gone BEFORE the revocation commits, so a revoked
+            // key cannot wake a closed node, not even for the seconds until the rewrite.
+            if (mirror != null) await mirror.RetireDoorAsync(BootDoorKinds.Agent, id);
+            try
+            {
+                await repo.DeleteAsync(id);
+            }
+            catch
+            {
+                await SlotDoors.RewriteAsync(mirror);   // the revocation did not happen: the door is copied back
+                throw;
+            }
+            await SlotDoors.RewriteAsync(mirror);
             await auditRepo.LogAsync("agent", id.ToString(), "agent_deleted", "web",
                 $"Agent '{agent.Name}' (owner=#{agent.OwnerUserId}) deleted by user {callerId}");
 

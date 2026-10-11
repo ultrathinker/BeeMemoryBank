@@ -54,9 +54,13 @@ became a superadmin, or that lost the role, may go on emitting cluster-state eve
 other node quietly rejects. See "Initial Join: Snapshot-Based Bootstrap" below for the one place a
 node's authority *is* inferred rather than announced: the immediate node a joiner dials into.
 
-**One further consequence for the event log itself:** payloads are plaintext JSON. A peer that only
-ever authenticates and pulls still learns every article title, tree path and tag name in the vault,
-even though bodies stay encrypted — see [encryption.md](encryption.md#what-is-not-encrypted-by-design).
+**One further consequence for the event log itself:** until metadata encryption is switched on, payloads are
+plaintext JSON. A peer that only ever authenticates and pulls still learns every article title, tree path and tag name
+in the vault, even though bodies stay encrypted — see [encryption.md](encryption.md#what-is-not-encrypted-by-design).
+After the switch, content events travel sealed (a blind copy and anyone who only relays them learn none of it), while
+control events (whitelist, rotations, recovery material, anchors, checkpoints, restores, the metadata keys and the
+activation) stay readable; a full node still holds every title in its own tables. See
+[Metadata Encryption (Protocol 4)](#metadata-encryption-protocol-4).
 
 ## How It Works in Practice
 
@@ -248,6 +252,15 @@ Agents, users, and folder ACL entries are node-local — they are created on the
 | `restore_network` | snapshot_hash, restore_point_ts, file_size_bytes, expires_at, source_url, filter_secrets | Yes |
 | `dek_rotation_proposed` | encrypted_new_dek, iv, new_dek_epoch, rotation_ts, expires_at, originator_node_id | Yes |
 | `dek_rotation_commit` | proposed_event_id, encrypted_new_dek, iv, new_dek_epoch, rotation_ts, originator_node_id | Yes |
+| `sealed` | the envelope `{v, k, n, b, c}` of a content event (protocol 4, after the switch) | Yes |
+| `metadata_key_set` | key_id, generation, dek_fingerprint, epoch_hint, wrapped, iv, created_at | Yes |
+| `metadata_activation` | activation_id, key_id, generation, activated_at | Yes |
+
+**Content and control.** Every type is one of two classes (`EventClasses`, a guard test fails on a type that is in
+neither): *content* — article, comment, folder, media, concept tag events and `hard_delete` — and *control* — the
+whitelist, checkpoint, restore, rotation, password-change, recovery, anchor, sealed-secret and metadata key/activation
+events. After the metadata switch a content event travels only as `sealed`; a control event is readable at every
+protocol. The full list of fields that stay readable is `docs/design/protocol4-clear-fields.golden.txt`.
 
 **Callable nodes (`tls_spki`, `tls_trust`).** A blind copy calls a node the whitelist says it may call, and how it trusts that
 node's TLS endpoint travels with the row ([ADR 0007](adr/0007-blind-copies-call-a-full-node.md)). `tls_trust` is `pin` (the
@@ -350,6 +363,9 @@ public static byte[] BuildPayload(SyncEvent e)
 - `Applied` — event was processed and persisted (or was a duplicate already in the log).
 - `SilentlyDropped` — event was deliberately ignored (replay-shield, hard-delete tombstone, malformed payload). The pull/push loops still advance their cursor past it so the same event is not re-fetched forever.
 - `Skipped` — event raised an exception that callers should surface (signature mismatch, unknown protocol version, etc.).
+- `Held` — a sealed content event this node cannot apply yet (the vault is locked, its metadata key is not here, or an
+  earlier row waits). It is stored and counts as received; the drain applies it later. See
+  [Held events](#held-events-received-and-applied).
 
 Three defensive gates run before per-type handlers:
 
@@ -629,6 +645,125 @@ counts (rewrapped / already-on-new-key / unreadable) rather than a bare pass/fai
 material `LazySlotRewrapService` needs is now persisted locally (migration 020) instead of being
 readable only from the `dek_rotation_commit` event — which event-log compaction routinely deletes,
 previously locking out any user who hadn't logged in since the rotation.
+
+## Metadata Encryption (Protocol 4)
+
+Release 2.6.0 can encrypt the metadata that sync protocol 3 carries in clear (titles, paths, tags, folder and file
+names, the shape of the tree; the cryptography is in [encryption.md](encryption.md#metadata-encryption-sync-protocol-4)).
+It is **off until a superadmin switches it on for the whole network**. Until then a 2.6 node declares protocol 3 and
+behaves as 2.5.1, except that it already understands protocol 4 (`SyncProtocolVersion.CanApply` 1-4) and advertises
+that it does.
+
+### Capabilities and the protocol a node declares
+
+- Every 2.6 node sends the capability `metadata-envelope-v1` and its version at authenticate, in `/api/sync/identity`
+  and in `report-position`; the receiving node records what each peer last showed on its whitelist row (capabilities,
+  version, when). The readiness report reads those observations.
+- `ISyncProtocolPolicy` decides what a node declares and accepts: protocol 3 before the switch, 4 after. Before the
+  switch any peer declaring 3 or more is accepted; after it, a peer declaring 4, or 3 with the capability (a 2.6 node
+  that has not pulled the activation yet: it must be able to, or the switch would deadlock). A 2.5 node gets 426 at
+  authenticate and, on its side, never pulls from a node declaring 4: the two are cut off both ways, as intended.
+
+### Sending and receiving sealed events
+
+- After the switch `EventLogger` seals every content event with the newest metadata key this node can open and writes
+  protocol 4. Without such a key it refuses the write instead of writing in clear.
+- A full node opens a sealed event and runs every check on the opened view as before (signature on the outer event,
+  hard-delete gate, path checks, replay shield, superadmin gate on the inner type). The row it stores is the original
+  outer event, which it relays byte for byte; its own activity views read the local columns `local_type`,
+  `local_article_id` and `entity_id`, which are never served.
+- A blind host (the Docker blind node, a phone, a desktop blind copy) never opens anything: it stores sealed events as
+  relayed and, once activated, drops content offered in clear.
+- **Stragglers.** A 2.6 node that wrote content before it pulled the activation wrote it in clear and signed it; full
+  nodes apply it as usual and ask for an early baseline (`late_protocol3`). No full node serves or pushes protocol-1..3
+  content to a blind peer after the switch: `GET /api/sync/events` leaves such rows out and fills the page
+  with the rows the requester may have (it reads on until the page is full or the log ends, so a client that follows
+  its cursor never stalls on a left-out row), and the push loop passes over them as if accepted. A blind copy gets content only sealed or
+  inside a baseline.
+- **Blobs.** A sealed event lists the hashes of the blobs it needs in its envelope, so blob transport ships them
+  without opening anything (`BlobReferences`).
+
+### Held events: received and applied
+
+A full node that cannot apply a sealed content event yet stores it as **held** (`tbl_event.apply_state = 1`, migration
+038) with a reason: `locked` (the vault is locked), `key` (its metadata key is not openable here yet) or `order` (an
+earlier row is held: content applies in log order, clear stragglers included). Control events never wait.
+
+- *Received* covers held rows: the pull cursor, `report-position` and the push answer's `LastAppliedSequence` move over
+  them, and `GET /api/sync/events` serves them like any other row, so a locked node is a relay. *Applied* is
+  `MIN(held sequence) - 1`, or the head when nothing is held.
+- **The drain** (`HeldEventDrainService`) applies held rows in sequence order, exactly once: after every unlock (chained
+  after the DEK rotation retry, so a key of a rotation accepted at unlock opens first), when a `metadata_key_set` arrives,
+  and every 5 minutes while unlocked rows wait. It stops when the vault locks, and at a `restore_network` row whose
+  restore is still pending, downloading or applying, so that content received after a restore is applied after it. A
+  `key` hold whose key no `metadata_key_set` named within 30 days becomes state 3 ("unknown metadata key"); a row that
+  does not open with the key it names, or that a handler refuses for good, also becomes state 3 — it was relayed and
+  stays in the log, never applied.
+- A held row keeps the originator's superadmin flag as it was at receipt: a revocation that arrived and applied while
+  the node was locked does not make it reject content an unlocked node had already applied.
+- **Refused while anything is held**, with a message saying to unlock and wait: compaction, a DEK rotation proposal, a
+  network restore, the metadata switch (and, on the hosts that produce them, baselines and join snapshots).
+- **Status.** `GET /api/sync/status` has `held: { count, locked, key, order, oldest_at, applied_through_seq, head_seq,
+  quarantined_after_receipt, warning, message }`; `bmb status` prints a `Held:` line; the Web layout shows "N changes
+  wait to be applied". It warns when more than 100,000 rows are held or the oldest is older than 7 days.
+
+### Metadata keys and DEK rotation
+
+The switch creates key generation 1. On an activated network every DEK rotation makes its initiator create the next
+generation under the new DEK (`metadata_key_set`) and ask for an early baseline (`key_rotation`); peers create nothing.
+A node the rotation left out cannot open the new generation, so it cannot read metadata written afterwards. A node
+that has not accepted the rotation yet holds events sealed under the new key (`key`) until it does.
+
+The new generation is part of the rotation, not an afterthought. The transaction that swaps the DEK also inserts the next
+`tbl_metadata_key` row (wrapped under the new DEK) and a durable marker (`tbl_migration_marker`, key
+`mek_publish_pending`), so there is never a committed new DEK without its metadata key. Right after the commit one more
+transaction appends the `metadata_key_set` event and deletes the marker. If that does not succeed (a failed write, a
+crash) the rotation is **not** complete: its progress stays `Completing`, the completion record waits, the step is
+retried every minute and at every unlock, and meanwhile this node refuses to write sealed metadata (HTTP 503, code
+`metadata_key_publish_pending`, `Retry-After: 60`, on every route that writes articles, comments, folders, media, tags or
+purges) rather than seal with a generation the node left out can still open. A refused write changes nothing: the check
+comes before the first change. A write that is already running when a rotation starts is finished first; the rotation
+waits for it (and gives up, changing nothing, if it does not end within two minutes), so nothing is ever appended under
+the old key after the new DEK is in place. What the rotation still has to finish after its commit (the completion audit
+line, the `Completed` step, the compaction) is recorded in the same transaction as the commit and finished from that
+record, also after a restart and after a failure. A second rotation is refused (409) until the marker is gone and the
+previous rotation is finished.
+
+## Switching Metadata Encryption On
+
+An operator guide. The switch is **one way**: there is no off switch.
+
+1. **Update every device** to 2.6.0 or newer — servers, desktops, phones, the Docker blind node, desktop blind copies —
+   and let each one sync once, so this node sees that it is ready. Update the devices that are already paired: a 2.5
+   node that joins a 2.6 node afterwards, and a 2.5 Docker blind node that a 2.6 full node tries to seed, are refused with
+   "upgrade this node first" (the snapshot or package carries schema 39; 2.5.2 stops at 36 — the rule every release that adds a
+   migration has), while a pair that was already syncing keeps syncing at protocol 3 during the upgrade.
+2. **Check readiness**: Admin → *Metadata encryption* → *Ask every device now*, or `bmb sync readiness`
+   (`GET /api/sync/readiness`). Every active device is `ready`, `not_capable` (it runs an older version), `stale` (not
+   seen for more than 14 days) or `unknown` (never seen by this node or a device it asked). The switch is refused while
+   anything blocks it: a device that is not ready, this node being locked, a device that does not see this node as a
+   superadmin, a DEK rotation in progress, changes held on this node, or the switch already being on. A device you no
+   longer use: revoke it, it then no longer counts.
+3. **Take a fresh backup of this node and keep it offline.** It holds your titles in clear, and it is the only way back.
+4. **Switch it on**: on the Admin card tick "I took a fresh backup", enter the master password and confirm; or
+   `bmb sync activate --yes` (it asks for the master password, or reads it with `--password-stdin`). The API is
+   `POST /api/sync/activation` `{ "password": ... }`: superadmin, never an agent; the password is checked, the vault is
+   not unlocked by it; 409 lists the blockers. This node creates key generation 1, writes the activation, declares
+   protocol 4 and seals what it writes from that moment; the audit log records `metadata_activated`. Every other device
+   switches as it syncs: it pulls the key and the activation. A device still on 2.5 is refused (426) until it is
+   updated.
+5. **Afterwards**: blind copies take an encrypted (format 2) baseline and purge the readable content they held; a
+   2.5 binary must not be started on an activated volume (unsupported: it cannot read sealed events, and its peers
+   refuse it).
+
+**Rollback** means restoring the backup taken in step 3 (a network restore, or rebuilding the network from it) and
+losing every change made since the switch. There is no deactivation event.
+
+**Retiring readable copies.** The switch protects what travels and what blind copies keep from then on; it does not
+reach copies made before it. Old backups and snapshots of full nodes, restic snapshots of the blind node made before
+its first encrypted baseline, and a blind node's database kept aside by an earlier reseed (listed as `legacy_copies` in
+its status) still hold titles in clear: delete them, or keep them as carefully as the backup of step 3, once the
+network runs encrypted. A full node's own database keeps titles in clear by design (it shows and searches them).
 
 ## Recent hardening (2026-09)
 

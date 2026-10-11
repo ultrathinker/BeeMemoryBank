@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Vault.Sealed;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -14,8 +15,13 @@ public class KeyManagementService(
     SessionService session,
     IUserRepository userRepo,
     IDbConnectionFactory connFactory,
-    IRecoveryBoxPublisher? recoveryBoxes = null)
+    IRecoveryBoxPublisher? recoveryBoxes = null,
+    IUnlockMaterialMirror? mirror = null)
 {
+    // Step B (docs/design/step-b-spec.md 3.6, 4.3): a key slot is a door of a sealed node. The pending door is written before the sealed
+    // transaction commits, the copies of a deleted slot's door are retired before the delete, and the boot store is rewritten once the
+    // operation is done. With no mirror (or on a plain node, where the mirror does nothing) every call below is the plain call it was.
+
     /// <summary>
     /// Legacy password-change endpoint, kept for backward compatibility with older mobile app
     /// builds. The canonical path is UserService.ChangePasswordAsync(userId, ...). When a
@@ -87,12 +93,20 @@ public class KeyManagementService(
                 try
                 {
                     newSlotId = await keySlotRepo.CreateAsync(newSlot, tx);
+                    newSlot.SlotId = newSlotId;
+                    if (mirror != null)
+                    {
+                        // Rules 1 and 2 of the write protocol, while the sealed transaction is still open.
+                        await mirror.AddPendingDoorAsync(SlotDoors.PendingFor(newSlot, masterDek));
+                        await mirror.RetireDoorAsync(BeeMemoryBank.Storage.Boot.BootDoorKinds.Slot, oldSlot.SlotId);
+                    }
                     await keySlotRepo.DeleteAsync(oldSlot.SlotId, tx);
                     tx.Commit();
                 }
                 catch
                 {
                     try { tx.Rollback(); } catch { /* SQLite may have already auto-rolled back; don't mask the real failure */ }
+                    await SlotDoors.RewriteAsync(mirror);   // restores the retired door, drops the pending one
                     throw;
                 }
             }
@@ -112,6 +126,7 @@ public class KeyManagementService(
             newSlot.SlotId = newSlotId;
             if (recoveryBoxes != null)
                 await recoveryBoxes.PublishDeviceBoxAsync(newSlot, masterDek);
+            await SlotDoors.RewriteAsync(mirror);
         }
         finally
         {
@@ -164,7 +179,8 @@ public class KeyManagementService(
                 ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
                 CreatedAt = DateTime.UtcNow
             };
-            await keySlotRepo.CreateAsync(slot);
+            await SlotDoors.CreateSlotAsync(keySlotRepo, connFactory, mirror, slot, masterDek);
+            await SlotDoors.RewriteAsync(mirror);
 
             return recoveryKeyString;
         }
@@ -208,9 +224,10 @@ public class KeyManagementService(
                 ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
                 CreatedAt = DateTime.UtcNow
             };
-            slot.SlotId = await keySlotRepo.CreateAsync(slot);
+            await SlotDoors.CreateSlotAsync(keySlotRepo, connFactory, mirror, slot, masterDek);
             if (recoveryBoxes != null)
                 await recoveryBoxes.PublishDeviceBoxAsync(slot, masterDek);
+            await SlotDoors.RewriteAsync(mirror);
         }
         finally
         {
@@ -231,10 +248,11 @@ public class KeyManagementService(
         if (slots.All(s => s.SlotId != slotId))
             throw new KeyNotFoundException($"Slot {slotId} not found.");
 
-        await keySlotRepo.DeleteAsync(slotId);
+        await SlotDoors.DeleteSlotAsync(keySlotRepo, mirror, slotId);
         // A user still pointing at the deleted slot would look like they hold one, which
         // suppresses re-provisioning at their next login (UserService.ProvisionMissingKeySlotAsync)
         // and leaves them unable to unlock with no way to recover short of an admin password reset.
         await userRepo.ClearKeySlotAsync(slotId);
+        await SlotDoors.RewriteAsync(mirror);
     }
 }

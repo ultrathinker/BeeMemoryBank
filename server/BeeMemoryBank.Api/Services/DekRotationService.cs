@@ -19,7 +19,7 @@ using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Services;
 
-public partial class DekRotationService : IDekRotationApplier
+public partial class DekRotationService : IDekRotationApplier, IDisposable
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly SessionService _sessionService;
@@ -27,6 +27,11 @@ public partial class DekRotationService : IDekRotationApplier
     private readonly MaintenanceModeService _maintenance;
     private readonly ILogger<DekRotationService> _logger;
     private readonly string _dataPath;
+    private readonly ITimer _completionTimer;
+    private readonly TimeSpan _authoringDrainTimeout;
+
+    /// <summary>How often a finish that did not hold yet (see <see cref="FinishPendingCompletionAsync"/>) is retried while the vault is unlocked.</summary>
+    public static readonly TimeSpan CompletionRetryPeriod = TimeSpan.FromSeconds(60);
 
     private readonly ProgressState _progress = new();
     private readonly SemaphoreSlim _executeLock = new(1, 1);
@@ -73,7 +78,9 @@ public partial class DekRotationService : IDekRotationApplier
         DbConnectionFactory connFactory,
         MaintenanceModeService maintenance,
         ILogger<DekRotationService> logger,
-        string dataPath)
+        string dataPath,
+        TimeProvider? time = null,
+        TimeSpan? authoringDrainTimeout = null)
     {
         _scopeFactory = scopeFactory;
         _sessionService = sessionService;
@@ -81,7 +88,11 @@ public partial class DekRotationService : IDekRotationApplier
         _maintenance = maintenance;
         _logger = logger;
         _dataPath = dataPath;
+        _authoringDrainTimeout = authoringDrainTimeout ?? BeeMemoryBank.Vault.Metadata.AuthoringBarrier.DefaultDrainTimeout;
+        _completionTimer = (time ?? TimeProvider.System).CreateTimer(_ => OnCompletionTimer(), null, CompletionRetryPeriod, CompletionRetryPeriod);
     }
+
+    public void Dispose() => _completionTimer.Dispose();
 
     public DekRotationProgressResponse GetProgress()
     {
