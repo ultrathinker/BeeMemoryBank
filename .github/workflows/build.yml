@@ -92,9 +92,11 @@ jobs:
             case "$proj" in tests/BeeMemoryBank.BlindMobile.Tests/*) continue ;; esac
             # Category=Timing tests compare wall-clock durations; a shared runner's speed changes between two measurements,
             # so they run on developer machines only. A test that hangs is named and stopped instead of holding the job.
+            # Every project runs even when an earlier one failed, so one run shows every failure; the step fails at the end.
             dotnet test "$proj" --no-build -c Release --verbosity normal --filter "Category!=Timing" \
-              --blame-hang-timeout 15m --blame-hang-dump-type none
+              --blame-hang-timeout 15m --blame-hang-dump-type none || failed="$failed $proj"
           done
+          if [ -n "${failed:-}" ]; then echo "::error::test projects with failures:$failed"; exit 1; fi
 
       # The proof that a blind node does not contain the vault, on what is actually shipped: the three blind programs are published the way
       # docker/blind/Dockerfile publishes them and every application assembly in the output is read at the metadata level.

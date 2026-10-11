@@ -300,6 +300,8 @@ public class SealedPathIsomorphismTests : IAsyncLifetime
         "tbl_blob.created_at",
         "tbl_folder.id", "tbl_folder.created_at", "tbl_folder.updated_at", "tbl_article.folder_id",
         "tbl_conflict_version.id", "tbl_conflict_version.created_at", "tbl_conflict_version.expires_at",
+        // a tag row is inserted by name and its created_at is the receiver's own clock (the column default)
+        "tbl_concept_tag.created_at",
     ];
 
     /// <summary>Every row of a table, its columns as text (blobs in base64).</summary>
