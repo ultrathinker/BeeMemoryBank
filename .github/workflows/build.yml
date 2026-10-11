@@ -18,6 +18,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # A full run takes about an hour (the Integration project alone about 50 minutes); a stuck run ends here, not after six hours.
+    timeout-minutes: 150
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,7 +90,10 @@ jobs:
             # The boundary guards of the two Android apps read the built Android apps, which this job does not build;
             # build-mobile.yml builds both apps and runs them.
             case "$proj" in tests/BeeMemoryBank.BlindMobile.Tests/*) continue ;; esac
-            dotnet test "$proj" --no-build -c Release --verbosity normal
+            # Category=Timing tests compare wall-clock durations; a shared runner's speed changes between two measurements,
+            # so they run on developer machines only. A test that hangs is named and stopped instead of holding the job.
+            dotnet test "$proj" --no-build -c Release --verbosity normal --filter "Category!=Timing" \
+              --blame-hang-timeout 15m --blame-hang-dump-type none
           done
 
       # The proof that a blind node does not contain the vault, on what is actually shipped: the three blind programs are published the way

@@ -241,8 +241,10 @@ public class RecoveryKeyPasswordResetTests : TestFixture
     // same class of KDF work: the recovery-slot attempt (or a dummy for its absence), then the two
     // operations a successful reset would perform. Keep the floor comfortably below three full
     // derivations so machine scheduling does not make this security test flaky, while still
-    // rejecting the old one-derivation wrong-key path.
+    // rejecting the old one-derivation wrong-key path. It compares wall-clock durations, so it is a
+    // Category=Timing test: CI on shared runners skips it (their speed changes between two measurements).
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task EveryRefusal_PaysAtLeastOneKeyDerivation()
     {
         await Users.CreateUserAsync("bob", "Bob", "BobPass1", UserRoles.User);

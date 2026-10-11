@@ -29,6 +29,11 @@ public sealed class BlindReplicaPreflightCacheTests : IAsyncLifetime
         using var client = _full.CreateClient();
         (await client.PostAsJsonAsync("/api/session/login", new { username = "admin", password = Password }))
             .EnsureSuccessStatusCode();
+
+        // The node's own background work (sync, state anchor…) calls the same peers through the same handler and made
+        // the count race on a slow runner (3 calls instead of 1). The test's requests carry their execution context into
+        // the server, so the handler counts only the peer calls a replica request of this test caused.
+        _full.Server.PreserveExecutionContext = true;
     }
 
     public Task DisposeAsync()
@@ -63,6 +68,7 @@ public sealed class BlindReplicaPreflightCacheTests : IAsyncLifetime
 
     private static Task<HttpResponseMessage> GetReplicaAsync(HttpClient http, string token, RangeHeaderValue? range)
     {
+        CountingPeerHandler.Counting.Value = true; // flows into the server with this request only (PreserveExecutionContext)
         var request = new HttpRequestMessage(HttpMethod.Get, "/api/blind/replica");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.Range = range;
@@ -80,16 +86,18 @@ public sealed class BlindReplicaPreflightCacheTests : IAsyncLifetime
         UpdatedAt = DateTime.UtcNow
     };
 
-    /// <summary>A peer that is never reachable; it only counts how often it was asked.</summary>
+    /// <summary>A peer that is never reachable; it only counts how often a replica request of the test asked it.</summary>
     private sealed class CountingPeerHandler : HttpMessageHandler
     {
+        public static readonly AsyncLocal<bool> Counting = new();
+
         private int _calls;
 
         public int Calls => Volatile.Read(ref _calls);
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _calls);
+            if (Counting.Value) Interlocked.Increment(ref _calls);
             throw new HttpRequestException("peer unreachable (test)");
         }
     }

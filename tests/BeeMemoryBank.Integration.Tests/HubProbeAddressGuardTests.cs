@@ -250,7 +250,9 @@ public sealed class HubProbeAddressGuardTests : IAsyncLifetime
         var act = () => With(_ => true).ProbeAsync($"https://127.0.0.1:{server.Port}", BlindTrust.Pin, null, CancellationToken.None);
 
         var thrown = (await act.Should().ThrowAsync<HubProbeException>()).Which;
-        thrown.Message.Should().NotContain("INTERNAL-SECRET").And.NotContain(status.ToString());
+        // The message names the probed address; its random port may contain the status digits (42003 holds "200").
+        var withoutAddress = thrown.Message.Replace($"127.0.0.1:{server.Port}", "<target>");
+        withoutAddress.Should().NotContain("INTERNAL-SECRET").And.NotContain(status.ToString());
     }
 
     [Fact]
