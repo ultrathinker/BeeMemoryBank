@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,22 +51,7 @@ public sealed class RestoreWizardPageTests(RestoreSourceFixture source) : IAsync
     [Fact]
     public async Task RestoreFromBackup_ShowsTheAnchorDate_AndConfirmation()
     {
-        var start = await PostFormAsync("RestoreBackup", new()
-        {
-            ["backupPath"] = source.BackupFolder, ["password"] = RestoreSourceFixture.Password,
-            ["adminUsername"] = "admin", ["displayName"] = "Restored PC"
-        });
-        start.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        start.Headers.Location!.ToString().Should().Contain("step=restoring");
-
-        var page = "";
-        var deadline = DateTime.UtcNow.AddMinutes(3);
-        while (DateTime.UtcNow < deadline)
-        {
-            page = await (await _browser.GetAsync("/Setup?step=restoring")).Content.ReadAsStringAsync();
-            if (!page.Contains("http-equiv=\"refresh\"")) break;
-            await Task.Delay(500);
-        }
+        var page = await RestoreAndReadResultAsync(source.BackupFolder, "confirmed");
 
         page.Should().Contain("Confirmed as of").And.Contain("matches the integrity anchor made under your master key");
     }
@@ -90,27 +77,47 @@ public sealed class RestoreWizardPageTests(RestoreSourceFixture source) : IAsync
             await Dapper.SqlMapper.ExecuteAsync(conn, "UPDATE tbl_article SET title = 'Tampered' WHERE lower(id) = @victim", new { victim });
         }
 
-        var page = await RestoreAndReadResultAsync(folder);
+        var page = await RestoreAndReadResultAsync(folder, "partially_confirmed");
 
         page.Should().Contain("Partly confirmed").And.Contain("were not checked at all").And.Contain(victim);
         page.Should().NotContain("Confirmed as of");
     }
 
-    private async Task<string> RestoreAndReadResultAsync(string folder)
+    private async Task<string> RestoreAndReadResultAsync(string folder, string expectedAnchorState)
     {
-        (await PostFormAsync("RestoreBackup", new()
+        var start = await PostFormAsync("RestoreBackup", new()
         {
             ["backupPath"] = folder, ["password"] = RestoreSourceFixture.Password, ["adminUsername"] = "admin", ["displayName"] = "PC"
-        })).StatusCode.Should().Be(HttpStatusCode.Redirect);
-        var page = "";
+        });
+        start.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        start.Headers.Location!.ToString().Should().Contain("step=restoring");
+
+        return await WaitForRestoreResultAsync("done", expectedAnchorState);
+    }
+
+    private async Task<string> WaitForRestoreResultAsync(string expectedState, string? expectedAnchorState = null)
+    {
+        using var api = _api.CreateClient();
         var deadline = DateTime.UtcNow.AddMinutes(3);
         while (DateTime.UtcNow < deadline)
         {
-            page = await (await _browser.GetAsync("/Setup?step=restoring")).Content.ReadAsStringAsync();
-            if (!page.Contains("http-equiv=\"refresh\"")) break;
-            await Task.Delay(500);
+            var progress = await api.GetFromJsonAsync<JsonElement>("/api/restore/progress");
+            var state = progress.GetProperty("state").GetString();
+            if (state != "running")
+            {
+                state.Should().Be(expectedState);
+                if (expectedAnchorState != null)
+                {
+                    var anchor = progress.GetProperty("anchor");
+                    anchor.ValueKind.Should().NotBe(JsonValueKind.Null);
+                    anchor.GetProperty("state").GetString().Should().Be(expectedAnchorState);
+                }
+                return await (await _browser.GetAsync("/Setup?step=restoring")).Content.ReadAsStringAsync();
+            }
+            await Task.Delay(250);
         }
-        return page;
+
+        throw new TimeoutException($"Restore did not reach '{expectedState}' within three minutes.");
     }
 
     [Fact]
@@ -133,14 +140,7 @@ public sealed class RestoreWizardPageTests(RestoreSourceFixture source) : IAsync
             ["backupPath"] = folder, ["password"] = RestoreSourceFixture.Password, ["adminUsername"] = "admin", ["displayName"] = "PC"
         });
 
-        var page = "";
-        var deadline = DateTime.UtcNow.AddMinutes(3);
-        while (DateTime.UtcNow < deadline)
-        {
-            page = await (await _browser.GetAsync("/Setup?step=restoring")).Content.ReadAsStringAsync();
-            if (!page.Contains("http-equiv=\"refresh\"")) break;
-            await Task.Delay(500);
-        }
+        var page = await WaitForRestoreResultAsync("done", "unconfirmed");
 
         page.Should().Contain("Unconfirmed.").And.NotContain("Confirmed as of");
     }
@@ -154,14 +154,7 @@ public sealed class RestoreWizardPageTests(RestoreSourceFixture source) : IAsync
             ["adminUsername"] = "admin", ["displayName"] = "PC"
         });
 
-        var page = "";
-        var deadline = DateTime.UtcNow.AddMinutes(2);
-        while (DateTime.UtcNow < deadline)
-        {
-            page = await (await _browser.GetAsync("/Setup?step=restoring")).Content.ReadAsStringAsync();
-            if (!page.Contains("http-equiv=\"refresh\"")) break;
-            await Task.Delay(500);
-        }
+        var page = await WaitForRestoreResultAsync("failed");
 
         page.Should().Contain("opens none of the recovery boxes");
     }
@@ -208,7 +201,7 @@ public sealed class RestoreWizardPageTests(RestoreSourceFixture source) : IAsync
         // A legitimate backup whose data no anchor matches: every device comes back inactive. The wizard is the
         // way out — nobody is signed in yet, the master password confirms them.
         var folder = BackupCopy("UPDATE tbl_article SET title = 'Altered' WHERE title = 'Under key 1'");
-        var page = await RestoreAndReadResultAsync(folder);
+        var page = await RestoreAndReadResultAsync(folder, "unconfirmed");
         page.Should().Contain("Confirm the selected devices");
         (await ActivePeersAsync()).Should().BeEmpty();
         var devices = new[] { source.SourceNodeId, source.OldLaptopId, source.BlindNodeIdentity };
@@ -233,7 +226,7 @@ public sealed class RestoreWizardPageTests(RestoreSourceFixture source) : IAsync
         var folder = BackupCopy(
             $@"INSERT INTO tbl_whitelist (node_id, display_name, ed25519_public_key, status, is_superadmin, created_at, updated_at)
                VALUES ('{phone}', 'Kitchen tablet', randomblob(32), 'A', 0, '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')");
-        await RestoreAndReadResultAsync(folder);
+        await RestoreAndReadResultAsync(folder, "confirmed");
         (await ActivePeersAsync()).Should().NotContain(phone);
         var admin = await WebLogin.LoginAsync(_web, "admin", RestoreSourceFixture.Password);
         var session = admin.DefaultRequestHeaders.GetValues("Cookie").Single();
