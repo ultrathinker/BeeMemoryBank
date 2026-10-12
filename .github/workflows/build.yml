@@ -16,10 +16,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  test-shards:
+    name: Test shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # A full run takes about an hour (the Integration project alone about 50 minutes); a stuck run ends here, not after six hours.
-    timeout-minutes: 150
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,39 +73,52 @@ jobs:
       # The MAUI Android project under mobile/ requires the maui-android workload
       # (~1 GB download) and is built separately by build-mobile.yml on changes
       # under mobile/**.
-      - name: Restore dependencies
+      - name: Restore dependencies for this shard
         run: |
           set -e
-          for proj in libs/*/*.csproj server/*/*.csproj tools/*/*.csproj tests/*/*.csproj; do
+          for proj in tests/BeeMemoryBank.Integration.Tests/BeeMemoryBank.Integration.Tests.csproj $(scripts/run-test-shard.sh projects "${{ matrix.shard }}"); do
             dotnet restore "$proj"
           done
 
-      - name: Build
+      # ReleaseTool.Tests starts the published tool directly.  Restore every tool
+      # here so this retains the previous workflow's compile contract.
+      - name: Restore tools used by ReleaseTool tests
+        if: matrix.shard == 3
         run: |
           set -e
-          for proj in libs/*/*.csproj server/*/*.csproj tools/*/*.csproj tests/*/*.csproj; do
-            dotnet build "$proj" --no-restore -c Release
+          for proj in tools/*/*.csproj; do
+            dotnet restore "$proj"
           done
 
-      - name: Test
+      - name: Build this shard
         run: |
           set -e
-          for proj in tests/*/*.csproj; do
-            # The boundary guards of the two Android apps read the built Android apps, which this job does not build;
-            # build-mobile.yml builds both apps and runs them.
-            case "$proj" in tests/BeeMemoryBank.BlindMobile.Tests/*) continue ;; esac
-            # Category=Timing tests compare wall-clock durations; a shared runner's speed changes between two measurements,
-            # so they run on developer machines only. A test that hangs is named and stopped instead of holding the job.
-            # Every project runs even when an earlier one failed, so one run shows every failure; the step fails at the end.
-            dotnet test "$proj" --no-build -c Release --verbosity normal --filter "Category!=Timing" \
-              --blame-hang-timeout 15m --blame-hang-dump-type none || failed="$failed $proj"
+          for proj in tests/BeeMemoryBank.Integration.Tests/BeeMemoryBank.Integration.Tests.csproj $(scripts/run-test-shard.sh projects "${{ matrix.shard }}"); do
+            dotnet build "$proj" --no-restore -c Release -m:2 -nr:false
           done
-          if [ -n "${failed:-}" ]; then echo "::error::test projects with failures:$failed"; exit 1; fi
+
+      - name: Build tools used by ReleaseTool tests
+        if: matrix.shard == 3
+        run: |
+          set -e
+          for proj in tools/*/*.csproj; do
+            dotnet build "$proj" --no-restore -c Release -m:2 -nr:false
+          done
+
+      # Proves the Integration filters cover the present non-Timing suite once each.
+      # The Android boundary guard stays outside this workflow, as it requires Android builds.
+      - name: Verify test-shard coverage
+        if: matrix.shard == 0
+        run: scripts/run-test-shard.sh coverage 0
+
+      - name: Test this shard
+        run: scripts/run-test-shard.sh run "${{ matrix.shard }}"
 
       # The proof that a blind node does not contain the vault, on what is actually shipped: the three blind programs are published the way
       # docker/blind/Dockerfile publishes them and every application assembly in the output is read at the metadata level.
       # BMB_REQUIRE_SCAN makes the scan fail instead of passing quietly if the variable is not set.
       - name: Publish the blind programs and scan them for vault code
+        if: matrix.shard == 2
         run: |
           set -e
           out="$RUNNER_TEMP/blind-publish"
@@ -110,3 +127,16 @@ jobs:
           done
           BMB_REQUIRE_SCAN=1 BMB_SCAN_DIRS="$out/BlindNode;$out/BlindConsole;$out/BlindCli" \
             dotnet test tests/BeeMemoryBank.BlindNode.Tests/BeeMemoryBank.BlindNode.Tests.csproj --no-build -c Release --filter "FullyQualifiedName~PublishedFolders"
+
+  # Preserve the historical required status-check name for branch protection.
+  build:
+    needs: test-shards
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test shard
+        run: |
+          if [ "${{ needs.test-shards.result }}" != "success" ]; then
+            echo "::error::test-shards result: ${{ needs.test-shards.result }}"
+            exit 1
+          fi
