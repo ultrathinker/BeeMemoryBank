@@ -350,13 +350,25 @@ public sealed class StepAEndToEndCanaryTests : IAsyncLifetime
     private List<CanaryHit> ScanBlindDisk(IEnumerable<string> canaries)
     {
         var list = canaries.ToList();
-        var hits = MetadataCanaries.ScanDirectory(_blind.DataPath, list);
-        foreach (var archive in Directory.EnumerateFiles(_blind.DataPath, "*.tar.gz", SearchOption.AllDirectories))
+        for (var attempt = 0; ; attempt++)
         {
-            try { hits.AddRange(MetadataCanaries.ScanArchive(archive, list)); }
-            catch (InvalidDataException) { }
+            try
+            {
+                var hits = MetadataCanaries.ScanDirectory(_blind.DataPath, list);
+                foreach (var archive in Directory.EnumerateFiles(_blind.DataPath, "*.tar.gz", SearchOption.AllDirectories))
+                {
+                    try { hits.AddRange(MetadataCanaries.ScanArchive(archive, list)); }
+                    catch (InvalidDataException) { }
+                }
+                return hits;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                // SQLite sidecars and staged packages can be replaced while the blind host is still running.
+                // Retry the complete listing/read for a bounded five-second observation window.
+                Thread.Sleep(250);
+            }
         }
-        return hits;
     }
 
     private async Task<BlindPairCode> PairCodeAsync()
