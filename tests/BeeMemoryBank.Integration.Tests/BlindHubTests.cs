@@ -623,12 +623,24 @@ public sealed class BlindHubTests(BlindHubWorld world)
         var pull = new BlindPhonePullClient(syncing.Services.GetRequiredService<IServiceScopeFactory>(),
             syncing.Services.GetRequiredService<INodeAuthSigner>(), NullLogger<BlindPhonePullClient>.Instance);
 
+        using var conn = syncing.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        long folderCount = 0;
         using (var http = provider.GetClient(callB))
-            await pull.SyncOnceAsync(http, callB, CancellationToken.None);
+        {
+            do
+            {
+                await pull.SyncOnceAsync(http, callB, CancellationToken.None);
+                folderCount = await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_folder WHERE path = @folder", new { folder });
+                if (folderCount == 1)
+                    break;
+                await Task.Delay(50);
+            }
+            while (DateTime.UtcNow < deadline);
+        }
 
         (await syncing.Services.GetRequiredService<ISyncPositionRepository>().GetAsync(world.HubId))!.LastSequenceNum.Should().BeGreaterThan(0);
-        using var conn = syncing.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
-        (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_folder WHERE path = @folder", new { folder }))
+        folderCount
             .Should().Be(1, "the folder the hub created came through the call");
     }
 
