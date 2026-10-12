@@ -97,7 +97,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
     {
         using var node = await StartAsync();
         var before = await DumpAsync(node);
-        MetadataCanaries.ScanDirectory(node.Dir, template.Canaries).Should().NotBeEmpty("the control: a plain node shows its canaries to a raw scan");
+        Scan(node.Dir, template.Canaries).Should().NotBeEmpty("the control: a plain node shows its canaries to a raw scan");
 
         var seal = node.Services.GetRequiredService<SealMigrationService>();
         var preflight = await seal.PreflightAsync(new SealOptions());
