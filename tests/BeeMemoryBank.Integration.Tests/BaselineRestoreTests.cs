@@ -13,7 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
 
-[CollectionDefinition(Name)]
+[CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class BaselineRestoreCollection : ICollectionFixture<BaselineRestoreFixture>
 {
     public const string Name = "BaselineRestore";

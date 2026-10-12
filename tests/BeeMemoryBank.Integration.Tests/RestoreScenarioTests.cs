@@ -291,7 +291,7 @@ public sealed class RestoreSourceFixture : IAsyncLifetime
     }
 }
 
-[CollectionDefinition(Name)]
+[CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class RestoreScenarioCollection : ICollectionFixture<RestoreSourceFixture>
 {
     public const string Name = "RestoreScenario";

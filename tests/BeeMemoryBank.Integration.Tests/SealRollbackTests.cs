@@ -19,6 +19,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// node up again with the password of the day, restore the pre-encryption snapshot through its key envelope. The snapshot opens whatever happened to
 /// the password or the master key in between.
 /// </summary>
+[Collection(HeavyOperationCollection.Name)]
 public sealed class SealRollbackTests(ActivatedPlainTemplate template) : IClassFixture<ActivatedPlainTemplate>
 {
     private const string Password = ActivatedPlainTemplate.Password;

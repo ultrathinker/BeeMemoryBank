@@ -26,6 +26,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// PC's real endpoint, installs the listener's replica with the real client, and pulls with the real pull
 /// client; the package source, recovery-set source and runner are the ones the app composes.
 /// </summary>
+[Collection(HeavyOperationCollection.Name)]
 public sealed class BlindPhoneBackupRoundTripTests : IAsyncLifetime
 {
     private static readonly RestoreIdentity Who = new("admin", "Restored PC", RestoreSourceFixture.Password);

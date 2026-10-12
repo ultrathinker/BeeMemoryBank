@@ -25,6 +25,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// today, the boot store is told before and after (hooks), a plain database in an archive is refused before anything is extracted, and a snapshot
 /// of an earlier vault key is opened through its key envelope. The boot-store side is a recording double: the mirror of track 2 is not on this branch.
 /// </summary>
+[Collection(HeavyOperationCollection.Name)]
 public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IClassFixture<SealedNodeTemplate>
 {
     private const string Changed = "Changed after the snapshot";
