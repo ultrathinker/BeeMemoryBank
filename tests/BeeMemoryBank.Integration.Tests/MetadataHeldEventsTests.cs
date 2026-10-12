@@ -75,7 +75,13 @@ public class MetadataHeldEventsTests : IAsyncLifetime
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (await ArticleCountAsync(_b, article) == 0 && DateTime.UtcNow < deadline) await Task.Delay(100);
         (await ArticleCountAsync(_b, article)).Should().Be(1, "the drain applied it at unlock");
-        (await StatusAsync(_clientB)).GetProperty("held").GetProperty("count").GetInt32().Should().Be(0);
+        var heldCount = 1;
+        while (heldCount != 0 && DateTime.UtcNow < deadline)
+        {
+            heldCount = (await StatusAsync(_clientB)).GetProperty("held").GetProperty("count").GetInt32();
+            if (heldCount != 0) await Task.Delay(100);
+        }
+        heldCount.Should().Be(0, "the asynchronous unlock drain cleared its held-status entry");
 
         using var conn = Db(_b);
         var rows = (await conn.QueryAsync<long>(
