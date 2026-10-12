@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.6.1 (2026-10-12)
+
+### Fixed
+
+- **"Encrypt this node" now starts on Windows and macOS desktop nodes.** In 2.6.0 the check for unencrypted copies of the vault, which runs before encryption, reported the node's own lock file (`node.lock`) as an unreadable copy and refused to start. It now passes over a lock file only when it is provably the lock the running node holds (the same file on disk, empty, a regular file); any other file of that name, and any other unreadable file, still blocks encryption.
+
+- Tests that failed by chance on CI runners or only on Windows were fixed; the CI job runs every test project, reports all failures at the end and stops after 150 minutes.
+
 ### Added
 
 #### 2.6.0 (2026-10-11)

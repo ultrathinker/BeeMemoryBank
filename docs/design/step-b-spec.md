@@ -1090,7 +1090,7 @@ plaintext rows are covered by the page encryption.
 
 **`PlainVaultCopyScanner`** (`libs/BeeMemoryBank.AppPaths/PlainVaultCopyScanner.cs`: the content-based scan opens no SQLite
 connection, and AppPaths - a library with no project reference, which the resolver, the Api, the CLI, Profiles and Rekey can all
-reach - is the one place every caller can use; `SecureFileWipe` and `FileIdentity` live there too). `Scan(dataPath, mode)` decides **by content, never by name, folder or schema**, and **skips nothing**:
+reach - is the one place every caller can use; `SecureFileWipe` and `FileIdentity` live there too). `Scan(dataPath, mode)` decides **by content, never by name, folder or schema**, and **skips nothing** apart from an unreadable runtime lock whose exact live-handle identity is proven:
 `media/`, `search-index-segments/`, `snapshots/`, `baselines/`, `pre-encryption/`, `updates/` and `tmp/` are walked like every other
 folder. It does not follow a symbolic link or reparse point (it reports the link as a finding of kind `link`, its target is not
 scanned). For every regular file it opens the file with full sharing, reads the first 512 bytes and classifies it:
@@ -1136,11 +1136,13 @@ plain `beememorybank.db` or `chat.db` is a finding. In both modes a **copy of th
 application id, bytes 68-71, is `VaultStoreFiles.BootApplicationId`; the quiesced set of 8.5 holds one) is not a finding of
 `plain_sqlite`: the boot store carries only allow-listed columns (2.3), so a copy of it is exactly as exposed as the original, and
 the erase must never wipe the boot store of a pre-update set (a vault database has application id 0). The `-wal` and `-journal`
-of the sealed files, in `Sealed` mode, are judged by the plain page test (a sealed node's own WAL is not a finding, a plain one is). A file that cannot be opened or read is a finding of kind `unreadable` (fail closed;
-the owner moves it). The scan does not stop at the first finding. A finding is `(relativePath, bytes, lastWriteUtc, kind)`.
+of the sealed files, in `Sealed` mode, are judged by the plain page test (a sealed node's own WAL is not a finding, a plain one is). A file that cannot be opened or read is a finding of kind `unreadable` (fail closed,
+apart from an empty regular runtime-lock file whose path identity equals a handle held by this node right now: `bmbd` hands its `node.lock` proof to
+the Api child and an Api registers its own `.instance.lock`; links, reparse points, directories, hard links, a changed identity, or a nonzero length before
+or after the failed read are never exempt). The owner moves every other unreadable path. The scan does not stop at the first finding. A finding is `(relativePath, bytes, lastWriteUtc, kind)`.
 
 **Other names of the same bytes (hard links).** The scanner takes the file identity (`FileIdentity`, `libs/BeeMemoryBank.AppPaths/FileIdentity.cs` next to `SecureFileWipe`: volume and file index,
-Windows `GetFileInformationByHandle`, Linux and macOS `fstat`; null when it cannot be read) of each live file and of each finding.
+Windows `GetFileInformationByHandle`, Linux and macOS `stat`/`fstat`; null when it cannot be read) of each live file and of each finding.
 A finding with the same identity as a live file is reported as `shares_identity` (a second name for the live database or its
 sidecar), and a live file whose link count is above one is reported as a finding `live_linked` on the live file itself (another name
 exists somewhere, in the data directory or outside it). When the identity of a live file cannot be determined on the platform the scan

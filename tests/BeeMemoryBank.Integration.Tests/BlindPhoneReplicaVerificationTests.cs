@@ -21,6 +21,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// (the call code carries that key); the handshake still runs against the real blind host. A control
 /// test installs a correct package, so each refusal below differs from it by exactly one defect.
 /// </summary>
+[Collection(BlindReplicaVerificationCollection.Name)]
 public sealed class BlindPhoneReplicaVerificationTests : IDisposable
 {
     private static readonly byte[] SignatureDomain = "BMB-MANIFEST-FILE-V1\0"u8.ToArray();

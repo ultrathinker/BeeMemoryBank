@@ -7,10 +7,19 @@ public sealed class InstanceInUseException(string message) : InvalidOperationExc
 public sealed class InstanceLock : IDisposable
 {
     private readonly FileStream _file;
+    private readonly IDisposable? _proofRegistration;
 
-    internal InstanceLock(FileStream file) => _file = file;
+    internal InstanceLock(FileStream file, string path)
+    {
+        _file = file;
+        _proofRegistration = HeldLockProofs.Register(HeldLockProofs.FromHeldHandle(path, file.SafeFileHandle));
+    }
 
-    public void Dispose() => _file.Dispose();
+    public void Dispose()
+    {
+        _proofRegistration?.Dispose();
+        _file.Dispose();
+    }
 }
 
 /// <summary>
@@ -77,7 +86,7 @@ public static class InstanceGuard
             // Linux and macOS: .NET turns FileShare.None into an exclusive flock, and anything less into a shared one, which would
             // not exclude; flock is advisory, so cp, tar and restic are not held off by it.
             var share = OperatingSystem.IsWindows() ? FileShare.Read : FileShare.None;
-            return new InstanceLock(new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, share, bufferSize: 1));
+            return new InstanceLock(new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, share, bufferSize: 1), path);
         }
         catch (IOException) { return null; }
         catch (UnauthorizedAccessException) { return null; }

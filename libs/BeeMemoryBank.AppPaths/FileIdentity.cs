@@ -34,6 +34,23 @@ public static class FileIdentity
         }
     }
 
+    /// <summary>The identity from an already-held handle, without opening the path again.</summary>
+    public static FileIdentityInfo? TryGet(SafeFileHandle handle)
+    {
+        try
+        {
+            if (handle is null || handle.IsInvalid) return null;
+            if (OperatingSystem.IsWindows()) return TryGetWindowsHandle(handle);
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) return TryGetUnixHandle(handle);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
+                                       or DllNotFoundException or EntryPointNotFoundException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
     // ---- Windows ---------------------------------------------------------------------------------------------------------------
 
     private const uint FileShareAll = 0x7, OpenExisting = 3, FileFlagBackupSemantics = 0x02000000;
@@ -58,6 +75,11 @@ public static class FileIdentity
         // still has an identity.
         using var handle = CreateFileW(path, 0, FileShareAll, IntPtr.Zero, OpenExisting, FileFlagBackupSemantics, IntPtr.Zero);
         if (handle.IsInvalid) return null;
+        return TryGetWindowsHandle(handle);
+    }
+
+    private static FileIdentityInfo? TryGetWindowsHandle(SafeFileHandle handle)
+    {
         if (!GetFileInformationByHandle(handle, out var info)) return null;
         return new FileIdentityInfo(info.VolumeSerialNumber, ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow, info.NumberOfLinks);
     }
@@ -78,33 +100,51 @@ public static class FileIdentity
         var arch = RuntimeInformation.ProcessArchitecture;
         if (arch is not (Architecture.X64 or Architecture.Arm64)) return null;
 
-        using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.None);
+        var buffer = Marshal.AllocHGlobal(StatBufferSize);
+        try { return TryReadUnixStat(buffer, () => Stat(path, buffer)); }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    [DllImport("libc", EntryPoint = "stat", SetLastError = true)]
+    private static extern int Stat(string path, IntPtr buffer);
+
+    private static FileIdentityInfo? TryGetUnixHandle(SafeFileHandle handle)
+    {
+        var arch = RuntimeInformation.ProcessArchitecture;
         var fd = (int)handle.DangerousGetHandle();
         var buffer = Marshal.AllocHGlobal(StatBufferSize);
         try
         {
-            for (var i = 0; i < StatBufferSize; i += 8) Marshal.WriteInt64(buffer, i, 0);
-            int rc;
-            try { rc = FStat(fd, buffer); }
-            catch (EntryPointNotFoundException) { rc = FxStat(arch == Architecture.X64 ? 1 : 0, fd, buffer); }
-            if (rc != 0) return null;
-
-            if (OperatingSystem.IsMacOS())
+            return TryReadUnixStat(buffer, () =>
             {
-                // struct stat (64-bit inodes): st_dev int32 @0, st_mode u16 @4, st_nlink u16 @6, st_ino u64 @8.
-                return new FileIdentityInfo((uint)Marshal.ReadInt32(buffer, 0), (ulong)Marshal.ReadInt64(buffer, 8), (ushort)Marshal.ReadInt16(buffer, 6));
-            }
-            if (arch == Architecture.X64)
-            {
-                // Linux x86-64: st_dev u64 @0, st_ino u64 @8, st_nlink u64 @16.
-                return new FileIdentityInfo((ulong)Marshal.ReadInt64(buffer, 0), (ulong)Marshal.ReadInt64(buffer, 8), (uint)Marshal.ReadInt64(buffer, 16));
-            }
-            // Linux arm64 (asm-generic): st_dev u64 @0, st_ino u64 @8, st_mode u32 @16, st_nlink u32 @20.
-            return new FileIdentityInfo((ulong)Marshal.ReadInt64(buffer, 0), (ulong)Marshal.ReadInt64(buffer, 8), (uint)Marshal.ReadInt32(buffer, 20));
+                try { return FStat(fd, buffer); }
+                catch (EntryPointNotFoundException) { return FxStat(arch == Architecture.X64 ? 1 : 0, fd, buffer); }
+            });
         }
         finally
         {
             Marshal.FreeHGlobal(buffer);
         }
+    }
+
+    private static FileIdentityInfo? TryReadUnixStat(IntPtr buffer, Func<int> stat)
+    {
+        var arch = RuntimeInformation.ProcessArchitecture;
+        if (arch is not (Architecture.X64 or Architecture.Arm64)) return null;
+        for (var i = 0; i < StatBufferSize; i += 8) Marshal.WriteInt64(buffer, i, 0);
+        if (stat() != 0) return null;
+
+        if (OperatingSystem.IsMacOS())
+        {
+            // struct stat (64-bit inodes): st_dev int32 @0, st_mode u16 @4, st_nlink u16 @6, st_ino u64 @8.
+            return new FileIdentityInfo((uint)Marshal.ReadInt32(buffer, 0), (ulong)Marshal.ReadInt64(buffer, 8), (ushort)Marshal.ReadInt16(buffer, 6));
+        }
+        if (arch == Architecture.X64)
+        {
+            // Linux x86-64: st_dev u64 @0, st_ino u64 @8, st_nlink u64 @16.
+            return new FileIdentityInfo((ulong)Marshal.ReadInt64(buffer, 0), (ulong)Marshal.ReadInt64(buffer, 8), (uint)Marshal.ReadInt64(buffer, 16));
+        }
+        // Linux arm64 (asm-generic): st_dev u64 @0, st_ino u64 @8, st_mode u32 @16, st_nlink u32 @20.
+        return new FileIdentityInfo((ulong)Marshal.ReadInt64(buffer, 0), (ulong)Marshal.ReadInt64(buffer, 8), (uint)Marshal.ReadInt32(buffer, 20));
     }
 }

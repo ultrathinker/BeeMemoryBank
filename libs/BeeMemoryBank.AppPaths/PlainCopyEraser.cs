@@ -27,17 +27,13 @@ public sealed record PlainEraseRefusal(string Path, string Kind)
 /// against a second name: the bytes of a file that has one are not overwritten.
 /// </summary>
 /// <summary>
-/// The content scan as this node's own code runs it (the preflight, the final scan of the migration, the erase and its re-scan): the scanner's findings
-/// without the one that is not a copy. A running node holds <c>.instance.lock</c> exclusively (<see cref="InstanceGuard"/>); the file holds no data, but on
-/// Linux and macOS (advisory flock) and inside the holding process on Windows no other open succeeds, so the scanner reports it as <c>unreadable</c> and
-/// every preflight of a running node would be blocked by its own lock. Only that finding of that file at the top of the data folder is dropped: a file of
-/// that name anywhere else, or one that can be read and holds a plain database, is judged like any other.
+/// The content scan as this node's own code runs it (the preflight, final migration scan, erase and re-scan). Runtime locks are exempted only by the
+/// scanner's live-handle identity proof; a spelling such as <c>.instance.lock</c> has no special meaning.
 /// </summary>
 public static class PlainCopyScan
 {
     public static IReadOnlyList<PlainCopyFinding> Run(string dataPath, PlainScanMode mode, CancellationToken ct = default) =>
         PlainVaultCopyScanner.Scan(dataPath, mode, ct: ct)
-            .Where(f => !(f.Kind == PlainCopyKinds.Unreadable && string.Equals(f.RelativePath, InstanceGuard.FileName, StringComparison.Ordinal)))
             .Where(f => !VanishedWhileScanned(dataPath, f))
             .ToList();
 

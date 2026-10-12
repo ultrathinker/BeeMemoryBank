@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Hosting;
 
 namespace BeeMemoryBank.Node.Tests;
@@ -62,6 +63,32 @@ public class NodeOrchestratorTests : IDisposable
         orchestrator2.AllReady.Should().BeTrue();
 
         await orchestrator2.StopAsync();
+    }
+
+    [Fact]
+    public async Task Orchestrator_passes_its_held_node_lock_identity_to_a_child()
+    {
+        var readyFile = Path.Combine(_testDataDir, "proof.ready");
+        var proofFile = Path.Combine(_testDataDir, "proof.json");
+        var config = new ChildProcessConfig(
+            ApplicationName: "Api",
+            ExecutablePath: "dotnet",
+            WorkingDirectory: AppContext.BaseDirectory,
+            ReadyFilePath: readyFile,
+            Arguments: $"\"{_stubDllPath}\" --ready-file \"{readyFile}\" --write-held-lock-proof \"{proofFile}\"");
+        using var orchestrator = new NodeOrchestrator(_testDataDir, [config]);
+
+        await orchestrator.StartAsync(CancellationToken.None);
+
+        var proofs = JsonSerializer.Deserialize<HeldLockProof[]>(File.ReadAllText(proofFile));
+        var identity = FileIdentity.TryGet(Path.Combine(_testDataDir, "node.lock"));
+        proofs.Should().ContainSingle();
+        identity.Should().NotBeNull();
+        proofs![0].Path.Should().Be(Path.Combine(_testDataDir, "node.lock"));
+        proofs[0].Volume.Should().Be(identity!.Value.Volume);
+        proofs[0].Index.Should().Be(identity.Value.Index);
+
+        await orchestrator.StopAsync();
     }
 
     [Fact]

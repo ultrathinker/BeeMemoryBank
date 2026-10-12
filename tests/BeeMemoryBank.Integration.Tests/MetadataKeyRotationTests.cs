@@ -217,6 +217,13 @@ public class MetadataKeyRotationTests : IAsyncLifetime
         (await WaitForStepAsync("Completing", "Completed", "Failed")).Should().Be("Completing");
         var before = await AuthoringStateAsync();
 
+        // Accepting a rotation starts detached device-box recovery, which writes its own clear
+        // control event. It is not a response to an authoring route and must not make this check
+        // report an authoring leak.
+        await WaitUntilAsync(async () => await EventCountAsync(EventTypes.RecoveryBoxSet, null) > 0);
+        (await EventCountAsync(EventTypes.RecoveryBoxSet, null)).Should().BeGreaterThan(0,
+            "the rotation's device-box recovery is an independent event writer");
+
         var routes = new (string Name, Func<Task<HttpResponseMessage>> Call)[]
         {
             ("POST /api/folders", () => _client.PostAsJsonAsync("/api/folders", new { path = "/Created" })),
@@ -428,15 +435,23 @@ public class MetadataKeyRotationTests : IAsyncLifetime
         (await AuditCountAsync("dek_rotation_completed")).Should().Be(0);
 
         // The process dies here: no memory of the accepting service survives, and nobody is subscribed to the publication any more.
+        _a.Services.GetRequiredService<BeeMemoryBank.Api.Services.DekRotationService>().Dispose();
         var publisher = _a.Services.GetRequiredService<MetadataKeyPublishService>();
         ForgetSubscribers(publisher);
-        var restarted = ActivatorUtilities.CreateInstance<BeeMemoryBank.Api.Services.DekRotationService>(_a.Services, _a.DataPath);
+        using var restarted = ActivatorUtilities.CreateInstance<BeeMemoryBank.Api.Services.DekRotationService>(_a.Services, _a.DataPath);
 
         await restarted.FinishPendingCompletionAsync();
         (await AuditCountAsync("dek_rotation_completed")).Should().Be(0, "the key is not published yet: the rotation is not complete");
         (await CompletionRecordAsync()).Should().NotBeNull();
 
         _a.Fault.Mode = FaultMode.None;
+        // The finish above re-subscribed the fresh service to the publication before it saw the
+        // pending marker (SubscribeToPublication runs ahead of that check). Left armed, its
+        // OnMetadataKeyPublished starts a detached finish the moment this publish holds — one that
+        // can write the completion audit before the trigger below exists, finishing the rotation
+        // legitimately and leaving nothing for the failed finish to keep. The dead process
+        // subscribes to nothing: forget it again.
+        ForgetSubscribers(publisher);
         (await publisher.TryPublishAsync()).Should().BeTrue();
         (await MarkerAsync()).Should().BeNull();
 
@@ -461,6 +476,7 @@ public class MetadataKeyRotationTests : IAsyncLifetime
         _a.Fault.Mode = FaultMode.BeforeAppend;
         await RotateAsync();
         (await WaitForStepAsync("Completing", "Completed", "Failed")).Should().Be("Completing");
+        _a.Services.GetRequiredService<BeeMemoryBank.Api.Services.DekRotationService>().Dispose();
         var publisher = _a.Services.GetRequiredService<MetadataKeyPublishService>();
         ForgetSubscribers(publisher);
         _a.Fault.Mode = FaultMode.None;
@@ -472,7 +488,7 @@ public class MetadataKeyRotationTests : IAsyncLifetime
         await ExecAsync("CREATE TRIGGER fail_audit BEFORE INSERT ON tbl_audit_log WHEN NEW.action = 'dek_rotation_completed' BEGIN SELECT RAISE(ABORT, 'injected'); END");
 
         time.Fire();
-        await Task.Delay(1500);
+        await _a.Fault.CompletionAuditFailed.Task.WaitAsync(TimeSpan.FromSeconds(30));
         (await CompletionRecordAsync()).Should().NotBeNull("the finish failed and is kept");
         await ExecAsync("DROP TRIGGER fail_audit");
 
@@ -554,16 +570,17 @@ public class MetadataKeyRotationTests : IAsyncLifetime
         return _client.PostAsync("/api/media", form);
     }
 
-    /// <summary>Everything an authoring route could leave behind, as one comparable string.</summary>
+    /// <summary>Everything a sealed authoring route could leave behind, as one comparable string.</summary>
     private async Task<string> AuthoringStateAsync()
     {
         using var conn = Db();
         var folders = string.Join(",", await conn.QueryAsync<string>("SELECT path || ':' || status FROM tbl_folder ORDER BY path"));
         var tags = string.Join(",", await conn.QueryAsync<string>("SELECT name FROM tbl_concept_tag ORDER BY name"));
         var articles = string.Join(",", await conn.QueryAsync<string>("SELECT id || ':' || status || ':' || title || ':' || tree_path FROM tbl_article ORDER BY id"));
-        var counts = await conn.QuerySingleAsync<(long Comments, long Media, long Events, long Audit)>(
-            "SELECT (SELECT COUNT(*) FROM tbl_comment), (SELECT COUNT(*) FROM tbl_media), (SELECT COUNT(*) FROM tbl_event), (SELECT COUNT(*) FROM tbl_hard_delete_audit)");
-        return $"folders[{folders}] tags[{tags}] articles[{articles}] comments={counts.Comments} media={counts.Media} events={counts.Events} purges={counts.Audit}";
+        var counts = await conn.QuerySingleAsync<(long Comments, long Media, long SealedEvents, long Audit)>(
+            "SELECT (SELECT COUNT(*) FROM tbl_comment), (SELECT COUNT(*) FROM tbl_media), (SELECT COUNT(*) FROM tbl_event WHERE event_type = @Sealed), (SELECT COUNT(*) FROM tbl_hard_delete_audit)",
+            new { Sealed = EventTypes.Sealed });
+        return $"folders[{folders}] tags[{tags}] articles[{articles}] comments={counts.Comments} media={counts.Media} sealed-events={counts.SealedEvents} purges={counts.Audit}";
     }
 
     private async Task<string?> CompletionRecordAsync()
@@ -689,6 +706,9 @@ public class MetadataKeyRotationTests : IAsyncLifetime
 
         /// <summary>Awaited before a sealed event is appended (a request suspended between sealing and appending), or null.</summary>
         public volatile Func<SyncEvent, Task>? HoldSealedAppend;
+
+        /// <summary>Completed only after a completion-audit insert fails in the test database.</summary>
+        public TaskCompletionSource CompletionAuditFailed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     /// <summary>A node whose event log fails on <c>metadata_key_set</c> when told to: before the row is written, or after it was (then the surrounding transaction must undo it).</summary>
@@ -712,6 +732,18 @@ public class MetadataKeyRotationTests : IAsyncLifetime
                     faulty.Fault = Fault;
                     return proxy;
                 }, original.Lifetime));
+
+                var auditLog = services.Single(d => d.ServiceType == typeof(IAuditLogRepository));
+                services.Remove(auditLog);
+                services.Add(ServiceDescriptor.Describe(typeof(IAuditLogRepository), sp =>
+                {
+                    var inner = (IAuditLogRepository)ActivatorUtilities.CreateInstance(sp, auditLog.ImplementationType!);
+                    var proxy = DispatchProxy.Create<IAuditLogRepository, FaultyAuditLog>();
+                    var faulty = (FaultyAuditLog)(object)proxy;
+                    faulty.Inner = inner;
+                    faulty.Fault = Fault;
+                    return proxy;
+                }, auditLog.Lifetime));
             });
         }
     }
@@ -761,6 +793,47 @@ public class MetadataKeyRotationTests : IAsyncLifetime
         {
             await appended;
             throw new IOException("injected: the transaction fails after the event was appended");
+        }
+    }
+
+    /// <summary>Observes the exact completion-audit failure that the timer retry test injects.</summary>
+    public class FaultyAuditLog : DispatchProxy
+    {
+        public IAuditLogRepository Inner { get; set; } = null!;
+        public FaultSwitch Fault { get; set; } = null!;
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            try
+            {
+                var result = targetMethod!.Invoke(Inner, args);
+                if (targetMethod.Name == nameof(IAuditLogRepository.LogAsync)
+                    && args?[2] is "dek_rotation_completed"
+                    && result is Task task)
+                {
+                    return ObserveCompletionAuditFailureAsync(task);
+                }
+
+                return result;
+            }
+            catch (TargetInvocationException ex)
+            {
+                ExceptionDispatchInfo.Capture(ex.InnerException!).Throw();
+                throw;
+            }
+        }
+
+        private async Task ObserveCompletionAuditFailureAsync(Task task)
+        {
+            try
+            {
+                await task;
+            }
+            catch
+            {
+                Fault.CompletionAuditFailed.TrySetResult();
+                throw;
+            }
         }
     }
 }

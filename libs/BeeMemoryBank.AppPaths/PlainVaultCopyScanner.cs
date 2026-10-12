@@ -47,10 +47,10 @@ public sealed record PlainScanLimits(int MaxArchiveEntries = 100_000, long MaxIn
 
 /// <summary>
 /// Finds every file in a data directory that is a plain image of the vault, by CONTENT (docs/design/step-b-spec.md 10.2): never by name,
-/// folder or schema, skipping nothing (<c>media/</c>, <c>snapshots/</c>, <c>tmp/</c> and the rest are walked like every folder). No link is
-/// followed, no SQLite connection is opened, nothing is extracted to disk or changed, and a file that cannot be read is a finding (fail
-/// closed). The scan does not stop at the first finding. It is the preflight blocker <c>plain_copies</c>, the erase and the final scan of
-/// the migration.
+/// folder or schema, skipping nothing (<c>media/</c>, <c>snapshots/</c>, <c>tmp/</c> and the rest are walked like every folder), apart from
+/// an unreadable, empty runtime lock whose exact identity was supplied by its live owner. No link is followed, no SQLite connection is opened,
+/// nothing is extracted to disk or changed, and a file that cannot be read is a finding (fail closed) unless that identity proof applies. The scan does
+/// not stop at the first finding. It is the preflight blocker <c>plain_copies</c>, the erase and the final scan of the migration.
 /// </summary>
 public static class PlainVaultCopyScanner
 {
@@ -124,6 +124,7 @@ public static class PlainVaultCopyScanner
 
                 var finding = ScanFile((FileInfo)entry, relative, limits);
                 if (finding is null) continue;
+                if (IsProvenHeldEmptyLock(finding, entry.FullName)) continue;
                 findings.Add(finding);
                 if (mode == PlainScanMode.Preflight && finding.Kind is PlainCopyKinds.PlainSqlite or PlainCopyKinds.PlainJournal)
                     identityCandidates.Add((finding, entry.FullName));
@@ -158,6 +159,36 @@ public static class PlainVaultCopyScanner
     {
         try { return info.LastWriteTimeUtc; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return DateTime.UtcNow; }
+    }
+
+    /// <summary>
+    /// The owner supplies its held handle's identity.  Name is deliberately irrelevant: before and
+    /// after the failed read the regular file must be empty, it must have one name, and its current
+    /// path identity must equal a live owner proof.  A stale length, a hard link, a reparse point,
+    /// a directory and an unrelated lock therefore remain fail-closed findings.
+    /// </summary>
+    private static bool IsProvenHeldEmptyLock(PlainCopyFinding finding, string path)
+    {
+        if (finding.Kind != PlainCopyKinds.Unreadable || finding.Bytes != 0
+            || finding.Detail != "the file cannot be opened or read") return false;
+
+        FileInfo info;
+        try { info = new FileInfo(path); }
+        catch (ArgumentException) { return false; }
+        try
+        {
+            if (info.LinkTarget is not null || (info.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+                return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+
+        long lengthAfter;
+        try { lengthAfter = info.Length; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        if (lengthAfter != 0) return false;
+
+        var identity = FileIdentity.TryGet(path);
+        return identity is { } current && HeldLockProofs.Matches(path, current);
     }
 
     // ---- identities: another name of a live file ---------------------------------------------------------------------------------

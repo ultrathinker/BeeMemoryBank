@@ -74,6 +74,12 @@ The scan reads **every file of the data folder by its content**, whatever it is 
 start while it finds a plain image of the vault or of the chat history. It follows no link and opens no database. The
 findings, by kind:
 
+The only runtime exception is a runtime lock the running node can prove it owns: its held handle's file identity must
+match the regular, non-link file at the path, and the file must be empty both before and after the failed read. The
+desktop host passes its `node.lock` identity to its Api child; a running Api registers its own `.instance.lock` handle.
+A name alone is never enough: a readable or nonempty lock, a renamed, hard-linked or replaced file, and every other
+unreadable file are still scanned or block the preflight normally.
+
 | Kind | Meaning | What to do |
 |---|---|---|
 | `plain_sqlite` | A file that starts with the SQLite header, under any name. | Move it out of the data folder, or **Erase these copies**. |
@@ -83,7 +89,7 @@ findings, by kind:
 | `shares_identity` | A second name for your live database (a hard link). Erasing through that name would overwrite the live database. | Remove that name yourself. |
 | `live_linked` | Your live database has more than one name; another name exists somewhere, in the folder or outside it. | Find and remove the other name. |
 | `link` | A symbolic link or reparse point. Its target is not scanned. | Remove it. |
-| `unreadable`, `identity_unavailable` | A file or folder could not be opened or listed, or the identity of the live file cannot be read on this platform. The check fails closed. | Close the program that holds the file and try again. |
+| `unreadable`, `identity_unavailable` | A file or folder could not be opened or listed, or the identity of the live file cannot be read on this platform. The check fails closed apart from a proven empty runtime lock described above. | Close the program that holds the file and try again. |
 
 **Erase these copies** (the button, or `POST /api/vault/seal/erase-plain-copies` with the master password) scans
 again and overwrites and deletes exactly the paths you ticked that are still findings of kind `plain_sqlite`,

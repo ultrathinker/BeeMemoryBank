@@ -21,3 +21,14 @@ public sealed class HeavyOperationCollection
 {
     public const string Name = "HeavyOperation";
 }
+
+/// <summary>
+/// Keeps the replica-package verifier away from other in-process hosts.  Its test phone creates and
+/// immediately reopens a SQLite database below a WebApplicationFactory data directory; Windows can
+/// otherwise still hold the just-created database while another host is disposing.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class BlindReplicaVerificationCollection
+{
+    public const string Name = "BlindReplicaVerification";
+}

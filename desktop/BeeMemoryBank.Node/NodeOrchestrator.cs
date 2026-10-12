@@ -239,6 +239,10 @@ public class NodeOrchestrator : IDisposable
                     psi.EnvironmentVariables[key] = val;
                 }
             }
+            psi.EnvironmentVariables.Remove(BeeMemoryBank.AppPaths.HeldLockProofs.EnvironmentVariable);
+            var lockProof = BeeMemoryBank.AppPaths.HeldLockProofs.ForChildEnvironment(_directoryLock?.Proof);
+            if (lockProof is not null)
+                psi.EnvironmentVariables[BeeMemoryBank.AppPaths.HeldLockProofs.EnvironmentVariable] = lockProof;
 
             Process process;
             try

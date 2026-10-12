@@ -37,6 +37,22 @@ public sealed class SealPreflightApiTests(ActivatedPlainTemplate template) : ICl
     // ---------------------------------------------------------------- plain copies and the erase
 
     [Fact]
+    public async Task An_empty_node_lock_held_like_bmbd_does_not_block_preflight_or_sealing()
+    {
+        using var node = await StartAsync();
+        using var client = node.Client();
+        using var running = new FileStream(Path.Combine(node.Dir, "node.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite,
+            FileShare.None, bufferSize: 1, FileOptions.DeleteOnClose);
+        using var proof = HeldLockProofs.Register(HeldLockProofs.FromHeldHandle(Path.Combine(node.Dir, "node.lock"), running.SafeFileHandle));
+
+        (await SealedApiNode.GetJsonAsync(client, "/api/vault/seal/preflight")).GetProperty("can_start").GetBoolean().Should().BeTrue();
+        using var start = await client.PostAsJsonAsync("/api/vault/seal", new { password = Password });
+        start.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await WaitForEndAsync(client)).GetProperty("phase").GetString().Should().Be("done");
+        node.Gate.IsSealed.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Plain_copies_block_the_start_and_the_erase_removes_exactly_the_listed_files_after_which_the_migration_runs()
     {
         using var node = await StartAsync();
@@ -109,7 +125,7 @@ public sealed class SealPreflightApiTests(ActivatedPlainTemplate template) : ICl
         var live = Path.Combine(node.Dir, "beememorybank.db");
         Directory.CreateDirectory(Path.Combine(node.Dir, "tmp"));
         TestLinks.CreateHardLink(live, Path.Combine(node.Dir, "tmp", "hidden-name.bin"));
-        var liveBefore = File.ReadAllBytes(live);
+        var liveBefore = ReadLiveDatabase(live);
 
         var preflight = await SealedApiNode.GetJsonAsync(client, "/api/vault/seal/preflight");
         preflight.GetProperty("can_start").GetBoolean().Should().BeFalse();
@@ -120,7 +136,7 @@ public sealed class SealPreflightApiTests(ActivatedPlainTemplate template) : ICl
         var answer = await erase.Content.ReadFromJsonAsync<JsonElement>();
         answer.GetProperty("erased").GetArrayLength().Should().Be(0);
         answer.GetProperty("refused").EnumerateArray().Select(r => r.GetProperty("kind").GetString()).Should().Contain(PlainCopyKinds.SharesIdentity);
-        File.ReadAllBytes(live).Should().Equal(liveBefore, "the live database is byte-identical");
+        ReadLiveDatabase(live).Should().Equal(liveBefore, "the live database is byte-identical");
         using var c = node.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
         c.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_user").Should().BeGreaterThan(0, "the node still opens");
     }
@@ -240,6 +256,15 @@ public sealed class SealPreflightApiTests(ActivatedPlainTemplate template) : ICl
 
     private static IEnumerable<string> Codes(JsonElement body, string list) =>
         body.GetProperty(list).EnumerateArray().Select(e => e.GetProperty("code").GetString()!).ToList();
+
+    /// <summary>Reads the live SQLite database without requiring an exclusive Windows share.</summary>
+    private static byte[] ReadLiveDatabase(string path)
+    {
+        using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var bytes = new MemoryStream();
+        input.CopyTo(bytes);
+        return bytes.ToArray();
+    }
 
     private static async Task<JsonElement> WaitForEndAsync(HttpClient client)
     {

@@ -475,7 +475,8 @@ public sealed class MacOsSleepMonitorTests
         monitor.IsRunning.Should().BeFalse();
         _notifier.Notices.Should().ContainSingle().Which.Message.Should().Contain("will NOT be locked");
         _log.Should().Contain(l => l.Contains("Could not watch for sleep"));
-        monitor.ThreadHasExited.Should().BeTrue();
+        SpinWait.SpinUntil(() => monitor.ThreadHasExited, TimeSpan.FromSeconds(1)).Should().BeTrue(
+            "the failed registration thread must finish before the monitor is discarded");
     }
 
     [Fact]

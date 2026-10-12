@@ -13,6 +13,7 @@ public static class Program
         bool writeReadyFile = true;
         int exitDelayMs = -1;
         string appName = "StubApp";
+        string? heldLockProofFile = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -44,6 +45,10 @@ public static class Program
             {
                 appName = args[++i];
             }
+            else if (args[i] == "--write-held-lock-proof" && i + 1 < args.Length)
+            {
+                heldLockProofFile = args[++i];
+            }
         }
 
         // If BMB_READY_FILE environment variable is specified, use it as fallback
@@ -53,6 +58,11 @@ public static class Program
         {
             Console.WriteLine("[StubProcess] Crashing immediately with exit code 99");
             return 99;
+        }
+
+        if (!string.IsNullOrEmpty(heldLockProofFile))
+        {
+            File.WriteAllText(heldLockProofFile, Environment.GetEnvironmentVariable("BMB_HELD_LOCK_PROOFS") ?? string.Empty);
         }
 
         if (writeReadyFile && !string.IsNullOrEmpty(readyFilePath))

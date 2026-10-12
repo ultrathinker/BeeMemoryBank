@@ -4,7 +4,7 @@ namespace BeeMemoryBank.AppPaths.Tests;
 
 /// <summary>
 /// <see cref="FileIdentity"/> (docs/design/step-b-spec.md 10.2, red test 15.1.17): two names of one file have one identity and a link
-/// count of two, a copy has another identity, an unreadable path has none. The Linux and macOS implementation (fstat) runs these same
+/// count of two, a copy has another identity, an unreadable path has none. The Linux and macOS implementation (stat/fstat) runs these same
 /// tests at the platform gate (15.5).
 /// </summary>
 public sealed class FileIdentityTests : IDisposable
@@ -97,6 +97,20 @@ public sealed class FileIdentityTests : IDisposable
         var id = FileIdentity.TryGet(path);
 
         id.Should().NotBeNull("an attribute-only handle conflicts with no share mode, so the live database of a running node is not 'unreadable'");
+    }
+
+    [Fact]
+    public void An_held_handle_proves_the_same_identity_as_its_path()
+    {
+        var path = Write("held.db", "content");
+        using var hold = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        var fromHandle = FileIdentity.TryGet(hold.SafeFileHandle);
+        var fromPath = FileIdentity.TryGet(path);
+
+        fromHandle.Should().NotBeNull();
+        fromPath.Should().NotBeNull();
+        fromHandle!.Value.IsSameFileAs(fromPath!.Value).Should().BeTrue();
     }
 
     [Fact]

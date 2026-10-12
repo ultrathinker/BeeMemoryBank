@@ -9,11 +9,13 @@ public sealed class DirectoryLock : IDisposable
 {
     private readonly FileStream _lockStream;
     private readonly string _lockFilePath;
+    public BeeMemoryBank.AppPaths.HeldLockProof? Proof { get; }
 
     private DirectoryLock(FileStream lockStream, string lockFilePath)
     {
         _lockStream = lockStream;
         _lockFilePath = lockFilePath;
+        Proof = BeeMemoryBank.AppPaths.HeldLockProofs.FromHeldHandle(lockFilePath, lockStream.SafeFileHandle);
     }
 
     /// <summary>

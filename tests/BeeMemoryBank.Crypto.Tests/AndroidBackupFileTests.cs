@@ -266,9 +266,7 @@ public sealed class AndroidBackupFileTests : IDisposable
         {
             if (changed) return;
             changed = true;
-            using var f = new FileStream(source, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-            f.Position = Chunk * 3 + 5; // a chunk not read yet
-            f.WriteByte(0x42);
+            FlipByte(source, Chunk * 3 + 5); // a chunk not read yet
         });
 
         var write = () => AndroidBackupWriter.WriteAsync(source, output, _key, _nodeId,
@@ -289,9 +287,7 @@ public sealed class AndroidBackupFileTests : IDisposable
         var tamper = new SyncProgress(p =>
         {
             if (p < 0.7 || p > 0.8) return; // after chunk 3 of 4
-            using var f = new FileStream(source, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-            f.Position = 5; // inside chunk 0, read long ago
-            f.WriteByte(0x42);
+            FlipByte(source, 5); // inside chunk 0, read long ago
         });
 
         var write = () => AndroidBackupWriter.WriteAsync(source, output, _key, _nodeId,
@@ -324,6 +320,16 @@ public sealed class AndroidBackupFileTests : IDisposable
 
     private static int FirstChunkOffset(byte[] file) =>
         8 + 4 + (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(file.AsSpan(8, 4));
+
+    private static void FlipByte(string path, int position)
+    {
+        using var file = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+        file.Position = position;
+        var original = file.ReadByte();
+        original.Should().BeGreaterThanOrEqualTo(0);
+        file.Position = position;
+        file.WriteByte((byte)(original ^ 0xff));
+    }
 
     [Fact]
     public async Task AChangedSource_StartsOver_InsteadOfReusingNonces()
