@@ -89,6 +89,8 @@ public class SearchContentConcurrencyTests : TestFixture
         {
             var stopChurn = new CancellationTokenSource();
             var deletedThisIteration = new ConcurrentQueue<Guid>();
+            var writersStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            int startedWriterCount = 0;
 
             // Background writers: continuously churn the active set so the old LIMIT/OFFSET
             // windowing would shift between batches. Two kinds of mutation, both on connections
@@ -97,10 +99,17 @@ public class SearchContentConcurrencyTests : TestFixture
             //       which is the clean trigger for a boundary needle falling through a gap;
             //   (b) create an ephemeral filler then immediately delete it → adds a transient row.
             var churnTasks = Enumerable.Range(0, 3).Select(_ => Task.Run(() =>
-                ChurnAsync(deletablePool, deletedThisIteration, stopChurn.Token))).ToArray();
+                ChurnAsync(
+                    deletablePool,
+                    deletedThisIteration,
+                    stopChurn.Token,
+                    () =>
+                    {
+                        if (Interlocked.Increment(ref startedWriterCount) == 3)
+                            writersStarted.TrySetResult();
+                    }))).ToArray();
 
-            // Give the writers a beat to start mutating before the search kicks off.
-            await Task.Delay(5);
+            await writersStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
             var results = await SearchService.SearchWithContentAsync(Needle);
 
@@ -136,9 +145,14 @@ public class SearchContentConcurrencyTests : TestFixture
         results.Articles.Should().BeEmpty("locked session must not search bodies");
     }
 
-    private async Task ChurnAsync(Guid[] pool, ConcurrentQueue<Guid> deleted, CancellationToken ct)
+    private async Task ChurnAsync(
+        Guid[] pool,
+        ConcurrentQueue<Guid> deleted,
+        CancellationToken ct,
+        Action writerStarted)
     {
         var rng = new Random();
+        writerStarted();
         while (!ct.IsCancellationRequested)
         {
             try
