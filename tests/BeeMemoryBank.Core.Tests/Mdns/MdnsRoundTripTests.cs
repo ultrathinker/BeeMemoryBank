@@ -39,15 +39,20 @@ public class MdnsRoundTripTests
         // query first (and to exercise the passive path, not just query/answer).
         advertiser.Announce(profile);
 
-        // Give the announcement a moment to propagate before browsing.
-        await Task.Delay(TimeSpan.FromMilliseconds(500));
-
         var browser = new MdnsBrowser();
-        var discovered = await browser.DiscoverAsync(
-            scanTime: TimeSpan.FromSeconds(8),
-            serviceType: testService);
+        // The announcement is asynchronous: a fixed sleep can race the responder's socket setup on
+        // a busy CI host.  Keep asking with short bounded scans until the announced node is visible.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        MdnsNodeRecord? match = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            var discovered = await browser.DiscoverAsync(
+                scanTime: TimeSpan.FromSeconds(1),
+                serviceType: testService);
+            match = discovered.SingleOrDefault(n => n.NodeId == nodeId);
+            if (match is not null) break;
+        }
 
-        var match = discovered.SingleOrDefault(n => n.NodeId == nodeId);
         match.Should().NotBeNull(
             "the announced node should be discoverable in-process via mDNS multicast loopback");
 
