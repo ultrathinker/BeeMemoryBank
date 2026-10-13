@@ -3,8 +3,11 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -19,7 +22,10 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
     private const string AdminPassword = "AdminPass123";
     private static readonly string Pin = Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
 
-    private readonly BmbWebApplicationFactory _api = new();
+    // The blind node in the whitelist is only a row on these pages. With the real machine behind it, every superadmin login would start a
+    // strong box build (up to 1 GiB of Argon2id) on the process-wide heavy-derivation queue, and a test class that really builds boxes
+    // would find the queue full and be refused.
+    private readonly BmbWebApplicationFactory _api = new NoStrongBoxFactory();
     private readonly BmbWebHostFactory _web = new();
     private HttpClient _admin = null!;
     private readonly Guid _normal = Guid.NewGuid();
@@ -179,5 +185,21 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
         if (resp.StatusCode is HttpStatusCode.Redirect or HttpStatusCode.Found)
             resp = await _admin.GetAsync(resp.Headers.Location!.OriginalString);
         return (resp.StatusCode, WebUtility.HtmlDecode(await resp.Content.ReadAsStringAsync()));
+    }
+
+    private sealed class NoStrongBoxFactory : BmbWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.ConfigureTestServices(s => s.AddSingleton<IRecoveryHost>(new PhoneHost()));
+        }
+    }
+
+    /// <summary>A phone never builds a strong box (StrongBoxPolicy).</summary>
+    private sealed class PhoneHost : IRecoveryHost
+    {
+        public RecoveryHostKind Kind => RecoveryHostKind.Phone;
+        public long AvailableMemoryBytes() => 0;
     }
 }
