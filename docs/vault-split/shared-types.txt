@@ -338,6 +338,7 @@ BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.SealedImportMethod
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.SealedImportTooLargeException
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.SealedSqlite
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.SealedSqlite+KeyedHandles
+BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.SnapshotFileNames
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.SqlCipherPageFormat
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.SqlCipherScheme
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.VaultStoreDiagnosis
