@@ -167,14 +167,18 @@ public sealed class PlainFileWatch : IDisposable
 {
     private static readonly byte[] Magic = "SQLite format 3\0"u8.ToArray();
     private readonly Thread _thread;
+    private readonly object _look = new();
+    private readonly Action<string>? _midLook;
     private volatile bool _stop;
 
     public ConcurrentDictionary<string, byte> Seen { get; } = new();
     public ConcurrentBag<string> Plain { get; } = new();
     public ConcurrentBag<string> CanaryHits { get; } = new();
 
-    public PlainFileWatch(IEnumerable<string> folders, IEnumerable<string> canaries)
+    /// <param name="midLook">Test seam: called with the file name while a look is half done (the plain header is recorded, the canary hits are not).</param>
+    public PlainFileWatch(IEnumerable<string> folders, IEnumerable<string> canaries, Action<string>? midLook = null)
     {
+        _midLook = midLook;
         var dirs = folders.ToList();
         var list = canaries.ToList();
         using var started = new ManualResetEventSlim();
@@ -193,22 +197,41 @@ public sealed class PlainFileWatch : IDisposable
         started.Wait();
     }
 
+    // One look at a file, from opening it to recording what it holds, is one step under _look, so Forget can tell that no look is half done.
     private void Look(string file, List<string> canaries)
     {
         var name = Path.GetFileName(file);
         Seen.TryAdd(name, 0);
-        try
+        lock (_look)
         {
-            using var s = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            var head = new byte[16];
-            if (s.ReadAtLeast(head, 16, throwOnEndOfStream: false) == 16 && head.AsSpan().SequenceEqual(Magic)) Plain.Add(name);
-            s.Position = 0;
-            var all = new byte[s.Length];
-            s.ReadExactly(all);
-            foreach (var hit in MetadataCanaries.Scan(all, canaries, file)) CanaryHits.Add(name + ":" + hit.Encoding);
+            try
+            {
+                using var s = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var head = new byte[16];
+                if (s.ReadAtLeast(head, 16, throwOnEndOfStream: false) == 16 && head.AsSpan().SequenceEqual(Magic)) Plain.Add(name);
+                _midLook?.Invoke(name);
+                s.Position = 0;
+                var all = new byte[s.Length];
+                s.ReadExactly(all);
+                foreach (var hit in MetadataCanaries.Scan(all, canaries, file)) CanaryHits.Add(name + ":" + hit.Encoding);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+    }
+
+    /// <summary>
+    /// Drops everything recorded so far, once a deliberately planted file has been deleted. A look that opened the file before it was deleted is
+    /// still reading it, and would record its hits after a plain clearing of the lists: this waits for that look, and no later look can open the
+    /// deleted file, so nothing of the planted file is recorded after this returns.
+    /// </summary>
+    public void Forget()
+    {
+        lock (_look)
+        {
+            Plain.Clear();
+            CanaryHits.Clear();
+        }
     }
 
     public void Stop()

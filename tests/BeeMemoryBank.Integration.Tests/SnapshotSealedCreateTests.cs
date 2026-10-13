@@ -71,15 +71,14 @@ public sealed class SnapshotSealedCreateTests(SealedNodeTemplate template) : ICl
         var staging = SnapshotStaging.DirIn(node.Dir);
         Directory.CreateDirectory(staging);
         using var watch = new PlainFileWatch([staging, node.Snapshots.SnapshotsDir], template.Canaries);
-        // The watch can see: a plain database planted for a moment is recorded.
+        // The watch can see: a plain database planted for a moment is recorded. The probe stays until the watch has recorded it (a watch thread that is
+        // slow to be scheduled is not a failure of the control) and the watch forgets it after it is deleted, so a look still half done on the probe
+        // cannot put its hits into the lists of the real run below.
         var probe = Path.Combine(staging, "probe-plain.tmp");
         await File.WriteAllBytesAsync(probe, [.. "SQLite format 3\0"u8.ToArray(), .. System.Text.Encoding.UTF8.GetBytes(template.Canaries[0])]);
-        await Task.Delay(100);
+        SpinWait.SpinUntil(() => watch.Plain.Contains("probe-plain.tmp") && !watch.CanaryHits.IsEmpty, TimeSpan.FromSeconds(30)).Should().BeTrue("the watch sees the probe");
         File.Delete(probe);
-        watch.Plain.Should().Contain("probe-plain.tmp");
-        watch.CanaryHits.Should().NotBeEmpty();
-        while (watch.Plain.TryTake(out _)) { }
-        while (watch.CanaryHits.TryTake(out _)) { }
+        watch.Forget();
 
         var info = await node.Snapshots.CreateAsync(filterSecrets: false, sign: true);
         watch.Stop();
