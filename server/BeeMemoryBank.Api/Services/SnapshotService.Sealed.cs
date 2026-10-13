@@ -53,13 +53,42 @@ public partial class SnapshotService
 
     /// <summary>Where the pre-encryption snapshot lives (docs/design/step-b-spec.md 10.7): not listed, not pruned, found by name here.</summary>
     public string PreEncryptionDir => Path.Combine(_dataPath, VaultStoreFiles.PreEncryptionDir);
-    /// <summary>A snapshot file by name: <c>snapshots/</c> first, then <c>pre-encryption/</c> (the restore of the way-back snapshot, spec 10.7).</summary>
-    private string? FindRestorableSnapshot(string safeName)
+    /// <summary>
+    /// The snapshot file a restore name means, or null when there is none. A plain name is looked up in <c>snapshots/</c> first, then in
+    /// <c>pre-encryption/</c> (the restore of the way-back snapshot, spec 10.7); a name that is in both folders is refused, because the restore cannot
+    /// tell which of the two is meant and must not open the wrong one. <c>pre-encryption/&lt;name&gt;</c> and <c>snapshots/&lt;name&gt;</c> name the
+    /// folder and are looked up there only: the way out of that refusal without touching a file. The message carries file and folder names only.
+    /// </summary>
+    private string? FindRestorableSnapshot(string requestedName)
     {
+        var safeName = Path.GetFileName(requestedName);
         var inSnapshots = Path.Combine(SnapshotsDir, safeName);
-        if (File.Exists(inSnapshots)) return inSnapshots;
         var inPreEncryption = Path.Combine(PreEncryptionDir, safeName);
+
+        var asked = requestedName.Replace('\\', '/');
+        if (string.Equals(asked, $"{VaultStoreFiles.PreEncryptionDir}/{safeName}", StringComparison.OrdinalIgnoreCase))
+            return File.Exists(inPreEncryption) ? inPreEncryption : null;
+        if (string.Equals(asked, $"{SnapshotFileNames.SnapshotsDir}/{safeName}", StringComparison.OrdinalIgnoreCase))
+            return File.Exists(inSnapshots) ? inSnapshots : null;
+
+        if (File.Exists(inSnapshots) && File.Exists(inPreEncryption))
+            throw new InvalidOperationException(
+                $"Two snapshots are named {safeName}: one in snapshots/ and one in pre-encryption/, and the restore cannot tell which one is meant. " +
+                "Nothing was changed. Rename or delete the ordinary snapshot with this name in snapshots/ (it is listed on the Snapshots page) and try again, " +
+                $"or name the folder: {VaultStoreFiles.PreEncryptionDir}/{safeName} or {SnapshotFileNames.SnapshotsDir}/{safeName}.");
+        if (File.Exists(inSnapshots)) return inSnapshots;
         return File.Exists(inPreEncryption) ? inPreEncryption : null;
+    }
+
+    /// <summary>
+    /// Throws <see cref="InvalidOperationException"/> when <paramref name="fileName"/> is in both snapshot folders and no folder is named (see
+    /// <see cref="FindRestorableSnapshot"/>). The restore route asks this first, so that a refused restore has done nothing yet: no audit entry of a
+    /// started restore, no safety backup, no session lock. A name that does not exist or is not a snapshot name is left to the restore itself.
+    /// <see cref="RestoreAsync"/> checks again, so the refusal does not depend on the caller.
+    /// </summary>
+    public void RequireUnambiguousRestoreName(string? fileName)
+    {
+        if (!string.IsNullOrEmpty(fileName)) _ = FindRestorableSnapshot(fileName);
     }
 
     /// <summary>

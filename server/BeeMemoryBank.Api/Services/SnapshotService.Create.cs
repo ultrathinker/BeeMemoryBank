@@ -10,6 +10,7 @@ using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,9 @@ namespace BeeMemoryBank.Api.Services;
 
 public partial class SnapshotService
 {
+    /// <summary>The clock of the snapshot file names, to the second. The integration tests set it so that two snapshots share a second.</summary>
+    internal Func<DateTime> SnapshotNameClock { get; set; } = () => DateTime.UtcNow;
+
     /// <summary>The fingerprint of the master DEK a join snapshot is sealed under, or null while the vault is locked (the join cache key).</summary>
     public string? JoinKeyFingerprint() => _keys?.GetJoinKeyFingerprint();
 
@@ -284,15 +288,10 @@ public partial class SnapshotService
             // the second file then overwrote the first under an identical name — silently
             // destroying the one copy that exists to be restored if the restore goes wrong.
             // Disambiguate with a counter rather than widening the timestamp, so file names keep
-            // the shape operators and older snapshots already have.
-            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-            var fileName = $"bmb-snapshot-{timestamp}.tar.gz";
+            // the shape operators and older snapshots already have. The counter also skips a name taken in the other snapshot folder: a restore by
+            // name looks in snapshots/ first, so the same name in pre-encryption/ would open the wrong archive.
+            var fileName = SnapshotFileNames.Unique(_dataPath, outputDir, SnapshotNameClock());
             var filePath = Path.Combine(outputDir, fileName);
-            for (var dedupe = 2; File.Exists(filePath); dedupe++)
-            {
-                fileName = $"bmb-snapshot-{timestamp}-{dedupe}.tar.gz";
-                filePath = Path.Combine(outputDir, fileName);
-            }
 
             // Two complementary signatures over the manifest exist for historical reasons:
             //   1) Sidecar `{filePath}.sig` over (manifest || file-content) — used by the

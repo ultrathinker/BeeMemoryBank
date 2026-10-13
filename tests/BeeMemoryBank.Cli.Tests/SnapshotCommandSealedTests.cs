@@ -129,6 +129,25 @@ public sealed class SnapshotCommandSealedTests : IDisposable
     }
 
     [Fact]
+    public async Task The_snapshot_takes_a_name_free_in_both_snapshot_folders_and_overwrites_nothing()
+    {
+        // The way-back snapshot of an encrypted node lives in pre-encryption/ and a restore by name looks in snapshots/ first: the same name in both
+        // would open the wrong archive.
+        var second = new DateTime(2026, 10, 13, 9, 30, 15, DateTimeKind.Utc);
+        var wayBack = Path.Combine(_data, "pre-encryption", "bmb-snapshot-20261013-093015.tar.gz");
+        Directory.CreateDirectory(Path.GetDirectoryName(wayBack)!);
+        File.WriteAllText(wayBack, "the way-back");
+
+        var first = await SnapshotCommand.CreateSealedSnapshotAsync(_data, _vault, _keys, _masterDek, "node-1", "Test node", nameClock: () => second);
+        var again = await SnapshotCommand.CreateSealedSnapshotAsync(_data, _vault, _keys, _masterDek, "node-1", "Test node", nameClock: () => second);
+
+        Path.GetFileName(first.Path).Should().Be("bmb-snapshot-20261013-093015-2.tar.gz");
+        Path.GetFileName(again.Path).Should().Be("bmb-snapshot-20261013-093015-3.tar.gz");
+        new FileInfo(first.Path).Length.Should().BeGreaterThan(100, "the first archive is not truncated by the second");
+        File.ReadAllText(wayBack).Should().Be("the way-back", "a file of that name in the other folder is left as it is");
+    }
+
+    [Fact]
     public async Task A_vault_that_is_not_open_or_a_session_without_the_master_dek_answers_the_password_sentence_and_writes_nothing()
     {
         var output = new StringWriter();

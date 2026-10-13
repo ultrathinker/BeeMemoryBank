@@ -84,7 +84,8 @@ public partial class SnapshotService
             throw new ArgumentException("Invalid snapshot file name");
 
         // snapshots/ first, then pre-encryption/: the way-back snapshot of a node that was encrypted is restored by its file name (spec 10.7).
-        var filePath = FindRestorableSnapshot(safeName)
+        // The requested name, not the bare one: it may name the folder, and a name in both folders without one is refused here.
+        var filePath = FindRestorableSnapshot(fileName)
             ?? throw new FileNotFoundException($"Snapshot {safeName} not found");
 
         // Coordinate with CompactionService — both flows bulk-rewrite tbl_event.

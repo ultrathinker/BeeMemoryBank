@@ -26,7 +26,7 @@ public static class SnapshotCommand
     private const string ManifestFileName = "manifest.json";
     private const int ManifestVersion = 1;
 
-    public static async Task<int> HandleCreateAsync(string dataPath, TextWriter? output = null, Action<string>? afterStagingWork = null)
+    public static async Task<int> HandleCreateAsync(string dataPath, TextWriter? output = null, Action<string>? afterStagingWork = null, Func<DateTime>? nameClock = null)
     {
         output ??= Console.Out;
 
@@ -94,12 +94,11 @@ public static class SnapshotCommand
 
             // Generate snapshot file name. Place under {dataPath}/snapshots/ so
             // `bmb snapshot restore-standalone <name>` can find it by file name —
-            // the running API server reads from that directory.
-            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-            var snapshotName = $"bmb-snapshot-{timestamp}.tar.gz";
-            var snapshotsDir = Path.Combine(dataPath, "snapshots");
+            // the running API server reads from that directory. The name is one the node's own snapshots
+            // do not hold either, in snapshots/ or in pre-encryption/ (SnapshotFileNames).
+            var snapshotsDir = Path.Combine(dataPath, SnapshotFileNames.SnapshotsDir);
             Directory.CreateDirectory(snapshotsDir);
-            snapshotPath = Path.Combine(snapshotsDir, snapshotName);
+            snapshotPath = Path.Combine(snapshotsDir, SnapshotFileNames.Unique(dataPath, snapshotsDir, nameClock?.Invoke() ?? DateTime.UtcNow));
 
             // Create tar.gz
             await using (var fileStream = File.Create(snapshotPath))
@@ -200,7 +199,7 @@ public static class SnapshotCommand
     /// copy is encrypted and is wiped at the end.
     /// </summary>
     public static async Task<SealedSnapshotResult> CreateSealedSnapshotAsync(string dataPath, DbConnectionFactory vault, IVaultKeySource keys,
-        byte[] masterDek, string nodeId, string displayName, CancellationToken ct = default, Action<string>? afterStagingWork = null)
+        byte[] masterDek, string nodeId, string displayName, CancellationToken ct = default, Action<string>? afterStagingWork = null, Func<DateTime>? nameClock = null)
     {
         var staging = SnapshotStaging.NewFile(dataPath);
         string? madeArchive = null;
@@ -238,9 +237,9 @@ public static class SnapshotCommand
             };
             var manifestBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
 
-            var snapshotsDir = Path.Combine(dataPath, "snapshots");
+            var snapshotsDir = Path.Combine(dataPath, SnapshotFileNames.SnapshotsDir);
             Directory.CreateDirectory(snapshotsDir);
-            var snapshotPath = Path.Combine(snapshotsDir, $"bmb-snapshot-{DateTime.UtcNow:yyyyMMdd-HHmmss}.tar.gz");
+            var snapshotPath = Path.Combine(snapshotsDir, SnapshotFileNames.Unique(dataPath, snapshotsDir, nameClock?.Invoke() ?? DateTime.UtcNow));
             await using (var fileStream = File.Create(snapshotPath))
             await using (var gzip = new GZipStream(fileStream, CompressionLevel.Optimal))
             using (var tar = new TarWriter(gzip, TarEntryFormat.Pax))

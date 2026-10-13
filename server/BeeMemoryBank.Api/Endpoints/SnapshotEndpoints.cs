@@ -99,6 +99,15 @@ public static class SnapshotEndpoints
                 return Results.BadRequest(new ErrorResponse(refusal!));
             }
 
+            // A name that is in both snapshot folders is refused before anything is done: no password check, no audit entry of a started restore, no
+            // safety backup, no change to the session. RestoreAsync refuses it again; this is the same refusal, just early.
+            try { svc.RequireUnambiguousRestoreName(req.FileName); }
+            catch (InvalidOperationException ex)
+            {
+                await auditRepo.LogAsync("snapshot", req.FileName, "snapshot_restore_refused", "web", $"Mode={mode}, by user {actor}: {ex.Message}");
+                return Results.BadRequest(new ErrorResponse(ex.Message));
+            }
+
             // Re-authenticate. Only unlock the shared session when it is actually locked — an
             // encrypted snapshot needs the master DEK to apply, and the restore path locks again
             // when it is done. Calling UnlockAsync unconditionally (as this used to) also fired the

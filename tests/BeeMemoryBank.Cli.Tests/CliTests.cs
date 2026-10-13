@@ -297,6 +297,29 @@ public class CliTests : IDisposable
     }
 
     [Fact]
+    public async Task Snapshot_Create_TakesANameFreeInBothSnapshotFolders_AndOverwritesNothing()
+    {
+        // A restore by name looks in snapshots/ and then in pre-encryption/, so the command must not give a snapshot the name of one in either folder
+        // (the way-back snapshot of an encrypted node lives in pre-encryption/), and must not truncate a file that already has its name.
+        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        var second = new DateTime(2026, 10, 13, 9, 30, 15, DateTimeKind.Utc);
+        var wayBack = Path.Combine(_tempDir, "pre-encryption", "bmb-snapshot-20261013-093015.tar.gz");
+        Directory.CreateDirectory(Path.GetDirectoryName(wayBack)!);
+        File.WriteAllText(wayBack, "the way-back");
+
+        var first = new StringWriter();
+        var second2 = new StringWriter();
+        (await SnapshotCommand.HandleCreateAsync(_tempDir, first, nameClock: () => second)).Should().Be(0, first.ToString());
+        (await SnapshotCommand.HandleCreateAsync(_tempDir, second2, nameClock: () => second)).Should().Be(0, second2.ToString());
+
+        first.ToString().Should().Contain("bmb-snapshot-20261013-093015-2.tar.gz");
+        second2.ToString().Should().Contain("bmb-snapshot-20261013-093015-3.tar.gz");
+        Directory.GetFiles(Path.Combine(_tempDir, "snapshots"), "bmb-snapshot-*.tar.gz").Select(Path.GetFileName)
+            .Should().BeEquivalentTo("bmb-snapshot-20261013-093015-2.tar.gz", "bmb-snapshot-20261013-093015-3.tar.gz");
+        File.ReadAllText(wayBack).Should().Be("the way-back", "a file of that name in the other folder is left as it is");
+    }
+
+    [Fact]
     public async Task Snapshot_RestoreOnFreshNode_AllDataAvailable()
     {
         // Create a node with an article
