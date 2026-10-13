@@ -28,7 +28,8 @@ public static class JoinCommand
         bool allowInsecureHttp = false,
         TextWriter? output = null,
         string? joinCode = null,
-        TimeSpan? requestTimeout = null)
+        TimeSpan? requestTimeout = null,
+        TimeSpan? abortTimeout = null)
     {
         output ??= Console.Out;
 
@@ -123,7 +124,7 @@ public static class JoinCommand
         {
             if (hostTold) return;
             hostTold = true;
-            var outcome = await JoinAbortClient.TryAbortAsync(http, remoteUrl, password, nodeId, publicKey, code?.Token, requestTimeout);
+            var outcome = await JoinAbortClient.TryAbortAsync(http, remoteUrl, password, nodeId, publicKey, code?.Token, abortTimeout ?? requestTimeout);
             await output.WriteLineAsync(outcome.HostForgot()
                 ? $"The other computer was told and no longer lists this node ('{displayName}', {nodeId})."
                 : StillListsSentence(displayName, nodeId, rowCertain));

@@ -28,13 +28,18 @@ public class JoinCommandAbortTests : IDisposable
     private static (int, IReadOnlyDictionary<string, string>, byte[])? Ok(string json) => RecordingJoinHost.Reply(200, json);
 
     private static Func<SeenRequest, (int, IReadOnlyDictionary<string, string>, byte[])?> HostOf(
-        FakeJoinHost host, Func<SeenRequest, (int, IReadOnlyDictionary<string, string>, byte[])?>? abort = null, int? protocol = null) =>
-        r => r.Path switch
+        FakeJoinHost host, Func<SeenRequest, (int, IReadOnlyDictionary<string, string>, byte[])?>? abort = null, int? protocol = null)
+    {
+        // The key slot is wrapped with Argon2id (64 MB, 3 passes): built here, once, not inside the handler, where on a busy machine
+        // it would eat the request limit of the join the test is waiting for.
+        var join = host.JoinResponseJson(Password, protocol);
+        return r => r.Path switch
         {
-            "/api/join" => Ok(host.JoinResponseJson(Password, protocol)),
+            "/api/join" => Ok(join),
             "/api/join/abort" => abort?.Invoke(r),
             _ => host.Answer(r.Path)
         };
+    }
 
     private static Guid NodeIdOf(string output) =>
         Guid.Parse(output.Split('\n').First(l => l.StartsWith("Generated nodeId: ")).Split(": ")[1].Trim());
@@ -101,18 +106,29 @@ public class JoinCommandAbortTests : IDisposable
     public async Task AHostThatDoesNotAnswerTheAbort_DoesNotHoldTheJoinUp_AndKeepsTheAccurateSentence()
     {
         var forged = new FakeJoinHost(Guid.NewGuid(), badSignature: true);
+        // The host takes the abort and says nothing until the test lets go at the end. So the join can come back only because the abort
+        // ran out of its own (short) limit, however slow this machine is; every other step of the join keeps its default limit.
+        using var silence = new ManualResetEventSlim();
         using var server = new RecordingJoinHost(HostOf(forged, abort: _ =>
         {
-            Thread.Sleep(TimeSpan.FromSeconds(4));
+            silence.Wait(TimeSpan.FromMinutes(2));
             return RecordingJoinHost.Reply(200);
         }));
 
         var output = new StringWriter();
-        var started = DateTime.UtcNow;
-        var rc = await JoinCommand.HandleAsync(_tempDir, server.Url, Password, "CliJoiner", output: output, requestTimeout: TimeSpan.FromSeconds(1));
+        try
+        {
+            var rc = await JoinCommand.HandleAsync(_tempDir, server.Url, Password, "CliJoiner", output: output, abortTimeout: TimeSpan.FromSeconds(1))
+                .WaitAsync(TimeSpan.FromMinutes(1));
 
-        rc.Should().NotBe(0);
-        (DateTime.UtcNow - started).Should().BeLessThan(TimeSpan.FromSeconds(30));
+            rc.Should().NotBe(0);
+        }
+        finally
+        {
+            silence.Set();
+        }
+
+        server.Paths.Last().Should().Be("/api/join/abort");
         output.ToString().Should().Contain("signature verification failed").And.Contain("still lists this node ('CliJoiner'");
     }
 
