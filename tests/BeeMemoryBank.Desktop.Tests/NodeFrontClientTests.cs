@@ -242,6 +242,18 @@ public sealed class NodeFrontClientTests : IDisposable
         NodeFrontClient.KeyFromEnvironment().Should().BeNull("an empty variable is no key");
     }
 
+    [Fact]
+    public void TheTestsThatStartAHostedNode_RunInTheCollectionOfTheTestsThatSetTheKey()
+    {
+        // Every hosted start replaces BMB_INTERNAL_KEY of this process, so run beside the test above it would change the value that test
+        // has just set. One collection means one after the other.
+        static string? CollectionOf(Type type) => type.CustomAttributes
+            .SingleOrDefault(a => a.AttributeType == typeof(CollectionAttribute))?.ConstructorArguments.FirstOrDefault().Value as string;
+
+        CollectionOf(typeof(NodeFrontClientTests)).Should().NotBeNullOrEmpty();
+        CollectionOf(typeof(NodeLifecycleServiceTests)).Should().Be(CollectionOf(typeof(NodeFrontClientTests)));
+    }
+
     // ── the update-unlock handoff, which now goes through the same client ─────────────────────────────────────
 
     [Fact]

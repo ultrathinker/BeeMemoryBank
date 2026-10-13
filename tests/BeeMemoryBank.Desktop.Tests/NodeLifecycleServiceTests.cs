@@ -23,6 +23,9 @@ namespace BeeMemoryBank.Desktop.Tests;
 ///  - Hosted process that ignores EOF (hung)   → StopAsync waits the timeout, then hard-kills.
 ///  - Attached (foreign) process               → StopAsync does NOT touch it at all.
 /// </summary>
+// Every start of a hosted node generates a new internal key and puts it into this process's BMB_INTERNAL_KEY (the service's design), so
+// these tests share the collection of the tests that set that variable and read it back: run beside them they overwrite it.
+[Collection("BMB_INTERNAL_KEY environment")]
 public class NodeLifecycleServiceTests
 {
     [Fact]
