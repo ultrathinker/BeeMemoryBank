@@ -30,6 +30,7 @@ public class RecoveryBoxLifecycleTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        await WaitForTheHeavyQueueAsync();
         _client = _factory.CreateClient();
         await _factory.InitializeNodeAsync(password: Password);
         // Unlocked directly, not through /login: the login trigger would start a build of its own
@@ -410,6 +411,28 @@ public class RecoveryBoxLifecycleTests : IAsyncLifetime
                      created_at AS CreatedAt, status AS Status, retired_by_box_id AS RetiredByBoxId,
                      lamport_ts AS LamportTs, source_node_id AS SourceNodeId
               FROM tbl_recovery_box WHERE kind = 'strong'")).ToList();
+    }
+
+    /// <summary>
+    /// The heavy-derivation queue is one per process, and a strong box build that finds it full is dropped on purpose (the next login builds
+    /// it again). A test that triggers one build and waits for it would wait for nothing. Test classes that run beside this one can leave the
+    /// queue full or long, so each test starts only when the queue takes work and everything queued ahead of the marker has run.
+    /// </summary>
+    private static async Task WaitForTheHeavyQueueAsync()
+    {
+        var deadline = DateTime.UtcNow.AddMinutes(3);
+        while (true)
+        {
+            try
+            {
+                await HeavyDerivationQueue.RunAsync(() => 0).WaitAsync(TimeSpan.FromMinutes(3));
+                return;
+            }
+            catch (KdfBusyException) when (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(250);
+            }
+        }
     }
 
     private static async Task<bool> WaitUntilAsync(Func<Task<bool>> condition, int seconds = 120)
