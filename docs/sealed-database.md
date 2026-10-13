@@ -161,8 +161,10 @@ To make an encrypted node plain again:
    empty, plain vault. The restore asks for the password once and uses it twice, to prove you may restore into this
    vault and to open the envelope, so the two must be the same.
 4. **`bmb snapshot restore-standalone <file name>`** with that password. The name is looked up in `snapshots/` and then
-   in `pre-encryption/`. The new vault's own key does not open the snapshot; the envelope does. The snapshot's database
-   replaces the empty vault, the node becomes a **new node** with a new node id and key pair (see
+   in `pre-encryption/`. If the same name is in both, the restore is refused and nothing is changed: rename or delete
+   the ordinary snapshot with this name in `snapshots/` (it is listed on the Snapshots page) and try again, or give the
+   folder with the name (`pre-encryption/<file name>`). The new vault's own key does not open the snapshot; the
+   envelope does. The snapshot's database replaces the empty vault, the node becomes a **new node** with a new node id and key pair (see
    `docs/snapshot-restore.md`), keeps the activation state the snapshot had, and locks. Sign in with the same
    password. A wrong password is refused before anything is replaced.
 5. **Join the other devices to this node again** and pair the blind copies again. If you want the node encrypted

@@ -204,7 +204,9 @@ carries it under the password and recovery key of that day.
 
 To go back to an unencrypted node: reset the node (`bmb init reset`; `snapshots/` and `pre-encryption/` stay), set it up again **with the master password you
 had on the day of the snapshot** (or the text of the recovery key of that day), then restore with
-`bmb snapshot restore-standalone <file name>` and that same password. The file is looked up in `snapshots/` and then in `pre-encryption/`. The new
+`bmb snapshot restore-standalone <file name>` and that same password. The file is looked up in `snapshots/` and then in `pre-encryption/`. If the same name is in both, the restore is refused and nothing is
+changed: rename or delete the ordinary snapshot with this name in `snapshots/` (it is listed on the Snapshots page) and try again, or give the folder with
+the name (`pre-encryption/<file name>`). The new
 vault's own key does not open the snapshot, so the product tries each slot of the envelope with the password (under the same Argon2id limits it applies
 to the slots of a staged database); the key that passes the check of the vault's sentinel opens the database and is cleared at once. With a wrong
 password, or a snapshot that has no envelope, the restore is refused before anything is replaced. The result is a new node (new id and key pair, as for
@@ -247,8 +249,11 @@ the old format 1 outright. And as everywhere else, this reaches only copies made
 - **The pre-encryption snapshot is found here too.** The migration writes it to `pre-encryption/` in the data folder —
   not listed on the Snapshots page, not pruned, deleted only deliberately. `bmb snapshot restore-standalone <name>`
   looks in `snapshots/` first, then in `pre-encryption/`, and opens the latter through its key envelope with the
-  password you had on the day of the encryption — even if the password has since changed. That restore is step 4 of
-  the documented rollback ([sealed-database.md](sealed-database.md#making-this-node-plain-again-rollback)): the node
+  password you had on the day of the encryption — even if the password has since changed. If the same name is in both
+  folders, the restore is refused and nothing is changed: rename or delete the ordinary snapshot with this name in
+  `snapshots/` (it is listed on the Snapshots page) and try again, or give the folder with the name
+  (`pre-encryption/<file name>`). Restoring the way-back is step 4 of the documented rollback
+  ([sealed-database.md](sealed-database.md#making-this-node-plain-again-rollback)): the node
   comes back as a **new node** with the content of the moment just before the encryption, and you join your devices
   again. What the rollback gives up (changes that never synced, chat history) is listed there too.
 - **The server's "Start unlocked after a restart" checkbox survives a restore in one case only** — an in-place
