@@ -299,14 +299,14 @@ public sealed class BaselineRestoreFixture : IAsyncLifetime
         while (DateTime.UtcNow < deadline)
         {
             using var conn = Source.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
-            var row = (await conn.QueryAsync<(string KeyId, long Generation, string Fp, byte[] Wrapped, byte[] Iv)>(
-                "SELECT key_id AS KeyId, generation AS Generation, dek_fingerprint AS Fp, wrapped AS Wrapped, iv AS Iv FROM tbl_metadata_key WHERE generation = 2"))
-                .Select(r => new MetadataKeyRow(r.KeyId, (int)r.Generation, r.Fp, r.Wrapped, r.Iv)).SingleOrDefault();
-            if (row is not null)
+            var row = (await conn.QueryAsync<(string KeyId, long Generation, string Fp, byte[] Wrapped, byte[] Iv, string EventId)>(
+                "SELECT key_id AS KeyId, generation AS Generation, dek_fingerprint AS Fp, wrapped AS Wrapped, iv AS Iv, event_id AS EventId FROM tbl_metadata_key WHERE generation = 2"))
+                .Select(r => (Row: new MetadataKeyRow(r.KeyId, (int)r.Generation, r.Fp, r.Wrapped, r.Iv), r.EventId)).SingleOrDefault();
+            if (row.Row is not null && !string.IsNullOrEmpty(row.EventId))
             {
-                var mek = MetadataKeyCrypto.TryUnwrap(row, [session.GetMasterDek()]);
+                var mek = MetadataKeyCrypto.TryUnwrap(row.Row, [session.GetMasterDek()]);
                 mek.Should().NotBeNull("the new key is wrapped under the key the rotation made current");
-                return (mek!, row);
+                return (mek!, row.Row);
             }
             await Task.Delay(200);
         }
