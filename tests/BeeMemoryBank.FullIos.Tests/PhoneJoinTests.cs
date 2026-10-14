@@ -257,9 +257,10 @@ public class PhoneJoinTests
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline && !join.IsCompleted)
         {
-            // A file of the staging folder can be renamed or removed between the listing and its size: look again in the next round.
+            // A file of the staging folder can be renamed or removed (on Windows: pending delete, an access error) between the listing and its
+            // size: look again in the next round. Any other exception is not expected here and fails the test.
             try { archive = Directory.Exists(staging) ? Directory.GetFiles(staging).FirstOrDefault(f => new FileInfo(f).Length > 0) ?? "" : ""; }
-            catch (IOException) { archive = ""; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { archive = ""; }
             if (archive != "") break;
             await Task.Delay(50);
         }

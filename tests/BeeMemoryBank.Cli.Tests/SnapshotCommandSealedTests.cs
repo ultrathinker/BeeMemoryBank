@@ -56,25 +56,33 @@ public sealed class SnapshotCommandSealedTests : IDisposable
         var tmp = Path.Combine(_data, "tmp");
         var observed = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>();
         var canaryHits = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+        // The control, before anything runs: a plain file that holds the canary is seen and its content is read by the very observer used below.
+        Directory.CreateDirectory(tmp);
+        var control = Path.Combine(tmp, "control-plain.tmp");
+        File.WriteAllText(control, "head " + _canary + " tail");
+        ObserveOnce(tmp, observed, canaryHits);
+        observed.Keys.Should().Contain("control-plain.tmp", "the control: the observer lists a file of the staging folder");
+        canaryHits.Should().NotBeEmpty("the control: the observer reads the file and finds the canary in it");
+        File.Delete(control);
+        observed.Clear();
+        canaryHits.Clear();
+
         var stop = false;
+        Exception? observerFailure = null;
         using var started = new ManualResetEventSlim();
         var poller = new Thread(() =>
         {
             started.Set();
-            while (!Volatile.Read(ref stop))
+            try
             {
-                if (Directory.Exists(tmp))
-                    foreach (var file in Directory.GetFiles(tmp))
-                    {
-                        observed.TryAdd(Path.GetFileName(file), 0);
-                        try
-                        {
-                            foreach (var hit in MetadataCanaries.Scan(File.ReadAllBytes(file), [_canary], file)) canaryHits.Add(hit.Encoding);
-                        }
-                        catch (IOException) { }
-                    }
-                Thread.Sleep(1);
+                while (!Volatile.Read(ref stop))
+                {
+                    ObserveOnce(tmp, observed, canaryHits);
+                    Thread.Sleep(1);
+                }
             }
+            catch (Exception ex) { observerFailure = ex; }
         }) { IsBackground = true };
         poller.Start();
         started.Wait();
@@ -84,6 +92,7 @@ public sealed class SnapshotCommandSealedTests : IDisposable
         Volatile.Write(ref stop, true);
         poller.Join();
 
+        observerFailure.Should().BeNull("the observer itself must not fail: " + observerFailure);
         observed.Keys.Should().OnlyContain(n => n.StartsWith("snapshot-") && (n.EndsWith(".tmp") || n.EndsWith(".tmp-journal")),
             "the only files that appear are the encrypted staging copy and the rollback journal VACUUM INTO keeps beside it (encrypted pages)");
         canaryHits.Should().BeEmpty("the staging copy is encrypted at every moment");
@@ -100,6 +109,34 @@ public sealed class SnapshotCommandSealedTests : IDisposable
         manifest.GetProperty("nodeId").GetString().Should().Be("node-1");
         manifest.GetProperty("files").GetProperty("beememorybank.db").GetString().Should().Be(result.DbHash);
         Convert.ToHexStringLower(SHA256.HashData(dbEntry)).Should().Be(result.DbHash);
+    }
+
+    /// <summary>
+    /// One round of the observer: lists the staging folder and reads every file in it (the shared reader, which opens a file a writer still holds).
+    /// The files of that folder come and go while the snapshot is made, so a file can be gone (on Windows: pending delete) between the listing and
+    /// its read: the folder is then listed again, bounded, and what was already read keeps its hits. A file that lives shorter than the polling
+    /// interval cannot be seen by any poll; the encrypted staging copy is long-lived enough (a whole VACUUM and a container build) for the check
+    /// to mean something. Any other exception is not expected and surfaces through the caller.
+    /// </summary>
+    private void ObserveOnce(string tmp, System.Collections.Concurrent.ConcurrentDictionary<string, byte> observed, System.Collections.Concurrent.ConcurrentBag<string> canaryHits)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                if (!Directory.Exists(tmp)) return;
+                foreach (var file in Directory.GetFiles(tmp))
+                {
+                    observed.TryAdd(Path.GetFileName(file), 0);
+                    foreach (var hit in MetadataCanaries.ScanFile(file, [_canary])) canaryHits.Add(hit.Encoding);
+                }
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 50)
+            {
+                Thread.Sleep(1);
+            }
+        }
     }
 
     [Fact]
