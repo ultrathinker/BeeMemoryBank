@@ -66,8 +66,7 @@ public sealed class KeyedFactoryTests : IDisposable
         var files = Directory.GetFiles(_dir).Select(Path.GetFileName).ToList();
         files.Should().Contain(["beememorybank.db", "beememorybank.db-wal", "beememorybank.db-shm"]);
         new FileInfo(DbPath + "-wal").Length.Should().BeGreaterThan(0);
-        foreach (var file in Directory.GetFiles(_dir))
-            MetadataCanaries.ScanFile(file, [canary]).Should().BeEmpty($"{Path.GetFileName(file)} is encrypted");
+        MetadataCanaries.ScanDirectory(_dir, [canary]).Should().BeEmpty("every file of the folder, the -wal and -shm included, is encrypted");
         HasMagic(DbPath).Should().BeFalse("a sealed file has no SQLite header");
         var length = new FileInfo(DbPath).Length;
         length.Should().BeGreaterThan(0);
@@ -85,7 +84,7 @@ public sealed class KeyedFactoryTests : IDisposable
             Run(c, "INSERT INTO tbl_article (title) VALUES (@canary)", new { canary });
         }
 
-        Directory.GetFiles(_dir).SelectMany(f => MetadataCanaries.ScanFile(f, [canary])).Should().NotBeEmpty();
+        MetadataCanaries.ScanDirectory(_dir, [canary]).Should().NotBeEmpty();
         HasMagic(DbPath).Should().BeTrue();
     }
 
