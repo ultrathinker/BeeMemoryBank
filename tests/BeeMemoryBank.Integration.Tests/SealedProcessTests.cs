@@ -20,14 +20,18 @@ public sealed class SealedProcessTests(ActivatedPlainTemplate template) : IClass
     /// <summary>The Api as a child process. Its standard output and error are kept line by line.</summary>
     private sealed class ApiChild : IDisposable
     {
-        private readonly Process _process;
+        private readonly string _dataDir;
+        private readonly string? _killAfter;
+        private readonly bool _traceLogs;
         private readonly List<string> _output = [];
-        private readonly HttpClient _client;
+        private Process _process = null!;
+        private HttpClient _client = null!;
 
-        private ApiChild(Process process, HttpClient client)
+        private ApiChild(string dataDir, string? killAfter, bool traceLogs)
         {
-            _process = process;
-            _client = client;
+            _dataDir = dataDir;
+            _killAfter = killAfter;
+            _traceLogs = traceLogs;
         }
 
         public string Output
@@ -41,10 +45,18 @@ public sealed class SealedProcessTests(ActivatedPlainTemplate template) : IClass
 
         public static ApiChild Start(string dataDir, string? killAfter = null, bool traceLogs = false)
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
+            var child = new ApiChild(dataDir, killAfter, traceLogs);
+            child.Launch();
+            return child;
+        }
+
+        /// <summary>
+        /// Starts the process on a port picked now. The process needs its port on its command line and takes seconds to bind it, so another socket of the
+        /// machine can take it first: the Api then exits saying "address already in use", and <see cref="WaitHealthyAsync"/> launches it again on a new port.
+        /// </summary>
+        private void Launch()
+        {
+            var port = PortBinding.PickFreePort();
 
             var info = new ProcessStartInfo("dotnet", $"\"{Path.Combine(AppContext.BaseDirectory, "BeeMemoryBank.Api.dll")}\"")
             {
@@ -56,10 +68,10 @@ public sealed class SealedProcessTests(ActivatedPlainTemplate template) : IClass
             };
             info.Environment["ASPNETCORE_ENVIRONMENT"] = "Testing";
             info.Environment["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}";
-            info.Environment["BMB_DATA_PATH"] = dataDir;
+            info.Environment["BMB_DATA_PATH"] = _dataDir;
             info.Environment.Remove("BMB_ROLE");
-            if (killAfter is not null) info.Environment["BMB_SEAL_TEST_KILL_AFTER"] = killAfter;
-            if (traceLogs) info.Environment["Logging__LogLevel__Default"] = "Trace";
+            if (_killAfter is not null) info.Environment["BMB_SEAL_TEST_KILL_AFTER"] = _killAfter;
+            if (_traceLogs) info.Environment["Logging__LogLevel__Default"] = "Trace";
             var key = Convert.ToHexString(Guid.NewGuid().ToByteArray());
             info.Environment["BMB_INTERNAL_KEY"] = key;
 
@@ -68,13 +80,13 @@ public sealed class SealedProcessTests(ActivatedPlainTemplate template) : IClass
             client.DefaultRequestHeaders.Add("X-Internal-Key", key);
             client.DefaultRequestHeaders.Add("X-User-Id", "1");
             client.DefaultRequestHeaders.Add("X-User-Role", "superadmin");
-            var child = new ApiChild(process, client);
-            process.OutputDataReceived += (_, e) => child.Keep(e.Data);
-            process.ErrorDataReceived += (_, e) => child.Keep(e.Data);
+            process.OutputDataReceived += (_, e) => Keep(e.Data);
+            process.ErrorDataReceived += (_, e) => Keep(e.Data);
+            _process = process;
+            _client = client;
             process.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
-            return child;
         }
 
         private void Keep(string? line)
@@ -86,9 +98,21 @@ public sealed class SealedProcessTests(ActivatedPlainTemplate template) : IClass
         public async Task WaitHealthyAsync()
         {
             var until = DateTime.UtcNow.AddSeconds(90);
-            while (DateTime.UtcNow < until)
+            for (var launches = 1; DateTime.UtcNow < until;)
             {
-                if (_process.HasExited) throw new InvalidOperationException("The Api exited before it was healthy (exit " + _process.ExitCode + "):\n" + Output);
+                if (_process.HasExited)
+                {
+                    if (launches >= 5 || !Output.Contains("address already in use", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("The Api exited before it was healthy (exit " + _process.ExitCode + "):\n" + Output);
+                    // Another socket took the port between the pick and the bind: nothing else is wrong, start again on a new port.
+                    _process.WaitForExit();   // the last lines of the old process are in the output before it is cleared
+                    lock (_output) _output.Clear();
+                    _process.Dispose();
+                    _client.Dispose();
+                    launches++;
+                    Launch();
+                    continue;
+                }
                 try
                 {
                     using var response = await _client.GetAsync("/health");
