@@ -5,6 +5,7 @@ using BeeMemoryBank.Cli.Commands;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Cli.Tests;
@@ -37,10 +38,8 @@ public class JoinCommandAuthorityTests : IDisposable
         var plainPeer = Guid.NewGuid();
         var blindPeer = BlindNodeId.NewId();
 
-        var port = FreePort();
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://localhost:{port}/");
-        listener.Start();
+        var (started, port) = PortBinding.StartHttpListener();
+        using var listener = started;
         var host = new FakeJoinHost(hostId);
         var serve = ServeJoinAsync(listener, host, JoinResponseJson(host,
             (superPeer, true), (plainPeer, false), (blindPeer, true)));
@@ -114,14 +113,5 @@ public class JoinCommandAuthorityTests : IDisposable
             await ctx.Response.OutputStream.WriteAsync(bytes);
             ctx.Response.Close();
         }
-    }
-
-    private static int FreePort()
-    {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
     }
 }

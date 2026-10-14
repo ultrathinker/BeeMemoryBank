@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using BeeMemoryBank.Cli.Commands;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Cli.Tests;
@@ -41,10 +42,8 @@ public class JoinCommandPeerTlsTests : IDisposable
             FakeJoinHost.Peer(damaged, "https://peer-e.example", "pin", "not-a-pin")
         ]);
 
-        var port = FreePort();
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://localhost:{port}/");
-        listener.Start();
+        var (started, port) = PortBinding.StartHttpListener();
+        using var listener = started;
         var serve = ServeJoinAsync(listener, host, answer);
 
         var output = new StringWriter();
@@ -86,14 +85,5 @@ public class JoinCommandPeerTlsTests : IDisposable
             await ctx.Response.OutputStream.WriteAsync(bytes);
             ctx.Response.Close();
         }
-    }
-
-    private static int FreePort()
-    {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
     }
 }

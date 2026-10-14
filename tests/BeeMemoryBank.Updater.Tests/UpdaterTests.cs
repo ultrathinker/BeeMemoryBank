@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.TestSupport;
 using BeeMemoryBank.Updater;
 using FluentAssertions;
 using Xunit;
@@ -45,20 +46,18 @@ public class UpdaterTests : IDisposable
         }
     }
 
-    private int GetRandomPort()
+    /// <summary>The health-check server, started on a port the system picked; the pick is repeated if another socket took that port before the server bound it.</summary>
+    private int StartMockServer(int statusCode)
     {
-        var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
-
-    private MockHttpServer CreateMockServer(int port)
-    {
-        var server = new MockHttpServer(port);
+        var (server, port) = PortBinding.Bind(free =>
+        {
+            var candidate = new MockHttpServer(free);
+            try { candidate.Start(statusCode); }
+            catch { candidate.Dispose(); throw; }
+            return (candidate, free);
+        });
         _servers.Add(server);
-        return server;
+        return port;
     }
 
     private void CreateZipFile(string zipPath, Dictionary<string, string> files)
@@ -144,9 +143,7 @@ public class UpdaterTests : IDisposable
         File.WriteAllText(requestPath, JsonSerializer.Serialize(request));
 
         // Start mock health check server (200 OK)
-        int port = GetRandomPort();
-        var server = CreateMockServer(port);
-        server.Start(200);
+        int port = StartMockServer(200);
 
         string healthUrl = $"http://127.0.0.1:{port}/health/";
 
@@ -277,9 +274,7 @@ public class UpdaterTests : IDisposable
         File.WriteAllText(requestPath, JsonSerializer.Serialize(request));
 
         // Start mock health check server that returns 500 OK (Failure)
-        int port = GetRandomPort();
-        var server = CreateMockServer(port);
-        server.Start(500);
+        int port = StartMockServer(500);
 
         string healthUrl = $"http://127.0.0.1:{port}/health/";
 

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using BeeMemoryBank.TestSupport;
 
 namespace BeeMemoryBank.Cli.Tests;
 
@@ -14,7 +15,7 @@ internal sealed record SeenRequest(string Method, string Path, string Body, IRea
 /// </summary>
 internal sealed class RecordingJoinHost : IDisposable
 {
-    private readonly HttpListener _listener = new();
+    private readonly HttpListener _listener;
     private readonly Func<SeenRequest, (int Status, IReadOnlyDictionary<string, string> Headers, byte[] Body)?> _answer;
     private readonly Task _loop;
     private readonly List<SeenRequest> _seen = new();
@@ -22,13 +23,9 @@ internal sealed class RecordingJoinHost : IDisposable
     public RecordingJoinHost(Func<SeenRequest, (int Status, IReadOnlyDictionary<string, string> Headers, byte[] Body)?> answer)
     {
         _answer = answer;
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
+        var (listener, port) = PortBinding.StartHttpListener();
+        _listener = listener;
         Url = $"http://localhost:{port}";
-        _listener.Prefixes.Add(Url + "/");
-        _listener.Start();
         _loop = Task.Run(LoopAsync);
     }
 

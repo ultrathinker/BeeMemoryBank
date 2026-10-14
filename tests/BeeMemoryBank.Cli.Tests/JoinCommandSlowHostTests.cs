@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using BeeMemoryBank.Cli.Commands;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Cli.Tests;
@@ -70,14 +71,8 @@ public class JoinCommandSlowHostTests : IDisposable
 
     private static HttpListener Start(out string url)
     {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
+        var (listener, port) = PortBinding.StartHttpListener();
         url = $"http://localhost:{port}";
-        var listener = new HttpListener();
-        listener.Prefixes.Add(url + "/");
-        listener.Start();
         return listener;
     }
 

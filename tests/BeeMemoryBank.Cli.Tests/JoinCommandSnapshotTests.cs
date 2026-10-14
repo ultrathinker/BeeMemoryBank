@@ -5,6 +5,7 @@ using System.Text.Json;
 using BeeMemoryBank.Cli.Commands;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Cli.Tests;
@@ -121,7 +122,7 @@ public class JoinCommandSnapshotTests : IDisposable
     /// <summary>A local HTTP host answering by path (404 for null); records the paths it was asked for.</summary>
     private sealed class Host : IDisposable
     {
-        private readonly HttpListener _listener = new();
+        private readonly HttpListener _listener;
         private readonly Func<string, (int Status, IReadOnlyDictionary<string, string> Headers, byte[] Body)?> _answer;
         private readonly Task _loop;
         private readonly List<string> _paths = new();
@@ -129,10 +130,9 @@ public class JoinCommandSnapshotTests : IDisposable
         public Host(Func<string, (int Status, IReadOnlyDictionary<string, string> Headers, byte[] Body)?> answer)
         {
             _answer = answer;
-            var port = FreePort();
+            var (listener, port) = PortBinding.StartHttpListener();
+            _listener = listener;
             Url = $"http://localhost:{port}";
-            _listener.Prefixes.Add(Url + "/");
-            _listener.Start();
             _loop = Task.Run(LoopAsync);
         }
 
@@ -167,15 +167,6 @@ public class JoinCommandSnapshotTests : IDisposable
             _listener.Stop();
             _listener.Close();
             try { _loop.Wait(TimeSpan.FromSeconds(5)); } catch { }
-        }
-
-        private static int FreePort()
-        {
-            var probe = new TcpListener(IPAddress.Loopback, 0);
-            probe.Start();
-            var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-            probe.Stop();
-            return port;
         }
     }
 }

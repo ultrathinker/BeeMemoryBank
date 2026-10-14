@@ -9,6 +9,7 @@ using BeeMemoryBank.FullIos.Services;
 using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.FullIos.Tests;
@@ -256,7 +257,9 @@ public class PhoneJoinTests
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline && !join.IsCompleted)
         {
-            archive = Directory.Exists(staging) ? Directory.GetFiles(staging).FirstOrDefault(f => new FileInfo(f).Length > 0) ?? "" : "";
+            // A file of the staging folder can be renamed or removed between the listing and its size: look again in the next round.
+            try { archive = Directory.Exists(staging) ? Directory.GetFiles(staging).FirstOrDefault(f => new FileInfo(f).Length > 0) ?? "" : ""; }
+            catch (IOException) { archive = ""; }
             if (archive != "") break;
             await Task.Delay(50);
         }
@@ -291,7 +294,7 @@ public class PhoneJoinTests
     /// <summary>A plain-HTTP loopback host answering by path; the join takes its address as given in a test.</summary>
     private sealed class MiniHost : IDisposable
     {
-        private readonly HttpListener _listener = new();
+        private readonly HttpListener _listener;
         private readonly Func<string, (int Status, IReadOnlyDictionary<string, string> Headers, byte[] Body)?> _answer;
         private readonly Task _loop;
 
@@ -302,13 +305,9 @@ public class PhoneJoinTests
         {
             _answer = answer;
             _custom = custom;
-            var probe = new TcpListener(IPAddress.Loopback, 0);
-            probe.Start();
-            var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-            probe.Stop();
+            var (listener, port) = PortBinding.StartHttpListener();
+            _listener = listener;
             Url = $"http://localhost:{port}";
-            _listener.Prefixes.Add(Url + "/");
-            _listener.Start();
             _loop = Task.Run(LoopAsync);
         }
 
