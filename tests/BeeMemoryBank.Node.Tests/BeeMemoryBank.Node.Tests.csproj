@@ -24,4 +24,10 @@
     <Using Include="Xunit" />
     <Using Include="FluentAssertions" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- A test that names the port of its server before it binds it: one source in tests/shared (the pick is repeated when the address was taken). -->
+    <Compile Include="..\shared\PortBinding.cs" Link="Shared\PortBinding.cs" />
+    <Compile Include="..\shared\PortBindingTests.cs" Link="Shared\PortBindingTests.cs" />
+  </ItemGroup>
 </Project>

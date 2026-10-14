@@ -15,6 +15,7 @@ using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Hosting;
 using BeeMemoryBank.Infrastructure.Network;
 using BeeMemoryBank.Node;
+using BeeMemoryBank.TestSupport;
 
 namespace BeeMemoryBank.Node.Tests;
 
@@ -190,7 +191,7 @@ public class LanFrontListenerTests : IAsyncLifetime
 
         var failure = await FluentActions.Awaiting(() => listener.EnableAsync()).Should().ThrowAsync<Exception>();
 
-        IsAddressInUse(failure.Which).Should().BeTrue("this is the failure the retry of a test that picks its port first looks for: " + failure.Which);
+        PortBinding.IsAddressInUse(failure.Which).Should().BeTrue("this is the failure the retry of a test that picks its port first looks for: " + failure.Which);
         listener.IsOn.Should().BeFalse();
     }
 
@@ -253,7 +254,7 @@ public class LanFrontListenerTests : IAsyncLifetime
         // meantime ("address already in use"), the test starts again with another port; any other failure still fails it.
         for (var attempt = 1; ; attempt++)
         {
-            var doorPort = FreePort();
+            var doorPort = PortBinding.PickFreePort();
             await using var door = new LanJoinListener("http://127.0.0.1:1", () => _cert,
                 new IPEndPoint(IPAddress.Loopback, doorPort), TimeProvider.System);
             await using var listener = new LanFrontListener(() => RealFront(doorPort), () => _cert);
@@ -263,7 +264,7 @@ public class LanFrontListenerTests : IAsyncLifetime
                 await door.EnableAsync();
                 await sw.SetAsync(true);
             }
-            catch (Exception ex) when (attempt < 5 && IsAddressInUse(ex)) { continue; }
+            catch (Exception ex) when (attempt < 5 && PortBinding.IsAddressInUse(ex)) { continue; }
 
             door.Current.Should().BeNull("the door gave its port to the permanent listener");
             listener.IsOn.Should().BeTrue();
@@ -503,14 +504,6 @@ public class LanFrontListenerTests : IAsyncLifetime
 
     private static int PortOf(TcpListener listener) => ((IPEndPoint)listener.LocalEndpoint).Port;
 
-    /// <summary>True when a server failed to start because its address was taken, however the server wrapped the socket error.</summary>
-    private static bool IsAddressInUse(Exception ex)
-    {
-        for (var e = ex; e != null; e = e.InnerException)
-            if (e is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse }) return true;
-        return false;
-    }
-
     private async Task<WebApplication> StartStubAsync(Action<WebApplication> configure)
     {
         var builder = WebApplication.CreateBuilder();
@@ -520,14 +513,5 @@ public class LanFrontListenerTests : IAsyncLifetime
         await app.StartAsync();
         _stubs.Add(app);
         return app;
-    }
-
-    private static int FreePort()
-    {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
     }
 }

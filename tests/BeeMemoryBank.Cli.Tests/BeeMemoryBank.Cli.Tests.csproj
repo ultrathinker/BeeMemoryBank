@@ -30,4 +30,10 @@
     <!-- The rescan of a folder that is still changing: one source in tests/shared, for the MetadataCanaries copy of this project. -->
     <Compile Include="..\shared\MetadataCanariesRescanTests.cs" Link="Shared\MetadataCanariesRescanTests.cs" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- A test that names the port of its server before it binds it: one source in tests/shared (the pick is repeated when the address was taken). -->
+    <Compile Include="..\shared\PortBinding.cs" Link="Shared\PortBinding.cs" />
+    <Compile Include="..\shared\PortBindingTests.cs" Link="Shared\PortBindingTests.cs" />
+  </ItemGroup>
 </Project>
