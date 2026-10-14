@@ -38,4 +38,8 @@
     <Using Include="FluentAssertions" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The rescan of a folder that is still changing: one source in tests/shared, for the MetadataCanaries copy of this project. -->
+    <Compile Include="..\shared\MetadataCanariesRescanTests.cs" Link="Shared\MetadataCanariesRescanTests.cs" />
+  </ItemGroup>
 </Project>

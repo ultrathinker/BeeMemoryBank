@@ -11,6 +11,8 @@ public sealed record CanaryHit(string Canary, string Encoding, string Where, lon
 /// <summary>Canary values and a byte scanner for the Step A red tests (docs/design/step-a-spec.md 16.1).</summary>
 public static class MetadataCanaries
 {
+    private static readonly TimeSpan RescanWindow = TimeSpan.FromSeconds(30);
+
     public static string Ascii(string label) => $"cnry{label}{Guid.NewGuid():N}";
 
     public static string NonAscii(string label) => $"ZürichΩ{label}{Guid.NewGuid():N}";
@@ -55,12 +57,28 @@ public static class MetadataCanaries
         return Scan(memory.ToArray(), canaries, path);
     }
 
-    /// <summary>Every file below <paramref name="directory"/> (database, -wal, -shm, journals, logs, packages as raw bytes).</summary>
+    /// <summary>Every file below <paramref name="directory"/> (database, -wal, -shm, journals, logs, packages as raw bytes).
+    /// A file that disappears between the listing and the read is not skipped and not a finding: the whole folder is listed and read again for up to
+    /// <see cref="RescanWindow"/>, and what is still there on the last try is judged. A failure that outlasts the window is thrown, never turned into an empty result.</summary>
     public static List<CanaryHit> ScanDirectory(string directory, IEnumerable<string> canaries)
     {
         var list = canaries.ToList();
-        return Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
-            .SelectMany(f => ScanFile(f, list)).ToList();
+        if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
+        var deadline = DateTime.UtcNow + RescanWindow;
+        while (true)
+        {
+            try
+            {
+                return Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                    .SelectMany(f => ScanFile(f, list)).ToList();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && DateTime.UtcNow < deadline)
+            {
+                // A database that is still open replaces its -wal and -shm files, and a running host replaces staged packages: a file that was listed
+                // can be gone (on Windows: pending delete) when it is read, which is not a finding. List and read the whole folder again; what is still there on the last try is judged.
+                Thread.Sleep(100);
+            }
+        }
     }
 
     /// <summary>A .tar.gz package: the compressed bytes, then every entry decompressed.</summary>
