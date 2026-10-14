@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -20,7 +21,8 @@ namespace BeeMemoryBank.Node.Tests;
 /// <summary>
 /// The permanent listener behind "Devices on my network": closed until switched on, then the node's whole front over HTTPS with the
 /// node's certificate, closed again on switch-off and on shutdown, and the setting that drives it saved only when the listener really
-/// opened. The listener binds an ephemeral loopback port here; on a real node it is 0.0.0.0:5311.
+/// opened. The listener binds a loopback port the system picks here (port 0, the bound address is read back from the started server: a
+/// port chosen before the bind can be taken by another socket of the machine in between); on a real node it is 0.0.0.0:5311.
 /// </summary>
 public class LanFrontListenerTests : IAsyncLifetime
 {
@@ -32,14 +34,14 @@ public class LanFrontListenerTests : IAsyncLifetime
     private readonly List<string?> _internalKeysSeenByTheApi = new();
     private readonly List<string?> _forwardedForSeenByTheApi = new();
     private X509Certificate2 _cert = null!;
-    private int _port;
+    private int _frontsBuilt;
+    private Uri? _address;   // where the front that was started last listens
     private Dictionary<string, ReadyFileInfo> _children = null!;
 
     public async Task InitializeAsync()
     {
         Directory.CreateDirectory(_dir);
         _cert = TestCertificates.CreateServerCertificate();
-        _port = FreePort();
 
         var api = await StartStubAsync(app =>
         {
@@ -79,13 +81,15 @@ public class LanFrontListenerTests : IAsyncLifetime
     {
         await using var listener = RealListener();
         listener.IsOn.Should().BeFalse();
-        using var client = PinnedClient();
-        await FluentActions.Awaiting(() => client.GetAsync("/api/ping"))
+        _frontsBuilt.Should().Be(0, "no server exists before the switch-on, so nothing can listen");
+        using var closed = PinnedClient();
+        await FluentActions.Awaiting(() => closed.GetAsync("/api/ping"))
             .Should().ThrowAsync<HttpRequestException>("nothing listens on the network until the user switches it on");
 
         await listener.EnableAsync();
 
         listener.IsOn.Should().BeTrue();
+        using var client = PinnedClient();
         // The same routes as the loopback front: the API's prefixes go to the API, everything else is the web page.
         (await client.GetStringAsync("/api/ping")).Should().Be(ApiBody);
         (await client.GetStringAsync("/mcp")).Should().Be(ApiBody);
@@ -160,7 +164,8 @@ public class LanFrontListenerTests : IAsyncLifetime
         await FluentActions.Awaiting(() => client.GetAsync("/api/ping")).Should().ThrowAsync<HttpRequestException>();
 
         await listener.EnableAsync();
-        (await client.GetStringAsync("/api/ping")).Should().Be(ApiBody);
+        using var again = PinnedClient();   // the system picks the port again: the client follows the front that is open now
+        (await again.GetStringAsync("/api/ping")).Should().Be(ApiBody);
     }
 
     [Fact]
@@ -179,12 +184,13 @@ public class LanFrontListenerTests : IAsyncLifetime
     [Fact]
     public async Task PortTaken_ThrowsFromEnable_AndLeavesItOff()
     {
-        using var squatter = new TcpListener(IPAddress.Loopback, _port);
-        squatter.Start();
-        await using var listener = RealListener();
+        using var squatter = Squat();
+        var taken = PortOf(squatter);
+        await using var listener = new LanFrontListener(() => RealFront(taken), () => _cert);
 
-        await FluentActions.Awaiting(() => listener.EnableAsync()).Should().ThrowAsync<Exception>();
+        var failure = await FluentActions.Awaiting(() => listener.EnableAsync()).Should().ThrowAsync<Exception>();
 
+        IsAddressInUse(failure.Which).Should().BeTrue("this is the failure the retry of a test that picks its port first looks for: " + failure.Which);
         listener.IsOn.Should().BeFalse();
     }
 
@@ -243,19 +249,26 @@ public class LanFrontListenerTests : IAsyncLifetime
     [Fact]
     public async Task SwitchOn_ClosesTheTemporaryDoorFirst_BecauseBothWantThePort()
     {
-        var doorPort = FreePort();
-        await using var door = new LanJoinListener("http://127.0.0.1:1", () => _cert,
-            new IPEndPoint(IPAddress.Loopback, doorPort), TimeProvider.System);
-        await door.EnableAsync();
-        await using var listener = new LanFrontListener(
-            () => NodeFrontBuilder.BuildNetworkFront(_children, new IPEndPoint(IPAddress.Loopback, doorPort), () => _cert),
-            () => _cert);
-        var sw = new LanNetworkSwitch(new NodeNetworkSettingsStore(_dir), listener, door, new NetworkExposure(false, NetworkExposureSource.Off));
+        // Both are told the same port, so it has to be known before either binds it. If another socket of the machine takes it in the
+        // meantime ("address already in use"), the test starts again with another port; any other failure still fails it.
+        for (var attempt = 1; ; attempt++)
+        {
+            var doorPort = FreePort();
+            await using var door = new LanJoinListener("http://127.0.0.1:1", () => _cert,
+                new IPEndPoint(IPAddress.Loopback, doorPort), TimeProvider.System);
+            await using var listener = new LanFrontListener(() => RealFront(doorPort), () => _cert);
+            var sw = new LanNetworkSwitch(new NodeNetworkSettingsStore(_dir), listener, door, new NetworkExposure(false, NetworkExposureSource.Off));
+            try
+            {
+                await door.EnableAsync();
+                await sw.SetAsync(true);
+            }
+            catch (Exception ex) when (attempt < 5 && IsAddressInUse(ex)) { continue; }
 
-        await sw.SetAsync(true);
-
-        door.Current.Should().BeNull("the door gave its port to the permanent listener");
-        listener.IsOn.Should().BeTrue();
+            door.Current.Should().BeNull("the door gave its port to the permanent listener");
+            listener.IsOn.Should().BeTrue();
+            return;
+        }
     }
 
     [Fact]
@@ -327,10 +340,10 @@ public class LanFrontListenerTests : IAsyncLifetime
     [Fact]
     public async Task State_PortTaken_NeverSaysListening()
     {
-        using var squatter = new TcpListener(IPAddress.Loopback, _port);
-        squatter.Start();
+        using var squatter = Squat();
+        var taken = PortOf(squatter);
         var states = new StateLog();
-        await using var listener = new LanFrontListener(RealFront, () => _cert, states.Add);
+        await using var listener = new LanFrontListener(() => RealFront(taken), () => _cert, states.Add);
 
         await FluentActions.Awaiting(() => listener.EnableAsync()).Should().ThrowAsync<Exception>();
 
@@ -362,9 +375,9 @@ public class LanFrontListenerTests : IAsyncLifetime
         var state = new LanListenerState(_dir);
         state.Set(false);
         var log = new List<string>();
-        var squatter = new TcpListener(IPAddress.Loopback, _port);
-        squatter.Start();
-        await using var listener = new LanFrontListener(RealFront, () => _cert, listening => state.Set(listening));
+        var squatter = Squat();
+        var port = PortOf(squatter);
+        await using var listener = new LanFrontListener(() => RealFront(port), () => _cert, listening => state.Set(listening));
         var sw = new LanNetworkSwitch(store, listener, null, new NetworkExposure(true, NetworkExposureSource.Setting));
 
         await sw.ApplyAtStartAsync(log.Add);
@@ -376,6 +389,7 @@ public class LanFrontListenerTests : IAsyncLifetime
         sw.IsOn.Should().BeFalse();
 
         squatter.Stop();
+        port = 0;   // the retry takes a port the system picks: the one the squatter gave back could be taken by another socket meanwhile
         await sw.SetAsync(true); // "Try again"
 
         state.IsListening().Should().BeTrue("the retry bound the port: now it is announced");
@@ -460,14 +474,42 @@ public class LanFrontListenerTests : IAsyncLifetime
 
     // ─── Helpers ────────────────────────────────────────────────────────────
 
-    private Uri Address => new($"https://127.0.0.1:{_port}");
+    /// <summary>Where the front that was started last listens; before any was started, a port nothing listens on.</summary>
+    private Uri Address => _address ?? new Uri("https://127.0.0.1:1");
 
     private HttpClient PinnedClient() => new(SpkiPin.CreatePinnedHandler(SpkiPin.Of(_cert))) { BaseAddress = Address };
 
     private LanFrontListener RealListener() => new(RealFront, () => _cert);
 
-    private WebApplication RealFront() =>
-        NodeFrontBuilder.BuildNetworkFront(_children, new IPEndPoint(IPAddress.Loopback, _port), () => _cert);
+    private WebApplication RealFront() => RealFront(0);
+
+    /// <summary>The network front on <paramref name="port"/>; on 0 the system picks a free port when the server starts and <see cref="Address"/>
+    /// reads it back, so no port is chosen before it is bound.</summary>
+    private WebApplication RealFront(int port)
+    {
+        Interlocked.Increment(ref _frontsBuilt);
+        var app = NodeFrontBuilder.BuildNetworkFront(_children, new IPEndPoint(IPAddress.Loopback, port), () => _cert);
+        app.Lifetime.ApplicationStarted.Register(() => _address = new Uri(app.Urls.Single()));
+        return app;
+    }
+
+    /// <summary>A socket that holds a port the system gave it, so a front told to bind that port fails for certain.</summary>
+    private static TcpListener Squat()
+    {
+        var squatter = new TcpListener(IPAddress.Loopback, 0);
+        squatter.Start();
+        return squatter;
+    }
+
+    private static int PortOf(TcpListener listener) => ((IPEndPoint)listener.LocalEndpoint).Port;
+
+    /// <summary>True when a server failed to start because its address was taken, however the server wrapped the socket error.</summary>
+    private static bool IsAddressInUse(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+            if (e is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse }) return true;
+        return false;
+    }
 
     private async Task<WebApplication> StartStubAsync(Action<WebApplication> configure)
     {
