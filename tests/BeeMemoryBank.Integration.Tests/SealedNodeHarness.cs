@@ -162,6 +162,18 @@ public sealed class SealedNode : IDisposable
 /// <summary>
 /// Watches a folder from its own thread while a test runs and records every file that holds a plain SQLite header or a canary, whatever its
 /// name (spec 15.1.7-9: "no plain file exists at any moment"). Its own thread, not the pool: a starved pool is how a short-lived staging file is missed.
+/// <para>
+/// The limit, plainly: this is a poll. A plain file that is created and removed again between two looks (it lives shorter than the polling interval
+/// plus the time one look takes, a few milliseconds to some tens of milliseconds on a loaded machine) is not seen, and neither is its content. What the
+/// watch proves is that no plain file <em>that lives for at least a look</em> appeared: a file the product keeps until its working copy goes, or one that
+/// carries a plain header (a file held for the whole snapshot, or behind a SQLite header, turns the sealed snapshot test red). It does not prove that
+/// no plain byte was ever on the disk for a moment.
+/// </para>
+/// <para>
+/// What else the tests look at: the finished archive is scanned for the canaries, the staging folder is asserted empty afterwards (a plain file that
+/// outlives the snapshot is found there), and the data folders of sealed nodes are scanned at rest by other tests. None of these sees a plain file that
+/// is created and deleted again between two looks; making the poll faster would only move the limit, so it is stated here instead.
+/// </para>
 /// </summary>
 public sealed class PlainFileWatch : IDisposable
 {
