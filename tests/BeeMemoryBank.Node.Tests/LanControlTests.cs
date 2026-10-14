@@ -36,8 +36,9 @@ public class LanControlTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _cert = TestCertificates.CreateServerCertificate();
+        // No test connects to the door, they only switch it on: it binds a port the system picks.
         _listener = new LanJoinListener("http://127.0.0.1:1", () => _cert,
-            new IPEndPoint(IPAddress.Loopback, FreePort()), TimeProvider.System);
+            new IPEndPoint(IPAddress.Loopback, 0), TimeProvider.System);
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.ConfigureKestrel(o => o.Listen(IPAddress.Loopback, 0));
@@ -151,15 +152,6 @@ public class LanControlTests : IAsyncLifetime
         var req = new HttpRequestMessage(method, path);
         req.Headers.Add(LanControl.InternalKeyHeader, InternalKey);
         return req;
-    }
-
-    private static int FreePort()
-    {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
     }
 
     private sealed class FakeFirewall : ILanFirewall

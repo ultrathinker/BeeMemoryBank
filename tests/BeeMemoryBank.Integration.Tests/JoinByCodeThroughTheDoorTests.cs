@@ -11,6 +11,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Node;
+using BeeMemoryBank.TestSupport;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -70,9 +71,30 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
 
         // The door in front of it: TLS with a certificate from nobody's CA, pinned by the code.
         _cert = CreateServerCertificate();
-        _doorPort = FreePort();
-        _door = new LanJoinListener(_nodeA.Urls.First(u => u.StartsWith("http://127.0.0.1")), () => _cert,
+        _door = NewDoor();
+    }
+
+    private LanJoinListener NewDoor()
+    {
+        _doorPort = PortBinding.PickFreePort();
+        return new LanJoinListener(_nodeA.Urls.First(u => u.StartsWith("http://127.0.0.1")), () => _cert,
             new IPEndPoint(IPAddress.Loopback, _doorPort), _clock);
+    }
+
+    /// <summary>Opens the door. Its port was picked before it is bound, so another socket of the machine can take it in between ("address
+    /// already in use"): the door is then built again on a new port, a few times. Any other failure is thrown at once. What a test reads from
+    /// <c>_doorPort</c> after this call is the port the door really holds.</summary>
+    private async Task<LanJoinSession> EnableDoorAsync()
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return await _door.EnableAsync(); }
+            catch (Exception ex) when (attempt < 5 && PortBinding.IsAddressInUse(ex))
+            {
+                await _door.DisposeAsync();
+                _door = NewDoor();
+            }
+        }
     }
 
     public async Task DisposeAsync()
@@ -88,7 +110,7 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     [Fact]
     public async Task Join_WithTheCode_Succeeds_RecordsThePinnedKeyOfTheOtherComputer_AndTheDoorClosesAfterTheSnapshot()
     {
-        var session = await _door.EnableAsync();
+        var session = await EnableDoorAsync();
         var b = NewJoiner();
 
         var (status, body) = await JoinAsync(b, CodeFor(session));
@@ -108,7 +130,7 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     [Fact]
     public async Task AJoinThatFailedOnTheJoiner_IsTakenBackThroughTheDoor_AndOnlyWithTheCodesToken()
     {
-        var session = await _door.EnableAsync();
+        var session = await EnableDoorAsync();
         var (publicKey, _) = Ed25519Signer.GenerateKeyPair();
         var nodeId = Guid.NewGuid();
         using var http = JoinHttp.CreateClient(session.SpkiPin);
@@ -157,7 +179,7 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     [Fact]
     public async Task WrongToken_IsRefusedByTheDoorWithItsOwnSentence_AndNothingReachesTheApiOrIsCreated()
     {
-        var session = await _door.EnableAsync();
+        var session = await EnableDoorAsync();
         var b = NewJoiner();
 
         var (status, body) = await JoinAsync(b, new JoinCode($"https://127.0.0.1:{_doorPort}", RandomToken(), session.SpkiPin).ToString());
@@ -172,7 +194,7 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     [Fact]
     public async Task WrongPin_NeverSendsThePassword_AndTheRealCodeStillWorks()
     {
-        var session = await _door.EnableAsync();
+        var session = await EnableDoorAsync();
         var otherKey = SpkiPin.Of(CreateServerCertificate());
         var b = NewJoiner();
 
@@ -190,7 +212,7 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     [Fact]
     public async Task ExpiredDoor_SaysTheOtherComputerDidNotAnswer_AndNamesTheFifteenMinutes()
     {
-        var session = await _door.EnableAsync();
+        var session = await EnableDoorAsync();
         _clock.Advance(LanJoinListener.Lifetime + TimeSpan.FromSeconds(1));
         (await EventuallyAsync(() => _door.Current == null)).Should().BeTrue("the door closes by itself when its time is up");
         var b = NewJoiner();
@@ -205,7 +227,7 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     [Fact]
     public async Task WrongPassword_ShowsTheNodesOwnSentence_AndDoesNotBurnTheCode()
     {
-        var session = await _door.EnableAsync();
+        var session = await EnableDoorAsync();
         var b = NewJoiner();
 
         var (status, body) = await JoinAsync(b, CodeFor(session), password: "doorJoinPassword124");
@@ -232,7 +254,7 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     [Fact]
     public async Task TheTypedAddress_OfAComputerWithItsOwnCa_ExplainsThatTheCodeIsTheWayIn()
     {
-        await _door.EnableAsync();
+        await EnableDoorAsync();
         var b = NewJoiner();
 
         using var client = b.CreateClient();
@@ -277,15 +299,6 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     {
         for (var i = 0; i < 100 && !condition(); i++) await Task.Delay(50);
         return condition();
-    }
-
-    private static int FreePort()
-    {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
     }
 
     /// <summary>A self-signed server certificate SChannel can use (a PFX round-trip), as the node's real leaf is.</summary>

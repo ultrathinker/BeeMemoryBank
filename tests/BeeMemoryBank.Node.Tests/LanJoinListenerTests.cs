@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Node;
+using BeeMemoryBank.TestSupport;
 
 namespace BeeMemoryBank.Node.Tests;
 
@@ -41,8 +42,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     {
         _api = await StartApiStubAsync();
         _cert = TestCertificates.CreateServerCertificate();
-        _port = FreePort();
-        _listener = new LanJoinListener(_api.Urls.First(), () => _cert, new IPEndPoint(IPAddress.Loopback, _port), _time);
+        _listener = NewListener();
     }
 
     public async Task DisposeAsync()
@@ -60,7 +60,7 @@ public class LanJoinListenerTests : IAsyncLifetime
         await FluentActions.Awaiting(() => client.PostAsync("/api/sync/challenge", null))
             .Should().ThrowAsync<HttpRequestException>("nothing listens on the LAN until the user asks for it");
 
-        var session = await _listener.EnableAsync();
+        var session = await EnableAsync();
 
         session.SpkiPin.Should().Be(SpkiPin.Of(_cert), "the join code must pin the key the listener actually serves");
         session.ExpiresAt.Should().Be(_time.GetUtcNow() + LanJoinListener.Lifetime);
@@ -70,7 +70,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task OnlyTheJoinCallsAreExposed()
     {
-        await _listener.EnableAsync();
+        await EnableAsync();
         using var client = PinnedClient(SpkiPin.Of(_cert));
 
         (await client.GetAsync("/api/articles")).StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -82,7 +82,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task Join_WithoutOrWithAWrongToken_IsRefused_AndNeverReachesTheApi()
     {
-        await _listener.EnableAsync();
+        await EnableAsync();
         using var client = PinnedClient(SpkiPin.Of(_cert));
 
         (await JoinAsync(client, token: null, RightPassword)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
@@ -96,7 +96,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task Join_WithTheToken_IsForwarded_WithoutTheCallersIdentityHeaders()
     {
-        var session = await _listener.EnableAsync();
+        var session = await EnableAsync();
         using var client = PinnedClient(session.SpkiPin);
 
         using var req = JoinRequest(session.Token, RightPassword);
@@ -110,7 +110,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task Token_SurvivesAWrongPassword_IsSpentByTheFirstSuccessfulJoin()
     {
-        var session = await _listener.EnableAsync();
+        var session = await EnableAsync();
         using var client = PinnedClient(session.SpkiPin);
 
         (await JoinAsync(client, session.Token, "typo")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
@@ -125,7 +125,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task AfterTheJoinedDeviceDownloadedItsSnapshot_TheListenerTurnsItselfOff()
     {
-        var session = await _listener.EnableAsync();
+        var session = await EnableAsync();
         using var client = PinnedClient(session.SpkiPin);
         (await JoinAsync(client, session.Token, RightPassword)).EnsureSuccessStatusCode();
 
@@ -151,7 +151,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task Abort_WithoutOrWithAWrongToken_IsRefused_AndNeverReachesTheApi()
     {
-        await _listener.EnableAsync();
+        await EnableAsync();
         using var client = PinnedClient(SpkiPin.Of(_cert));
 
         (await AbortAsync(client, token: null)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
@@ -164,7 +164,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task Abort_WithTheToken_IsForwarded_WithoutTheTokenOrTheCallersIdentity_AndDoesNotSpendTheCode()
     {
-        var session = await _listener.EnableAsync();
+        var session = await EnableAsync();
         using var client = PinnedClient(session.SpkiPin);
 
         using (var abort = AbortRequest(session.Token))
@@ -182,7 +182,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task Abort_StillWorksAfterTheSnapshotWasTaken_ForTheJoinThatFailedOnTheDevice()
     {
-        var session = await _listener.EnableAsync();
+        var session = await EnableAsync();
         using var client = PinnedClient(session.SpkiPin);
         (await JoinAsync(client, session.Token, RightPassword)).EnsureSuccessStatusCode();
         (await client.PostAsync("/api/sync/challenge", null)).EnsureSuccessStatusCode();
@@ -199,7 +199,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task EnableAgain_DuringTheGraceOfAFinishedJoin_OpensANewSessionOnTheSamePort()
     {
-        var first = await _listener.EnableAsync();
+        var first = await EnableAsync();
         using (var client = PinnedClient(first.SpkiPin))
         {
             (await JoinAsync(client, first.Token, RightPassword)).EnsureSuccessStatusCode();
@@ -207,7 +207,7 @@ public class LanJoinListenerTests : IAsyncLifetime
         }
         (await EventuallyAsync(() => _listener.Current == null)).Should().BeTrue();
 
-        var second = await _listener.EnableAsync();
+        var second = await EnableAsync();
 
         second.Token.Should().NotBe(first.Token);
         using var next = PinnedClient(second.SpkiPin);
@@ -220,7 +220,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task ASnapshotWithoutACompletedJoin_DoesNotCloseTheListener()
     {
-        await _listener.EnableAsync();
+        await EnableAsync();
         using var client = PinnedClient(SpkiPin.Of(_cert));
 
         (await SnapshotAsync(client, StubBearerToken)).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -232,7 +232,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task AfterFifteenMinutes_TheListenerTurnsItselfOff()
     {
-        await _listener.EnableAsync();
+        await EnableAsync();
 
         _time.Advance(LanJoinListener.Lifetime - TimeSpan.FromSeconds(1));
         _listener.Current.Should().NotBeNull();
@@ -244,12 +244,12 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task EnableAgain_WhileOpen_KeepsTheSession_AfterDisable_IssuesANewToken()
     {
-        var first = await _listener.EnableAsync();
-        (await _listener.EnableAsync()).Should().Be(first, "pressing the button twice must not invalidate the code on screen");
+        var first = await EnableAsync();
+        (await EnableAsync()).Should().Be(first, "pressing the button twice must not invalidate the code on screen");
 
         await _listener.DisableAsync();
         _listener.Current.Should().BeNull();
-        var second = await _listener.EnableAsync();
+        var second = await EnableAsync();
 
         second.Token.Should().NotBe(first.Token);
         using var client = PinnedClient(second.SpkiPin);
@@ -264,7 +264,7 @@ public class LanJoinListenerTests : IAsyncLifetime
         // page's request for a moment. That late request must not open a LAN listener nobody will close.
         await _listener.DisposeAsync();
 
-        await FluentActions.Awaiting(() => _listener.EnableAsync())
+        await FluentActions.Awaiting(() => EnableAsync())
             .Should().ThrowAsync<ObjectDisposedException>();
 
         _listener.Current.Should().BeNull();
@@ -276,7 +276,7 @@ public class LanJoinListenerTests : IAsyncLifetime
     [Fact]
     public async Task DisposeWhileOpen_ClosesTheListener_AndTwiceIsHarmless()
     {
-        await _listener.EnableAsync();
+        await EnableAsync();
 
         await _listener.DisposeAsync();
         await _listener.DisposeAsync();
@@ -289,8 +289,39 @@ public class LanJoinListenerTests : IAsyncLifetime
 
     // ─── Helpers ────────────────────────────────────────────────────────────
 
+    private LanJoinListener NewListener()
+    {
+        _port = PortBinding.PickFreePort();
+        return new LanJoinListener(_api.Urls.First(), () => _cert, new IPEndPoint(IPAddress.Loopback, _port), _time);
+    }
+
+    /// <summary>Opens the door. Its port was picked before it is bound, so another socket of the machine can take it in between ("address
+    /// already in use"): the door is then built again on a new port, a few times. Any other failure is thrown at once.</summary>
+    private async Task<LanJoinSession> EnableAsync()
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return await _listener.EnableAsync(); }
+            catch (Exception ex) when (attempt < 5 && PortBinding.IsAddressInUse(ex))
+            {
+                await _listener.DisposeAsync();
+                _listener = NewListener();
+            }
+        }
+    }
+
+    /// <summary>A client of the door that follows its port when <see cref="EnableAsync"/> had to move it.</summary>
     private HttpClient PinnedClient(string pin) =>
-        new(SpkiPin.CreatePinnedHandler(pin)) { BaseAddress = new Uri($"https://127.0.0.1:{_port}") };
+        new(new FollowPort(SpkiPin.CreatePinnedHandler(pin), () => _port)) { BaseAddress = new Uri($"https://127.0.0.1:{_port}") };
+
+    private sealed class FollowPort(HttpMessageHandler inner, Func<int> port) : DelegatingHandler(inner)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            request.RequestUri = new UriBuilder(request.RequestUri!) { Port = port() }.Uri;
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
 
     private static Task<HttpResponseMessage> SnapshotAsync(HttpClient client, string? bearer)
     {
@@ -361,15 +392,6 @@ public class LanJoinListenerTests : IAsyncLifetime
     {
         for (var i = 0; i < 100 && !condition(); i++) await Task.Delay(50);
         return condition();
-    }
-
-    private static int FreePort()
-    {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
     }
 }
 

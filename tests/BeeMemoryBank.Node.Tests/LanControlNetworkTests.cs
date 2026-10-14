@@ -236,9 +236,10 @@ public class LanControlNetworkTests : IAsyncLifetime
     {
         certificate ??= () => _cert;
         var exposure = startup ?? new NetworkExposure(false, NetworkExposureSource.Off);
-        var door = new LanJoinListener("http://127.0.0.1:1", certificate, new IPEndPoint(IPAddress.Loopback, FreePort()), TimeProvider.System);
+        // The control routes are driven, the door and the listener are never connected to: both bind a port the system picks.
+        var door = new LanJoinListener("http://127.0.0.1:1", certificate, new IPEndPoint(IPAddress.Loopback, 0), TimeProvider.System);
         var listener = new LanFrontListener(
-            () => NodeFrontBuilder.BuildNetworkFront(_children, new IPEndPoint(IPAddress.Loopback, FreePort()), certificate),
+            () => NodeFrontBuilder.BuildNetworkFront(_children, new IPEndPoint(IPAddress.Loopback, 0), certificate),
             certificate);
         var network = new LanNetworkSwitch(new NodeNetworkSettingsStore(_dir), listener, door, exposure);
         var lan = new LanControl(permanentByEnvironment ? null : door, certificate, firewall ?? new Firewall(true), InternalKey, network, platform);
@@ -291,14 +292,5 @@ public class LanControlNetworkTests : IAsyncLifetime
         public bool RuleExists(int port) => _rule;
         public Task<bool> AddWithConsentAsync(int port) { Prompts++; _rule = true; return Task.FromResult(true); }
         public Task<bool> RemoveWithConsentAsync(int port) { Prompts++; _rule = false; return Task.FromResult(true); }
-    }
-
-    private static int FreePort()
-    {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
     }
 }
