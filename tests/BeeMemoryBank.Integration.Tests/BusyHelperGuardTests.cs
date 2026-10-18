@@ -685,7 +685,8 @@ public class BusyHelperGuardTests
     [InlineData("<Entry ReturnCommand=\"{Binding Source={x:Reference Go}, Path=Command}\"/><Button x:Name=\"Go\" Clicked=\"OnGo\"/>", "void OnGo(object s, EventArgs e) { Scheduler.RequestHeavy(null); }", 0)]
     [InlineData("<Entry ReturnCommand=\"{Binding Source={x:Reference Go}, Path=Command}\"/><Button x:Name=\"Go\" Command=\"{Binding GoCommand}\"/>", "GoCommand = new Command(Go, () => !_busy);", 0)]
     [InlineData("<Entry ReturnCommand=\"{Binding Source={x:Reference Go}, Path=Command}\"/>", "Nothing = 1;", 1)]
-    [InlineData("<Entry ReturnCommand=\"{Binding Source={x:Reference Go}, Path=Command}\"/><Button x:Name=\"Go\" Text=\"Go\"/>", "Nothing = 1;", 1)]
+    // (the button first: a test's name shows only the first characters of each argument, and two rows with the same name fail the CI shard coverage check)
+    [InlineData("<Button x:Name=\"Go\" Text=\"Go\"/><Entry ReturnCommand=\"{Binding Source={x:Reference Go}, Path=Command}\"/>", "Nothing = 1;", 1)]
     [InlineData("<Entry ReturnCommand=\"{Binding Source={StaticResource Shared}, Path=Command}\"/>", "Nothing = 1;", 1)]
     [InlineData("<Entry ReturnCommand=\"{Binding Source={RelativeSource Self}, Path=Command}\"/>", "Nothing = 1;", 1)]
     public void TheBoundCommandScanner_FlagsACommandThatBypassesTheBusyState_WhateverClassMakesIt(string xaml, string code, int expected)
@@ -727,7 +728,8 @@ public class BusyHelperGuardTests
     [Theory]
     // a helper five levels down, and a camelCase one: the scanner follows every call, not two levels of capitalized ones
     [InlineData("<Button Clicked=\"OnGo\"/>", "private async void OnGo(object? s, EventArgs e) => await A();\nprivate async Task A() => await B();\nprivate async Task B() => await C();\nprivate async Task C() => await D();\nprivate async Task D() => await E();\nprivate async Task E() { await BusyAction.RunAsync(null, Work); }", 0)]
-    [InlineData("<Button Clicked=\"OnGo\"/>", "private async void OnGo(object? s, EventArgs e) => await run();\nprivate async Task run() { await BusyAction.RunAsync(null, Work); }", 0)]
+    // (the space before the slash keeps the name of this row different from the row above: the names show only the first characters of the code)
+    [InlineData("<Button Clicked=\"OnGo\" />", "private async void OnGo(object? s, EventArgs e) => await run();\nprivate async Task run() { await BusyAction.RunAsync(null, Work); }", 0)]
     [InlineData("<Button Clicked=\"OnGo\"/>", "private async void OnGo(object? s, EventArgs e) => await A();\nprivate async Task A() => await B();\nprivate async Task B() => await Work();", 1)]
     // the other things a person does that start something
     [InlineData("<RefreshView Refreshing=\"OnPull\"/>", "private async void OnPull(object? s, EventArgs e) { await Sync(); }", 1)]
