@@ -119,7 +119,7 @@ if (app.Services.GetRequiredService<INodeRole>().IsBlind)
 }
 
 app.MapSessionEndpoints();
-// Step B: the status of the encrypted database, "Encrypt this node", the way-back snapshot. Mapped where the sealed composition is registered
+// Step B: the status of the encrypted database, "Encrypt this node". Mapped where the sealed composition is registered
 // (AddSealedVault, Program.cs): a host composed without it has none of these routes and, as before Step B, nothing of them to fail on.
 if (app.Services.GetService<BeeMemoryBank.Vault.Sealed.SealMigrationService>() is not null)
     app.MapVaultEndpoints();

@@ -63,11 +63,25 @@ public static class VaultStartup
                 if (exclusive != null)
                 {
                     if (Refusal(d) is { } late) throw new VaultInUseException(late);
-                    resolved = RekeySwapResolver.Resolve(d);
-                    // An interrupted "Encrypt this node" (docs/design/step-b-spec.md 10.6) is finished, undone or refused by name here too,
-                    // under the same exclusive lease and before anything opens or creates a file of the data folder.
-                    if (SealSwapResolver.Resolve(resolved.DataDir) is { Action: not SealResolveAction.None } seal)
-                        resolved = resolved with { Seal = seal };
+                    // The link gate FIRST (BMB-306 fix round 5): a data folder that is a link, or a reserved name in it that is one (live or dangling), refuses the start by
+                    // name before any resolver below asks whether anything exists, reads, moves or wipes through it.
+                    resolved = LinkGate.RefusedStart(d) ?? RekeySwapResolver.Resolve(d);
+                    if (resolved.Seal is null)
+                    {
+                        // An interrupted "Encrypt this node" (docs/design/step-b-spec.md 10.6) is finished, undone or refused by name here too,
+                        // under the same exclusive lease and before anything opens or creates a file of the data folder.
+                        if (SealSwapResolver.Resolve(resolved.DataDir) is { Action: not SealResolveAction.None } seal)
+                            resolved = resolved with { Seal = seal };
+                        // A setup, join or restore that was cut off before the node was encrypted (SealIntent): the encrypted pair loses only its marker,
+                        // anything else it had written in the open is wiped, here, before the plain start can serve it. A file that will not go refuses
+                        // the start by name, like a leftover of an interrupted encryption.
+                        if (SealIntent.Resolve(resolved.DataDir) is { Action: not SealIntentAction.None } intent)
+                        {
+                            resolved = resolved with { Intent = intent };
+                            if (intent.Refusal is { } refusal && resolved.Seal?.Refusal is null)
+                                resolved = resolved with { Seal = new SealSwapResolution(SealResolveAction.Refused, Refusal: refusal) };
+                        }
+                    }
                 }
             }
 
@@ -95,10 +109,23 @@ public static class VaultStartup
     /// first start on a swapped-in vault.</summary>
     private static RekeySwapResolution Joined(string d)
     {
+        // The link gate FIRST on this path too: a start that joined others does not read a journal or ask about a marker through a link either.
+        if (LinkGate.RefusedStart(d) is { } gated) return gated;
         RekeySwapJournal? journal = null;
         try { journal = RekeySwapJournal.Read(d); }
         catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidDataException or NotSupportedException) { }
-        return new RekeySwapResolution(d, journal?.Phase == RekeySwapJournal.Swapped && Directory.Exists(d));
+        var joined = new RekeySwapResolution(d, journal?.Phase == RekeySwapJournal.Swapped && Directory.Exists(d));
+
+        // The others passed the gate, so the swap is resolved - but a setup, join or restore may be running in one of them, or have been cut off while another
+        // still runs. This start does not resolve a seal intent (that needs the lease exclusively, and it may be a live operation's), and it must not serve
+        // what the operation writes in the open either: it is refused by name, and nothing is wiped (BMB-306 fix round 2).
+        if (SealIntent.BusyRefusal(d) is { } busy)
+            joined = joined with
+            {
+                Intent = new SealIntentResolution(SealIntentAction.Refused, SealIntent.KindOf(d), null, busy),
+                Seal = new SealSwapResolution(SealResolveAction.Refused, Refusal: busy),
+            };
+        return joined;
     }
 
     private static string? Refusal(string dataDir) =>

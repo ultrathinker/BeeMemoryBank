@@ -21,6 +21,9 @@ public interface IPhoneEnvironment
     int? BatteryPercent { get; }
 
     bool IsCharging { get; }
+
+    /// <summary>Free bytes of the file system that holds <paramref name="path"/> (the app's data folder), or null when the platform does not say.</summary>
+    long? FreeBytes(string path) => null;
 }
 
 /// <summary>One piece of the app's start work and the number it runs at (spec 5.3 table 2: 100 migrations, 200 folder bootstrap, ... 800 the pragmas and the rotation auto-arm).</summary>
@@ -42,10 +45,11 @@ public sealed record PhoneStart(VaultStoreMode Mode, BrokenStart? Broken, SealSw
 public sealed class PhoneVaultLifecycle(IVaultGate? gate, SessionService session)
 {
     /// <summary>
-    /// "Encrypt this phone's database" is hidden until the native release gate of spec 12.4 is green; the integration round sets this to
-    /// true after it. The lifecycle and the rest of this file work with it false.
+    /// "Encrypt this phone's database" was hidden until the native release gate of spec 12.4 is green; the integration round sets this to
+    /// true after it. This build offers it, by the owner's decision, to be run on his own device (the gate's device run: encrypt, background,
+    /// unlock, kill mid-encryption, restart). The lifecycle and the rest of this file work with it either way.
     /// </summary>
-    public static bool PhoneEncryptionAvailable => false;
+    public static bool PhoneEncryptionAvailable => true;
 
     /// <summary>
     /// True when the app has to start through <see cref="Begin"/>: the phone may be encrypted (<see cref="PhoneEncryptionAvailable"/>), or the folder
@@ -126,8 +130,8 @@ public sealed class PhoneVaultLifecycle(IVaultGate? gate, SessionService session
 public delegate Task<bool> PeerHoldsHead(CancellationToken ct);
 
 /// <summary>
-/// What a phone adds to "Encrypt this node" (spec 10.8): no way-back snapshot (a phone has no snapshot service; the way back is to join again from a
-/// peer), so step 3 is replaced by the blocker <c>phone_no_copy</c>; and the blockers of the foreground and the battery.
+/// What a phone adds to "Encrypt this node" (spec 10.8): the blocker <c>phone_no_copy</c> (no copy of the plain database is kept anywhere; the way back
+/// is to join again from a peer) and the blockers of the foreground and the battery.
 /// </summary>
 /// <param name="environment">The app's foreground and battery.</param>
 /// <param name="peerHoldsHead">Whether a peer holds the phone's head.</param>
@@ -147,12 +151,7 @@ public sealed class PhoneSealMigrationHost(IPhoneEnvironment environment, PeerHo
         return peers.Any(p => p.ReportedSeq is { } reported && reported >= head);
     };
 
-    public bool CanMakeWayBackSnapshot => false;
-
-    public bool FitsWayBackSnapshot(long databaseBytes) => true;
-
-    public Task<WayBackSnapshot> CreateWayBackSnapshotAsync(string masterPassword, CancellationToken ct) =>
-        throw new NotSupportedException("A phone has no way-back snapshot: step 3 is the blocker phone_no_copy.");
+    public long? FreeBytes(string path) => environment.FreeBytes(path);
 
     public async Task<IReadOnlyList<SealBlocker>> HostBlockersAsync(SealOptions options, CancellationToken ct)
     {
@@ -162,7 +161,7 @@ public sealed class PhoneSealMigrationHost(IPhoneEnvironment environment, PeerHo
         else if (!environment.IsCharging && environment.BatteryPercent is < MinBatteryPercent)
             blockers.Add(new SealBlocker(SealBlockers.MobileForeground, $"Charge the phone first: encrypting needs at least {MinBatteryPercent} % battery or a charger."));
 
-        // The tick is the owner's word that nothing here is missing elsewhere (the same tick as snapshot_limit, spec 10.2).
+        // The tick is the owner's word that nothing here is missing elsewhere (spec 10.8).
         if (!options.AcceptNoSnapshot && !await peerHoldsHead(ct))
             blockers.Add(new SealBlocker(SealBlockers.PhoneNoCopy,
                 "No other device has this phone's latest changes yet. Let it sync first, or tick \"This phone holds the only copy of these notes; encrypting cannot be undone\"."));

@@ -67,13 +67,27 @@ public class CliJoinTests : IAsyncLifetime
         await scope.ServiceProvider.GetRequiredService<InitializationService>().InitializeAsync("admin", "NodeA", Password);
         _nodeAId = (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!.NodeId;
         (await _nodeA.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue();
+        // A new node joins only a node on protocol 4 (BMB-306).
+        await StepANode.ActivateAsync(_nodeA.Services);
         var articles = scope.ServiceProvider.GetRequiredService<ArticleService>();
         for (var i = 1; i <= NoteCount; i++)
             await articles.CreateAsync($"Note {i}", "/Notes", [], $"Body of note {i}.");
     }
 
+    /// <summary>The joined node is encrypted when the join ends (BMB-306): it is opened with the master password, the way every verb of the CLI opens one.</summary>
+    private static Task<ServiceProvider> OpenJoinedAsync(string dataPath)
+    {
+        CliSealed.Error = new StringWriter();
+        CliSealed.StdinIsRedirected = () => true;   // a wrong password is an error, never a prompt that waits for a person
+        CliSealed.Set(Password, false);
+        return CliServiceProvider.CreateAsync(dataPath);
+    }
+
     public async Task DisposeAsync()
     {
+        CliSealed.Error = Console.Error;
+        CliSealed.StdinIsRedirected = () => Console.IsInputRedirected;
+        CliSealed.Set(null, false);
         await _nodeA.StopAsync();
         await _nodeA.DisposeAsync();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
@@ -92,7 +106,7 @@ public class CliJoinTests : IAsyncLifetime
         var rc = await JoinCommand.HandleAsync(_dataB, _urlA, Password, "CliJoiner", output: output);
 
         rc.Should().Be(0, output.ToString());
-        await using var services = await CliServiceProvider.CreateAsync(_dataB);
+        await using var services = await OpenJoinedAsync(_dataB);
         using var joined = services.CreateScope();
         (await CountNotesAsync(joined.ServiceProvider)).Should().Be(NoteCount, "the snapshot carries every note, compacted log or not");
         var position = await joined.ServiceProvider.GetRequiredService<ISyncPositionRepository>().GetAsync(_nodeAId);
@@ -115,7 +129,7 @@ public class CliJoinTests : IAsyncLifetime
 
         rc.Should().Be(0, output.ToString());
         output.ToString().Should().Contain($"Imported {NoteCount} note(s)");
-        await using var services = await CliServiceProvider.CreateAsync(_dataB);
+        await using var services = await OpenJoinedAsync(_dataB);
         using var joined = services.CreateScope();
         (await CountNotesAsync(joined.ServiceProvider)).Should().Be(NoteCount);
         (await joined.ServiceProvider.GetRequiredService<ISyncPositionRepository>().GetAsync(_nodeAId)).Should().NotBeNull();
@@ -130,7 +144,7 @@ public class CliJoinTests : IAsyncLifetime
 
         rc.Should().NotBe(0, output.ToString());
         output.ToString().Should().Contain("signature verification failed");
-        await using (var services = await CliServiceProvider.CreateAsync(_dataB))
+        await using (var services = await OpenJoinedAsync(_dataB))
         {
             using var scope = services.CreateScope();
             (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull("no half-made node");
@@ -141,7 +155,7 @@ public class CliJoinTests : IAsyncLifetime
         BeeMemoryBank.Api.Middleware.RateLimitMiddleware.ResetForTests();
         var again = new StringWriter();
         (await JoinCommand.HandleAsync(_dataB, _urlA, Password, "CliJoiner", output: again)).Should().Be(0, again.ToString());
-        await using var after = await CliServiceProvider.CreateAsync(_dataB);
+        await using var after = await OpenJoinedAsync(_dataB);
         using var joined = after.CreateScope();
         (await CountNotesAsync(joined.ServiceProvider)).Should().Be(NoteCount);
     }

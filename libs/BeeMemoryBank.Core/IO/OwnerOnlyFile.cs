@@ -192,6 +192,121 @@ public static class OwnerOnlyFile
     }
 
     /// <summary>
+    /// Replaces the file <paramref name="path"/> with <paramref name="content"/> so that the old file is whole until the new one is: the bytes go to a
+    /// random-named, owner-only temp file beside it (<see cref="CreateNew"/>), in blocks that honour <paramref name="ct"/>, flushed to the disk and checked for
+    /// their length, and only then does the temp file take the name (an atomic rename over the old one). A full volume, a failed write or a cancellation at
+    /// any point leaves <paramref name="path"/> exactly as it was and removes the temp file (<paramref name="discardTemp"/>, default: delete; a caller that
+    /// writes a plain image passes a wipe). The final file has the owner-only permissions of the temp file.
+    /// </summary>
+    /// <param name="discardTemp">What removes the temp file after a failure (it may hold the bytes written so far).</param>
+    /// <param name="wrapWrite">Test seam: wraps the temp file's stream, so that a test can make the write fail the way a full volume does.</param>
+    /// <param name="beforeRename">Test seam: called with the temp path once it holds the checked bytes.</param>
+    public static async Task ReplaceAsync(
+        string path, ReadOnlyMemory<byte> content, CancellationToken ct = default,
+        Action<string>? discardTemp = null, Func<FileStream, Stream>? wrapWrite = null, Action<string>? beforeRename = null)
+    {
+        RefuseLink(path);
+        var temp = path + "." + Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant() + ".tmp";
+        // Outside the try: a temp name that already exists is not ours to remove.
+        var file = CreateNew(temp);
+        try
+        {
+            await using (file.ConfigureAwait(false))
+            {
+                Stream target = wrapWrite?.Invoke(file) ?? file;
+                const int block = 1 << 20;
+                for (var offset = 0; offset < content.Length; offset += block)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await target.WriteAsync(content.Slice(offset, Math.Min(block, content.Length - offset)), ct).ConfigureAwait(false);
+                }
+                await target.FlushAsync(ct).ConfigureAwait(false);
+                file.Flush(flushToDisk: true);
+                if (file.Length != content.Length)
+                    throw new IOException($"{temp} holds {file.Length} bytes of the {content.Length} written; {path} was not replaced.");
+            }
+
+            beforeRename?.Invoke(temp);
+            ct.ThrowIfCancellationRequested();
+            await MoveReplaceAsync(temp, path, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (discardTemp is not null && File.Exists(temp)) discardTemp(temp);
+            TryDelete(temp);
+            throw;
+        }
+    }
+
+    /// <summary>How often, and how long apart, a replacement that Windows refuses is tried again before it is reported.</summary>
+    private const int ReplaceAttempts = 12;
+    private static readonly TimeSpan ReplaceDelay = TimeSpan.FromMilliseconds(150);
+
+    /// <summary>
+    /// Puts the finished file <paramref name="from"/> under the name <paramref name="to"/>, replacing what is there, in one rename of the same folder: what
+    /// is at <paramref name="to"/> is whole until the new file is, and a replacement that fails leaves it exactly as it was (its attributes included).
+    /// A link at <paramref name="to"/> is refused. This is the one place that replaces a staged file, so the Windows rules are kept here:
+    /// <list type="bullet">
+    /// <item>a destination with the read-only attribute is not replaceable (<c>MoveFileEx</c> answers "access denied"): the attribute is lifted for the
+    /// rename, and put back if the rename does not happen;</item>
+    /// <item>a destination that another process has open without sharing delete (a scanner, the search indexer, a backup agent looking at a file that was
+    /// just written) is also answered "access denied", for as long as that process holds it, which is milliseconds: the rename is tried again a few
+    /// times (about two seconds in all) before the failure is reported. Linux and macOS replace an open file and make no second attempt.</item>
+    /// </list>
+    /// A source or a folder that is missing, and a destination that is a folder, are not waited for.
+    /// </summary>
+    /// <exception cref="IOException">The destination could not be replaced (it is unchanged).</exception>
+    /// <exception cref="UnauthorizedAccessException">The destination stayed unreplaceable for the whole time (it is unchanged).</exception>
+    public static Task MoveReplaceAsync(string from, string to, CancellationToken ct = default) =>
+        MoveReplaceAsync(from, to, ct, ReplaceAttempts, ReplaceDelay);
+
+    /// <param name="attempts">Test seam: how many tries on Windows.</param>
+    /// <param name="delay">Test seam: the wait between two tries.</param>
+    internal static async Task MoveReplaceAsync(string from, string to, CancellationToken ct, int attempts, TimeSpan delay)
+    {
+        RefuseLink(to);
+        if (Directory.Exists(to))
+            throw new IOException($"{to} is a folder; it was not replaced.");
+
+        var windows = OperatingSystem.IsWindows();
+        FileAttributes? lifted = null;
+        try
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    if (windows && lifted is null && File.Exists(to) && File.GetAttributes(to) is var held && (held & FileAttributes.ReadOnly) != 0)
+                    {
+                        File.SetAttributes(to, held & ~FileAttributes.ReadOnly);
+                        lifted = held;
+                    }
+                    File.Move(from, to, overwrite: true);
+                    lifted = null;
+                    return;
+                }
+                catch (Exception ex) when (windows && attempt < attempts
+                    && ex is IOException or UnauthorizedAccessException
+                    && ex is not (FileNotFoundException or DirectoryNotFoundException))
+                {
+                    await Task.Delay(delay, ct).ConfigureAwait(false);
+                }
+            }
+        }
+        finally
+        {
+            // The rename did not happen: the destination is as it was found.
+            if (lifted is { } original && File.Exists(to))
+            {
+                try { File.SetAttributes(to, original); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+    }
+
+    /// <summary>
     /// Renames <paramref name="from"/> to <paramref name="to"/> only if nothing is at <paramref name="to"/>, in one
     /// atomic step: of several callers racing for the same name exactly one succeeds, the others get an
     /// <see cref="IOException"/>, and what the winner put there is never replaced.

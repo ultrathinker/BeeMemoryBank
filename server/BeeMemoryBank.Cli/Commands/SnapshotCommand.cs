@@ -26,7 +26,7 @@ public static class SnapshotCommand
     private const string ManifestFileName = "manifest.json";
     private const int ManifestVersion = 1;
 
-    public static async Task<int> HandleCreateAsync(string dataPath, TextWriter? output = null, Action<string>? afterStagingWork = null, Func<DateTime>? nameClock = null)
+    public static async Task<int> HandleCreateAsync(string dataPath, TextWriter? output = null)
     {
         output ??= Console.Out;
 
@@ -59,91 +59,13 @@ public static class SnapshotCommand
             }
         }
 
-        // Create a VACUUM copy of the database for a consistent snapshot - staged in the data folder like the node's own
-        // snapshots (SnapshotStaging), owner-only, not in the OS temp folder. The node's next start removes it if this
-        // command dies before its finally; the CLI itself never sweeps, since the node may be running a snapshot.
-        var tempDb = SnapshotStaging.NewFile(Path.GetDirectoryName(services.GetRequiredService<BeeMemoryBank.Core.Services.MediaStorageOptions>().MediaDir)!);
-        string dbHash, snapshotPath;
-        var copyRemoved = false;
-        try
-        {
-            var connFactory = services.GetRequiredService<DbConnectionFactory>();
-            using (var conn = (SqliteConnection)connFactory.CreateConnection())
-            {
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = $"VACUUM INTO '{tempDb.Replace("'", "''")}'";
-                cmd.ExecuteNonQuery();
-            }
-
-            // Compute SHA256 of the DB copy
-            dbHash = await ComputeFileHashAsync(tempDb);
-
-            // Create manifest
-            var manifest = new
-            {
-                version = ManifestVersion,
-                createdAt = DateTime.UtcNow.ToString("o"),
-                nodeId = identity?.NodeId.ToString() ?? "",
-                displayName = identity?.DisplayName ?? "",
-                files = new Dictionary<string, string>
-                {
-                    [DbFileName] = dbHash
-                }
-            };
-            var manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
-
-            // Generate snapshot file name. Place under {dataPath}/snapshots/ so
-            // `bmb snapshot restore-standalone <name>` can find it by file name —
-            // the running API server reads from that directory. The name is one the node's own snapshots
-            // do not hold either, in snapshots/ or in pre-encryption/ (SnapshotFileNames).
-            var snapshotsDir = Path.Combine(dataPath, SnapshotFileNames.SnapshotsDir);
-            Directory.CreateDirectory(snapshotsDir);
-            snapshotPath = Path.Combine(snapshotsDir, SnapshotFileNames.Unique(dataPath, snapshotsDir, nameClock?.Invoke() ?? DateTime.UtcNow));
-
-            // Create tar.gz
-            await using (var fileStream = File.Create(snapshotPath))
-            await using (var gzip = new GZipStream(fileStream, CompressionLevel.Optimal))
-            using (var tar = new TarWriter(gzip, TarEntryFormat.Pax))
-            {
-                // Add DB file. The stream is scoped, not handed to the entry inline: TarWriter does
-                // not take ownership of DataStream, so an inline File.OpenRead leaked the handle
-                // and the `finally` below could not delete tempDb. On Linux that is invisible —
-                // unlink succeeds on an open file — which is why it only ever failed on Windows,
-                // and why CI stayed green while three CLI tests failed locally.
-                {
-                    await using var dbStream = File.OpenRead(tempDb);
-                    await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, DbFileName)
-                    {
-                        DataStream = dbStream
-                    });
-                }
-
-                // Add manifest
-                var manifestBytes = Encoding.UTF8.GetBytes(manifestJson);
-                await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, ManifestFileName)
-                {
-                    DataStream = new MemoryStream(manifestBytes)
-                });
-            }
-
-        }
-        finally
-        {
-            // The working copy goes with its SQLite sidecars before the snapshot is reported: one that stays fails the command.
-            afterStagingWork?.Invoke(tempDb);
-            copyRemoved = SqliteStaging.TryCleanup(tempDb);
-        }
-
-        if (!copyRemoved)
-        {
-            RemoveUnreported(snapshotPath);
-            await output.WriteLineAsync($"Error: {WorkingCopyNotRemoved}");
-            return 1;
-        }
-        await output.WriteLineAsync($"Snapshot created: {snapshotPath}");
-        await output.WriteLineAsync($"  Node: {identity?.DisplayName ?? "unknown"} ({identity?.NodeId})");
-        await output.WriteLineAsync($"  SHA256(db): {dbHash}");
-        return 0;
+        // A node whose database is not encrypted makes no snapshot here (BMB-306): the archive would hold the database in the open, and no restore takes
+        // one ("a restore never produces an unencrypted node"). Admin > Snapshots makes an encrypted snapshot of such a node; encrypting the node first
+        // (bmb vault seal) lets this command make one too.
+        await output.WriteLineAsync(
+            "Error: this node's database is not encrypted, and a snapshot made here would hold it in the open - a restore does not take one. " +
+            "Make the snapshot in Admin, Snapshots (it is encrypted), or encrypt this node first (bmb vault seal).");
+        return 1;
     }
 
     /// <summary>What a snapshot writer reports when its working copy stays on the disk: the snapshot is not made, as far as anyone may rely on it.</summary>
@@ -168,7 +90,7 @@ public static class SnapshotCommand
     /// <see cref="SealedNeedsPassword"/> when the vault is not open or the session holds no master DEK; never writes a plain database.
     /// </summary>
     public static async Task<int> HandleSealedCreateAsync(string dataPath, IVaultGate gate, IVaultKeySource? keys, DbConnectionFactory vault,
-        byte[]? masterDek, NodeIdentity? identity, TextWriter output)
+        byte[]? masterDek, NodeIdentity? identity, TextWriter output, long? freeMemoryBytes = null)
     {
         if (!gate.IsUsable || keys is not { IsOpen: true } || masterDek is null)
         {
@@ -179,10 +101,12 @@ public static class SnapshotCommand
         SealedSnapshotResult result;
         try
         {
-            result = await CreateSealedSnapshotAsync(dataPath, vault, keys, masterDek, identity?.NodeId.ToString() ?? "", identity?.DisplayName ?? "");
+            result = await CreateSealedSnapshotAsync(dataPath, vault, keys, masterDek, identity?.NodeId.ToString() ?? "", identity?.DisplayName ?? "",
+                freeMemoryBytes: freeMemoryBytes);
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or NotEnoughMemoryException)
         {
+            // NotEnoughMemoryException names the memory limit that would be enough (BMB-304).
             await output.WriteLineAsync($"Error: {ex.Message}");
             return 1;
         }
@@ -199,10 +123,24 @@ public static class SnapshotCommand
     /// copy is encrypted and is wiped at the end.
     /// </summary>
     public static async Task<SealedSnapshotResult> CreateSealedSnapshotAsync(string dataPath, DbConnectionFactory vault, IVaultKeySource keys,
-        byte[] masterDek, string nodeId, string displayName, CancellationToken ct = default, Action<string>? afterStagingWork = null, Func<DateTime>? nameClock = null)
+        byte[] masterDek, string nodeId, string displayName, CancellationToken ct = default, Action<string>? afterStagingWork = null, Func<DateTime>? nameClock = null,
+        long? freeMemoryBytes = null, Func<Stream, Stream>? wrapArchive = null)
     {
+        // The container is one AES-GCM message held in memory as one buffer (BMB-304): ask for that room before the working copy is made, and name the
+        // memory limit that would be enough (the codec asks again for the exact size of the image, so a wrong guess here only costs the early answer).
+        // The size is the live image (VACUUM INTO leaves the free pages out), not the length of the file.
+        var vaultFile = Path.Combine(dataPath, DbFileName);
+        if (File.Exists(vaultFile))
+        {
+            long size;
+            using (var sizeConn = vault.CreateConnection()) size = Bmbdb2Container.LiveImageBytes(sizeConn, new FileInfo(vaultFile).Length);
+            MemoryBudget.RequireFree(size + Bmbdb2Container.OverheadV2 + MemoryBudget.Slack,
+                $"Making the snapshot of a {Math.Max(1, size / (1024 * 1024))} MB database", freeMemoryBytes);
+        }
+
         var staging = SnapshotStaging.NewFile(dataPath);
         string? madeArchive = null;
+        string? tempArchive = null;
         try
         {
             using (var conn = (SqliteConnection)vault.CreateConnection())
@@ -217,7 +155,7 @@ public static class SnapshotCommand
             try
             {
                 await using var image = PlainImageReader.Open(staging, pageKey);
-                container = await Bmbdb2Container.EncryptAsync(image, image.Length, masterDek, ct);
+                container = await Bmbdb2Container.EncryptAsync(image, image.Length, masterDek, ct, freeMemoryBytes);
             }
             finally
             {
@@ -240,13 +178,19 @@ public static class SnapshotCommand
             var snapshotsDir = Path.Combine(dataPath, SnapshotFileNames.SnapshotsDir);
             Directory.CreateDirectory(snapshotsDir);
             var snapshotPath = Path.Combine(snapshotsDir, SnapshotFileNames.Unique(dataPath, snapshotsDir, nameClock?.Invoke() ?? DateTime.UtcNow));
-            await using (var fileStream = File.Create(snapshotPath))
-            await using (var gzip = new GZipStream(fileStream, CompressionLevel.Optimal))
+            // Written under a temp name, owner-only from the first byte, and given its name only when it is whole: a full volume or a cancellation leaves no
+            // half-written *.tar.gz, and the finally below removes the temp file (BMB-304 fix round).
+            tempArchive = snapshotPath + "." + Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant() + ".tmp";
+            await using (var fileStream = OwnerOnlyFile.CreateNew(tempArchive))
+            await using (var gzip = new GZipStream(wrapArchive?.Invoke(fileStream) ?? fileStream, CompressionLevel.Optimal))
             using (var tar = new TarWriter(gzip, TarEntryFormat.Pax))
             {
                 await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, DbFileName) { DataStream = new MemoryStream(container) }, ct);
                 await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, ManifestFileName) { DataStream = new MemoryStream(manifestBytes) }, ct);
             }
+            ct.ThrowIfCancellationRequested();
+            OwnerOnlyFile.MoveNoReplace(tempArchive, snapshotPath);
+            tempArchive = null;
             madeArchive = snapshotPath;
             return new SealedSnapshotResult(snapshotPath, dbHash);
         }
@@ -255,137 +199,13 @@ public static class SnapshotCommand
             // Encrypted already, but it is a key-less image of the vault: wiped, not just deleted, with its SQLite sidecars. One that stays
             // fails the snapshot, which is not reported as made: its archive goes too.
             afterStagingWork?.Invoke(staging);
+            if (tempArchive is not null) RemoveUnreported(tempArchive);
             var gone = SqliteStaging.TryCleanup(staging, path => SecureFileWipe.TryWipe(path));
             if (!gone && madeArchive is not null)
             {
                 RemoveUnreported(madeArchive);
                 throw new IOException(WorkingCopyNotRemoved);
             }
-        }
-    }
-
-    public static async Task<int> HandleRestoreAsync(string dataPath, string snapshotPath, TextWriter? output = null)
-    {
-        output ??= Console.Out;
-
-        if (!File.Exists(snapshotPath))
-        {
-            await output.WriteLineAsync($"Error: snapshot file not found: {snapshotPath}");
-            return 1;
-        }
-
-        // The extraction is the vault in clear: in the data folder (SnapshotStaging), owner-only, never in the OS temp folder.
-        var tempDir = SnapshotStaging.NewDirectory(dataPath);
-        try
-        {
-            // Extract tar.gz
-            await using (var fileStream = File.OpenRead(snapshotPath))
-            await using (var gzip = new GZipStream(fileStream, CompressionMode.Decompress))
-            {
-                await TarFile.ExtractToDirectoryAsync(gzip, tempDir, overwriteFiles: true);
-            }
-
-            var extractedDb = Path.Combine(tempDir, DbFileName);
-            var extractedManifest = Path.Combine(tempDir, ManifestFileName);
-
-            if (!File.Exists(extractedDb) || !File.Exists(extractedManifest))
-            {
-                await output.WriteLineAsync("Error: snapshot is corrupted — required files are missing.");
-                return 1;
-            }
-
-            // A snapshot of a sealed vault (or any snapshot with an encrypted database) carries a BMBDB container, not a SQLite file:
-            // copying it over the database would destroy the vault. The node's restore opens it with the master password.
-            if (Bmbdb2Container.IsContainer(await ReadHeadAsync(extractedDb)))
-            {
-                await output.WriteLineAsync("Error: this snapshot's database is encrypted. Restore it with 'bmb snapshot restore-standalone <file name>' on the running node.");
-                return 1;
-            }
-
-            // Read and validate the manifest
-            var manifestJson = await File.ReadAllTextAsync(extractedManifest);
-            var manifest = JsonSerializer.Deserialize<JsonElement>(manifestJson);
-
-            var expectedHash = manifest.GetProperty("files").GetProperty(DbFileName).GetString()!;
-            var actualHash = await ComputeFileHashAsync(extractedDb);
-
-            if (!string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase))
-            {
-                await output.WriteLineAsync($"Error: database checksum mismatch.");
-                await output.WriteLineAsync($"  Expected: {expectedHash}");
-                await output.WriteLineAsync($"  Actual:   {actualHash}");
-                return 1;
-            }
-
-            // Restore database
-            Directory.CreateDirectory(dataPath);
-            var targetDb = Path.Combine(dataPath, DbFileName);
-
-            // Create a backup of the existing database if it exists
-            if (File.Exists(targetDb))
-            {
-                var backupPath = targetDb + ".bak";
-                File.Copy(targetDb, backupPath, overwrite: true);
-                await output.WriteLineAsync($"  Existing database backed up: {backupPath}");
-            }
-
-            File.Copy(extractedDb, targetDb, overwrite: true);
-
-            // Restore media files if present in snapshot
-            var tempMediaDir = Path.Combine(tempDir, "media");
-            if (Directory.Exists(tempMediaDir))
-            {
-                var targetMediaDir = Path.Combine(dataPath, "media");
-                Directory.CreateDirectory(targetMediaDir);
-
-                var mediaFiles = Directory.GetFiles(tempMediaDir, "*.enc");
-                foreach (var file in mediaFiles)
-                {
-                    var targetFile = Path.Combine(targetMediaDir, Path.GetFileName(file));
-                    File.Copy(file, targetFile, overwrite: true);
-
-                    // Validate hash if manifest v2
-                    if (manifest.TryGetProperty("version", out var ver) && ver.GetInt32() >= 2)
-                    {
-                        var relativePath = $"media/{Path.GetFileName(file)}";
-                        if (manifest.GetProperty("files").TryGetProperty(relativePath, out var expectedMediaHash))
-                        {
-                            var actualMediaHash = await ComputeFileHashAsync(targetFile);
-                            if (!string.Equals(expectedMediaHash.GetString(), actualMediaHash, StringComparison.OrdinalIgnoreCase))
-                            {
-                                await output.WriteLineAsync($"  Warning: checksum mismatch for {relativePath}");
-                            }
-                        }
-                    }
-                }
-                await output.WriteLineAsync($"  Media files restored: {mediaFiles.Length}");
-            }
-
-            var nodeId = manifest.TryGetProperty("nodeId", out var nid) ? nid.GetString() : "unknown";
-            var displayName = manifest.TryGetProperty("displayName", out var dn) ? dn.GetString() : "unknown";
-            var createdAt = manifest.TryGetProperty("createdAt", out var ca) ? ca.GetString() : "unknown";
-
-            // The extraction is the vault in clear: it is gone before the restore is reported. One that stays fails the restore.
-            if (!SnapshotStaging.TryCleanupDirectory(tempDir))
-            {
-                await output.WriteLineAsync("Error: the extracted copy of the snapshot could not be removed; node repair is required. The restore is not reported as done.");
-                return 1;
-            }
-
-            await output.WriteLineAsync($"Snapshot restored:");
-            await output.WriteLineAsync($"  Node: {displayName} ({nodeId})");
-            await output.WriteLineAsync($"  Snapshot date: {createdAt}");
-            await output.WriteLineAsync($"  Database: {targetDb}");
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            await output.WriteLineAsync($"Error during restore: {ex.Message}");
-            return 1;
-        }
-        finally
-        {
-            SnapshotStaging.TryCleanupDirectory(tempDir);
         }
     }
 
@@ -524,18 +344,4 @@ public static class SnapshotCommand
         }
     }
 
-    private static async Task<byte[]> ReadHeadAsync(string path)
-    {
-        await using var stream = File.OpenRead(path);
-        var head = new byte[64];
-        var n = await stream.ReadAtLeastAsync(head, head.Length, throwOnEndOfStream: false);
-        return head[..n];
-    }
-
-    private static async Task<string> ComputeFileHashAsync(string path)
-    {
-        await using var stream = File.OpenRead(path);
-        var hash = await SHA256.HashDataAsync(stream);
-        return Convert.ToHexStringLower(hash);
-    }
 }

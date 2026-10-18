@@ -108,17 +108,37 @@ public partial class ApiClient
     public async Task<NodeIdentityDto?> GetIdentityAsync() =>
         await http.GetFromJsonAsync<NodeIdentityDto>("/api/sync/identity", JsonOpts);
 
-    public async Task<Dictionary<Guid, DateTime>?> GetNodeSyncStatusAsync()
+    /// <summary>When this node last made contact with each peer, whose call it was and whether its calls fail; null when the API did not answer.</summary>
+    public async Task<Dictionary<Guid, NodeContactDto>?> GetNodeSyncStatusAsync()
     {
         try
         {
-            var list = await http.GetFromJsonAsync<List<SyncStatusEntry>>("/api/whitelist/sync-status", JsonOpts);
-            return list?.ToDictionary(e => e.NodeId, e => e.UpdatedAt);
+            var list = await http.GetFromJsonAsync<List<NodeContactDto>>("/api/whitelist/sync-status", JsonOpts);
+            return list?.ToDictionary(e => e.NodeId);
         }
         catch { return null; }
     }
 
-    private record SyncStatusEntry(Guid NodeId, DateTime UpdatedAt);
+    /// <summary>Invisible Mode: this node calls nobody and answers nobody. Null when the API did not answer.</summary>
+    public async Task<bool?> GetInvisibleModeAsync()
+    {
+        try
+        {
+            var answer = await http.GetFromJsonAsync<System.Text.Json.JsonElement>("/api/sync/invisible", JsonOpts);
+            return answer.TryGetProperty("isInvisible", out var on) ? on.GetBoolean() : null;
+        }
+        catch { return null; }
+    }
+
+    public async Task<(bool Ok, string? Error)> SetInvisibleModeAsync(bool enabled)
+    {
+        try
+        {
+            var resp = await http.PostAsJsonAsync("/api/sync/invisible", enabled, JsonOpts);
+            return resp.IsSuccessStatusCode ? (true, null) : (false, $"The node refused ({(int)resp.StatusCode}).");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { return (false, "The node did not answer."); }
+    }
 
     // ─── Agents ───────────────────────────────────────────────────────────────
 

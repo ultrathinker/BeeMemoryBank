@@ -27,7 +27,8 @@ public static class JoinEndpoints
             IUserRepository userRepo,
             IEventLogger eventLogger,
             SessionService session,
-            ISyncProtocolPolicy protocolPolicy) =>
+            ISyncProtocolPolicy protocolPolicy,
+            BeeMemoryBank.Sync.PeerAddressService addresses) =>
         {
             // 1. Verify that this node is initialized
             var identity = await nodeRepo.GetAsync();
@@ -101,9 +102,15 @@ public static class JoinEndpoints
             // double slash that ASP.NET routing answers with 404, silently wedging sync with that
             // peer. The value also travels to every other node in a whitelist_add event, so one
             // unnormalized join propagates the breakage across the mesh.
-            var apiAddress = string.IsNullOrWhiteSpace(req.ApiAddress)
-                ? req.ApiAddress
-                : req.ApiAddress!.Trim().TrimEnd('/');
+            // The one policy (PeerAddressPolicy) decides what is stored: its canonical form, or a refusal before anything is written - an address with a user name,
+            // a query or a link-local target never reaches a row or the event that carries it to every other node.
+            string? apiAddress = null;
+            if (!string.IsNullOrWhiteSpace(req.ApiAddress))
+            {
+                var canonical = BeeMemoryBank.Sync.PeerAddressPolicy.Canonicalize(req.ApiAddress);
+                if (!canonical.Ok) return Results.BadRequest(new ErrorResponse(canonical.Refusal!));
+                apiAddress = canonical.Address;
+            }
 
             // 4. Add the new node to the whitelist (or update if already exists)
             // One step with the abort of the same join (JoinAttemptGate): the row is looked at and written under one gate, so two joins of
@@ -144,17 +151,15 @@ public static class JoinEndpoints
                     // never send one. Writing the null here while peers ignore a null address in the event
                     // left this node alone without a way to reach the peer. The known address is kept and
                     // announced, so every node ends up with the same one.
+                    // The one writer of a peer's row on a running node: the address is policed and canonical, the key on record is the key named (the check above, again),
+                    // the event and the row carry the same address and version, a repeat that changes nothing writes nothing, and the loop forgets the old place.
                     var isSuperadmin = JoinAuthority.ForPasswordPeer(req.NodeId);
-                    var address = apiAddress ?? existing.ApiAddress;
-                    var version = await eventLogger.LogWhitelistUpdateAsync(req.NodeId, address, req.DisplayName, isSuperadmin);
-
-                    existing.DisplayName = req.DisplayName;
-                    existing.ApiAddress = address;
-                    existing.IsSuperadmin = isSuperadmin;
-                    existing.UpdatedAt = DateTime.UtcNow;
-                    existing.LamportTs = version.LamportTs;
-                    existing.SourceNodeId = version.SourceNodeId;
-                    await whitelistRepo.UpdateAsync(existing);
+                    var rejoined = await addresses.ApplyProofAsync(existing,
+                        new BeeMemoryBank.Sync.PeerProof(apiAddress, ProvenKey: publicKey, DisplayName: req.DisplayName, IsSuperadmin: isSuperadmin, Announce: true), "join", "join");
+                    if (!rejoined.Succeeded)
+                        return rejoined.Outcome == BeeMemoryBank.Sync.PeerAddressOutcome.WrongKey
+                            ? Results.Json(new ErrorResponse("Node with this NodeId is already registered with a different public key"), statusCode: 403)
+                            : Results.BadRequest(new ErrorResponse(rejoined.Message));
                 }
                 else
                 {
@@ -164,7 +169,6 @@ public static class JoinEndpoints
                         NodeId = req.NodeId,
                         DisplayName = req.DisplayName,
                         Ed25519PublicKey = publicKey,
-                        ApiAddress = apiAddress,
                         Status = "A",
                         CreatedAt = now,
                         UpdatedAt = now,
@@ -175,13 +179,10 @@ public static class JoinEndpoints
                         // a divergence nothing ever repaired. See JoinAuthority.
                         IsSuperadmin = JoinAuthority.ForPasswordPeer(req.NodeId)
                     };
-                    // Log first so the row carries the version of the add the mesh is told about;
-                    // otherwise this row starts at version 0 and any later event beats it, including
-                    // one that predates the join.
-                    var version = await eventLogger.LogWhitelistAddAsync(entry);
-                    entry.LamportTs = version.LamportTs;
-                    entry.SourceNodeId = version.SourceNodeId;
-                    await whitelistRepo.CreateAsync(entry);
+                    // The event is logged first, inside the one writer, so the row carries the version of the add the mesh is told about;
+                    // otherwise this row starts at version 0 and any later event beats it, including one that predates the join.
+                    var admitted = await addresses.AdmitAsync(entry, apiAddress, "join", "join");
+                    if (!admitted.Succeeded) return Results.BadRequest(new ErrorResponse(admitted.Message));
                 }
             }
             finally

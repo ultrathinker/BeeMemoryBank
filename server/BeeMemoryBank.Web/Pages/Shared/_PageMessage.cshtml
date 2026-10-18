@@ -1,0 +1,15 @@
+@model BeeMemoryBank.Web.Pages.PageMessage
+@if (!string.IsNullOrEmpty(Model.Success))
+{
+    <sl-alert variant="success" open closable class="card-message" role="status" style="margin-bottom:12px;">
+        <sl-icon slot="icon" name="check2-circle"></sl-icon>
+        @Model.Success
+    </sl-alert>
+}
+@if (!string.IsNullOrEmpty(Model.Error))
+{
+    <sl-alert variant="danger" open closable class="card-message" role="alert" style="margin-bottom:12px;">
+        <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+        @Model.Error
+    </sl-alert>
+}

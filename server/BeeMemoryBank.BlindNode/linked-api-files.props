@@ -64,6 +64,7 @@
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RecoveryStatusService.cs" Link="Api\Services\Recovery\RecoveryStatusService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RestoreTlsPin.cs" Link="Api\Services\Recovery\RestoreTlsPin.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\StrongBoxPolicy.cs" Link="Api\Services\Recovery\StrongBoxPolicy.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotContainerException.cs" Link="Api\Services\SnapshotContainerException.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotJoinCache.cs" Link="Api\Services\SnapshotJoinCache.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Blind.cs" Link="Api\Services\SnapshotService.Blind.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\SnapshotService.Create.cs" Link="Api\Services\SnapshotService.Create.cs" />

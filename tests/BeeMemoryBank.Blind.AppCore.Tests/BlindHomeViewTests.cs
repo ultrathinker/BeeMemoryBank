@@ -95,6 +95,14 @@ public sealed class BlindHomeViewTests
     }
 
     [Fact]
+    public void WhileAJobRuns_SyncNowIsOff_AndComesBackWhenItEnds()
+    {
+        BlindHomeView.Build(Status(activeJob: "Sync"), null, backupRunning: false).CanSyncNow.Should().BeFalse("a sync is running: a second tap would ask for another");
+        BlindHomeView.Build(Status(activeJob: "Backup", progress: 0.2), null, backupRunning: false).CanSyncNow.Should().BeFalse();
+        BlindHomeView.Build(Status(), null, backupRunning: false).CanSyncNow.Should().BeTrue();
+    }
+
+    [Fact]
     public void ABackupListAndTheScheduleAreShown()
     {
         var status = Status(schedule: BlindBackupSchedule.Weekly, backups: [new BlindAppBackup("a.bmbbackup", 4096)]);

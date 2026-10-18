@@ -30,6 +30,12 @@
   .err { color:var(--bad); }
   .ok { color:var(--ok); }
   .hidden { display:none; }
+  .loader { width:36px; height:36px; border:4px solid var(--line); border-top-color:var(--acc); border-radius:50%; animation:spin 1s linear infinite; margin:0 auto 12px; }
+  .btn-spin { display:inline-block; width:.9em; height:.9em; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:.5rem; vertical-align:-.1em; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #busy { position:fixed; inset:0; background:rgba(0,0,0,.72); display:flex; align-items:center; justify-content:center; z-index:10; padding:12px; }
+  #busy.hidden { display:none; }
+  #busy > div { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px 24px; max-width:420px; text-align:center; }
   table { width:100%; border-collapse:collapse; font-size:.9rem; }
   td, th { text-align:left; padding:.25rem .4rem; border-bottom:1px solid var(--line); }
   #login { margin-top:20vh; }
@@ -63,6 +69,7 @@
     <div id="pairing"><p class="note">The pairing code is shown here for the device that pairs with this node.</p></div>
     <div id="peers"></div>
     <button class="secondary" id="pair-renew">Renew code</button>
+    <p class="err hidden" id="p-out"></p>
   </section>
 
   <section>
@@ -73,6 +80,7 @@
       <button data-mode="fast" id="m-fast">Fast</button>
       <button data-mode="pause" id="m-pause">Pause</button>
     </div>
+    <p class="err hidden" id="j-out"></p>
     <p class="note">Economy is the quiet default (low priority, one thread). Fast uses up to 90 % of the cores. Pause freezes the running job.</p>
   </section>
 
@@ -87,6 +95,7 @@
       <button id="b-full" class="secondary">Full check</button>
       <button id="b-sched" class="secondary">Schedule…</button>
     </div>
+    <p class="note hidden" id="b-out"></p>
     <details id="sched-box" class="hidden">
       <summary>Backup settings</summary>
       <div class="grid2">
@@ -114,6 +123,7 @@
         <label>Yearly<input id="s-ky" type="number" min="0"></label>
       </div>
       <button id="s-save" style="width:100%">Save settings</button>
+      <p class="hidden" id="s-out"></p>
     </details>
     <details>
       <summary>Save a copy to…</summary>
@@ -168,6 +178,10 @@
   <button class="secondary" id="logout" style="width:100%">Sign out</button>
 </div>
 
+<div id="busy" class="hidden" role="alertdialog" aria-modal="true" aria-live="assertive">
+  <div><div class="loader"></div><h2 id="busy-title"></h2><p class="note" id="busy-text"></p></div>
+</div>
+
 </main>
 <script>
 "use strict";
@@ -183,10 +197,46 @@ let timer = null;
 // replaced by a decision nobody made.
 let schedTouched = false;
 
+// The one busy helper of this page (BMB-311). It is the web UI's bmb-busy.js rule in a few lines, because this page stands alone: a short
+// operation disables its button at once and spins in it; a long one also puts up a "please wait" pop-up. A second click does nothing until
+// the answer is in, and the outcome is written where the button is (opt.out) — a refusal or a network failure with its full text.
+// Every call that changes something goes through busy(); a test fails when one does not.
+const working = new Set();
+let jobRunning = false;
+function say(el, text, cls) { el.textContent = text; el.classList.remove("hidden", "ok", "err"); if (cls) el.classList.add(cls); }
+async function busy(btn, work, opt = {}) {
+  if (working.has(btn)) return false;
+  working.add(btn);
+  const label = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-spin"></span>' + label;
+  if (opt.out) opt.out.classList.add("hidden");
+  if (opt.long) { $("busy-title").textContent = opt.title; $("busy-text").textContent = opt.text || "Please wait."; $("busy").classList.remove("hidden"); }
+  try { await work(); return true; }
+  catch (e) {
+    const message = (e && e.message) || String(e);
+    if (opt.out) say(opt.out, message, "err"); else alert(message);
+    return false;
+  } finally {
+    working.delete(btn);
+    if (opt.long) $("busy").classList.add("hidden");
+    btn.innerHTML = label;
+    btn.disabled = jobButtons.includes(btn.id) && jobRunning;
+  }
+}
+// The text of a refusal, in full; a thrown Error is what busy() writes next to the button.
+function need(r, what) {
+  if (r.status >= 200 && r.status < 300) return r;
+  throw new Error(what + ": " + ((r.json && r.json.error) || ("HTTP " + r.status)));
+}
+const jobButtons = ["b-now", "b-verify", "b-full", "c-btn"];
+
 async function api(method, path, body) {
   const headers = { "X-Bmb-Console": "1" };
   if (body != null) headers["Content-Type"] = "application/json";
-  const r = await fetch("/proxy/" + path, { method, headers, body: body != null ? JSON.stringify(body) : undefined });
+  let r;
+  try { r = await fetch("/proxy/" + path, { method, headers, body: body != null ? JSON.stringify(body) : undefined }); }
+  catch (e) { throw new Error("The node did not answer (" + ((e && e.message) || "network error") + ")."); }
   const text = await r.text();
   let json = null; try { json = JSON.parse(text); } catch {}
   return { status: r.status, json, text };
@@ -234,6 +284,13 @@ function render(st) {
   $("peers").innerHTML = peers || "<p class='note'>No peers paired yet.</p>";
 
   const jobs = (st.jobs || []).filter(j => j.state === "running" || j.state === "queued");
+  // One job at a time: while one runs the buttons that start another are off (the node would answer 409 anyway).
+  jobRunning = jobs.length > 0;
+  for (const id of jobButtons) {
+    if (working.has($(id))) continue;
+    $(id).disabled = jobRunning;
+    $(id).title = jobRunning ? "A job is running; wait until it has finished." : "";
+  }
   if (jobs.length) {
     const j = jobs[0];
     const pct = Math.round((j.progress || 0) * 100);
@@ -315,35 +372,59 @@ async function loadPairCode() {
 // ── events ──────────────────────────────────────────────────────────────
 $("lbtn").onclick = doLogin;
 $("lpw").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
-async function doLogin() {
-  $("lerr").classList.add("hidden");
-  const r = await fetch("/login", { method: "POST", headers: {"Content-Type":"application/json", "X-Bmb-Console":"1"}, body: JSON.stringify({ password: $("lpw").value }) });
-  if (r.ok) { enter(); return; }
-  let locked = false; try { locked = (await r.json()).locked === true; } catch {}
-  $("lerr").textContent = locked ? "Too many failed attempts — sign-in is locked for 15 minutes."
-    : r.status === 401 ? "Wrong password." : "Sign-in failed (HTTP " + r.status + ").";
-  $("lerr").classList.remove("hidden");
+function doLogin() {
+  return busy($("lbtn"), async () => {
+    let r;
+    try { r = await fetch("/login", { method: "POST", headers: {"Content-Type":"application/json", "X-Bmb-Console":"1"}, body: JSON.stringify({ password: $("lpw").value }) }); }
+    catch (e) { throw new Error("The node did not answer (" + ((e && e.message) || "network error") + ")."); }
+    if (r.ok) { enter(); return; }
+    let locked = false; try { locked = (await r.json()).locked === true; } catch {}
+    throw new Error(locked ? "Too many failed attempts — sign-in is locked for 15 minutes."
+      : r.status === 401 ? "Wrong password." : "Sign-in failed (HTTP " + r.status + ").");
+  }, { out: $("lerr") });
 }
 
-$("logout").onclick = async () => { await fetch("/logout", { method: "POST", headers: {"X-Bmb-Console":"1"} }); location.reload(); };
+$("logout").onclick = () => busy($("logout"), async () => { await fetch("/logout", { method: "POST", headers: {"X-Bmb-Console":"1"} }); location.reload(); });
 for (const [id, m] of [["m-eco","economy"],["m-fast","fast"],["m-pause","pause"]])
-  $(id).onclick = () => api("POST", "api/blind/backup/mode", { mode: m }).then(refresh);
+  $(id).onclick = () => busy($(id), async () => { need(await api("POST", "api/blind/backup/mode", { mode: m }), "The mode was not changed"); await refresh(); }, { out: $("j-out") });
 
-$("b-now").onclick = async () => { const r = await api("POST", "api/blind/backup/now"); if (r.status === 409) alert("A job is already running."); refresh(); };
-$("b-verify").onclick = async () => { const r = await api("POST", "api/blind/backup/verify", { full: false }); if (r.status === 409) alert("A job is already running."); refresh(); };
-$("b-full").onclick = async () => { if (!confirm("A full check reads the whole repository and can take hours. Continue?")) return; const r = await api("POST", "api/blind/backup/verify", { full: true }); if (r.status === 409) alert("A job is already running."); refresh(); };
-$("c-btn").onclick = async () => {
-  const r = await api("POST", "api/blind/backup/copy", { destination: $("c-dest").value });
-  const out = $("c-out");
-  out.classList.remove("hidden", "err");
-  if (r.status === 202) out.textContent = "Copy started — follow it under Jobs.";
-  else { out.textContent = r.status === 409 ? "A job is already running." : "Not started: " + ((r.json && r.json.error) || ("HTTP " + r.status)); out.classList.add("err"); }
-  refresh();
+// Starting a job answers at once (the job runs on in the node and is followed under Jobs); the buttons stay off while it runs (see render).
+const ALREADY = "A job is already running. Wait until it has finished.";
+$("b-now").onclick = () => busy($("b-now"), async () => {
+  const r = await api("POST", "api/blind/backup/now");
+  if (r.status === 409) throw new Error(ALREADY);
+  need(r, "The backup was not started");
+  say($("b-out"), "Backup started — follow it under Jobs.", "ok");
+  await refresh();
+}, { out: $("b-out") });
+$("b-verify").onclick = () => busy($("b-verify"), async () => {
+  const r = await api("POST", "api/blind/backup/verify", { full: false });
+  if (r.status === 409) throw new Error(ALREADY);
+  need(r, "The check was not started");
+  say($("b-out"), "Check started — follow it under Jobs.", "ok");
+  await refresh();
+}, { out: $("b-out") });
+$("b-full").onclick = () => {
+  if (!confirm("A full check reads the whole repository and can take hours. Continue?")) return;
+  return busy($("b-full"), async () => {
+    const r = await api("POST", "api/blind/backup/verify", { full: true });
+    if (r.status === 409) throw new Error(ALREADY);
+    need(r, "The check was not started");
+    say($("b-out"), "Full check started — follow it under Jobs.", "ok");
+    await refresh();
+  }, { out: $("b-out") });
 };
+$("c-btn").onclick = () => busy($("c-btn"), async () => {
+  const r = await api("POST", "api/blind/backup/copy", { destination: $("c-dest").value });
+  if (r.status === 409) throw new Error(ALREADY);
+  if (r.status !== 202) throw new Error("Not started: " + ((r.json && r.json.error) || ("HTTP " + r.status)));
+  say($("c-out"), "Copy started — follow it under Jobs.");
+  await refresh();
+}, { out: $("c-out") });
 $("b-sched").onclick = () => { $("sched-box").open = !$("sched-box").open; };
 $("s-type").onchange = () => { $("s3-extra").style.display = $("s-type").value === "s3" ? "" : "none"; };
 $("s-on").onchange = () => { schedTouched = true; };
-$("s-save").onclick = async () => {
+$("s-save").onclick = () => busy($("s-save"), async () => {
   // scheduleEnabled travels only when the operator moved the toggle. The node has its own default
   // (on, as soon as the repository is configured), and a form that always echoed the field back
   // would turn "I did not touch it" into a decision.
@@ -358,28 +439,27 @@ $("s-save").onclick = async () => {
   }
   if ($("s-rpw").value) body.resticPassword = $("s-rpw").value;
   if (schedTouched) body.scheduleEnabled = $("s-on").value === "on";
-  const r = await api("PUT", "api/blind/backup/settings", body);
-  if (r.status === 200) { alert("Settings saved."); loadBackups(); }
-  else alert("Not saved: " + ((r.json && r.json.error) || r.status));
-};
-$("pair-renew").onclick = async () => { await api("POST", "api/blind/pair-code/renew", {}); loadPairCode(); };
-$("r-code").onclick = async () => {
+  need(await api("PUT", "api/blind/backup/settings", body), "Not saved");
+  say($("s-out"), "Settings saved.", "ok");
+  loadBackups();
+}, { out: $("s-out") });
+$("pair-renew").onclick = () => busy($("pair-renew"), async () => {
+  need(await api("POST", "api/blind/pair-code/renew", {}), "The code was not renewed");
+  await loadPairCode();
+}, { out: $("p-out") });
+$("r-code").onclick = () => busy($("r-code"), async () => {
   const r = await api("POST", "api/blind/restore-code", { password: $("r-pw").value });
   $("r-pw").value = "";
-  const out = $("r-out");
-  out.classList.remove("hidden", "ok", "err");
   if (r.status === 200 && r.json && r.json.code) {
-    out.textContent = "Code: " + r.json.code + "\nValid until " + fmtDate(r.json.expiresAt ?? r.json.expires_at);
-    out.classList.add("ok");
+    say($("r-out"), "Code: " + r.json.code + "\nValid until " + fmtDate(r.json.expiresAt ?? r.json.expires_at), "ok");
     loadRestoreLog();
-  } else {
-    out.textContent = r.status === 401 ? "Wrong console password."
-      : r.status === 423 ? "Locked for 15 minutes after failed attempts."
-      : r.status === 404 ? "Recovery codes arrive together with network recovery."
-      : "Could not issue a code: " + ((r.json && r.json.error) || ("HTTP " + r.status));
-    out.classList.add("err");
+    return;
   }
-};
+  throw new Error(r.status === 401 ? "Wrong console password."
+    : r.status === 423 ? "Locked for 15 minutes after failed attempts."
+    : r.status === 404 ? "Recovery codes arrive together with network recovery."
+    : "Could not issue a code: " + ((r.json && r.json.error) || ("HTTP " + r.status)));
+}, { out: $("r-out") });
 
 async function loadRestoreLog() {
   const s = await api("GET", "api/blind/restore-codes");
@@ -391,32 +471,35 @@ async function loadRestoreLog() {
     : "No codes issued yet.";
 }
 
-$("pw-btn").onclick = async () => {
+$("pw-btn").onclick = () => {
   const out = $("pw-out");
-  const say = (text, cls) => { out.textContent = text; out.className = cls; };
-  if ($("pw-new").value !== $("pw-rep").value) { say("The new password and its repeat differ.", "err"); return; }
-  if ($("pw-new").value.length < 8) { say("The new password must be at least 8 characters.", "err"); return; }
-  const r = await api("POST", "api/blind/console/password", { currentPassword: $("pw-cur").value, newPassword: $("pw-new").value });
-  if (r.status === 204 || r.status === 200) {
-    for (const id of ["pw-cur", "pw-new", "pw-rep"]) $(id).value = "";
-    say("Password changed. Other browsers were signed out.", "ok");
-    loadLogins(); loadBackups();
-    return;
-  }
-  // 401 with a message is the wrong password; a bare 401 is a session that has ended.
-  if (r.status === 401 && !(r.json && r.json.error)) { location.reload(); return; }
-  say(r.status === 401 ? "Wrong current password."
-    : r.status === 423 ? "Locked for 15 minutes after failed attempts."
-    : "Not changed: " + ((r.json && r.json.error) || ("HTTP " + r.status)), "err");
-  loadLogins();
+  if ($("pw-new").value !== $("pw-rep").value) { say(out, "The new password and its repeat differ.", "err"); return; }
+  if ($("pw-new").value.length < 8) { say(out, "The new password must be at least 8 characters.", "err"); return; }
+  return busy($("pw-btn"), async () => {
+    const r = await api("POST", "api/blind/console/password", { currentPassword: $("pw-cur").value, newPassword: $("pw-new").value });
+    if (r.status === 204 || r.status === 200) {
+      for (const id of ["pw-cur", "pw-new", "pw-rep"]) $(id).value = "";
+      say(out, "Password changed. Other browsers were signed out.", "ok");
+      loadLogins(); loadBackups();
+      return;
+    }
+    // 401 with a message is the wrong password; a bare 401 is a session that has ended.
+    if (r.status === 401 && !(r.json && r.json.error)) { location.reload(); return; }
+    loadLogins();
+    throw new Error(r.status === 401 ? "Wrong current password."
+      : r.status === 423 ? "Locked for 15 minutes after failed attempts."
+      : "Not changed: " + ((r.json && r.json.error) || ("HTTP " + r.status)));
+  }, { out });
 };
 
-$("w-btn").onclick = async () => {
+$("w-btn").onclick = () => {
   if (!confirm("WIPE all data of this blind node? The backup repository and the other devices are NOT affected.")) return;
   if (!confirm("Are you sure? This cannot be undone.")) return;
-  const r = await api("POST", "api/blind/wipe", { consolePassword: $("w-pw").value, confirmNodeName: $("w-name").value });
-  if (r.status === 200) { alert("The node was wiped. It needs to be paired again."); location.reload(); }
-  else { $("w-err").textContent = (r.json && r.json.error) || ("HTTP " + r.status); $("w-err").classList.remove("hidden"); }
+  return busy($("w-btn"), async () => {
+    need(await api("POST", "api/blind/wipe", { consolePassword: $("w-pw").value, confirmNodeName: $("w-name").value }), "The node was not wiped");
+    alert("The node was wiped. It needs to be paired again.");
+    location.reload();
+  }, { long: true, title: "Wiping this node", text: "Please wait. The node's data is being destroyed; do not close this page.", out: $("w-err") });
 };
 
 function enter() {

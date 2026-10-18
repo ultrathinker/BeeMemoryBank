@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Storage.Sealed;
 
 namespace BeeMemoryBank.Api.Helpers;
 
@@ -30,6 +31,11 @@ public static class ExceptionStatusMap
         VaultBusyException e => (503, e.Message),
         VaultKeyMismatchException => (503, "This node's database could not be opened with its key: the boot store does not belong to this database."),
         InsufficientDiskSpaceException e => (507, e.Message),
+        // A job that has to hold a whole database in memory and cannot (BMB-304): the message names the memory limit that would be enough.
+        // Like a full disk, not a conflict and not a retry-later: the node needs more room.
+        NotEnoughMemoryException e => (507, e.Message),
+        // A snapshot whose database entry cannot be opened (damaged, cut short, another vault's): the request is what is wrong, the sentence is fixed.
+        BeeMemoryBank.Api.Services.SnapshotContainerException e => (400, e.Message),
         ConflictException e => (409, e.Message),
 
         KeyNotFoundException e => (404, e.Message),
@@ -49,6 +55,8 @@ public static class ExceptionStatusMap
         VaultSealedException => ("vault_sealed", 30),
         VaultBusyException => ("vault_busy", 5),
         VaultKeyMismatchException => ("vault_key_mismatch", 30),
+        NotEnoughMemoryException => ("not_enough_memory", null),
+        BeeMemoryBank.Api.Services.SnapshotContainerException => ("bad_snapshot", null),
         _ => (null, null)
     };
 }

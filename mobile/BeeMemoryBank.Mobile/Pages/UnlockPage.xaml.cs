@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Services;
 
@@ -41,15 +42,12 @@ public partial class UnlockPage : ContentPage
     private async void OnFingerprintClicked(object? sender, EventArgs e)
         => await TryFingerprintUnlockAsync();
 
+    // The one busy helper (BMB-311): both unlock buttons are off and the tapped one spins until the vault is open or the reason is on the
+    // screen; a failure is said in full in the error line.
     private async Task TryFingerprintUnlockAsync()
     {
         ErrorLabel.IsVisible = false;
-        LoadingIndicator.IsRunning = true;
-        LoadingIndicator.IsVisible = true;
-        FingerprintButton.IsEnabled = false;
-        UnlockButton.IsEnabled = false;
-
-        try
+        await BusyAction.RunAsync(FingerprintButton, async () =>
         {
             var password = await _biometric.GetPasswordAsync();
             if (password == null)
@@ -72,22 +70,16 @@ public partial class UnlockPage : ContentPage
                 ErrorLabel.Text = "Fingerprint data outdated. Please enter password.";
                 ErrorLabel.IsVisible = true;
             }
-        }
-        catch (Exception ex)
-        {
-            ErrorLabel.Text = $"Error: {ex.Message}";
-            ErrorLabel.IsVisible = true;
-        }
-        finally
-        {
-            LoadingIndicator.IsRunning = false;
-            LoadingIndicator.IsVisible = false;
-            FingerprintButton.IsEnabled = true;
-            UnlockButton.IsEnabled = true;
-        }
+        }, new BusyOptions { ResultLabel = ErrorLabel, AlsoDisable = [UnlockButton] });
     }
 
     // ── Password unlock ───────────────────────────────────────────────────────
+
+    private void OnTogglePasswordClicked(object? sender, EventArgs e)
+    {
+        PasswordEntry.IsPassword = !PasswordEntry.IsPassword;
+        TogglePasswordButton.Text = PasswordEntry.IsPassword ? "Show" : "Hide";
+    }
 
     private async void OnUnlockClicked(object? sender, EventArgs e)
     {
@@ -100,41 +92,35 @@ public partial class UnlockPage : ContentPage
         }
 
         ErrorLabel.IsVisible = false;
-        UnlockButton.IsEnabled = false;
-        FingerprintButton.IsEnabled = false;
-        LoadingIndicator.IsRunning = true;
-        LoadingIndicator.IsVisible = true;
-
-        await Task.Yield(); // let loader render before Argon2id starts
-
-        try
+        // The one busy helper (BMB-311); the page's own loader stays for the key derivation, which takes a moment.
+        await BusyAction.RunAsync(UnlockButton, async () =>
         {
-            var ok = await Task.Run(() => _session.UnlockAsync(password));
-            if (!ok)
+            LoadingIndicator.IsRunning = true;
+            LoadingIndicator.IsVisible = true;
+            try
             {
-                ErrorLabel.Text = "Wrong password.";
-                ErrorLabel.IsVisible = true;
-                PasswordEntry.Text = "";
-                return;
+                await Task.Yield(); // let loader render before Argon2id starts
+
+                var ok = await Task.Run(() => _session.UnlockAsync(password));
+                if (!ok)
+                {
+                    ErrorLabel.Text = "Wrong password.";
+                    ErrorLabel.IsVisible = true;
+                    PasswordEntry.Text = "";
+                    return;
+                }
+
+                // Password correct — offer to enable fingerprint if not yet set up
+                await OfferFingerprintEnrollmentAsync(password);
+
+                await _router.RouteAsync();
             }
-
-            // Password correct — offer to enable fingerprint if not yet set up
-            await OfferFingerprintEnrollmentAsync(password);
-
-            await _router.RouteAsync();
-        }
-        catch (Exception ex)
-        {
-            ErrorLabel.Text = $"Error: {ex.Message}";
-            ErrorLabel.IsVisible = true;
-        }
-        finally
-        {
-            UnlockButton.IsEnabled = true;
-            FingerprintButton.IsEnabled = true;
-            LoadingIndicator.IsRunning = false;
-            LoadingIndicator.IsVisible = false;
-        }
+            finally
+            {
+                LoadingIndicator.IsRunning = false;
+                LoadingIndicator.IsVisible = false;
+            }
+        }, new BusyOptions { ResultLabel = ErrorLabel, AlsoDisable = [FingerprintButton] });
     }
 
     private async Task OfferFingerprintEnrollmentAsync(string password)

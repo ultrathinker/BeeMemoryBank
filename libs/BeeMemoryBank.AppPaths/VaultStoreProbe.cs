@@ -47,6 +47,7 @@ public static class VaultStoreProbe
     /// <summary>First 16 bytes are <c>SQLite format 3\0</c>. False for an unreadable or short file.</summary>
     public static bool HasSqliteMagic(string path)
     {
+        if (LinkEntry.IsLink(path)) return false;   // a link is not opened: what is behind it is not this folder's file
         try
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -62,6 +63,7 @@ public static class VaultStoreProbe
     /// <summary>Header bytes 68-71 (big-endian) of a plain SQLite file, or 0 when unreadable.</summary>
     public static int ReadApplicationId(string path)
     {
+        if (LinkEntry.IsLink(path)) return 0;
         try
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -84,6 +86,8 @@ public static class VaultStoreProbe
     /// </summary>
     public static bool IsSealedPair(string dataDir)
     {
+        // A data folder that is a link, or a reserved name in it that is one, is not probed through: it is not a sealed pair (the entry points refuse it by name first).
+        if (LinkGate.Linked(dataDir).Count > 0) return false;
         var db = Path.Combine(dataDir, Database);
         var boot = Path.Combine(dataDir, Boot);
         try
@@ -114,7 +118,7 @@ public static class VaultStoreProbe
     /// <summary>The names of those files, relative to the data directory.</summary>
     public static IEnumerable<string> SealOldLeftovers(string dataDir)
     {
-        if (!Directory.Exists(dataDir)) yield break;
+        if (LinkEntry.IsLink(RekeySwapJournal.Normalize(dataDir)) || !Directory.Exists(dataDir)) yield break;   // a linked folder is not enumerated
         foreach (var pattern in new[] { Database + SealOldSuffix + "*", Chat + SealOldSuffix + "*" })
             foreach (var file in Directory.EnumerateFiles(dataDir, pattern))
                 yield return Path.GetFileName(file);
@@ -129,6 +133,7 @@ public static class VaultStoreProbe
     {
         try
         {
+            if (LinkEntry.IsLink(path)) return ProbeFileState.Unreadable;   // fail closed: a link is never opened, never read as "fine" or "plain"
             if (!File.Exists(path)) return ProbeFileState.Absent;
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             return InspectStream(fs);

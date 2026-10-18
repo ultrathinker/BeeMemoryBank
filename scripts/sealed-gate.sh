@@ -176,12 +176,15 @@ unlock() { expect 200 POST /api/session/unlock "{\"password\":\"$password\"}"; }
 
 # ---- 1. start, initialise a vault through the setup API, add the canary notes ---------------------------------------------------------------------
 
-step=1; say "start, set up a vault, add the canary notes"
+step=1; say "start, set up a vault (encrypted from its first request), add the canary notes"
 mkdir -p "$data1"
 printf '%s' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$auto_key_file"
 chmod 0400 "$auto_key_file"
 start_node
 expect 200 POST /api/init/standalone "{\"adminUsername\":\"admin\",\"displayName\":\"Gate node\",\"password\":\"$password\"}"
+# A node that is set up is encrypted and closed from the start (BMB-306): the setup ran the migration over the empty vault, and the sign-in opens it.
+call GET /api/vault/status
+[ "$(field mode)" = sealed ] || fail "a new node is not sealed after its setup: $body"
 expect 200 POST /api/session/login "{\"username\":\"admin\",\"password\":\"$password\"}"
 admin_id="$(printf '%s' "$body" | sed -n 's/.*"userId":\([0-9]*\).*/\1/p')"
 [ -n "$admin_id" ] || fail "no user id in the login answer: $body"
@@ -190,34 +193,33 @@ for i in 0 1 2; do
 done
 expect 200 GET /api/articles
 printf '%s' "$body" | grep -q "${canaries[0]}" || fail "the canary note is not listed: $body"
-echo "control: a plain vault shows its canaries to a raw scan"
+# The control of the scan: the same scan finds a canary in a plain file (a node is never plain, so the control is a file of the scratch folder).
+mkdir -p "$scratch/control"
+printf 'plain control: %s
+' "${canaries[0]}" > "$scratch/control/plain.txt"
+hits="$(scan "$scratch/control")"
+[ -n "$hits" ] || fail "the control scan of a plain file found no canary: the scan itself is broken"
+
+# ---- 2. the new sync format is on from the first day ---------------------------------------------------------------------------------------------------
+
+step=2; say "metadata encryption is already on (a node starts activated), and cannot be activated again"
+expect 200 GET "/api/sync/readiness?peers=false"
+printf '%s' "$body" | grep -q '"activated":true' || fail "a new node does not say it is activated: $body"
+call POST /api/sync/activation "{\"password\":\"$password\"}"
+[ "$code" = 409 ] || fail "activating an activated node answered $code, expected 409: $body"
+
+# ---- 3. the data folder holds an encrypted database since the setup (no migration was run by hand) -----------------------------------------------
+
+step=3; say "stop: the database file is not a SQLite file, the boot store is there, there is no way-back folder"
 stop_node
-hits="$(scan "$data1")"
-[ -n "$hits" ] || fail "the control scan of the PLAIN data folder found no canary: the scan itself is broken"
+layout="$(docker run --rm --cpus 1 --memory 512m -v "$data1:/scan:ro" --entrypoint bash "$image" -c     'head -c 15 /scan/beememorybank.db | od -An -c | tr -d " 
+"; echo; ls /scan | tr "
+" " "')"
+echo "layout: $layout"
+printf '%s' "$layout" | grep -q 'S Q L i t e' && fail "beememorybank.db starts with the SQLite header: the database is not encrypted: $layout"
+printf '%s' "$layout" | grep -q 'beememorybank.boot.db' || fail "the boot store is missing from the data folder: $layout"
+printf '%s' "$layout" | grep -q 'pre-encryption' && fail "a pre-encryption folder exists: no copy of the node is kept (BMB-306): $layout"
 start_node
-
-# ---- 2. activate (Step A) with a single node -------------------------------------------------------------------------------------------------------
-
-step=2; say "activate the new sync format (single node)"
-unlock
-expect 200 POST /api/sync/activation "{\"password\":\"$password\"}"
-
-# ---- 3. encrypt, wait for done -------------------------------------------------------------------------------------------------------------------------
-
-step=3; say "POST /api/vault/seal, wait for done"
-call GET /api/vault/seal/preflight
-echo "preflight: $body"
-expect 202 POST /api/vault/seal "{\"password\":\"$password\"}"
-phase=""
-for i in $(seq 1 300); do
-    call GET /api/vault/seal/progress
-    phase="$(field phase)"
-    [ "$phase" = done ] && break
-    [ "$phase" = failed ] && fail "the migration failed: $body"
-    sleep 3
-done
-[ "$phase" = done ] || fail "the migration did not finish in 15 minutes (last: $body)"
-echo "migration: $body"
 
 # ---- 4. restart: closed, 503 on content --------------------------------------------------------------------------------------------------------------
 

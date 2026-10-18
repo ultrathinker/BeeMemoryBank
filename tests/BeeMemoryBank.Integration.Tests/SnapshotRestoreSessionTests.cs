@@ -33,7 +33,7 @@ public class SnapshotRestoreSessionTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _client = _factory.CreateClient();
-        await _factory.InitializeNodeAsync(password: Password);
+        await _factory.InitializeEncryptedNodeAsync(password: Password);
         (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password }))
             .EnsureSuccessStatusCode();
     }

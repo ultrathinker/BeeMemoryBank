@@ -62,6 +62,25 @@ public class OsAutoUnlockServiceTests : TestFixture
         freshSession.GetMasterDek().Should().Equal(originalDek);
     }
 
+    /// <summary>BMB-312/308: a vault with no sentinel (NULL, or an empty BLOB) has nothing to disagree with the key, so OS auto-unlock opens it, as it always did for NULL.</summary>
+    [Theory]
+    [InlineData("NULL")]
+    [InlineData("X''")]
+    public async Task AutoUnlock_OpensAVaultWithNoSentinel_OfEitherShape(string missing)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        await Session.UnlockAsync("correctPassword");
+        var originalDek = Session.GetMasterDek();
+        await new OsAutoUnlockService(_keySlotRepo, Session, _tempDataDir).EnableAsync();
+        using (var c = Factory.CreateConnection())
+            await Dapper.SqlMapper.ExecuteAsync(c, $"UPDATE tbl_node_identity SET sentinel_value = {missing}");
+        var freshSession = new SessionService(_keySlotRepo);
+
+        (await new OsAutoUnlockService(_keySlotRepo, freshSession, _tempDataDir).TryAutoUnlockAsync(_nodeRepo)).Should().BeTrue();
+
+        freshSession.GetMasterDek().Should().Equal(originalDek);
+    }
+
     [Fact]
     public async Task Enable_DoesNotWriteRawSecretAsPlaintextToDisk()
     {

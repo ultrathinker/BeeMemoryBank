@@ -117,6 +117,11 @@ public class SessionUnlockCallSiteGuardTests
             "Both phone apps' unlock path on an encrypted database: the typed password, or the one the Keystore released behind the fingerprint, " +
             "opens the session and then the gate (spec 12.1). The pages call it; nothing else does.",
 
+        ["libs/BeeMemoryBank.Vault/Sealed/FreshNodeSealing.cs"] =
+            "The end of every setup (BMB-306): the vault of the node being set up (new, joined or restored) was written a moment ago under the master " +
+            "password the person just typed, and the encryption of its database needs the session open. It opens it with that password, runs the " +
+            "migration and locks again; it is called by the setup and restore routes, `bmb init` and `bmb join`, never by a request of an agent.",
+
         ["server/BeeMemoryBank.Cli/CliSealed.cs"] =
             "`bmb` verbs on an encrypted folder: the operator's own password (prompt or environment) opens the session of this one-shot process " +
             "before the database is opened. Same one-shot process as AgentCommand.",

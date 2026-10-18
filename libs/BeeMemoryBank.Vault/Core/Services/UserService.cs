@@ -197,10 +197,15 @@ public class UserService(
     // reset): new login hash, the user's key slot re-pointed at the new password, then the
     // revocations that make the old password stop meaning anything — security stamp (every web
     // cookie of this user is rejected at its next revalidation) and remote API tokens.
-    private async Task ReplacePasswordAsync(User user, string newPassword, byte[]? providedDek = null)
+    private async Task ReplacePasswordAsync(User user, string newPassword, byte[]? providedDek = null, CancellationToken ct = default)
     {
         ValidatePassword(newPassword);
         user.PasswordHash = HashPassword(newPassword);
+
+        // The last point at which the replacement can stop (BMB-311 fix round 3): the hash is only in this object, nothing is written. From the key slot on - the new slot
+        // stored, the old one dropped, the row, the security stamp, the remote tokens, the doors - it runs to its consistent end whatever the caller does.
+        AfterHashForTests?.Invoke();
+        ct.ThrowIfCancellationRequested();
 
         await RewrapOrProvisionKeySlotAsync(user, newPassword, providedDek);
 
@@ -275,27 +280,35 @@ public class UserService(
         return user;
     }
 
-    public async Task ChangePasswordAsync(int userId, string oldPassword, string newPassword)
+    /// <summary>Test seam: called after the new login hash is made and before anything is written (a test stops the replacement from here).</summary>
+    internal Action? AfterHashForTests { get; set; }
+
+    /// <param name="ct">Stops the change before it writes anything (see <see cref="ReplacePasswordAsync"/>); never in the middle of the key-slot rewrite.</param>
+    public async Task ChangePasswordAsync(int userId, string oldPassword, string newPassword, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
 
         if (!VerifyPassword(oldPassword, user.PasswordHash))
             throw new UnauthorizedAccessException("Incorrect current password");
+        ct.ThrowIfCancellationRequested();
 
         // Bumps the security stamp: any outstanding Web cookie (this user's other sessions,
         // and this session too) is rejected on next revalidation. Self-service password
         // change therefore forces a re-login — intended.
-        await ReplacePasswordAsync(user, newPassword);
+        await ReplacePasswordAsync(user, newPassword, ct: ct);
     }
 
-    public async Task AdminChangePasswordAsync(int userId, string newPassword)
+    /// <param name="ct">Stops the reset before it writes anything (see <see cref="ReplacePasswordAsync"/>); never in the middle of the key-slot rewrite.</param>
+    public async Task AdminChangePasswordAsync(int userId, string newPassword, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
 
         // Admin reset bumps the stamp — logs out every session for this user (intended).
-        await ReplacePasswordAsync(user, newPassword);
+        await ReplacePasswordAsync(user, newPassword, ct: ct);
     }
 
     /// <summary>

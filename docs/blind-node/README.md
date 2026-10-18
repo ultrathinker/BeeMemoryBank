@@ -107,7 +107,10 @@ and the activation reaches it (docs/design/step-a-spec.md, ADR 0009). After that
   a first seed that leaves no Lamport time to grant) is
   decided before the baseline is adopted and before the node's whitelist, control tables or positions change; the serving node's position moves last, after every delta
   is stored. At the activation the node asks for a reseed itself (the my-standing reseed flag), and once activated it refuses a format-1
-  package.
+  package. A refused seed is written to the node's log at Warning and answered to the sender with the same reason: a fixed sentence about the check that failed
+  (`BlindSeedRefusals`): the sentence of the check that found the problem (a package file name, a hash, a count), never a path of this node, an address, a key, a
+  pair code or the text of a parser or an I/O error (only its type is named); the name of one of the cutover's own files is the last element only
+  (`blind-cutover`, `new.db`). A sentence that still looks like a path or an address leaves the node as the generic one.
 * **Serving.** `GET /api/blind/replica` serves a format-2 `full` package, or with `?have=<baseline id>` 304 (still current) or a
   `baseline` package; `GET /api/blind/restore/package` a `full` package with blobs. With no sealed baseline yet both answer 503 with
   `Retry-After`, never a format-1 package. The routes are the same 47 ([ROUTES.golden.txt](ROUTES.golden.txt)).

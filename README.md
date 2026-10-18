@@ -96,8 +96,8 @@ If you've ever wished your AI assistant could remember the work it did with you 
 | :inbox_tray: | **Obsidian Vault Import** | One-click migration: upload an Obsidian vault as a ZIP — Markdown files become articles, folders map directly, Obsidian `![[image.png]]` embeds are rewritten to encrypted media |
 | :dna: | **Emergent Semantic Graph** | Concept tags create automatic bidirectional links **through shared characteristics, not article-to-article pairs** — one tag connects a note to every article that shares it (topic, project, tech, status, year — any dimension you pick). No manual `[[wiki-links]]` to maintain, no dead-end pairs; add a tag and the graph rewires itself. D3.js force-directed graph with depth-controlled exploration; related articles ranked by shared-tag strength; semantic tag search via **ONNX multilingual-e5-small** (384-dim real ML embeddings, self-hosted, multilingual) |
 | :lock: | **E2E Encryption** | AES-256-GCM with per-article and per-image keys, Argon2id KDF (64 MB, 3 iterations), envelope encryption with 3-level key hierarchy |
-| :closed_lock_with_key: | **Encrypted database** | New in 2.6.0, and only when you ask for it: **Encrypt this node** (Admin → Database encryption, or `bmb vault seal`) encrypts the database files themselves, so a stolen disk, a copied data folder or a backup of it shows no title, path, tag, user name or chat title. The node starts locked, keeps relaying its peers' changes while locked, and opens with your master password. It makes an encrypted way-back snapshot first, checks the encrypted copy against the original before it swaps, wipes the plain files it replaced, and refuses to start while another plain copy of your vault lies in the data folder. Auto-unlock is a separate, off-by-default choice with its own warnings. Read [docs/sealed-database.md](docs/sealed-database.md) before you start |
-| :lock_with_ink_pen: | **Metadata Encryption (2.6.0)** | One-way switch, on when *you* activate it after every device runs 2.6.0: sync events travel as sealed envelopes (protocol 4), blind copies hold no titles, no tree, no note count — just ciphertext, sizes and times; a stolen phone copy or a relaying peer learns that something changed, not what ([ADR-0009](docs/adr/0009-metadata-confidentiality.md)) |
+| :closed_lock_with_key: | **Encrypted database** | A node you set up is encrypted from its first day (2.6.2): the database files themselves are encrypted under your master password, so a stolen disk, a copied data folder or a backup of it shows no title, path, tag, user name or chat title. The node starts locked, keeps relaying its peers' changes while locked, and opens with your master password. A node set up by an earlier version is encrypted by **Encrypt this node** (Admin → Database encryption, or `bmb vault seal`), which checks the encrypted copy against the original before it swaps, wipes the plain files it replaced, and refuses to start while another plain copy of your vault lies in the data folder. There is no way back to an unencrypted node, and no restore produces one. Auto-unlock is a separate, off-by-default choice with its own warnings. Read [docs/sealed-database.md](docs/sealed-database.md) |
+| :lock_with_ink_pen: | **Metadata Encryption (2.6.0)** | One-way switch, already on for every node set up with 2.6.2 (a new node joins only a node that has it on), and activated by *you* on an older network once every device runs 2.6.0: sync events travel as sealed envelopes (protocol 4), blind copies hold no titles, no tree, no note count — just ciphertext, sizes and times; a stolen phone copy or a relaying peer learns that something changed, not what ([ADR-0009](docs/adr/0009-metadata-confidentiality.md)) |
 | :rotating_light: | **Online DEK Rotation** | Rotate the master encryption key without exporting/re-importing your vault. Single-transaction re-wrap of all article keys, automatic pre-rotation snapshot, peer-acceptance protocol so multi-node networks roll over together (auto-accept toggle per peer). Lazy slot rewrap migrates each user's password slot transparently on next login |
 | :floppy_disk: | **Snapshot & Restore** | One-click encrypted snapshots (full DB + media), upload to restore on any node of the same vault (a node that shares the master key; a different vault cannot open it). Two kinds of restore, chosen in the dialog: **this node only** (the default — the node leaves the network and becomes a *new* node: new identity, it forgets its trusted nodes, blind copies and sync history, and your other devices must be joined to it again) or **the whole network** (propagates via a signed sync event with a per-peer auto-accept toggle; every node keeps its identity). See [docs/snapshot-restore.md](docs/snapshot-restore.md). Pre-rotation backups created automatically before destructive operations |
 | :arrows_counterclockwise: | **Multi-Node Sync** | Event sourcing, Lamport clocks, Ed25519-signed events, near-realtime push-on-save sync between public nodes, works behind NAT |
@@ -244,7 +244,8 @@ Nothing else to download: the search model is inside the image.
   [docs/internet-access.md](docs/internet-access.md) and `docker-compose.reverse-proxy.yml`.
 - **Update:** Admin → Snapshots → Create (a safety copy), then `docker compose pull && docker compose up -d`. To stay on
   one release line put `BMB_VERSION=2.4` into `.env`. Data migrations only go forward: to go back to an older version,
-  restore the snapshot you made before updating.
+  restore the snapshot you made before updating. **From a version before 2.6, update to 2.6.1 first, then to the current
+  one:** the current version refuses a database older than 2.6 (and leaves it unchanged, with a message that says so).
 - **Back up:** Admin → Snapshots, and a copy of the data while the node is stopped:
   `docker compose stop && docker compose cp bmb:/app/data ./bmb-data-copy && docker compose start`.
 - **AI assistants on this computer:** uncomment the two marked lines in the compose file, see
@@ -435,6 +436,8 @@ sudo -u bmb /opt/beememorybank/cli/bmb init \
 ```
 
 > `bmb init --name X` creates a node named `X` AND a first user whose login is also `X`. If you want a separate username and node name, skip this step and use the Web Setup form after the services are running — it has separate fields.
+
+> Whichever you use (`bmb init`, the Web Setup form, a Docker start), the node you set up is **encrypted from its first day** (2.6.2): the database files are encrypted under the master password you gave, metadata encryption is on, and the node starts locked until the first sign-in. `bmb join` and the Setup page's "join" do the same, and join only a node that has metadata encryption on. See [docs/sealed-database.md](docs/sealed-database.md).
 
 #### 3. Shared API↔Web secret in one file
 
@@ -743,7 +746,7 @@ automatic certificates, Cloudflare Tunnel or Tailscale instead of an open port)?
 | Windows Desktop | Automatic: the tray offers "Restart to update" when a release is out (or Tray icon → Check for updates...) |
 | Windows Server (MSI) | `git pull` → `.\scripts\pack-windows-msi.ps1` → `msiexec /i ...` (the stable `UpgradeCode` lets it upgrade in place; data in `ProgramData` is preserved) |
 
-Tip: take a snapshot via Admin → Snapshots → Create before updating, in case a DB migration goes sideways.
+Tip: take a snapshot via Admin → Snapshots → Create before updating, in case a DB migration goes sideways. A database older than 2.6 must go through 2.6.1 first.
 
 #### Troubleshooting
 

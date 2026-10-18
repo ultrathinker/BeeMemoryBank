@@ -232,8 +232,8 @@ public sealed class ChatDataProtector : IDisposable
             // in-memory DEK yet (the microseconds between DekRewrapper's commit and SwapMasterDek).
             // Nothing may be created or replaced then — it would be sealed under a DEK that is
             // already retired.
-            var currentIsAuthoritative = sentinel is not { Length: > 0 }
-                || MasterKeyManager.VerifySentinel(sentinel, current);
+            var currentIsAuthoritative = MasterKeyManager.IsSentinelMissing(sentinel)
+                || MasterKeyManager.VerifySentinel(sentinel!, current);
 
             if (row != null)
             {

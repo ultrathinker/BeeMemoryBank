@@ -44,29 +44,23 @@ public sealed record JoinCode(string Address, string? Token, string SpkiPin)
     public static string DescribeConnectionFailure(HttpRequestException ex) =>
         ex.HttpRequestError == HttpRequestError.SecureConnectionError ? WrongComputerMessage : NotAnsweringMessage;
 
+    /// <summary>The other computer's join door refused the code: it is not valid, or it has been used (the door answers 403 for both).</summary>
+    public const string DoorRefusedMessage =
+        "The other computer did not accept this join code: it is not valid, or it has already been used. Open Connect a device on that computer again and use the new code.";
+
+    /// <summary>The other computer's join door is busy with another device that joins with the same code (the door answers 409).</summary>
+    public const string DoorBusyMessage = "Another device is joining with this code right now. Try again in a moment.";
+
     /// <summary>
-    /// The <c>error</c> sentence of a JSON answer from the other computer's join door ("This join code is not valid", "has already
-    /// been used", ...), for showing next to the status; null if the body is not that. Length-capped and stripped of control
-    /// characters: it is shown on a page, and the other computer is only trusted as far as the pin goes.
+    /// The sentence for a refusal of the other computer's join door, from the STATUS of its answer and nothing else: what the body says is that computer's own text
+    /// and is never shown (not capped, not stripped - not shown). Null for a status the door does not use, which is told as the status alone.
     /// </summary>
-    public static string? ReadDoorError(string? body)
+    public static string? DescribeDoorAnswer(int status) => status switch
     {
-        if (string.IsNullOrWhiteSpace(body)) return null;
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(body);
-            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
-            var error = doc.RootElement.EnumerateObject().FirstOrDefault(p => p.Name.Equals("error", StringComparison.OrdinalIgnoreCase));
-            if (error.Value.ValueKind != System.Text.Json.JsonValueKind.String) return null;
-            var text = new string(error.Value.GetString()!.Where(c => !char.IsControl(c)).ToArray()).Trim();
-            if (text.Length == 0) return null;
-            return text.Length <= 300 ? text : text[..300];
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return null;
-        }
-    }
+        403 => DoorRefusedMessage,
+        409 => DoorBusyMessage,
+        _ => null,
+    };
 
     /// <summary>True if <paramref name="text"/> is meant as a join code, well-formed or not.</summary>
     public static bool LooksLikeJoinCode(string? text) =>

@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -27,6 +28,8 @@ public class JoinInheritedAuthorityTests : IAsyncLifetime
         _hostClient = _host.CreateClient();
         (await _hostClient.PostAsJsonAsync("/api/session/unlock", new { Password = MasterPassword }))
             .EnsureSuccessStatusCode();
+        // A new node joins only a node on protocol 4 (BMB-306).
+        await StepANode.ActivateAsync(_host);
     }
 
     public Task DisposeAsync()
@@ -54,6 +57,8 @@ public class JoinInheritedAuthorityTests : IAsyncLifetime
             password = MasterPassword
         }, JsonOpts);
         joinResp.IsSuccessStatusCode.Should().BeTrue(await joinResp.Content.ReadAsStringAsync());
+        // The joined node is encrypted and locked (BMB-306); the password opens it.
+        (await joiner.Services.GetRequiredService<SessionService>().UnlockAsync(MasterPassword)).Should().BeTrue();
 
         Guid hostId;
         using (var hostScope = _host.Services.CreateScope())

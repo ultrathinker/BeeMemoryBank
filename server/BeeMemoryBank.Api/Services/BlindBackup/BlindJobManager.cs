@@ -255,7 +255,8 @@ public sealed class BlindJobManager
         catch (Exception ex)
         {
             job.State = BlindJobState.Failed;
-            job.Detail = ex.Message;
+            // The detail is shown on the node's pages and kept in its history: a failure of a call to the backup target is told as a kind of failure (FailureText).
+            job.Detail = BeeMemoryBank.Sync.FailureText.Say(ex);
             _logger.LogError(ex, "Blind job {Kind} {Id} failed", job.Kind, job.Id);
         }
         finally

@@ -46,14 +46,16 @@ public static class KeyEndpoints
             // longer unlock the vault, so after the next lock or restart the web could not open the
             // node at all (BMB-31, scenario 18). Callers with no user (older mobile builds) keep it.
             var callerId = CallerIdentity.Extract(ctx).UserId;
+            // A client that goes away (or a node that is stopping) stops the change while it is still only computation; once the key slot is being written it runs to its end.
+            using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
             if (callerId is { } userId)
             {
-                try { await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword); }
+                try { await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword, stop.Token); }
                 catch (UnauthorizedAccessException) { throw new InvalidOperationException("Incorrect old password."); }
             }
             else
             {
-                await svc.ChangePasswordAsync(req.OldPassword, req.NewPassword);
+                await svc.ChangePasswordAsync(req.OldPassword, req.NewPassword, stop.Token);
             }
 
             // The new password is in memory only now: build this node's strong recovery box with it,
@@ -91,7 +93,8 @@ public static class KeyEndpoints
                       "accept the OLD password, including at their own join endpoint — change it on each " +
                       "of them as well. Note that changing the password does not evict a node that already " +
                       "holds the master key: that needs revoking the peer and rotating the DEK."));
-        });
+        })
+            .SingleFlight("master-password-change", "A master password change");
 
         // GET /api/keys/password-notice — has the password been changed on another node?
         group.MapGet("/password-notice", async (INodeIdentityRepository nodeRepo) =>

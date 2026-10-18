@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.FullIos.Services;
 using BeeMemoryBank.Vault.Sealed;
 
@@ -38,49 +39,59 @@ public partial class EncryptDatabasePage : ContentPage
     {
         ErrorLabel.IsVisible = false;
         var options = new SealOptions(AcceptNoSnapshot: OnlyCopyCheck.IsChecked);
-        try
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up with the progress of the rewrite, so nothing can be
+        // tapped a second time; every reason it did not happen is written in the error line under the button.
+        await BusyAction.RunAsync(sender as Button, async busy =>
         {
-            EncryptButton.IsEnabled = false;
-            var preflight = await _seal.PreflightAsync(options);
-            // The tick is only offered when it is the blocker in the way (spec 10.8 phone_no_copy).
-            OnlyCopyRow.IsVisible = preflight.Blockers.Any(b => b.Code == SealBlockers.PhoneNoCopy) || OnlyCopyCheck.IsChecked;
-            if (!preflight.CanStart)
+            try
             {
-                ShowError(preflight.Blockers[0].Message);
-                return;
-            }
+                var preflight = await _seal.PreflightAsync(options);
+                // The tick is only offered when it is the blocker in the way (spec 10.8 phone_no_copy).
+                OnlyCopyRow.IsVisible = preflight.Blockers.Any(b => b.Code == SealBlockers.PhoneNoCopy) || OnlyCopyCheck.IsChecked;
+                if (!preflight.CanStart)
+                {
+                    ShowError(preflight.Blockers[0].Message);
+                    return;
+                }
 
-            // The screen stays on for as long as the database is rewritten (spec 10.8).
-            DeviceDisplay.Current.KeepScreenOn = true;
-            await SecretFields.RunAsync(() => _seal.StartAsync(PasswordEntry.Text ?? "", options), () => PasswordEntry.Text = "");
-            Progress.IsVisible = true;
-            StepLabel.IsVisible = true;
-            SealProgress? progress;
-            do
+                // The screen stays on for as long as the database is rewritten (spec 10.8).
+                DeviceDisplay.Current.KeepScreenOn = true;
+                await SecretFields.RunAsync(() => _seal.StartAsync(PasswordEntry.Text ?? "", options), () => PasswordEntry.Text = "");
+                Progress.IsVisible = true;
+                StepLabel.IsVisible = true;
+                SealProgress? progress;
+                do
+                {
+                    await Task.Delay(500);
+                    progress = _seal.Progress;
+                    Progress.Progress = (progress?.Percent ?? 0) / 100.0;
+                    StepLabel.Text = progress?.Step ?? "";
+                    busy.Report((progress?.Percent ?? 0) / 100.0, progress?.Step ?? "");
+                }
+                while (progress is null || progress.Phase is SealProgress.Idle or SealProgress.Running);
+
+                if (progress.Phase == SealProgress.Failed) ShowError(progress.Error ?? "The encryption failed; the iPhone is unchanged.");
+                else ShowStatus();
+            }
+            catch (UnauthorizedAccessException)
             {
-                await Task.Delay(500);
-                progress = _seal.Progress;
-                Progress.Progress = (progress?.Percent ?? 0) / 100.0;
-                StepLabel.Text = progress?.Step ?? "";
+                ShowError("The master password is not correct.");
             }
-            while (progress is null || progress.Phase is SealProgress.Idle or SealProgress.Running);
-
-            if (progress.Phase == SealProgress.Failed) ShowError(progress.Error ?? "The encryption failed; the iPhone is unchanged.");
-            else ShowStatus();
-        }
-        catch (UnauthorizedAccessException)
+            catch (SealMigrationException ex)
+            {
+                ShowError(ex.Message);
+            }
+            finally
+            {
+                DeviceDisplay.Current.KeepScreenOn = false;
+            }
+        }, new BusyOptions
         {
-            ShowError("The master password is not correct.");
-        }
-        catch (SealMigrationException ex)
-        {
-            ShowError(ex.Message);
-        }
-        finally
-        {
-            DeviceDisplay.Current.KeepScreenOn = false;
-            EncryptButton.IsEnabled = true;
-        }
+            Long = true,
+            Title = "Encrypting this iPhone's database",
+            Message = "Please wait. The database is being rewritten; this can take several minutes. The screen stays on. Keep the app open.",
+            Result = (ok, text) => { if (!ok) ShowError(text); },
+        });
     }
 
     private void ShowError(string message)

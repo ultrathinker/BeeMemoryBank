@@ -654,6 +654,21 @@ public class ServerAutoUnlockTests : SealedWriterFixture
         (await restarted.RunAtStartAsync(new NodeIdentityRepository(Factory))).Should().Be(ServerAutoUnlockStartOutcome.StayedLocked);
     }
 
+    /// <summary>BMB-312/308: a vault with no sentinel (NULL, or an empty BLOB) has nothing to disagree with the key, so the armed server opens it, as it always did for NULL.</summary>
+    [Theory]
+    [InlineData("NULL")]
+    [InlineData("X''")]
+    public async Task AnArmedServerWhoseVaultHasNoSentinel_OfEitherShape_StillUnlocks(string missing)
+    {
+        var svc = Make();
+        await svc.EnableAsync();
+        using (var c = Factory.CreateConnection())
+            await c.ExecuteAsync($"UPDATE tbl_node_identity SET sentinel_value = {missing}");
+        var restarted = Make(session: new SessionService(KeySlots));
+
+        (await restarted.RunAtStartAsync(new NodeIdentityRepository(Factory))).Should().Be(ServerAutoUnlockStartOutcome.Unlocked);
+    }
+
     [Fact]
     public async Task AnArmedServerWhoseSealedUnlockRefuses_StaysLocked()
     {

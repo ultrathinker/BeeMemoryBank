@@ -79,6 +79,8 @@
     <!-- The Android app's join by code, linked rather than copied: the same master-password exchange, key-pinned client and snapshot
          import on both phones. -->
     <Compile Include="..\BeeMemoryBank.Mobile\Services\NodeSetupService.cs" Link="Shared\NodeSetupService.cs" />
+    <!-- The one busy helper of the MAUI apps (BMB-311), shared as source with the other three. -->
+    <Compile Include="..\BeeMemoryBank.Mobile\Services\BusyAction.cs" Link="Shared\BusyAction.cs" />
   </ItemGroup>
 
   <ItemGroup>

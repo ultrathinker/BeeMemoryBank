@@ -112,3 +112,20 @@ warning, and a server gets a checkbox "start unlocked after a restart", off by d
 - **Detecting a file-level restore to switch the server checkbox off:** a restored directory looks like a restart, so the product
   cannot tell them apart; the enable record that no backup carries makes the question unnecessary.
 - **A home-made encrypted VFS or column encryption:** rejected for the engine and by ADR 0005.
+
+## Amendment (2.6.2, BMB-306): encrypted from the first day, and no way back
+
+The owner's rule for 2.6.2 replaces three decisions above:
+
+- **New nodes are encrypted at setup.** The Web setup, `bmb init`, a Docker start set up through either, `bmb join` and the restore wizard
+  end with an encrypted database under the setup password and metadata encryption on (protocol 4, readiness activated). One routine does it
+  (`FreshNodeSealing`: it opens the new vault, activates when the node starts a network, and runs the ordinary migration over what is a few
+  kilobytes of identity, key slots and schema). A node that cannot be encrypted is reset, never left open. Auto-unlock stays off.
+- **A new node joins only a node on protocol 4**, with a clear refusal and no compatibility mode.
+- **No way back.** The pre-encryption snapshot, its key envelope and the five-step rollback are gone, and so is the Admin block that managed
+  them: the "Encrypt this node" warning says that going back is not possible from the node. **No restore produces an open node:** a node whose
+  database is not encrypted refuses every restore into it, and an archive that holds an unencrypted database is refused wherever it goes. The
+  rejected alternative "keeping an encrypted snapshot as the rollback copy" is now the decision: the rollback copy is the owner's own backup, kept
+  outside the data folder, and the node does not restore it.
+
+Nodes that were set up before 2.6.2 stay open until the owner presses "Encrypt this node" (an update never does it for them).

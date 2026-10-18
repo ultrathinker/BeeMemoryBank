@@ -260,6 +260,7 @@ public class JoinWithSnapshotTests : IAsyncLifetime
 
         using (var conn = _producerFactory.CreateConnection())
         {
+            await conn.ExecuteAsync("DROP TRIGGER IF EXISTS trg_migration_ledger_guard"); // the guard against old programs; a test forges a newer schema
             await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version > 0");
             await conn.ExecuteAsync("INSERT INTO tbl_migration (version, filename, applied_at, updated_at) VALUES (999, @File, @At, @At)",
                 new { File = "999_test.sql", At = DateTime.UtcNow });
@@ -274,6 +275,66 @@ public class JoinWithSnapshotTests : IAsyncLifetime
         var act = () => _joinerSnapshot.RestoreForJoinAsync(snapshotPath, signature, _producerPubKey);
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*schema version*Upgrade this node first*");
+    }
+
+    // ---- BMB-314: the number in the manifest means the same before and after the squash ----------------------------------------------
+
+    /// <summary>The ledger of a 2.6.1 node: the 39 rows of the old chain (highest version 40) in place of the baseline's one row.</summary>
+    private static async Task MakeLedgerThatOfA261NodeAsync(DbConnectionFactory factory)
+    {
+        using var conn = factory.CreateConnection();
+        await conn.ExecuteAsync("DROP TRIGGER IF EXISTS trg_migration_ledger_guard");
+        await conn.ExecuteAsync("DELETE FROM tbl_migration");
+        foreach (var (version, name) in LegacyMigrationChain.LedgerRows)
+            await conn.ExecuteAsync("INSERT INTO tbl_migration (version, filename, applied_at, updated_at) VALUES (@version, @name, @at, @at)",
+                new { version, name, at = DateTime.UtcNow.ToString("o") });
+    }
+
+    private static async Task<int> MigrationVersionOfAsync(string snapshotPath)
+    {
+        await using var fs = File.OpenRead(snapshotPath);
+        await using var gz = new GZipStream(fs, CompressionMode.Decompress);
+        using var tar = new TarReader(gz);
+        while (await tar.GetNextEntryAsync() is { } entry)
+            if (entry.Name == "manifest.json")
+            {
+                using var ms = new MemoryStream();
+                await entry.DataStream!.CopyToAsync(ms);
+                return JsonDocument.Parse(ms.ToArray()).RootElement.GetProperty("migrationVersion").GetInt32();
+            }
+        throw new InvalidOperationException("no manifest");
+    }
+
+    [Fact]
+    public async Task A_snapshot_of_a_2_6_1_node_joins_a_2_6_2_node()
+    {
+        await MakeLedgerThatOfA261NodeAsync(_producerFactory);
+        await InsertProducerFolderAndArticleAsync();
+        var info = await _producerSnapshot.CreateAsync(filterSecrets: true, sign: true, cpSequenceNum: 10);
+        var path = _producerSnapshot.GetSnapshotPath(info.FileName);
+        (await MigrationVersionOfAsync(path)).Should().Be(40, "a 2.6.1 node writes the number of its last migration");
+
+        await _joinerSnapshot.RestoreForJoinAsync(path, await File.ReadAllBytesAsync($"{path}.sig"), _producerPubKey);
+
+        using var conn = _joinerFactory.CreateConnection();
+        (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_article")).Should().Be(1);
+        (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(1, "the joiner's own ledger is not replaced by the snapshot's");
+    }
+
+    [Fact]
+    public async Task A_snapshot_of_a_2_6_2_node_joins_a_2_6_1_node()
+    {
+        await MakeLedgerThatOfA261NodeAsync(_joinerFactory);
+        await InsertProducerFolderAndArticleAsync();
+        var info = await _producerSnapshot.CreateAsync(filterSecrets: true, sign: true, cpSequenceNum: 10);
+        var path = _producerSnapshot.GetSnapshotPath(info.FileName);
+        (await MigrationVersionOfAsync(path)).Should().Be(40, "the baseline is migration 40: a 2.6.1 node reads the number as its own");
+
+        await _joinerSnapshot.RestoreForJoinAsync(path, await File.ReadAllBytesAsync($"{path}.sig"), _producerPubKey);
+
+        using var conn = _joinerFactory.CreateConnection();
+        (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_article")).Should().Be(1);
+        (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(39, "the joiner's ledger is its own");
     }
 
     private async Task InsertProducerFolderAndArticleAsync()

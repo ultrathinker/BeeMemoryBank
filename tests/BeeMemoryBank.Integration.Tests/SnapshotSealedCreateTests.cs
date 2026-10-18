@@ -125,6 +125,34 @@ public sealed class SnapshotSealedCreateTests(SealedNodeTemplate template) : ICl
         (!Directory.Exists(staging) || !Directory.EnumerateFileSystemEntries(staging).Any()).Should().BeTrue();
     }
 
+    /// <summary>
+    /// BMB-304: a node that cannot hold its own database in memory as the one buffer of the container says which memory limit would do, before it makes
+    /// the working copy; nothing is left behind, and the same node makes the snapshot once the ceiling is lifted.
+    /// </summary>
+    [Fact]
+    public async Task A_node_with_less_memory_than_its_database_needs_refuses_the_snapshot_naming_the_limit_and_leaves_nothing_behind()
+    {
+        using var node = await SealedNode.CreateAsync(template);
+        // The test's ceiling is half the database: the fixture really is larger than it (the refusal is the database's, not only the slack's).
+        var dbSize = new FileInfo(Path.Combine(node.Dir, "beememorybank.db")).Length;
+        node.Snapshots.FreeMemoryOverride = dbSize / 2;
+        (dbSize / 2).Should().BeLessThan(dbSize);
+
+        var act = async () => await node.Snapshots.CreateAsync(filterSecrets: false, sign: false);
+
+        var ex = (await act.Should().ThrowAsync<NotEnoughMemoryException>()).Which;
+        ex.Message.Should().StartWith("Making the snapshot of a ").And.Contain("MB database needs about").And.Contain("memory limit")
+            .And.Contain($"to at least {ex.RecommendedLimitBytes / (1024 * 1024)} MB").And.Contain("Nothing was changed");
+        ex.NeededBytes.Should().BeGreaterThan(MemoryBudget.Slack).And.BeLessThan(2L * 1024 * 1024 * 1024);
+        (!Directory.Exists(node.Snapshots.SnapshotsDir) || !Directory.EnumerateFileSystemEntries(node.Snapshots.SnapshotsDir).Any()).Should().BeTrue("no snapshot");
+        var staging = SnapshotStaging.DirIn(node.Dir);
+        (!Directory.Exists(staging) || !Directory.EnumerateFileSystemEntries(staging).Any()).Should().BeTrue("no working copy");
+
+        node.Snapshots.FreeMemoryOverride = null;
+        var info = await node.Snapshots.CreateAsync(filterSecrets: false, sign: false);
+        File.Exists(node.Snapshots.GetSnapshotPath(info.FileName)).Should().BeTrue();
+    }
+
     [Fact]
     public async Task A_join_snapshot_of_a_sealed_node_is_a_BMBCH1_container_streamed_from_the_page_codec_with_no_plain_file()
     {
@@ -165,56 +193,4 @@ public sealed class SnapshotSealedCreateTests(SealedNodeTemplate template) : ICl
         (!Directory.Exists(staging) || !Directory.EnumerateFileSystemEntries(staging).Any()).Should().BeTrue("the working copy was removed");
     }
 
-    [Fact]
-    public async Task The_pre_encryption_snapshot_of_a_plain_node_wipes_its_plain_working_copy_before_the_container_takes_its_place()
-    {
-        var (root, dir, factory, session, snapshots) = await SealedNode.CreatePlainAsync(template);
-        try
-        {
-            var outputDir = Path.Combine(dir, "pre-encryption");
-            var overwritten = new List<(string Path, long Length, bool HasCanary, bool HasMagic)>();
-            snapshots.AfterStagingOverwrite = path =>
-            {
-                using var s = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                var bytes = new byte[s.Length];
-                s.ReadExactly(bytes);
-                overwritten.Add((path, bytes.Length, MetadataCanaries.Scan(bytes, template.Canaries, path).Count > 0,
-                    bytes.AsSpan(0, Math.Min(16, bytes.Length)).SequenceEqual("SQLite format 3\0"u8)));
-            };
-            var info = await snapshots.CreateAsync(filterSecrets: false, sign: false, encryptDb: true, outputDirectory: outputDir, wipeStaging: true);
-
-            overwritten.Should().ContainSingle("the plain working copy was wiped exactly once, by the wipe, with the seam after the overwrite");
-            overwritten[0].HasCanary.Should().BeFalse("no canary survives in the overwritten bytes");
-            overwritten[0].HasMagic.Should().BeFalse();
-            overwritten[0].Length.Should().BeGreaterThan(4096, "the seam runs with the file at its full length");
-            File.Exists(overwritten[0].Path).Should().BeFalse("the working copy is gone");
-            Directory.EnumerateFiles(SnapshotStaging.DirIn(dir)).Should().BeEmpty();
-
-            var archive = Path.Combine(outputDir, info.FileName);
-            File.Exists(archive).Should().BeTrue();
-            snapshots.List().Should().BeEmpty("a file in the pre-encryption folder is not listed");
-            MetadataCanaries.ScanArchive(archive, template.Canaries).Should().BeEmpty("the vault's titles are in the container, encrypted");
-            var entry = ArchiveDb(archive, out _);
-            var container = await File.ReadAllBytesAsync(entry);
-            container.AsSpan(0, 6).SequenceEqual("BMBDB2"u8).Should().BeTrue();
-            var dek = session.GetMasterDek();
-            var image = await Bmbdb2Container.DecryptAsync(new MemoryStream(container), container.Length, dek);
-            image.AsSpan(0, 16).SequenceEqual("SQLite format 3\0"u8).Should().BeTrue();
-
-            // Not pruned: three newer snapshots in snapshots/ and a retention of two leave it where it is.
-            for (var i = 0; i < 3; i++)
-            {
-                await snapshots.CreateAsync(filterSecrets: false, sign: false);
-                await Task.Delay(1100);
-            }
-            snapshots.PruneOldSnapshots(keepCount: 2).Should().Be(1);
-            File.Exists(archive).Should().BeTrue("the retention reads snapshots/ only");
-        }
-        finally
-        {
-            factory.Dispose();
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(root, true); } catch { }
-        }
-    }
 }

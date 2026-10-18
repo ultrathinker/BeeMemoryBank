@@ -141,7 +141,7 @@ public class EventWriteGateOwnerFlowTests : IAsyncLifetime
         public readonly TaskCompletionSource Tried = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<IDisposable> Entered { get; private set; } = null!;
 
-        public async Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent)
+        public async Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent, CancellationToken ct = default)
         {
             Reached.TrySetResult();
             await Go.Task;

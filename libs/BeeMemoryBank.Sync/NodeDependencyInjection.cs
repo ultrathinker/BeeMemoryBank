@@ -21,6 +21,8 @@ public static class NodeDependencyInjection
     {
         services.AddSingleton<SnapshotRequiredState>();
         services.AddSingleton<PeerNewerProtocolState>();
+        // When each peer last made contact with this node, either way, and how it is going (BMB-313).
+        services.AddSingleton<PeerContactLog>();
 
         services.AddSingleton<LamportClock>();
         services.AddSingleton<ILamportClock>(sp => sp.GetRequiredService<LamportClock>());
@@ -52,6 +54,8 @@ public static class NodeDependencyInjection
         // CLI and the phone's foreground service alike: a peer whose whitelist row carries tls_spki
         // (a blind node with its self-signed certificate) is accepted on that key and nothing else.
         services.AddHttpClient(SyncScheduler.HttpClientName).UsePinnedSyncHandler();
+        // The probe of a peer's new address (PeerAddressService): the same handler - pins, HTTPS for a pinned host, and no redirect is ever followed.
+        services.AddHttpClient(PeerAddressService.HttpClientName).UsePinnedSyncHandler();
 
         // The recovery sets a node receives, validates and serves (creating and opening recovery boxes is vault code).
         // A full Api node registers the peers' my-standing over this default (PeerOwnStanding).
@@ -77,6 +81,8 @@ public static class NodeDependencyInjection
             periodicCleanupFactory?.Invoke(sp),
             sp.GetRequiredService<SnapshotRequiredState>()));
         services.AddHostedService(sp => sp.GetRequiredService<SyncScheduler>());
+        // What the writers of the whitelist tell the loop when a peer is revoked or moved (it forgets what it learned about it).
+        services.AddSingleton<IPeerStateResetter>(sp => sp.GetRequiredService<SyncScheduler>());
         return services;
     }
 

@@ -9,11 +9,12 @@ This folder contains technical documentation for the BeeMemoryBank project.
 | [architecture.md](architecture.md) | Project overview, technology stack, module structure, dependency graph, and key architectural decisions |
 | [sync.md](sync.md) | Multi-node synchronization protocol, event sourcing, Lamport clocks, conflict resolution, push-on-save, Invisible Mode; metadata encryption (protocol 4), held events on a locked node, and the one-way activation switch |
 | [encryption.md](encryption.md) | Encryption system: 3-level key hierarchy, per-article/media DEKs, session management, media encryption; the metadata key (MEK) and what metadata encryption changes; the node database key (DBK) of an encrypted node |
-| [sealed-database.md](sealed-database.md) | Encryption at rest ("Encrypt this node", 2.6.0): what a sealed node protects and what it does not, the migration and its pre-encryption snapshot, locked versus unlocked restarts, the server's off-by-default auto-unlock checkbox, backups, key rotation, and what to do when something goes wrong |
+| [sealed-database.md](sealed-database.md) | Encryption at rest ("Encrypt this node", 2.6.0): what a sealed node protects and what it does not, the migration (no copy of the unencrypted node is kept), locked versus unlocked restarts, the server's off-by-default auto-unlock checkbox, backups, key rotation, and what to do when something goes wrong |
 | [account-recovery.md](account-recovery.md) | "Forgot your password? Use a recovery key": the Sign In page flow, `bmb user reset-password`, what it will not do, throttling, audit records |
 | [mcp.md](mcp.md) | MCP server for AI agent integration: 33 tools in 7 groups, transport, truncation, configuration examples |
 | [compaction.md](compaction.md) | Event log compaction and snapshot lifecycle |
 | [snapshot-restore.md](snapshot-restore.md) | Restoring a snapshot: this node only (it becomes a new node) versus the whole network; what each does to identity, trusted nodes and blind copies, and what to do afterwards |
+| [long-operations.md](long-operations.md) | A button that starts a long operation: the one busy helper per UI technology (web, desktop, Android, iPhone, blind console), the "please wait" pop-up, the 409 "already running" a second identical request gets, and the tests that fail when a new button bypasses the helper |
 | [deployment.md](deployment.md) | Deployment guide: environment variables, systemd, Docker (the ready-made images on ghcr.io and building from source), reverse proxy, maintenance page, new node setup, audit log retention |
 | [internet-access.md](internet-access.md) | Opening your node to the internet yourself: ports, router forwarding, Caddy / nginx with automatic certificates, tunnels and VPNs, security warnings |
 

@@ -114,7 +114,7 @@ public sealed partial class BlindPhoneReplicaClient(
                 await RecordInstallFailureAsync(workDirectory, target.NodeId, ex);
                 if (ex is InvalidDataException or IOException) throw;
                 throw new InvalidDataException(
-                    $"The downloaded replica could not be installed ({ex.GetType().Name}: {ex.Message})", ex);
+                    $"The downloaded replica could not be installed ({ex.GetType().Name})", ex);
             }
             CleanupDownloadArtifacts(workDirectory, partPath, metadataPath);
             ClearInstallFailure(workDirectory);
@@ -209,7 +209,7 @@ public sealed partial class BlindPhoneReplicaClient(
             await RecordInstallFailureAsync(workDirectory, target.NodeId, ex, BackupFailureFileName);
             if (ex is InvalidDataException or IOException) throw;
             throw new InvalidDataException(
-                $"The downloaded package could not be verified ({ex.GetType().Name}: {ex.Message})", ex);
+                $"The downloaded package could not be verified ({ex.GetType().Name})", ex);
         }
         finally
         {
@@ -533,7 +533,7 @@ public sealed partial class BlindPhoneReplicaClient(
                         NodeId = peer.NodeId,
                         DisplayName = peer.DisplayName,
                         Ed25519PublicKey = Convert.FromBase64String(peer.PublicKeyB64),
-                        ApiAddress = peer.ApiAddress,
+                        ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(peer.ApiAddress),
                         IsSuperadmin = peer.IsSuperadmin,
                         TlsSpki = BlindTrust.PinOf(peer.TlsTrust, peer.TlsSpki),
                         TlsTrust = BlindTrust.Effective(peer.TlsTrust, peer.TlsSpki),

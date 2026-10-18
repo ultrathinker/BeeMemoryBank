@@ -42,7 +42,7 @@ public partial class ApiClient
         }
         catch (Exception ex)
         {
-            return (false, ex.Message, null);
+            return (false, BeeMemoryBank.Sync.FailureText.Say(ex), null);
         }
     }
 

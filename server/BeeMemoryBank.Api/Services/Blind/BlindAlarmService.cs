@@ -1,3 +1,4 @@
+using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Metadata;
@@ -21,6 +22,13 @@ public static class BlindAlarmKinds
     /// (docs/design/step-a-spec.md 10.4): its restore would replay a week of changes, and its log only grows until a newer baseline covers it.
     /// </summary>
     public const string StaleBaseline = "stale_baseline";
+
+    /// <summary>
+    /// This PC calls the blind node and the calls fail (a door that is closed to it, another node at the address, a node that answers badly) since
+    /// <c>Since</c>, and nothing has been heard from it since: the failure the contact status of the node shows. A banner of the Blind nodes page, from
+    /// <see cref="BlindAlarmService.ServerNotifyAfter"/> on; the unreachable streak keeps its own <c>silent</c> alarm.
+    /// </summary>
+    public const string NotAnswering = "not_answering";
 }
 
 /// <summary>
@@ -226,6 +234,12 @@ public sealed class BlindAlarmService
             var quiet = now - quietSince > BlindNodeManager.SilentAfter;
             var failing = DateTime.MinValue;
             var inStreak = !isCopy && unreachableSince.TryGetValue(node.NodeId, out failing);
+            // The contact status of the node says this PC's calls to it fail (BMB-313): the same input as the card, with the same "since". A node in the
+            // unreachable streak has its silent alarm below; this is for the failures that streak does not follow (a closed door, another identity).
+            if (!isCopy && !inStreak && node.Contact is { State: PeerContactView.NotAnswering, NotAnsweringSince: { } failingSince }
+                && now - failingSince >= ServerNotifyAfter)
+                alarms.Add(new BlindAlarm(BlindAlarmKinds.NotAnswering, node.NodeId, node.DisplayName, DateTime.SpecifyKind(failingSince, DateTimeKind.Utc),
+                    Protocol: null, Notify: false, Banner: true));
             // A copy: only its calls to THIS PC are evidence (they are what LastProtocolSeenAt records).
             var copyQuiet = isCopy && node.ProtocolSeenAt is not null && now - quietSince > CopyNotifyAfter;
             // A copy cannot have called while this PC was off: until it has been awake for a while, it is not judged (see CopyGrace).

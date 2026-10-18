@@ -37,6 +37,7 @@ public partial class AddExistingProfileDialog : Window
         Close(dialogResult: false);
     }
 
+    // busy-exempt: opens the system folder picker, nothing is sent and nothing waits on the node
     private async void OnBrowseClick(object? sender, RoutedEventArgs e)
     {
         var path = await FolderPicker.PickAsync(this, "Choose the folder of an existing profile");
@@ -77,24 +78,25 @@ public partial class AddExistingProfileDialog : Window
                 return;
         }
 
-        AddButton.IsEnabled = false;
         CancelButton.IsEnabled = false;
         try
         {
-            AddedProfile = await Task.Run(() => _profiles.AddProfile(validation.Name!, folder));
-            Close(dialogResult: true);
-        }
-        catch (ArgumentException aex)
-        {
-            ShowError(aex.Message);
-        }
-        catch (Exception ex)
-        {
-            ShowError($"Could not add the profile: {ex.Message}");
+            // The one busy helper (BMB-311) disables the button, shows its loader and puts a failure in the error line below it.
+            await BusyAction.RunAsync(this, AddButton, async () =>
+            {
+                try
+                {
+                    AddedProfile = await Task.Run(() => _profiles.AddProfile(validation.Name!, folder));
+                    Close(dialogResult: true);
+                }
+                catch (Exception ex) when (ex is not ArgumentException)
+                {
+                    throw new InvalidOperationException($"Could not add the profile: {ex.Message}", ex);
+                }
+            }, new BusyOptions { Result = (ok, text) => { if (!ok) ShowError(text); } });
         }
         finally
         {
-            AddButton.IsEnabled = true;
             CancelButton.IsEnabled = true;
         }
     }

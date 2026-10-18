@@ -254,7 +254,7 @@ public sealed class BlindFormat2HostTests : IDisposable
         var missing = seeder.WriteBaseline(Path.Combine(_work, "b3"), [script.BaselineBlob, new string('d', 64)], lamportAtCut: 90);
         var refused = await UploadAsync(blind, await seeder.WriteAsync(BlindPackageKinds.Baseline, new ServableBaseline(missing, 0)), seeder, pairCode: false);
         refused.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await refused.Content.ReadAsStringAsync()).Should().Contain("not stored here");
+        (await refused.Content.ReadAsStringAsync()).Should().Contain(BlindSeedRefusals.Sentence(BlindSeedRefusal.BaselineRefused), "the sender is told the fixed sentence of the code, not which blob was missing");
         (await blind.Services.GetRequiredService<IBaselineStore>().GetCurrentAsync())!.Files.Manifest.BaselineId.Should().Be(newer.Manifest.BaselineId);
     }
 
@@ -475,7 +475,7 @@ public sealed class BlindFormat2HostTests : IDisposable
         var resp = await UploadAsync(blind, package, seeder, pairCode: false);
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await resp.Content.ReadAsStringAsync()).Should().Contain("older");
+        (await resp.Content.ReadAsStringAsync()).Should().Contain(BlindSeedRefusals.Sentence(BlindSeedRefusal.BaselineRefused));
         (await blind.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(newcomer, includeDeleted: true))
             .Should().BeNull("a refused package adds no peer");
         (await positions.GetAllAsync()).Single(p => p.RemoteNodeId == seeder.NodeId).LastSequenceNum
@@ -513,19 +513,19 @@ public sealed class BlindFormat2HostTests : IDisposable
     /// (or half-applied) in the seed after the adoption.
     /// </summary>
     [Theory]
-    [InlineData("positions omitted", "positions")]
-    [InlineData("a peer key that is not base64", "public key")]
-    [InlineData("a control database this node cannot import", "control database")]
-    [InlineData("a control database made of allow-listed views", "control database")]
+    [InlineData("positions omitted")]
+    [InlineData("a peer key that is not base64")]
+    [InlineData("a control database this node cannot import")]
+    [InlineData("a control database made of allow-listed views")]
     // Review round 3: the rows of control.db are held against the appliers' rules before the adoption, too.
-    [InlineData("a control row at the maximum Lamport time", "control database")]
-    [InlineData("a control row with key material stored as text", "control database")]
-    [InlineData("an activation naming a key the package lacks", "control database")]
-    [InlineData("a recovery box with a preset its kind may not have", "control database")]
+    [InlineData("a control row at the maximum Lamport time")]
+    [InlineData("a control row with key material stored as text")]
+    [InlineData("an activation naming a key the package lacks")]
+    [InlineData("a recovery box with a preset its kind may not have")]
     // Review round 5: baseline and delta Lamport values are package input too, and must be bounded before adoption.
-    [InlineData("a delta past the Lamport bound", "deltas.jsonl")]
-    [InlineData("a baseline Lamport time past the format-2 bound", "baseline")]
-    public async Task ASignedFullPackageWhoseContentCannotBeUsed_IsRefused_BeforeAnythingIsAdopted(string what, string message)
+    [InlineData("a delta past the Lamport bound")]
+    [InlineData("a baseline Lamport time past the format-2 bound")]
+    public async Task ASignedFullPackageWhoseContentCannotBeUsed_IsRefused_BeforeAnythingIsAdopted(string what)
     {
         var (blind, _) = NewBlind();
         await MaterialiseLegacyContentAsync(blind);
@@ -585,7 +585,8 @@ public sealed class BlindFormat2HostTests : IDisposable
 
         var body = await resp.Content.ReadAsStringAsync();
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
-        body.Should().Contain(message);
+        // What was wrong with it is in the inner exception (its type goes to the log); the sender is told the one fixed sentence of the code.
+        body.Should().Contain(BlindSeedRefusals.Sentence(BlindSeedRefusal.PackageV2Invalid));
         await AssertNothingWasTakenAsync(blind, seeder, peer);
     }
 

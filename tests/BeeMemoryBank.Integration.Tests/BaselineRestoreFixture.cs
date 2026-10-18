@@ -436,7 +436,7 @@ public sealed class BaselineRestoreFixture : IAsyncLifetime
         {
             ["version"] = 3, ["createdAt"] = DateTime.UtcNow.ToString("o"), ["files"] = files,
             ["snapshotFormatVersion"] = Format2Package.SnapshotFormatVersion, ["packageFormat"] = Format2Package.PackageFormat,
-            ["dbEncrypted"] = false, ["producerNodeId"] = ServingNodeId.ToString(), ["cpSequenceNum"] = served.CpSequence, ["migrationVersion"] = 39,
+            ["dbEncrypted"] = false, ["producerNodeId"] = ServingNodeId.ToString(), ["cpSequenceNum"] = served.CpSequence, ["migrationVersion"] = BeeMemoryBank.Storage.Sqlite.MigrationRunner.BaselineVersion,
         }, new JsonSerializerOptions { WriteIndented = true }));
 
         ArchivePath = Path.Combine(Work, "package.tar.gz");

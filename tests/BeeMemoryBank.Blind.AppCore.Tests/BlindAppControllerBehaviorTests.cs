@@ -113,10 +113,10 @@ public sealed class BlindAppControllerBehaviorTests
     }
 
     [Theory]
-    [InlineData(typeof(HttpRequestException))]
-    [InlineData(typeof(InvalidOperationException))]
-    [InlineData(typeof(NullReferenceException))]
-    public async Task AFailedSync_IsLogged_WhateverTheExceptionType(Type exceptionType)
+    [InlineData(typeof(HttpRequestException), "no answer")]   // a failure of a call to the other computer is told as its KIND, never by the words of the HTTP stack (BMB-306/307 fix2, T3)
+    [InlineData(typeof(InvalidOperationException), "link went down")]
+    [InlineData(typeof(NullReferenceException), "link went down")]
+    public async Task AFailedSync_IsLogged_WhateverTheExceptionType(Type exceptionType, string said)
     {
         var rig = new Rig();
         await rig.Controller.InitializeAsync();
@@ -126,11 +126,11 @@ public sealed class BlindAppControllerBehaviorTests
 
         var result = await rig.Controller.RequestSyncAsync();
 
-        result.Should().Be("Sync failed: link went down");
-        rig.Controller.GetStatus().RecentLog.Should().Contain(e => e.Kind == "sync" && e.Message == "Sync failed: link went down");
+        result.Should().Be("Sync failed: " + said);
+        rig.Controller.GetStatus().RecentLog.Should().Contain(e => e.Kind == "sync" && e.Message == "Sync failed: " + said);
         rig.Controller.GetStatus().LastSyncAt.Should().BeNull("a failed round is not a sync");
         rig.Controller.GetStatus().ActiveJob.Should().BeNull("the gate is released after a failure");
-        (await rig.Controller.RequestSyncAsync()).Should().Be("Sync failed: link went down", "the next request is not stuck behind the failure");
+        (await rig.Controller.RequestSyncAsync()).Should().Be("Sync failed: " + said, "the next request is not stuck behind the failure");
     }
 
     [Fact]
@@ -308,19 +308,20 @@ public sealed class BlindAppControllerBehaviorTests
     }
 
     [Fact]
-    public async Task AFailedFirstLoad_NamesTheInnerCause_NotOnlyTheHttpStacksGenericText()
+    public async Task AFailedFirstLoad_NamesTheKindOfFailure_NotTheHttpStacksWordsNorTheAddress()
     {
         var rig = new Rig();
         await rig.Controller.InitializeAsync();
         rig.Pair();
         rig.Controller.SetSchedule(BlindBackupSchedule.Off);
         rig.Replica.Failure = new HttpRequestException(
-            "An error occurred while sending the request.", new IOException("Unable to read data from the transport connection: Connection reset by peer."));
+            "An error occurred while sending the request to 10.9.8.7:5300.",
+            new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused));
 
         var result = await rig.Controller.RunHeavyAsync(false);
 
-        result.Should().Be("First load failed: An error occurred while sending the request. " +
-            "(IOException: Unable to read data from the transport connection: Connection reset by peer.)");
+        result.Should().Be("First load failed: no answer: connection refused (nothing listens at that address)");
+        result.Should().NotContain("10.9.8.7").And.NotContain("An error occurred");
         rig.Controller.GetStatus().RecentLog.Should().Contain(e => e.Message == result);
     }
 
@@ -331,14 +332,15 @@ public sealed class BlindAppControllerBehaviorTests
         await rig.Controller.InitializeAsync();
         rig.Pair();
         rig.Controller.SetSchedule(BlindBackupSchedule.Off);
-        rig.Replica.Failure = new HttpRequestException("The server answered 401 (Unauthorized).");
+        rig.Replica.Failure = new HttpRequestException("The server answered 401 (Unauthorized) with a reason of its own.", null, System.Net.HttpStatusCode.Unauthorized);
+        const string unauthorized = "it answered 401: its door is closed to this node (a proxy that does not let this address in, or it no longer knows this node)";
 
         for (var attempt = 1; attempt <= 9; attempt++)
         {
-            (await rig.Controller.RunHeavyAsync(false)).Should().Be("First load failed: The server answered 401 (Unauthorized).");
+            (await rig.Controller.RunHeavyAsync(false)).Should().Be("First load failed: " + unauthorized);
             var failure = rig.Controller.GetStatus().LastFailure!;
             failure.Title.Should().Be("First load");
-            failure.Message.Should().Be("The server answered 401 (Unauthorized).");
+            failure.Message.Should().Be(unauthorized);
             failure.Attempts.Should().Be(attempt);
             failure.At.Should().Be(rig.Clock.GetUtcNow());
             rig.Clock.Advance(TimeSpan.FromMinutes(1));
@@ -347,17 +349,17 @@ public sealed class BlindAppControllerBehaviorTests
         // The log lists the newest line first.
         var lines = rig.Controller.GetStatus().RecentLog.Where(e => e.Message.Contains("First load failed")).Select(e => e.Message).Reverse().ToList();
         lines.Should().Equal(
-            "First load failed: The server answered 401 (Unauthorized).",
-            "First load failed: The server answered 401 (Unauthorized). (attempt 2)",
-            "First load failed: The server answered 401 (Unauthorized). (attempt 4)",
-            "First load failed: The server answered 401 (Unauthorized). (attempt 8)");
+            "First load failed: " + unauthorized,
+            "First load failed: " + unauthorized + " (attempt 2)",
+            "First load failed: " + unauthorized + " (attempt 4)",
+            "First load failed: " + unauthorized + " (attempt 8)");
         rig.Replica.Starts.Should().Be(9);
 
         // Another reason is a new failure and a new line; a success clears it.
-        rig.Replica.Failure = new HttpRequestException("The connection was refused.");
+        rig.Replica.Failure = new HttpRequestException("The connection was refused.", new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused));
         await rig.Controller.RunHeavyAsync(false);
         rig.Controller.GetStatus().LastFailure!.Attempts.Should().Be(1);
-        rig.Controller.GetStatus().RecentLog.Should().Contain(e => e.Message == "First load failed: The connection was refused.");
+        rig.Controller.GetStatus().RecentLog.Should().Contain(e => e.Message == "First load failed: no answer: connection refused (nothing listens at that address)");
 
         rig.Replica.Failure = null;
         rig.Replica.Finish.TrySetResult();

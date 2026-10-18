@@ -43,7 +43,88 @@ public sealed class BlindSeedOffsetException(long received)
     public long Received { get; } = received;
 }
 
-public sealed class BlindSeedRejectedException(string message) : InvalidOperationException(message);
+/// <summary>
+/// Why a seed is refused: one code per check that can fail (BMB-306/307 fix round 2, M3/P4). The sender is told, and this node's log says, the FIXED sentence of
+/// the code (<see cref="BlindSeedRefusals.Sentence"/>) - never a path, an address, a key, a pair code, a number the sender chose, or the text of a parser or an I/O
+/// error. What went wrong underneath travels as the exception's inner exception, of which only the type is written down (see the endpoint).
+/// </summary>
+public enum BlindSeedRefusal
+{
+    Generic, SizeOutOfRange, HashMalformed, PartTooLarge, ResumeMismatch, HashMismatch, ActivatedTakesFormat2, ManifestMissing, PackageInvalid, WrongSeed,
+    NotSuperadminPeer, NotBuiltByPairedNode, BlindCannotSeed, CannotSeedItself, UnknownAuthority, SignatureInvalid, SchemaMismatch, DrainTimeout, ReplayFailed,
+    SwitchNotUndone, SwitchFailed, LamportNoRoom, PackageV2Invalid, ControlDatabaseInvalid, BaselineCleanupIncomplete, BaselineRefused, FirstSeedNeedsFullPackage,
+    NotBuiltBySeedingNode, BlobMismatch, DeltaNotStored, CutoverInterrupted, CutoverUnresolved, CutoverPathOutside, CutoverLink,
+}
+
+/// <summary>
+/// A seed this node refuses. <see cref="Exception.Message"/> is the fixed sentence of <see cref="Reason"/> and nothing else: there is no way to build one from a
+/// free sentence, so no sentence somebody later writes with an interpolated message or path can leave this node.
+/// </summary>
+public sealed class BlindSeedRejectedException(BlindSeedRefusal reason, Exception? cause = null)
+    : InvalidOperationException(BlindSeedRefusals.Sentence(reason), cause)
+{
+    public BlindSeedRefusal Reason { get; } = reason;
+}
+
+/// <summary>The sentence of each refusal. The reason of a seed leaves this node in a log line and in the answer to the sender.</summary>
+public static class BlindSeedRefusals
+{
+    public const string Generic = "The seed was refused. Nothing was changed.";
+
+    /// <summary>
+    /// The code whose fixed sentence another blind node answered, or null. What a blind node says about a refusal is one of its fixed sentences
+    /// (<see cref="Sentence"/>); an answer that is not exactly one of them is that node's own text and is not shown.
+    /// </summary>
+    public static BlindSeedRefusal? FromSentence(string? text) =>
+        text is null ? null : Enum.GetValues<BlindSeedRefusal>().Cast<BlindSeedRefusal?>().FirstOrDefault(c => Sentence(c!.Value) == text && c != BlindSeedRefusal.Generic);
+
+    public static string Sentence(BlindSeedRefusal reason) => reason switch
+    {
+        BlindSeedRefusal.SizeOutOfRange => "The package size is outside what this node accepts.",
+        BlindSeedRefusal.HashMalformed => "The package's SHA-256 must be 64 hex characters.",
+        BlindSeedRefusal.PartTooLarge => "Part is larger than announced.",
+        BlindSeedRefusal.ResumeMismatch => "Resume does not match the seed it continues.",
+        BlindSeedRefusal.HashMismatch => "SHA-256 of the received package does not match.",
+        BlindSeedRefusal.ActivatedTakesFormat2 =>
+            "This blind node is activated (metadata encryption): it takes format-2 packages only. Update the sending device to 2.6 or newer.",
+        BlindSeedRefusal.ManifestMissing => "Not a blind package: blind-manifest.json is missing.",
+        BlindSeedRefusal.PackageInvalid => "Not a valid blind package.",
+        BlindSeedRefusal.WrongSeed => "The package was built for another seed.",
+        BlindSeedRefusal.NotSuperadminPeer => "Only a superadmin peer may reseed this node.",
+        BlindSeedRefusal.NotBuiltByPairedNode => "The package was not built by the node that paired.",
+        BlindSeedRefusal.BlindCannotSeed => "A blind node cannot seed a blind node: pair it from a full node.",
+        BlindSeedRefusal.CannotSeedItself => "This node cannot seed itself.",
+        BlindSeedRefusal.UnknownAuthority => "Unknown seed authority.",
+        BlindSeedRefusal.SignatureInvalid => "The package signature does not verify.",
+        BlindSeedRefusal.SchemaMismatch => "The package is on a newer schema than this node. Update this node first.",
+        BlindSeedRefusal.DrainTimeout =>
+            "The database stayed in use (a blind backup job, a wipe or a connection was still running); nothing was changed. Send the seed again when it finishes.",
+        BlindSeedRefusal.ReplayFailed => "Could not replay this node's own events on top of the package; nothing was changed. Send the seed again.",
+        BlindSeedRefusal.SwitchNotUndone =>
+            "The switch failed and could not be undone in place; restart this node — it rolls back to its previous database at start.",
+        BlindSeedRefusal.SwitchFailed => "The switch failed; this node is back on its previous database and media. Send the seed again.",
+        BlindSeedRefusal.LamportNoRoom =>
+            "The package carries a Lamport time that leaves no value for a restorable first-seed grant; this node cannot take it.",
+        BlindSeedRefusal.PackageV2Invalid => "Not a valid format-2 package.",
+        BlindSeedRefusal.ControlDatabaseInvalid => "The package's control database cannot be imported here.",
+        BlindSeedRefusal.BaselineCleanupIncomplete =>
+            "The baseline is adopted, but removing the earlier readable content from this node's database did not finish. Send the seed again.",
+        BlindSeedRefusal.BaselineRefused => "The baseline was refused.",
+        BlindSeedRefusal.FirstSeedNeedsFullPackage => "A first seed needs a full package.",
+        BlindSeedRefusal.NotBuiltBySeedingNode => "The package was not built by the node that is seeding.",
+        BlindSeedRefusal.BlobMismatch => "A blob of the package does not match its name.",
+        BlindSeedRefusal.DeltaNotStored => "A delta event could not be stored yet; the baseline is adopted. Send the seed again.",
+        BlindSeedRefusal.CutoverInterrupted =>
+            "An earlier seed's switch was interrupted and is not resolved; this node rolls it back at its next start. Restart it, then send the seed again.",
+        BlindSeedRefusal.CutoverUnresolved =>
+            "An earlier seed's cutover is unresolved: its marker is missing or unreadable and the database it replaced is still kept in blind-cutover. Nothing was discarded. Restart this node, which keeps or restores what is there; resolve blind-cutover by hand if it stays unresolved. No seed is accepted until then.",
+        BlindSeedRefusal.CutoverPathOutside =>
+            "Refusing to change a file that is not directly under the cutover's own folder. Nothing was changed; resolve it by hand.",
+        BlindSeedRefusal.CutoverLink =>
+            "Refusing to touch a link (or another reparse point) where the cutover's own file should be. Nothing was changed; resolve it by hand.",
+        _ => Generic,
+    };
+}
 
 /// <summary>The pair code this upload came under is spent, renewed or expired by the time it is admitted.</summary>
 public sealed class BlindSeedAuthorityGoneException()
@@ -109,9 +190,9 @@ public sealed partial class BlindSeedService(
         Stream body, CancellationToken ct)
     {
         if (total <= 0 || total > MaxPackageBytes)
-            throw new BlindSeedRejectedException($"Package size {total} is outside 1..{MaxPackageBytes} bytes.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.SizeOutOfRange);
         if (sha256.Length != 64 || !sha256.All(Uri.IsHexDigit))
-            throw new BlindSeedRejectedException("sha256 must be 64 hex characters.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.HashMalformed);
 
         await _gate.WaitAsync(ct);
         try
@@ -146,7 +227,7 @@ public sealed partial class BlindSeedService(
                     if (chunk > MaxChunkBytes || upload.Received + chunk > upload.Total)
                     {
                         file.SetLength(upload.Received);
-                        throw new BlindSeedRejectedException("Part is larger than announced.");
+                        throw new BlindSeedRejectedException(BlindSeedRefusal.PartTooLarge);
                     }
                     await file.WriteAsync(buffer.AsMemory(0, read), ct);
                 }
@@ -184,7 +265,7 @@ public sealed partial class BlindSeedService(
             {
                 // Resuming must not change what is being uploaded, or by whom.
                 if (active.Total != total || active.Sha256 != sha256 || active.Authority != authority)
-                    throw new BlindSeedRejectedException("Resume does not match the seed it continues.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.ResumeMismatch);
                 return active;
             }
             if (DateTime.UtcNow - active.LastTouched < AbandonedAfter)
@@ -216,7 +297,7 @@ public sealed partial class BlindSeedService(
         await using (var file = File.OpenRead(upload.Path))
             actual = Convert.ToHexStringLower(await SHA256.HashDataAsync(file, ct));
         if (actual != upload.Sha256)
-            throw new BlindSeedRejectedException("SHA-256 of the received package does not match.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.HashMismatch);
 
         // Step A: the package's format decides the path. Once activated, only format 2 (spec 2, 8.7).
         if (await PackageFormatAsync(upload.Path, ct) == BlindManifestV2.CurrentFormat)
@@ -226,8 +307,7 @@ public sealed partial class BlindSeedService(
         }
         using (var policyScope = scopeFactory.CreateScope())
             if (policyScope.ServiceProvider.GetService<ISyncProtocolPolicy>() is { SealsMetadata: true })
-                throw new BlindSeedRejectedException(
-                    "This blind node is activated (metadata encryption): it takes format-2 packages only. Update the sending device to 2.6 or newer.");
+                throw new BlindSeedRejectedException(BlindSeedRefusal.ActivatedTakesFormat2);
 
         var dir = SeedDir(upload.SeedId);
         VerifiedSnapshot package;
@@ -237,7 +317,7 @@ public sealed partial class BlindSeedService(
             package = await snapshots.ExtractVerifiedAsync(upload.Path, Path.Combine(dir, "package"));
             var manifestPath = Path.Combine(package.Directory, BlindManifest.FileName);
             if (!File.Exists(manifestPath))
-                throw new BlindSeedRejectedException("Not a blind package: blind-manifest.json is missing.");
+                throw new BlindSeedRejectedException(BlindSeedRefusal.ManifestMissing);
             manifest = BlindManifest.Parse(await File.ReadAllBytesAsync(manifestPath, ct));
         }
         catch (Exception ex) when (ex is InvalidDataException or System.Text.Json.JsonException
@@ -245,10 +325,10 @@ public sealed partial class BlindSeedService(
         {
             // Whatever the sender uploaded is not a package this node can take: bad archive, a file
             // that does not match its manifest hash, an unknown format. The sender's problem, not ours.
-            throw new BlindSeedRejectedException($"Not a valid blind package: {ex.Message}");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.PackageInvalid, ex);
         }
         if (manifest.SeedId != upload.SeedId)
-            throw new BlindSeedRejectedException("The package was built for another seed.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.WrongSeed);
 
         using var scope = scopeFactory.CreateScope();
         var services = scope.ServiceProvider;
@@ -303,25 +383,25 @@ public sealed partial class BlindSeedService(
                 // superadmin — cannot be relayed in under this token.
                 var row = await services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(peer.NodeId);
                 if (row is not { IsSuperadmin: true })
-                    throw new BlindSeedRejectedException("Only a superadmin peer may reseed this node.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.NotSuperadminPeer);
                 producerKey = row.Ed25519PublicKey;
                 break;
             case BlindSeedAuthority.PairingSecret seeder:
                 if (manifest.ProducerNodeId != seeder.SeederNodeId)
-                    throw new BlindSeedRejectedException("The package was not built by the node that paired.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.NotBuiltByPairedNode);
                 // The seeder becomes this node's superadmin: only a full node can be one. A blind node
                 // holds no key and authors nothing, and this node cannot seed itself (review l-root4 #2).
                 if (BlindNodeId.IsBlind(seeder.SeederNodeId))
-                    throw new BlindSeedRejectedException("A blind node cannot seed a blind node: pair it from a full node.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.BlindCannotSeed);
                 if ((await services.GetRequiredService<INodeIdentityRepository>().GetAsync())?.NodeId == seeder.SeederNodeId)
-                    throw new BlindSeedRejectedException("This node cannot seed itself.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.CannotSeedItself);
                 producerKey = Convert.FromBase64String(seeder.SeederKeyB64);
                 break;
             default:
-                throw new BlindSeedRejectedException("Unknown seed authority.");
+                throw new BlindSeedRejectedException(BlindSeedRefusal.UnknownAuthority);
         }
         if (!package.IsSignedBy(producerKey))
-            throw new BlindSeedRejectedException("The package signature does not verify.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.SignatureInvalid);
     }
 
     private static async Task CheckSchemaAsync(VerifiedSnapshot package, IServiceProvider services)
@@ -329,8 +409,7 @@ public sealed partial class BlindSeedService(
         using var conn = services.GetRequiredService<IDbConnectionFactory>().CreateConnection();
         var local = await conn.ExecuteScalarAsync<int>("SELECT COALESCE(MAX(version), 0) FROM tbl_migration");
         if (package.MigrationVersion > local)
-            throw new BlindSeedRejectedException(
-                $"The package has schema {package.MigrationVersion}; this node is on {local}. Update this node first.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.SchemaMismatch);
     }
 
     private static async Task<List<SyncEvent>> ReadAllAfterAsync(IEventLogRepository events, long after)
@@ -409,7 +488,7 @@ public sealed partial class BlindSeedService(
                     NodeId = peer.NodeId,
                     DisplayName = peer.DisplayName,
                     Ed25519PublicKey = Convert.FromBase64String(peer.PublicKeyB64),
-                    ApiAddress = peer.ApiAddress,
+                    ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(peer.ApiAddress),
                     IsSuperadmin = peer.NodeId == manifest.ProducerNodeId || peer.IsSuperadmin,
                     TlsSpki = BlindTrust.PinOf(peer.TlsTrust, peer.TlsSpki),
                     TlsTrust = BlindTrust.Effective(peer.TlsTrust, peer.TlsSpki),
@@ -459,8 +538,7 @@ public sealed partial class BlindSeedService(
                 // Windows the rename fails under an open handle, on Linux the reader captures a
                 // half-moved tree. Taken with the wipe's own gate, so a wipe and a cutover serialize.
                 using var exclusive = await jobs.TryBeginExclusiveAsync(_cutoverDrainWait)
-                    ?? throw new BlindSeedRejectedException(
-                        $"A blind backup job (or a wipe) was still running after {_cutoverDrainWait.TotalSeconds:0} s; nothing was changed. Send the seed again when it finishes.");
+                    ?? throw new BlindSeedRejectedException(BlindSeedRefusal.DrainTimeout);
 
                 // Every connection to the live database takes part in the switch (review l-root4 #1):
                 // new ones wait, open ones are waited for, and the switch goes ahead only once none is
@@ -476,8 +554,7 @@ public sealed partial class BlindSeedService(
                 }
                 catch (TimeoutException)
                 {
-                    throw new BlindSeedRejectedException(
-                        $"The database stayed in use for {CutoverDrainWait.TotalSeconds:0} s; nothing was changed. Send the seed again.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.DrainTimeout);
                 }
 
                 // Plan 5.2: the reseeding node pulled everything up to IncludesUpTo before cutting the
@@ -508,9 +585,9 @@ public sealed partial class BlindSeedService(
                         await ApplyFirstSeedStandingAsync(manifest.ProducerNodeId,
                             manifest.Whitelist.Single(peer => peer.NodeId == manifest.ProducerNodeId), manifest.Standing,
                             p.KeyB64, p.GrantAt);
-                    if (await ReplayAsync(tail) is { } failure)
-                        throw new BlindSeedRejectedException(
-                            $"Could not replay this node's own event {failure} on top of the package; nothing was changed. Send the seed again.");
+                    // The replay says whether it failed, never why: what an event's apply threw is logged by the replay itself (the exception object, not its text).
+                    if (!await ReplayAsync(tail))
+                        throw new BlindSeedRejectedException(BlindSeedRefusal.ReplayFailed);
                     cutover.MarkDone(manifest.SeedId);
                 }
                 catch (Exception ex)
@@ -524,13 +601,11 @@ public sealed partial class BlindSeedService(
                     {
                         logger.LogCritical(rollbackFailure,
                             "Blind seed {SeedId}: rolling back the switch failed; the next start rolls it back", manifest.SeedId);
-                        throw new BlindSeedRejectedException(
-                            "The switch failed and could not be undone in place; restart this node — it rolls back to its previous database at start.");
+                        throw new BlindSeedRejectedException(BlindSeedRefusal.SwitchNotUndone);
                     }
                     if (ex is BlindSeedRejectedException) throw;
                     logger.LogWarning(ex, "Blind seed {SeedId}: the switch failed; rolled back", manifest.SeedId);
-                    throw new BlindSeedRejectedException(
-                        $"The switch failed ({ex.Message}); this node is back on its previous database and media. Send the seed again.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.SwitchFailed, ex);
                 }
 
                 // Done is durable: tidying up the old copies may fail without undoing anything — the
@@ -666,7 +741,7 @@ public sealed partial class BlindSeedService(
             row.Status = "A";
             row.IsSuperadmin = true;
             row.Ed25519PublicKey = pairedKey;
-            row.ApiAddress = claimed.ApiAddress ?? row.ApiAddress;
+            row.ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(claimed.ApiAddress) ?? row.ApiAddress;
             ApplyClaimedTrust(row, claimed);
             row.UpdatedAt = now;
             await whitelist.UpdateAsync(row);
@@ -678,7 +753,7 @@ public sealed partial class BlindSeedService(
                 NodeId = claimed.NodeId,
                 DisplayName = claimed.DisplayName,
                 Ed25519PublicKey = pairedKey,
-                ApiAddress = claimed.ApiAddress,
+                ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(claimed.ApiAddress),
                 IsSuperadmin = true,
                 TlsSpki = BlindTrust.PinOf(claimed.TlsTrust, claimed.TlsSpki),
                 TlsTrust = BlindTrust.Effective(claimed.TlsTrust, claimed.TlsSpki),
@@ -716,8 +791,7 @@ public sealed partial class BlindSeedService(
     {
         var max = Math.Max(maxHeld, (standing ?? []).Select(e => e.LamportTs).DefaultIfEmpty(0).Max());
         if (max >= BlindManifestV2.MaximumFirstSeedGrant)
-            throw new BlindSeedRejectedException(
-                "The package carries a Lamport time that leaves no value for a restorable first-seed grant; this node cannot take it.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.LamportNoRoom);
         return checked(max + 1);
     }
 
@@ -773,9 +847,10 @@ public sealed partial class BlindSeedService(
         return max;
     }
 
-    private async Task<string?> ReplayAsync(List<SyncEvent> tail)
+    /// <summary>Replays this node's own events on top of the new database. True when every one applied or was quarantined; false when one did not apply (the caller rolls the switch back).</summary>
+    private async Task<bool> ReplayAsync(List<SyncEvent> tail)
     {
-        if (tail.Count == 0) return null;
+        if (tail.Count == 0) return true;
         using var scope = scopeFactory.CreateScope();
         var applier = scope.ServiceProvider.GetRequiredService<EventApplier>();
         var quarantine = scope.ServiceProvider.GetRequiredService<ISyncQuarantineRepository>();
@@ -798,17 +873,18 @@ public sealed partial class BlindSeedService(
                 }
                 catch (Exception ex) when (SyncFailureClassifier.Classify(ex) == SyncFailureKind.Permanent)
                 {
+                    // The quarantine list is shown on a screen: the kind of failure, never the exception's own text.
                     await quarantine.RecordFailureAsync(evt.EventId, evt.EventType, evt.NodeId,
-                        "Blind reseed replay: " + ex.Message, SyncFailureKind.Permanent);
+                        $"Blind reseed replay: {ex.GetType().Name}", SyncFailureKind.Permanent);
                     logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) can never apply; quarantined", evt.EventId, evt.EventType);
                 }
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Blind reseed: own event {EventId} ({Type}) did not apply; rolling back", evt.EventId, evt.EventType);
-                    return $"{evt.EventId} ({evt.EventType}: {ex.Message})";
+                    return false;
                 }
             }
-            return (string?)null;
+            return true;
         });
     }
 

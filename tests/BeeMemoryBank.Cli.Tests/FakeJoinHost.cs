@@ -14,10 +14,13 @@ namespace BeeMemoryBank.Cli.Tests;
 /// <summary>How a <see cref="FakeJoinHost"/> behaves about metadata encryption (docs/design/step-a-spec.md 11).</summary>
 internal enum FakeHostActivation
 {
-    /// <summary>A 2.5.1 host, or a 2.6 host that has not activated: declares protocol 3 and sends a plain archive.</summary>
+    /// <summary>A 2.5.1 host, or a 2.6 host that has not activated: declares protocol 3 and sends a plain archive. A new node joins none of them (BMB-306).</summary>
     None,
 
-    /// <summary>An activated host: declares protocol 4 and seals the archive's database (BMBCH1, purpose join) under the DEK of its key slot.</summary>
+    /// <summary>
+    /// An activated host: declares protocol 4 and seals the archive's database (BMBCH1, purpose join) under the DEK of its key slot; the database holds the
+    /// activation, as the snapshot of a real activated node does. The default of a fake host, since a new node joins only such a node.
+    /// </summary>
     Sealed,
 
     /// <summary>A host that declares protocol 4 but sends a plain archive: a downgrade a joiner must refuse.</summary>
@@ -41,7 +44,7 @@ internal sealed class FakeJoinHost
 
     /// <param name="badSignature">Serve the snapshot with a signature that does not verify (a damaged or forged one).</param>
     public FakeJoinHost(Guid hostId, long cpSeq = 5, long lamportTs = 77, bool badSignature = false,
-        FakeHostActivation activation = FakeHostActivation.None)
+        FakeHostActivation activation = FakeHostActivation.Sealed)
     {
         HostId = hostId;
         Activation = activation;
@@ -54,6 +57,9 @@ internal sealed class FakeJoinHost
     private readonly byte[] _privateKey;
     // The master DEK this host's key slot hands over (and an activated host seals its archive under).
     private readonly byte[] _dek = MasterKeyManager.GenerateMasterDek();
+
+    /// <summary>The master DEK of this host: a test that writes its own <c>/api/join</c> answer wraps this one, so that the sealed archive opens.</summary>
+    public byte[] Dek => _dek;
     private readonly byte[] _snapshot;
     private readonly string _signatureB64;
 
@@ -148,7 +154,8 @@ internal sealed class FakeJoinHost
 
     private (byte[] TarGz, string SignatureB64) BuildSnapshot(long cpSeq, long lamportTs)
     {
-        var (plain, migrationVersion) = EmptyVault.Value;
+        var (empty, migrationVersion) = EmptyVault.Value;
+        var plain = Activation == FakeHostActivation.None ? empty : WithActivation(empty);
         var db = plain;
         var manifestFields = new Dictionary<string, object>();
         if (Activation is FakeHostActivation.Sealed or FakeHostActivation.SealedUnderAnotherKey)
@@ -182,6 +189,48 @@ internal sealed class FakeJoinHost
         hasher.AppendData(manifest);
         hasher.AppendData(bytes);
         return (bytes, Convert.ToBase64String(Ed25519Signer.Sign(_privateKey, hasher.GetHashAndReset())));
+    }
+
+    /// <summary>
+    /// The empty vault with the activation of an activated node: generation 1 of the metadata key, wrapped under this host's DEK, and the activation row that
+    /// names it. What a joiner imports from an activated host, so that it declares protocol 4 and can be encrypted when the join ends.
+    /// </summary>
+    private byte[] WithActivation(byte[] emptyVault)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "bmb_cli_fakehost_act_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var file = Path.Combine(dir, "vault.db");
+            File.WriteAllBytes(file, emptyVault);
+            var (mek, key) = MetadataKeyCrypto.Create(1, _dek);
+            CryptographicOperations.ZeroMemory(mek);
+            using (var conn = new SqliteConnection($"Data Source={file};Pooling=False"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText =
+                    "INSERT INTO tbl_metadata_key (key_id, generation, dek_fingerprint, epoch_hint, wrapped, iv, author_node_id, created_at, lamport_ts, event_id) " +
+                    "VALUES ($key, 1, $fp, 0, $wrapped, $iv, $author, $now, 1, $event);" +
+                    "INSERT INTO tbl_metadata_activation (activation_id, key_id, generation, activated_at, author_node_id, event_id, lamport_ts, applied_at) " +
+                    "VALUES ($activation, $key, 1, $now, $author, $event, 2, $now);";
+                cmd.Parameters.AddWithValue("$key", key.KeyId);
+                cmd.Parameters.AddWithValue("$fp", key.DekFingerprint);
+                cmd.Parameters.AddWithValue("$wrapped", key.Wrapped);
+                cmd.Parameters.AddWithValue("$iv", key.Iv);
+                cmd.Parameters.AddWithValue("$author", HostId.ToString("D"));
+                cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+                cmd.Parameters.AddWithValue("$event", Guid.NewGuid().ToString("D"));
+                cmd.Parameters.AddWithValue("$activation", Guid.NewGuid().ToString("D"));
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+            return File.ReadAllBytes(file);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* the test's own temp folder */ }
+        }
     }
 
     /// <summary>A freshly migrated, empty vault database, as one self-contained file.</summary>

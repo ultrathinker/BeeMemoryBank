@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using BeeMemoryBank.Cli.Commands;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Storage.Sqlite;
@@ -93,7 +94,10 @@ public sealed class SnapshotCommandSealedTests : IDisposable
         poller.Join();
 
         observerFailure.Should().BeNull("the observer itself must not fail: " + observerFailure);
-        observed.Keys.Should().OnlyContain(n => n.StartsWith("snapshot-") && (n.EndsWith(".tmp") || n.EndsWith(".tmp-journal")),
+        // "Only these files appear" is judged on what WAS seen, not on seeing something: a staging copy that lives for less than the observer's 1 ms poll is
+        // legitimately never listed (OnlyContain would fail on the empty set, which made this test fail one run in three). The control above proves the observer lists
+        // and reads a plain file, and the canary check below is the claim that matters.
+        observed.Keys.Where(n => !(n.StartsWith("snapshot-") && (n.EndsWith(".tmp") || n.EndsWith(".tmp-journal")))).Should().BeEmpty(
             "the only files that appear are the encrypted staging copy and the rollback journal VACUUM INTO keeps beside it (encrypted pages)");
         canaryHits.Should().BeEmpty("the staging copy is encrypted at every moment");
         Directory.GetFiles(tmp).Should().BeEmpty("the staging copy is gone");
@@ -166,22 +170,17 @@ public sealed class SnapshotCommandSealedTests : IDisposable
     }
 
     [Fact]
-    public async Task The_snapshot_takes_a_name_free_in_both_snapshot_folders_and_overwrites_nothing()
+    public async Task Two_snapshots_made_in_the_same_second_take_two_names_and_the_second_overwrites_nothing()
     {
-        // The way-back snapshot of an encrypted node lives in pre-encryption/ and a restore by name looks in snapshots/ first: the same name in both
-        // would open the wrong archive.
+        // A restore by name looks in snapshots/: a second archive of the same name would replace the first, the copy that exists to be restored.
         var second = new DateTime(2026, 10, 13, 9, 30, 15, DateTimeKind.Utc);
-        var wayBack = Path.Combine(_data, "pre-encryption", "bmb-snapshot-20261013-093015.tar.gz");
-        Directory.CreateDirectory(Path.GetDirectoryName(wayBack)!);
-        File.WriteAllText(wayBack, "the way-back");
 
         var first = await SnapshotCommand.CreateSealedSnapshotAsync(_data, _vault, _keys, _masterDek, "node-1", "Test node", nameClock: () => second);
         var again = await SnapshotCommand.CreateSealedSnapshotAsync(_data, _vault, _keys, _masterDek, "node-1", "Test node", nameClock: () => second);
 
-        Path.GetFileName(first.Path).Should().Be("bmb-snapshot-20261013-093015-2.tar.gz");
-        Path.GetFileName(again.Path).Should().Be("bmb-snapshot-20261013-093015-3.tar.gz");
+        Path.GetFileName(first.Path).Should().Be("bmb-snapshot-20261013-093015.tar.gz");
+        Path.GetFileName(again.Path).Should().Be("bmb-snapshot-20261013-093015-2.tar.gz");
         new FileInfo(first.Path).Length.Should().BeGreaterThan(100, "the first archive is not truncated by the second");
-        File.ReadAllText(wayBack).Should().Be("the way-back", "a file of that name in the other folder is left as it is");
     }
 
     [Fact]
@@ -216,29 +215,22 @@ public sealed class SnapshotCommandSealedTests : IDisposable
         text.Should().NotContain(Convert.ToHexString(_keys.GetPageKey(DbPurposes.Vault)), "no key is ever printed");
     }
 
+    /// <summary>BMB-304: a node that cannot hold its database as the one buffer of the container prints which memory limit would do, not an exception type.</summary>
     [Fact]
-    public async Task The_restore_verb_of_the_cli_refuses_a_snapshot_whose_database_is_encrypted_and_leaves_the_target_alone()
+    public async Task HandleSealedCreateAsync_with_less_memory_than_the_database_needs_says_which_limit_would_do_and_leaves_nothing_behind()
     {
-        var result = await SnapshotCommand.CreateSealedSnapshotAsync(_data, _vault, _keys, _masterDek, "node-1", "Test node");
-        var target = Path.Combine(Path.GetTempPath(), "bmb_clisnap_target_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(target);
-        var existing = Path.Combine(target, "beememorybank.db");
-        await File.WriteAllBytesAsync(existing, [1, 2, 3, 4]);
-        try
-        {
-            var output = new StringWriter();
+        var output = new StringWriter();
 
-            var rc = await SnapshotCommand.HandleRestoreAsync(target, result.Path, output);
+        var rc = await SnapshotCommand.HandleSealedCreateAsync(_data, new TestGate(usable: true), _keys, _vault, _masterDek, null, output,
+            freeMemoryBytes: 1024 * 1024);
 
-            rc.Should().Be(1);
-            output.ToString().Should().Contain("encrypted").And.Contain("restore-standalone");
-            (await File.ReadAllBytesAsync(existing)).Should().Equal(1, 2, 3, 4);
-            File.Exists(existing + ".bak").Should().BeFalse();
-        }
-        finally
-        {
-            try { Directory.Delete(target, true); } catch { }
-        }
+        rc.Should().Be(1);
+        var text = output.ToString();
+        text.Should().StartWith("Error: Making the snapshot of a ").And.Contain("MB database needs about").And.Contain("memory limit").And.Contain("Nothing was changed")
+            .And.NotContain("Exception").And.NotContain("OutOfMemory");
+        (!Directory.Exists(Path.Combine(_data, "snapshots")) || !Directory.EnumerateFiles(Path.Combine(_data, "snapshots")).Any()).Should().BeTrue("no archive");
+        var staging = SnapshotStaging.DirIn(_data);
+        (!Directory.Exists(staging) || !Directory.EnumerateFileSystemEntries(staging).Any()).Should().BeTrue("no working copy");
     }
 
     private static (byte[] Db, JsonElement Manifest) ReadArchive(string path)

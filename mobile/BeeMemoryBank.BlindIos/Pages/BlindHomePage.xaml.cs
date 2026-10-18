@@ -1,6 +1,7 @@
 using BeeMemoryBank.BlindIos.Platforms.iOS;
 using BeeMemoryBank.BlindIos.Services;
 using BeeMemoryBank.BlindMobile.Services.Blind;
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Services.BlindPhone;
 using QRCoder;
 using UIKit;
@@ -64,7 +65,7 @@ public partial class BlindHomePage : ContentPage
             }
             _timer.Start();
 
-            if (App.TakePendingLink() is { } link) AcceptLink(link);
+            if (App.TakePendingLink() is { } link) await AcceptLinkAsync(link);
 #if DEBUG || BMB_E2E
             // End-to-end checks on a simulator or a development iPhone (tools/ios-e2e): the computer's answer is handed over at launch,
             // because a script cannot tap the "Open in ...?" prompt iOS shows for a link. Accepted exactly like a pasted code. Only in a
@@ -72,7 +73,7 @@ public partial class BlindHomePage : ContentPage
             if (!_e2eCodeUsed && Environment.GetEnvironmentVariable("BMB_BLIND_E2E_CALL_CODE") is { Length: > 0 } e2eCode)
             {
                 _e2eCodeUsed = true;
-                AcceptLink(e2eCode);
+                await AcceptLinkAsync(e2eCode);
             }
             // On a real iPhone there is no screenshot to read the QR code from: the check starts the app with its console attached
             // (xcrun devicectl ... --console) and reads the phone code there. The code is on the screen anyway; this only repeats it to
@@ -314,11 +315,15 @@ public partial class BlindHomePage : ContentPage
         }
     }
 
-    /// <summary>A bmb-blind-call: link the app was opened with (the Camera scanned the computer's QR code).</summary>
-    public void AcceptLink(string url)
+    /// <summary>
+    /// A bmb-blind-call: link the app was opened with (the Camera scanned the computer's QR code), or one that waited for this screen, or the code the end-to-end check
+    /// hands over. It goes the SAME way as the Connect button (BMB-311 fix2, R3): behind the busy helper, keyed to the Connect button, so the screen is covered until the
+    /// first load has ended and a second link or a tap cannot start another one.
+    /// </summary>
+    public async Task AcceptLinkAsync(string url)
     {
         CallCodeEntry.Text = "";
-        if (Accept(url)) Notice("Connected with the code from the link. The first load starts now.");
+        await ConnectAsync(ConnectButton, url, fromLink: true);
     }
 
     /// <summary>The computer's answer, pasted or from a link: accepted only when it was made for this phone's current pairing secret.</summary>
@@ -348,6 +353,7 @@ public partial class BlindHomePage : ContentPage
         }
     }
 
+    // busy-exempt: copies to the clipboard, nothing is sent and nothing waits
     private async void OnCopyPhoneCodeClicked(object? sender, EventArgs e)
     {
         try
@@ -364,6 +370,7 @@ public partial class BlindHomePage : ContentPage
         }
     }
 
+    // busy-exempt: pastes from the clipboard, nothing is sent and nothing waits
     private async void OnPasteClicked(object? sender, EventArgs e)
     {
         try
@@ -376,7 +383,57 @@ public partial class BlindHomePage : ContentPage
         }
     }
 
-    private void OnConnectClicked(object? sender, EventArgs e) => Accept(CallCodeEntry.Text ?? "");
+    private async void OnConnectClicked(object? sender, EventArgs e)
+    {
+        await ConnectAsync(sender as Button, CallCodeEntry.Text ?? "", fromLink: false);
+    }
+
+    private async Task ConnectAsync(Button? sender, string code, bool fromLink)
+    {
+        // A long operation (BMB-311): pairing and the first copy. The one busy helper covers the screen from the start until the state of the phone says the
+        // first load has ended, failed or was never started, so Connect cannot be started twice (by a tap, a link or the end-to-end code); the reason a code was
+        // refused is written under the field.
+        await BusyAction.RunAsync(sender, async busy =>
+        {
+            var ask = BlindJobWait.Ask(BlindJobWait.FirstLoad, Runtime.App.GetStatus(), DateTimeOffset.UtcNow);
+            if (!Accept(code)) return;
+            if (fromLink) Notice("Connected with the code from the link. The first load starts now.");
+            var outcome = await WaitForJobAsync(busy, ask, BlindActivity.Heavy);
+            if (outcome.Phase == BlindJobPhase.Failed) Notice($"The first load did not finish: {outcome.Message}");
+            else if (outcome.Phase == BlindJobPhase.Unreported) Notice(outcome.Message ?? "");
+            Refresh();
+        }, new BusyOptions
+        {
+            Long = true,
+            Title = "Connecting",
+            Message = "Please wait. The first copy of the data is being loaded; this can take a while. Keep the app open until it is done; iOS pauses it in the background.",
+            FailureTitle = "Connect",
+        });
+    }
+
+    /// <summary>
+    /// Waits for the job just asked for, until the STATE of the phone says it has ended (<see cref="BlindJobWait.Judge"/>): it runs, or it is queued and not
+    /// started yet, and it ends when its mark appears, its failure is recorded, or - after a grace for the queue - nothing was ever seen of it. There is no
+    /// limit on how long a running job may take: the button is not given back while it runs, and after half an hour the pop-up says that it is still
+    /// running and not to start it again.
+    /// </summary>
+    private async Task<BlindJobOutcome> WaitForJobAsync(BusyProgress busy, BlindJobAsk ask, params string[] kinds)
+    {
+        var said = false;
+        for (;;)
+        {
+            var runtime = Runtime;
+            var now = DateTimeOffset.UtcNow;
+            var outcome = BlindJobWait.Judge(ask, runtime.App.GetStatus(), kinds.Any(runtime.Activity.IsActive), now);
+            if (!outcome.IsOpen) return outcome;
+            if (!said && now - ask.At > BlindJobWait.StillRunningAfter)
+            {
+                busy.Report(null, BlindJobWait.StillRunningText);
+                said = true;
+            }
+            await Task.Delay(1000);
+        }
+    }
 
     private async void OnRePairClicked(object? sender, EventArgs e)
     {
@@ -386,8 +443,13 @@ public partial class BlindHomePage : ContentPage
                     "This makes a new code for adding the iPhone on a computer again. The current connection stays until the computer's new answer is accepted.",
                     "Make a new code", "Cancel"))
                 return;
-            Runtime.App.StartRePair();
-            Refresh();
+            // The one busy helper (BMB-311): the button is off and spins until the new code is made; a failure is said in full.
+            await BusyAction.RunAsync(sender as Button, () =>
+            {
+                Runtime.App.StartRePair();
+                Refresh();
+                return Task.CompletedTask;
+            }, new BusyOptions { FailureTitle = "Re-pair" });
         }
         catch (Exception ex)
         {
@@ -397,55 +459,74 @@ public partial class BlindHomePage : ContentPage
 
     private async void OnSyncNowClicked(object? sender, EventArgs e)
     {
-        try
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up from the tap until the state of the phone says the sync has
+        // ended (it has no time limit: the button is not given back while the round runs); a failure to even ask is said in full.
+        await BusyAction.RunAsync(sender as Button, async busy =>
         {
+            var ask = BlindJobWait.Ask(BlindJobWait.Sync, Runtime.App.GetStatus(), DateTimeOffset.UtcNow);
             var scheduler = Runtime.Scheduler;
             scheduler.EnsureScheduled();
             scheduler.RequestSync();
             Notice("Sync asked for.");
             Refresh();
-        }
-        catch (Exception ex)
+            var outcome = await WaitForJobAsync(busy, ask, BlindActivity.Sync);
+            if (outcome.Phase == BlindJobPhase.Unreported) Notice(outcome.Message ?? "");
+            Refresh();
+        }, new BusyOptions
         {
-            await TellAsync("Sync now", ex.Message);
-        }
+            Long = true,
+            Title = "Syncing",
+            Message = "Please wait while this iPhone syncs. Keep the app open until it is done; iOS pauses it in the background.",
+            FailureTitle = "Sync now",
+        });
     }
 
     private async void OnBackupNowClicked(object? sender, EventArgs e)
     {
-        try
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up from the tap until the state of the phone says the backup has
+        // ended (it has no time limit: the button is not given back while the job runs). The button is off at once: a second tap cannot ask for a second
+        // job (the loop runs one job at a time anyway).
+        var ran = await BusyAction.RunAsync(sender as Button, async busy =>
         {
-            // Off at once: a second tap cannot ask for a second job while the first one starts (the loop runs one job at a time anyway).
             _backupAskedAt = DateTimeOffset.UtcNow;
-            BackupNowButton.IsEnabled = false;
+            var ask = BlindJobWait.Ask(BlindJobWait.Backup, Runtime.App.GetStatus(), _backupAskedAt);
             var scheduler = Runtime.Scheduler;
             scheduler.EnsureScheduled();
             scheduler.RequestBackup();
             Notice("Backup asked for. Keep the app open until it is done; iOS pauses it in the background.");
             Refresh();
-        }
-        catch (Exception ex)
+            var outcome = await WaitForJobAsync(busy, ask, BlindActivity.Heavy, BlindActivity.BackupService);
+            if (outcome.Phase == BlindJobPhase.Failed) Notice($"The backup did not finish: {outcome.Message}");
+            else if (outcome.Phase == BlindJobPhase.Unreported) Notice(outcome.Message ?? "");
+        }, new BusyOptions
         {
-            _backupAskedAt = DateTimeOffset.MinValue;
-            await TellAsync("Back up now", ex.Message);
-            Refresh();
-        }
+            Long = true,
+            Title = "Backing up",
+            Message = "Please wait while the backup is made. Keep the app open until it is done; iOS pauses it in the background.",
+            FailureTitle = "Back up now",
+        });
+        if (!ran) _backupAskedAt = DateTimeOffset.MinValue;
+        Refresh();
     }
 
     /// <summary>The share sheet ("Save to Files", AirDrop, another app) with the newest backup file of the backup folder, by name.</summary>
     private async void OnSaveToClicked(object? sender, EventArgs e)
     {
-        try
+        // A long operation (BMB-311): the file leaves the app through the share sheet, which waits for the person. The one busy helper keeps the screen
+        // covered until the sheet is done, so nothing else is started meanwhile; a failure is said in full.
+        await BusyAction.RunAsync(sender as Button, async () =>
         {
             var runtime = Runtime;
             if (runtime.App.GetStatus().Backups.FirstOrDefault() is not { } latest) return;
             var path = Path.Combine(BlindPaths.Backups(runtime.Paths.DataDirectory), Path.GetFileName(latest.Name));
             await Share.Default.RequestAsync(new ShareFileRequest { Title = "Save the blind copy's backup", File = new ShareFile(path) });
-        }
-        catch (Exception ex)
+        }, new BusyOptions
         {
-            await TellAsync("Save to…", ex.Message);
-        }
+            Long = true,
+            Title = "Saving the backup",
+            Message = "Please wait while the backup is handed to the share sheet.",
+            FailureTitle = "Save to…",
+        });
         Refresh();
     }
 
@@ -477,12 +558,33 @@ public partial class BlindHomePage : ContentPage
             }
             // Off the UI thread: the wipe waits (bounded) for a running sync, first load or backup to end before it deletes anything; when it
             // succeeds, the host puts the first-run composition in place and the screen moves to it (OnRuntimeReplaced).
+            // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up until the wipe has ended.
             var app = Runtime.App;
-            await Task.Run(() => app.DisconnectAndWipeAsync());
-        }
-        catch (AggregateException ex)
-        {
-            await TellAsync("Disconnect and wipe", $"{ex.Message}{Environment.NewLine}{Environment.NewLine}Press Disconnect and wipe again to finish.");
+            var incomplete = false;
+            await BusyAction.RunAsync(sender as Button, async () =>
+            {
+                try
+                {
+                    await Task.Run(() => app.DisconnectAndWipeAsync());
+                }
+                catch (AggregateException)
+                {
+                    incomplete = true;
+                    throw;
+                }
+            }, new BusyOptions
+            {
+                Long = true,
+                Title = "Disconnecting and wiping",
+                Message = "Please wait. A running sync or backup is stopped first, then this copy, its backups and its keys are deleted.",
+                Result = (ok, text) =>
+                {
+                    if (ok) return;
+                    _ = TellAsync("Disconnect and wipe", incomplete
+                        ? $"{text}{Environment.NewLine}{Environment.NewLine}Press Disconnect and wipe again to finish."
+                        : $"Could not wipe: {text}");
+                },
+            });
             Refresh();
         }
         catch (Exception ex)

@@ -195,7 +195,7 @@ public class JoinCommandAbortTests : IDisposable
 
         rc.Should().Be(1);
         server.Paths.Should().Equal("/api/join", "/api/join/abort");
-        output.ToString().Should().Contain("Error: the join could not be completed").And.Contain("Base-64")
+        output.ToString().Should().Contain("Error: the join could not be completed").And.Contain("cannot read or verify").And.NotContain("Base-64", "the framework's own words are not shown")
             .And.Contain("no longer lists").And.NotContain(Password);
     }
 
@@ -232,7 +232,7 @@ public class JoinCommandAbortTests : IDisposable
 
         rc.Should().Be(1);
         server.Paths.Count(p => p == "/api/join/abort").Should().Be(1);
-        output.ToString().Should().Contain("Base-64").And.Contain("no longer lists");
+        output.ToString().Should().Contain("cannot read or verify").And.NotContain("Base-64").And.Contain("no longer lists");
     }
 
     [Fact]

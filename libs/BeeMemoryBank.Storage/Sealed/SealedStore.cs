@@ -51,8 +51,6 @@ public static class VaultStoreFiles
     public const string SealNewSuffix = ".seal-new";
     /// <summary>Suffix a replaced plain file carries between the swap and its wipe (spec 10.6); never survives a start.</summary>
     public const string SealOldSuffix = ".seal-old";
-    /// <summary>Folder of the pre-encryption snapshot (spec 10.4 step 3, 10.7): not read by the snapshot listing or its retention.</summary>
-    public const string PreEncryptionDir = "pre-encryption";
 
     /// <summary><c>PRAGMA application_id</c> of every boot store: "BMBS".</summary>
     public const int BootApplicationId = 0x424D4253;

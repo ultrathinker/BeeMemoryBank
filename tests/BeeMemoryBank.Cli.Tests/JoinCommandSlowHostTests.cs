@@ -13,6 +13,7 @@ namespace BeeMemoryBank.Cli.Tests;
 /// one-time code. Verified on the old code with a host that took 32 seconds: "canceled due to the configured HttpClient.Timeout of 30 seconds".
 /// The limit is handed in here (1 second) so the test needs no real half minute.
 /// </summary>
+[Collection("CliSealedStatics")]
 public class JoinCommandSlowHostTests : IDisposable
 {
     private const string Password = "cliSlowHostPassword1";
@@ -21,6 +22,7 @@ public class JoinCommandSlowHostTests : IDisposable
 
     public void Dispose()
     {
+        JoinedNode.Reset();
         if (Directory.Exists(_tempDir))
             try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
@@ -43,7 +45,7 @@ public class JoinCommandSlowHostTests : IDisposable
         await serve;
 
         rc.Should().Be(0, output.ToString());
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!.InitialSyncCompleted.Should().BeTrue();
     }
@@ -63,8 +65,8 @@ public class JoinCommandSlowHostTests : IDisposable
         await serve;
 
         rc.Should().Be(1);
-        output.ToString().Should().Contain("did not answer within 1 seconds").And.NotContain(Password);
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        output.ToString().Should().Contain("did not answer in time").And.NotContain("within 1 seconds", "the exception's own words are not shown").And.NotContain(Password);
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull();
     }

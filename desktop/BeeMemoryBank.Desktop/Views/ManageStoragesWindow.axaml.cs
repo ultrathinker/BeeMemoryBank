@@ -103,6 +103,7 @@ public partial class ManageStoragesWindow : Window
 
     // ── Header actions ───────────────────────────────────────────────────────────
 
+    // busy-exempt: opens the Create dialog; the work is that dialog's Create button, which runs behind the busy helper
     private async void OnNewProfileClick(object? sender, RoutedEventArgs e)
     {
         try { await ProfileCommands.NewProfileAsync(this, _owner); }
@@ -110,6 +111,7 @@ public partial class ManageStoragesWindow : Window
         RefreshProfileList();
     }
 
+    // busy-exempt: opens the Add existing dialog; the work is that dialog's Add button, which runs behind the busy helper
     private async void OnAddExistingClick(object? sender, RoutedEventArgs e)
     {
         try { await ProfileCommands.AddExistingAsync(this, _owner); }
@@ -123,11 +125,11 @@ public partial class ManageStoragesWindow : Window
     {
         if (sender is Button btn && btn.Tag is string id)
         {
-            await RenameAsync(id);
+            await RenameAsync(id, btn);
         }
     }
 
-    private async Task RenameAsync(string id)
+    private async Task RenameAsync(string id, Button btn)
     {
         ProfileEntry profile;
         try { profile = _profiles.GetById(id); }
@@ -139,28 +141,26 @@ public partial class ManageStoragesWindow : Window
 
         if (string.IsNullOrWhiteSpace(newName)) return;
 
-        try
+        // The one busy helper (BMB-311): the button is off and shows its loader until the new name is written; a failure is said in full.
+        await BusyAction.RunAsync(this, btn, () =>
         {
             _profiles.RenameProfile(id, newName);
             _owner.NotifyProfilesChanged();
             RefreshProfileList();
-        }
-        catch (Exception ex)
-        {
-            await ShowMessageAsync("Could not rename the profile", ex.Message);
-        }
+            return Task.CompletedTask;
+        }, new BusyOptions { FailureTitle = "Could not rename the profile" });
     }
 
     private async void OnRekeyClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button btn && btn.Tag is string id)
         {
-            await RekeyAsync(id);
+            await RekeyAsync(id, btn);
         }
     }
 
     /// <summary>The offline re-key of the active profile's vault (<see cref="MainWindow.RekeyActiveProfileAsync"/>).</summary>
-    private async Task RekeyAsync(string id)
+    private async Task RekeyAsync(string id, Button btn)
     {
         ProfileEntry profile;
         try { profile = _profiles.GetById(id); }
@@ -175,19 +175,17 @@ public partial class ManageStoragesWindow : Window
         var password = await new RekeyPasswordDialog(profile.Name).ShowDialog<string?>(this);
         if (password == null) return;
 
-        var originalTitle = Title;
-        IsEnabled = false;
-        Title = "Profiles — re-keying...";
-        Services.DesktopRekeyResult result;
-        try
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up, so nothing can be clicked while the vault is re-encrypted.
+        Services.DesktopRekeyResult? outcome = null;
+        var ran = await BusyAction.RunAsync(this, btn, async () => outcome = await _owner.RekeyActiveProfileAsync(password), new BusyOptions
         {
-            result = await _owner.RekeyActiveProfileAsync(password);
-        }
-        finally
-        {
-            IsEnabled = true;
-            Title = originalTitle;
-        }
+            Long = true,
+            Title = "Re-keying this profile",
+            Message = "Please wait. The vault is being re-encrypted with a new key; this can take several minutes. Do not close the app.",
+            FailureTitle = "The re-key failed",
+        });
+        if (!ran || outcome is null) return;
+        var result = outcome;
 
         switch (result.Outcome)
         {
@@ -209,11 +207,11 @@ public partial class ManageStoragesWindow : Window
     {
         if (sender is Button btn && btn.Tag is string id)
         {
-            await MoveAsync(id);
+            await MoveAsync(id, btn);
         }
     }
 
-    private async Task MoveAsync(string id)
+    private async Task MoveAsync(string id, Button btn)
     {
         ProfileEntry profile;
         try { profile = _profiles.GetById(id); }
@@ -245,20 +243,18 @@ public partial class ManageStoragesWindow : Window
             "Move", "Cancel");
         if (!await confirm.ShowDialog<bool>(this)) return;
 
-        var originalTitle = Title;
-        IsEnabled = false;
-        Title = "Profiles — moving...";
-        Services.RelocateResult result;
-        try
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up while the database is copied.
+        Services.RelocateResult? moved = null;
+        var ran = await BusyAction.RunAsync(this, btn, async () => moved = await _owner.MoveProfileAsync(id, target), new BusyOptions
         {
-            result = await _owner.MoveProfileAsync(id, target);
-        }
-        finally
-        {
-            IsEnabled = true;
-            Title = originalTitle;
-            RefreshProfileList();
-        }
+            Long = true,
+            Title = "Moving this profile",
+            Message = "Please wait. The data is being copied to the new folder; this can take several minutes. Do not close the app.",
+            FailureTitle = "Could not move the profile",
+        });
+        RefreshProfileList();
+        if (!ran || moved is null) return;
+        var result = moved;
 
         if (!result.Success)
         {
@@ -288,14 +284,28 @@ public partial class ManageStoragesWindow : Window
             return;
         }
 
-        try
+        // A long operation (BMB-311): a recursive delete of a whole vault takes time. The one busy helper covers the window with the pop-up until it is
+        // done, so no other storage action starts meanwhile; the safety checks above are unchanged. The full error is said in the shell's own place for
+        // one, a message dialog, with the folder named.
+        string? failure = null;
+        await BusyAction.RunAsync(this, null, async () =>
         {
-            await Task.Run(() => Directory.Delete(oldPath, recursive: true));
-        }
-        catch (Exception ex)
+            try
+            {
+                await Task.Run(() => Directory.Delete(oldPath, recursive: true));
+            }
+            catch (Exception ex)
+            {
+                failure = $"{ex.Message}\n\n{oldPath}";
+            }
+        }, new BusyOptions
         {
-            await ShowMessageAsync("Could not delete the old copy", $"{ex.Message}\n\n{oldPath}");
-        }
+            Long = true,
+            Title = "Deleting the old copy",
+            Message = "Please wait while the old folder is deleted. Do not close the app.",
+            FailureTitle = "Could not delete the old copy",
+        });
+        if (failure != null) await ShowMessageAsync("Could not delete the old copy", failure);
     }
 
     private static string SafeFolderName(string name)
@@ -309,11 +319,11 @@ public partial class ManageStoragesWindow : Window
     {
         if (sender is Button btn && btn.Tag is string id)
         {
-            await ForgetAsync(id);
+            await ForgetAsync(id, btn);
         }
     }
 
-    private async Task ForgetAsync(string id)
+    private async Task ForgetAsync(string id, Button btn)
     {
         ProfileEntry profile;
         try { profile = _profiles.GetById(id); }
@@ -339,21 +349,15 @@ public partial class ManageStoragesWindow : Window
         var ok = await confirm.ShowDialog<bool>(this);
         if (!ok) return;
 
-        try
+        // The one busy helper (BMB-311). The last-profile refusal is an InvalidOperationException: the button must never silently do nothing,
+        // so the helper says it in full.
+        await BusyAction.RunAsync(this, btn, () =>
         {
             _profiles.ForgetProfile(id);
             _owner.NotifyProfilesChanged();
             RefreshProfileList();
-        }
-        catch (InvalidOperationException ioex)
-        {
-            // Last-profile case — the button must never silently do nothing.
-            await ShowMessageAsync("Cannot forget this profile", ioex.Message);
-        }
-        catch (Exception ex)
-        {
-            await ShowMessageAsync("Could not forget the profile", ex.Message);
-        }
+            return Task.CompletedTask;
+        }, new BusyOptions { FailureTitle = "Cannot forget this profile" });
     }
 
     private void OnOpenFolderClick(object? sender, RoutedEventArgs e)

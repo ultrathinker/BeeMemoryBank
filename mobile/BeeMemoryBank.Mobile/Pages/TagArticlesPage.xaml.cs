@@ -56,6 +56,7 @@ public partial class TagArticlesPage : ContentPage
         }
     }
 
+    // busy-exempt: opens the article tapped, nothing is sent and nothing waits
     private async void OnArticleTapped(object? sender, TappedEventArgs e)
     {
         if (sender is not BindableObject bo) return;

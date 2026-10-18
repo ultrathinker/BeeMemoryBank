@@ -18,8 +18,8 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The preflight of "Encrypt this node", the erase of unencrypted copies, the way-back snapshot's routes and the warnings, through the routes the page
-/// calls (docs/design/step-b-spec.md 10.2, 10.7, 11.2; red tests 15.3.8, 15.3.9, 15.3.17).
+/// The preflight of "Encrypt this node", the erase of unencrypted copies and the warnings, through the routes the page
+/// calls (docs/design/step-b-spec.md 10.2, 11.2; red tests 15.3.8, 15.3.9, 15.3.17). There is no way-back snapshot since 2.6.2 (BMB-306).
 /// </summary>
 public sealed class SealPreflightApiTests(ActivatedPlainTemplate template) : IClassFixture<ActivatedPlainTemplate>
 {
@@ -141,47 +141,35 @@ public sealed class SealPreflightApiTests(ActivatedPlainTemplate template) : ICl
         c.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_user").Should().BeGreaterThan(0, "the node still opens");
     }
 
+    /// <summary>
+    /// BMB-306: encrypting keeps no copy of the plain database, so the preflight says plainly, whatever else it says, that going back is not possible
+    /// from the node (every client shows the warning), and a node that has been encrypted holds no pre-encryption folder and no way-back in its progress.
+    /// </summary>
     [Fact]
-    public async Task A_database_above_the_snapshot_limit_blocks_until_the_owner_ticks_the_box_and_then_runs_without_the_way_back_snapshot()
+    public async Task The_preflight_warns_that_going_back_is_not_possible_from_the_node_and_the_run_keeps_no_copy()
     {
-        using var node = await StartAsync(services =>
-        {
-            // The product's own host, built the way the product builds it, behind a wrapper that finds the database too large.
-            var original = services.Single(d => d.ServiceType == typeof(ISealMigrationHost)).ImplementationFactory!;
-            services.Replace(ServiceDescriptor.Singleton<ISealMigrationHost>(sp => new LimitedHost((ISealMigrationHost)original(sp))));
-        });
+        using var node = await StartAsync();
         using var client = node.Client();
 
-        var blocked = await SealedApiNode.GetJsonAsync(client, "/api/vault/seal/preflight");
-        Codes(blocked, "blockers").Should().Contain("snapshot_limit");
-        using (var refused = await client.PostAsJsonAsync("/api/vault/seal", new { password = Password }))
-            refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var preflight = await SealedApiNode.GetJsonAsync(client, "/api/vault/seal/preflight");
+        var warning = preflight.GetProperty("warnings").EnumerateArray().Single(w => w.GetProperty("code").GetString() == "no_way_back");
+        warning.GetProperty("message").GetString().Should().Contain("Going back is not possible from the node").And.Contain("no copy");
+        preflight.GetProperty("can_start").GetBoolean().Should().BeTrue("a warning does not block");
+        Codes(preflight, "blockers").Should().NotContain("snapshot_limit", "there is no snapshot to be too large for");
 
-        var ticked = await SealedApiNode.GetJsonAsync(client, "/api/vault/seal/preflight?accept_no_snapshot=true");
-        ticked.GetProperty("can_start").GetBoolean().Should().BeTrue();
-        using var start = await client.PostAsJsonAsync("/api/vault/seal", new { password = Password, accept_no_snapshot = true });
+        using var start = await client.PostAsJsonAsync("/api/vault/seal", new { password = Password });
         start.StatusCode.Should().Be(HttpStatusCode.Accepted);
         var progress = await WaitForEndAsync(client);
         progress.GetProperty("phase").GetString().Should().Be("done", progress.ToString());
-        progress.GetProperty("snapshot").ValueKind.Should().Be(JsonValueKind.Null, "step 3 was skipped");
-        Directory.Exists(Path.Combine(node.Dir, "pre-encryption")).Should().BeFalse();
-    }
-
-    /// <summary>The host of the Api with a database "too large" for the way-back snapshot; making the snapshot must not be attempted.</summary>
-    private sealed class LimitedHost(ISealMigrationHost inner) : ISealMigrationHost
-    {
-        public bool CanMakeWayBackSnapshot => true;
-        public bool FitsWayBackSnapshot(long databaseBytes) => false;
-        public Task<WayBackSnapshot> CreateWayBackSnapshotAsync(string masterPassword, CancellationToken ct) =>
-            throw new InvalidOperationException("step 3 must be skipped");
-        public Task<IReadOnlyList<SealBlocker>> HostBlockersAsync(SealOptions options, CancellationToken ct) => inner.HostBlockersAsync(options, ct);
-        public Task<IReadOnlyList<SealWarning>> HostWarningsAsync(CancellationToken ct) => inner.HostWarningsAsync(ct);
+        progress.TryGetProperty("snapshot", out _).Should().BeFalse("no way-back snapshot is made, so none is reported");
+        Directory.Exists(Path.Combine(node.Dir, "pre-encryption")).Should().BeFalse("nothing was kept of the node as it was");
+        Directory.EnumerateFiles(node.Dir, "bmb-snapshot-*", SearchOption.AllDirectories).Should().BeEmpty("not even a snapshot of any kind");
     }
 
     // ---------------------------------------------------------------- after the migration
 
     [Fact]
-    public async Task After_the_migration_the_erase_works_on_the_sealed_node_and_the_way_back_snapshot_is_listed_and_deleted_on_the_owners_word()
+    public async Task After_the_migration_the_erase_works_on_the_sealed_node()
     {
         using var node = await StartAsync();
         using var client = node.Client();
@@ -193,42 +181,18 @@ public sealed class SealPreflightApiTests(ActivatedPlainTemplate template) : ICl
         using (var erase = await client.PostAsJsonAsync("/api/vault/seal/erase-plain-copies", new { password = Password, paths = new[] { "tmp/late-copy.db" } }))
             (await erase.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("erased").GetArrayLength().Should().Be(1);
         File.Exists(Path.Combine(node.Dir, "tmp", "late-copy.db")).Should().BeFalse();
-
-        // The way back: shown to a signed-in superadmin by name, size and date, never in the unauthenticated status.
-        var listed = await SealedApiNode.GetJsonAsync(client, "/api/vault/pre-encryption");
-        listed.GetProperty("exists").GetBoolean().Should().BeTrue();
-        var name = listed.GetProperty("name").GetString()!;
-        (await client.GetStringAsync("/api/vault/status")).Should().NotContain(name);
-        var snapshot = Path.Combine(node.Dir, "pre-encryption", name);
-        File.WriteAllText(snapshot + ".sig", "a signature");
-        File.WriteAllText(Path.Combine(node.Dir, "pre-encryption", "notes.txt"), "an unrelated file");
-
-        // Only the owner, with the password, deletes it.
-        using (var anonymous = node.Factory.CreateDefaultClient())
-            (await anonymous.DeleteAsync("/api/vault/pre-encryption")).StatusCode.Should().BeOneOf(HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden, HttpStatusCode.NotFound);   // a route outside the public surface does not exist for a caller without the internal key
-        using (var ordinaryUser = node.Client())
-        {
-            ordinaryUser.DefaultRequestHeaders.Remove("X-User-Role");
-            ordinaryUser.DefaultRequestHeaders.Add("X-User-Role", "user");
-            using var forbidden = await Delete(ordinaryUser, Password);
-            forbidden.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        }
-        using (var wrong = await Delete(client, "wrong password")) wrong.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-        File.Exists(snapshot).Should().BeTrue();
-
-        using (var deleted = await Delete(client, Password)) deleted.StatusCode.Should().Be(HttpStatusCode.OK);
-        File.Exists(snapshot).Should().BeFalse();
-        File.Exists(snapshot + ".sig").Should().BeFalse("the signature goes with the snapshot");
-        File.Exists(Path.Combine(node.Dir, "pre-encryption", "notes.txt")).Should().BeTrue("nothing else in the folder is the product's to delete");
-        (await SealedApiNode.GetJsonAsync(client, "/api/vault/pre-encryption")).GetProperty("exists").GetBoolean().Should().BeFalse();
-        using var c = node.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
-        c.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_audit_log WHERE action = 'pre_encryption_deleted'").Should().Be(1);
     }
 
-    private static Task<HttpResponseMessage> Delete(HttpClient client, string password)
+    /// <summary>The routes of the way-back snapshot are gone (BMB-306): nothing lists it, nothing deletes it, nothing restores into the open from it.</summary>
+    [Fact]
+    public async Task The_way_back_routes_do_not_exist()
     {
-        var request = new HttpRequestMessage(HttpMethod.Delete, "/api/vault/pre-encryption") { Content = JsonContent.Create(new { password }) };
-        return client.SendAsync(request);
+        using var node = await StartAsync();
+        using var client = node.Client();
+
+        using (var get = await client.GetAsync("/api/vault/pre-encryption")) get.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        using var delete = new HttpRequestMessage(HttpMethod.Delete, "/api/vault/pre-encryption") { Content = JsonContent.Create(new { password = Password }) };
+        using (var deleted = await client.SendAsync(delete)) deleted.StatusCode.Should().BeOneOf(HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed);
     }
 
     // ---------------------------------------------------------------- warnings

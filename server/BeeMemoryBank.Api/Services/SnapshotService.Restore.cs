@@ -56,19 +56,62 @@ public partial class SnapshotService
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// The refusal for a backup whose database this version would not open, judged from its migration ledger (a release before 2.6, or a
+    /// history nobody here knows) and from its structure (the same comparison the adoption makes of a 2.6.x database; for a backup that
+    /// carries the baseline's ledger already nothing would repair a gap at the next start, so a gap refuses it); null when it would open it.
+    /// Nothing is written to the backup, nothing is named but tables and columns and the version to use.
+    /// </summary>
+    private InvalidOperationException? DatabaseRefusalOf(string dbPath)
+    {
+        try
+        {
+            using var conn = OpenStaged(dbPath);
+            var refusal = MigrationRunner.JudgeDatabase(conn);
+            return refusal?.Reason switch
+            {
+                MigrationRefusal.OlderDatabase => new InvalidOperationException(
+                    "This backup was made by a release before 2.6 (or by an update that did not finish), so this version cannot restore it. " +
+                    "Restore it on a node that runs 2.6.1, update that node to this version, and make a new backup. Nothing was changed."),
+                MigrationRefusal.UnknownHistory => new InvalidOperationException(
+                    "This backup has a migration history this version does not recognise: it was made by a newer version. " +
+                    "Restore it with the version that made it, or with a newer one. Nothing was changed."),
+                MigrationRefusal.IncompatibleStructure => new InvalidOperationException(
+                    "This backup has the migration history of version 2.6 but not its structure (" +
+                    string.Join("; ", refusal!.Problems.Take(5)) + (refusal.Problems.Count > 5 ? $"; and {refusal.Problems.Count - 5} more" : "") +
+                    "), so this version could not open it after the restore. It was probably damaged or edited. " +
+                    "Restore another backup, one made by version 2.6.1 or later. Nothing was changed."),
+                _ => null,
+            };
+        }
+        catch (SqliteException ex)
+        {
+            throw new SnapshotContainerException(ex);
+        }
+    }
+
     /// <summary>Table names present in a database file, read without pooling the handle.</summary>
     private HashSet<string> ReadTableNames(string dbPath)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Not pooled, for the same reason as everywhere else in this file: the file is moved or deleted moments later, and a pooled handle
         // keeps it locked on Windows. Keyed on an encrypted node.
-        using var conn = OpenStaged(dbPath);
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-            names.Add(reader.GetString(0));
-        return names;
+        try
+        {
+            using var conn = OpenStaged(dbPath);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                names.Add(reader.GetString(0));
+            return names;
+        }
+        catch (SqliteException ex)
+        {
+            // The container authenticated and the image was imported, yet its schema cannot be read: a damaged image, not a fault of this node. The same sentence as every
+            // other unreadable snapshot (SQLite's text is not the answer); nothing has been changed when this is thrown.
+            throw new SnapshotContainerException(ex);
+        }
     }
 
     /// <summary>
@@ -77,16 +120,17 @@ public partial class SnapshotService
     /// key of the snapshot's database when the session's own key does not open it.
     /// </summary>
     public async Task<SnapshotRestoreOutcome> RestoreAsync(
-        string fileName, bool standaloneMode = false, string? masterPassword = null)
+        string fileName, bool standaloneMode = false, string? masterPassword = null, CancellationToken ct = default)
     {
         var safeName = Path.GetFileName(fileName);
         if (!safeName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Invalid snapshot file name");
 
-        // snapshots/ first, then pre-encryption/: the way-back snapshot of a node that was encrypted is restored by its file name (spec 10.7).
-        // The requested name, not the bare one: it may name the folder, and a name in both folders without one is refused here.
-        var filePath = FindRestorableSnapshot(fileName)
-            ?? throw new FileNotFoundException($"Snapshot {safeName} not found");
+        // Before the archive is looked at: a node whose database is not encrypted takes no restore at all.
+        RequireEncryptedNodeForRestore();
+
+        var filePath = Path.Combine(SnapshotsDir, safeName);
+        if (!File.Exists(filePath)) throw new FileNotFoundException($"Snapshot {safeName} not found");
 
         // Coordinate with CompactionService — both flows bulk-rewrite tbl_event.
         // Lock acquisition is the very first statement inside the try, so any failure
@@ -100,7 +144,7 @@ public partial class SnapshotService
             // In the data folder and owner-only, not the OS temp folder: the extracted database is the vault in clear.
             tempDir = SnapshotStaging.NewDirectory(_dataPath);
 
-            await RequireNoPlainDatabaseOnSealedNodeAsync(filePath);
+            await RequireNoPlainDatabaseAsync(filePath);
             await ExtractTarGzAsync(filePath, tempDir, new FileInfo(filePath).Length);
 
             await VerifyManifestAsync(tempDir);
@@ -111,7 +155,7 @@ public partial class SnapshotService
             if (!File.Exists(extractedDb))
                 throw new InvalidOperationException("Snapshot does not contain a database file");
 
-            await DecryptDbIfNeededAsync(extractedDb, masterPassword);
+            await DecryptDbIfNeededAsync(extractedDb, ct);
 
             var archiveTables = ReadTableNames(extractedDb);
 
@@ -129,6 +173,11 @@ public partial class SnapshotService
                     "It was produced as a package for a joining peer (secrets filtered out), not as a backup — " +
                     "without key slots the encrypted content could never be unlocked again. " +
                     "Restore a snapshot created from Admin → Snapshots, or join this node to a peer instead.");
+
+            // This version opens the database of a 2.6.x backup (it is adopted at the next start) and nothing older, and only one whose structure
+            // is the one the program reads. A backup of an earlier release, or a broken one, would replace the node and then be refused when the
+            // node starts, so it is refused here, before anything is replaced.
+            if (DatabaseRefusalOf(extractedDb) is { } databaseRefusal) throw databaseRefusal;
 
             if (standaloneMode)
             {

@@ -44,7 +44,7 @@ public static class HardDeleteEndpoints
 
             var result = await svc.DeleteArticleAsync(id, userId, agentId, ctx.RequestAborted);
             return Results.Ok(result);
-        });
+        }).SingleFlight("hard-delete-article:{id}", "Deleting this article for good");
 
         group.MapPost("/folder", async (HardDeleteFolderRequest req, HttpContext ctx, HardDeleteService svc, SessionService session) =>
         {
@@ -55,35 +55,38 @@ public static class HardDeleteEndpoints
 
             var result = await svc.DeleteFolderAsync(req.Path, userId, agentId, ctx.RequestAborted);
             return Results.Ok(result);
-        });
+        }).SingleFlight("hard-delete-folder:{path}", "Deleting this folder for good", ctx =>
+            ctx.Arguments.OfType<HardDeleteFolderRequest>().FirstOrDefault() is { Path: { Length: > 0 } path } ? "hard-delete-folder:" + path.Trim('/').ToLowerInvariant() : null);
 
-        group.MapPost("/restore/article/{id:guid}", async (Guid id, RestoreService svc, SessionService session) =>
+        group.MapPost("/restore/article/{id:guid}", async (Guid id, RestoreService svc, SessionService session, HttpContext ctx) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             try
             {
-                var result = await svc.RestoreArticleAsync(id);
+                using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
+                var result = await svc.RestoreArticleAsync(id, stop.Token);
                 return Results.Ok(result);
             }
             catch (KeyNotFoundException ex) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 404); }
             catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 400); }
-        });
+        }).SingleFlight("restore-article:{id}", "Restoring this article");
 
-        group.MapPost("/restore/folder/{id:guid}", async (Guid id, RestoreService svc, SessionService session) =>
+        group.MapPost("/restore/folder/{id:guid}", async (Guid id, RestoreService svc, SessionService session, HttpContext ctx) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
             try
             {
-                var result = await svc.RestoreFolderAsync(id);
+                using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
+                var result = await svc.RestoreFolderAsync(id, stop.Token);
                 return Results.Ok(result);
             }
             catch (KeyNotFoundException ex) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 404); }
             catch (InvalidOperationException ex) when (ex is not MetadataKeyPublishPendingException) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 400); }
-        });
+        }).SingleFlight("restore-folder:{id}", "Restoring this folder");
 
         group.MapGet("/audit", async (HardDeleteService svc, SessionService session, int page = 1, int pageSize = 100) =>
         {

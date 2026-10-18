@@ -11,7 +11,7 @@ namespace BeeMemoryBank.AppPaths;
 /// <param name="Phase"><see cref="Building"/>, <see cref="Verified"/> or <see cref="Swapping"/>.</param>
 /// <param name="StartedAt">UTC, ISO 8601.</param>
 /// <param name="Files">The relative names of the files being replaced (or, in a journal the resolver rebuilt after a failed wipe, of the leftovers still to be wiped).</param>
-/// <param name="Snapshot">Relative name of the pre-encryption snapshot (<c>pre-encryption/&lt;file&gt;</c>), or empty (a phone, or the owner ticked <c>snapshot_limit</c>).</param>
+/// <param name="Snapshot">Always empty since 2.6.2, which keeps no copy of the plain database. The field stays so that a journal an earlier version wrote (it may name <c>pre-encryption/&lt;file&gt;</c>) is still read and resolved.</param>
 public sealed record SealJournal(
     [property: JsonPropertyName("phase")] string Phase,
     [property: JsonPropertyName("started_at")] string StartedAt,
@@ -44,9 +44,10 @@ public sealed record SealJournal(
         var path = PathFor(dataDir);
         try
         {
+            // The entry first: a link to nothing is no "missing journal" (what Exists answers for one depends on the platform and the runtime), it is a link and never trusted.
+            if (LinkEntry.IsLink(path)) return (SealJournalState.Unreadable, null);
             var info = new FileInfo(path);
             if (!info.Exists) return (SealJournalState.Missing, null);
-            if (info.Attributes.HasFlag(FileAttributes.ReparsePoint) || info.LinkTarget is not null) return (SealJournalState.Unreadable, null);
             if (info.Length > 64 * 1024) return (SealJournalState.Unreadable, null);
             var journal = JsonSerializer.Deserialize<SealJournal>(File.ReadAllText(path));
             return IsWellFormed(journal) ? (SealJournalState.Valid, journal) : (SealJournalState.Unreadable, null);

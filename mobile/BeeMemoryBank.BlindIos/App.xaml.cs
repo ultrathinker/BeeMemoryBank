@@ -83,7 +83,7 @@ public partial class App : Application
     public static bool TryHandleLink(string? url)
     {
         if (url is null || !url.StartsWith("bmb-blind-call:", StringComparison.OrdinalIgnoreCase)) return false;
-        if (_running?.Windows.FirstOrDefault()?.Page is BlindHomePage page) MainThread.BeginInvokeOnMainThread(() => page.AcceptLink(url));
+        if (_running?.Windows.FirstOrDefault()?.Page is BlindHomePage page) _ = MainThread.InvokeOnMainThreadAsync(() => page.AcceptLinkAsync(url));
         else _pendingLink = url;
         return true;
     }

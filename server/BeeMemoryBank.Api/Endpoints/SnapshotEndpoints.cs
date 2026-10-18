@@ -2,10 +2,12 @@ using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Sync;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Cryptography;
@@ -54,11 +56,13 @@ public static class SnapshotEndpoints
             // tbl_user, tbl_key_slot, tbl_node_identity and tbl_sync_position DROPPED — which
             // restore cannot consume (it fails on the first DELETE against a table that is no
             // longer there) and which would not carry the accounts back even if it could.
-            var info = await svc.CreateAsync(filterSecrets: false);
+            // A client that goes away ends the work (the archive is written to a temp name and removed on cancellation): a hung write does not hold the lease for good.
+            var info = await svc.CreateAsync(filterSecrets: false, ct: ctx.RequestAborted);
             var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
             await auditRepo.LogAsync("snapshot", info.FileName, "snapshot_created", "web", $"Snapshot created by user {actor}");
             return Results.Created($"/api/snapshots/{info.FileName}", info);
-        }).RequireSuperadmin().RequireNonAgent();
+        }).RequireSuperadmin().RequireNonAgent()
+            .SingleFlight("snapshot-create", "Creating a snapshot");
 
         group.MapGet("/{fileName}/download", (string fileName, SnapshotService svc, SessionService session, HttpContext ctx) =>
         {
@@ -99,10 +103,10 @@ public static class SnapshotEndpoints
                 return Results.BadRequest(new ErrorResponse(refusal!));
             }
 
-            // A name that is in both snapshot folders is refused before anything is done: no password check, no audit entry of a started restore, no
-            // safety backup, no change to the session. RestoreAsync refuses it again; this is the same refusal, just early.
-            try { svc.RequireUnambiguousRestoreName(req.FileName); }
-            catch (InvalidOperationException ex)
+            // A node whose database is not encrypted takes no restore (BMB-306): refused before anything is done - no password check, no audit entry
+            // of a started restore, no safety backup, no change to the session. RestoreAsync refuses it again; this is the same refusal, just early.
+            try { svc.RequireEncryptedNodeForRestore(); }
+            catch (RestoreRefusedException ex)
             {
                 await auditRepo.LogAsync("snapshot", req.FileName, "snapshot_restore_refused", "web", $"Mode={mode}, by user {actor}: {ex.Message}");
                 return Results.BadRequest(new ErrorResponse(ex.Message));
@@ -154,14 +158,14 @@ public static class SnapshotEndpoints
                     // nor complete. Matches the pre-restore backup RestoreInitiatorService takes
                     // and the pre-update one UpdateService takes.
                     logger.LogInformation("Creating backup snapshot before restore");
-                    var backup = await svc.CreateAsync(filterSecrets: false);
+                    var backup = await svc.CreateAsync(filterSecrets: false, ct: ctx.RequestAborted);
                     backupFileName = backup.FileName;
                     logger.LogInformation("Backup created: {FileName}", backupFileName);
                 }
 
                 logger.LogInformation("Starting restore from {FileName} (mode {Mode})", req.FileName, mode);
                 var outcome = await svc.RestoreAsync(req.FileName,
-                    standaloneMode: mode == SnapshotRestoreModes.Standalone, masterPassword: req.MasterPassword);
+                    standaloneMode: mode == SnapshotRestoreModes.Standalone, masterPassword: req.MasterPassword, ct: ctx.RequestAborted);
                 logger.LogInformation("Restore completed successfully");
 
                 // The database on disk is the restored one now, so this entry belongs to the node's
@@ -187,6 +191,18 @@ public static class SnapshotEndpoints
                     newNodeId = outcome.NewNodeId,
                     nodeName = outcome.NodeDisplayName
                 });
+            }
+            catch (Exception ex) when (ex is NotEnoughMemoryException or InsufficientDiskSpaceException or SnapshotContainerException)
+            {
+                // The refusals that have a status and a machine-readable code of their own in ExceptionStatusMap: not enough memory for the image, not enough room on
+                // the disk (507, the NODE's fault), and a snapshot whose database cannot be opened (400 bad_snapshot, the file's). They derive from
+                // InvalidOperationException, so they must be caught before the arm below (which answers every such exception 400 without a code).
+                logger.LogWarning(ex, "Restore refused for {FileName} ({Code})", req.FileName, ExceptionStatusMap.Details(ex).Code);
+                await auditRepo.LogAsync("snapshot", req.FileName, "snapshot_restore_refused", "web",
+                    $"Mode={mode}, by user {actor}: {ex.Message}");
+                var (status, message) = ExceptionStatusMap.Map(ex);
+                var (code, _) = ExceptionStatusMap.Details(ex);
+                return Results.Json(new ErrorResponse(backupFileName != null ? $"{message} (A backup was saved as {backupFileName}.)" : message, code), statusCode: status);
             }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
             {
@@ -216,7 +232,8 @@ public static class SnapshotEndpoints
                 session.Lock();
                 maintenance.Exit();
             }
-        }).RequireSuperadmin().RequireNonAgent();
+        }).RequireSuperadmin().RequireNonAgent()
+            .SingleFlight("snapshot-restore", "A restore of this node");
 
         group.MapDelete("/{fileName}", async (string fileName, SnapshotService svc, SessionService session, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
@@ -273,7 +290,8 @@ public static class SnapshotEndpoints
         })
         .RequireSuperadmin().RequireNonAgent()
         .DisableAntiforgery()
-        .WithName("UploadSnapshot");
+        .WithName("UploadSnapshot")
+            .SingleFlight("snapshot-upload", "A snapshot upload");
 
         group.MapPost("/restore-network", async (
             RestoreInitiationRequest req,
@@ -284,6 +302,7 @@ public static class SnapshotEndpoints
             ILamportClock clock,
             IEventLogRepository eventLogRepo,
             IAuditLogRepository auditRepo,
+            Microsoft.Extensions.Hosting.IHostApplicationLifetime lifetime,
             HttpContext ctx,
             ILogger<Program> logger) =>
         {
@@ -369,19 +388,28 @@ public static class SnapshotEndpoints
             }
 
             await eventLogRepo.AppendAsync(evt);
-            
-            _ = Task.Run(async () => {
-                try {
-                    await restoreSvc.AcceptRestoreAsync(evt.EventId.ToString(), payload, evt);
-                } catch (Exception ex) {
-                    logger.LogError(ex, "Background restore failed");
-                }
-            });
+
+            // The lease of this route is the claim on "a restore of this node". The request answers 202 at once and the restore goes on in the background, so the
+            // lease goes with the background work and is given back when that work is over, whichever way it ends (BMB-311 fix round): a second request meanwhile is
+            // refused with 409 here, before it can append a second restore event.
+            // The work is tracked by the service and linked to the application's stopping token (a node that shuts down cancels it before it replaces anything), and the
+            // lease is given back when the work is over: done, failed or cancelled - never earlier, and with no timer.
+            var lease = ctx.DetachSingleFlightLease();
+            try
+            {
+                restoreSvc.StartBackground(token => restoreSvc.AcceptRestoreAsync(evt.EventId.ToString(), payload, evt, token), lifetime.ApplicationStopping, lease);
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
 
             return Results.Accepted(value: new { eventId = evt.EventId.ToString(), mode = SnapshotRestoreModes.Network });
         })
         .RequireSuperadmin().RequireNonAgent()
-        .WithName("InitiateNetworkRestore");
+        .WithName("InitiateNetworkRestore")
+            .SingleFlight("snapshot-restore", "A restore of this node");
 
         group.MapGet("/restore/{eventId}/file", async (
             string eventId,
@@ -449,6 +477,7 @@ public static class SnapshotEndpoints
                 RestoreFlowStep.Completed => "completed",
                 RestoreFlowStep.Failed => "failed",
                 RestoreFlowStep.NeedsAdminDecision => "needs_admin",
+                RestoreFlowStep.Cancelled => "cancelled",
                 _ => "in_progress"
             };
             // For authenticated callers (Web proxy presents X-Internal-Key) we expose the full

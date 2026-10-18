@@ -1474,6 +1474,56 @@ a.search-result-title:hover {
     font-weight: bold;
     pointer-events: none;
 }
+/* BMB-313: Invisible Mode is on - a badge on the sync icon, a line in the status, a red "not answering" */
+.sync-invisible-badge {
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    background: var(--sl-color-danger-500);
+    color: #fff;
+    font-size: 10px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+.sync-invisible-note {
+    margin: 0 10px 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    border: 1px solid var(--sl-color-danger-300);
+    border-radius: 6px;
+    background: var(--bg-input);
+    color: var(--text-primary, inherit);
+}
+.sync-bad {
+    color: var(--sl-color-danger-600);
+}
+.sync-node-hint {
+    padding: 4px 14px 8px;
+    font-size: 11px;
+    color: var(--text-secondary, var(--sl-color-neutral-500));
+}
+/* The "Check now" action of a node's row: a real button, so that the check does not need a mouse (BMB-313). */
+.sync-check-btn {
+    margin-top: 4px;
+    padding: 2px 10px;
+    font-size: 11px;
+    border: 1px solid var(--border, var(--sl-color-neutral-300));
+    border-radius: 4px;
+    background: transparent;
+    color: var(--accent, inherit);
+    cursor: pointer;
+}
+.sync-check-btn:hover,
+.sync-check-btn:focus-visible {
+    background: var(--bg-secondary, var(--sl-color-neutral-100));
+    outline: 2px solid var(--accent, var(--sl-color-primary-600));
+    outline-offset: 1px;
+}
 .sync-dropdown {
     position: absolute;
     top: 100%;

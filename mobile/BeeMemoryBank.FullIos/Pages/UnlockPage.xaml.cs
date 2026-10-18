@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.FullIos.Services;
 
 namespace BeeMemoryBank.FullIos.Pages;
@@ -8,7 +9,6 @@ public partial class UnlockPage : ContentPage
     private readonly FullVault _vault;
     private readonly QuickUnlock _quick;
     private readonly AppFlow _flow;
-    private bool _busy;
     private bool _askedOnce;
 
     public UnlockPage(FullVault vault, QuickUnlock quick, AppFlow flow)
@@ -42,11 +42,11 @@ public partial class UnlockPage : ContentPage
 
     private async void OnQuickUnlock(object? sender, EventArgs e) => await QuickUnlockAsync();
 
+    // The one busy helper (BMB-311): both unlock buttons are off and the Face ID one spins; a failure is written under them.
     private async Task QuickUnlockAsync()
     {
-        if (_busy) return;
-        SetBusy(true);
-        try
+        ErrorLabel.IsVisible = false;
+        await BusyAction.RunAsync(QuickButton, async () =>
         {
             switch (await _quick.UnlockAsync("Open your memory bank"))
             {
@@ -58,51 +58,27 @@ public partial class UnlockPage : ContentPage
                     ShowError($"{_quick.BiometryName} was turned off for this memory bank (its key changed). Unlock with the master password; you can turn it on again in Settings.");
                     break;
             }
-        }
-        catch (Exception ex)
-        {
-            ShowError(ex.Message);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+        }, new BusyOptions { Result = (ok, text) => { if (!ok) ShowError(text); }, AlsoDisable = [PasswordEntry, UnlockButton] });
     }
 
     private async void OnUnlock(object? sender, EventArgs e)
     {
-        if (_busy) return;
         var password = PasswordEntry.Text ?? "";
         if (password.Length == 0)
         {
             ShowError("Enter the master password.");
             return;
         }
-        SetBusy(true);
-        try
+        ErrorLabel.IsVisible = false;
+        // The one busy helper (BMB-311): both unlock buttons are off and the tapped one spins through the key derivation.
+        await BusyAction.RunAsync(sender as Button, async () =>
         {
             // The field is emptied whatever the unlock ends in (SecretFields): opened, refused, or an exception.
             if (await SecretFields.RunAsync(() => Task.Run(() => _vault.UnlockAsync(password)), () => PasswordEntry.Text = ""))
                 _flow.ShowMain();
             else
                 ShowError("Wrong password.");
-        }
-        catch (Exception ex)
-        {
-            ShowError(ex.Message);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
-
-    private void SetBusy(bool busy)
-    {
-        _busy = busy;
-        if (busy) ErrorLabel.IsVisible = false;
-        PasswordEntry.IsEnabled = UnlockButton.IsEnabled = QuickButton.IsEnabled = !busy;
-        Busy.IsVisible = Busy.IsRunning = busy;
+        }, new BusyOptions { Result = (ok, text) => { if (!ok) ShowError(text); }, AlsoDisable = [PasswordEntry, QuickButton] });
     }
 
     private void ShowError(string text)

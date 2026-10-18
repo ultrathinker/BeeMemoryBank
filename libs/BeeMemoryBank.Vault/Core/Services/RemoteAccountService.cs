@@ -115,7 +115,7 @@ public class RemoteAccountService(
             {
                 var (encrypted, iv) = SealToken(token, masterDek);
                 var dek = masterDek;
-                if (await write(encrypted, iv, sentinel => sentinel is not { Length: > 0 } || MasterKeyManager.VerifySentinel(sentinel, dek)))
+                if (await write(encrypted, iv, sentinel => MasterKeyManager.IsSentinelMissing(sentinel) || MasterKeyManager.VerifySentinel(sentinel!, dek)))
                     return;
             }
             finally

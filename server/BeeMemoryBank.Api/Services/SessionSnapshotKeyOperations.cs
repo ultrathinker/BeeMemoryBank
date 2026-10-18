@@ -57,7 +57,7 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         }
     }
 
-    public async Task<bool> EncryptDatabaseAsync(string dbPath)
+    public async Task<bool> EncryptDatabaseAsync(string dbPath, CancellationToken ct = default)
     {
         if (session is { IsUnlocked: false })
             throw new InvalidOperationException(
@@ -68,7 +68,7 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         var masterDek = session.GetMasterDek();
         try
         {
-            await SnapshotService.EncryptDbFileAsync(dbPath, masterDek);
+            await SnapshotService.EncryptDbFileAsync(dbPath, masterDek, ct: ct);
             return true;
         }
         finally
@@ -77,27 +77,7 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         }
     }
 
-    public async Task<bool> EncryptDatabaseAsync(string dbPath, bool wipePlain, Action<string>? afterOverwrite)
-    {
-        if (session is { IsUnlocked: false })
-            throw new InvalidOperationException(
-                "Cannot create an encrypted snapshot while the vault is locked. Unlock it first, " +
-                "or request an unencrypted snapshot explicitly.");
-
-        if (session is null) return false;
-        var masterDek = session.GetMasterDek();
-        try
-        {
-            await SnapshotService.EncryptDbFileAsync(dbPath, masterDek, wipePlain: wipePlain, afterOverwrite: afterOverwrite);
-            return true;
-        }
-        finally
-        {
-            Array.Clear(masterDek);
-        }
-    }
-
-    public async Task<bool> EncryptSealedDatabaseAsync(string sealedDbPath, byte[] pageKey)
+    public async Task<bool> EncryptSealedDatabaseAsync(string sealedDbPath, byte[] pageKey, CancellationToken ct = default)
     {
         if (session is { IsUnlocked: false })
             throw new InvalidOperationException(
@@ -111,8 +91,10 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
             byte[] container;
             // The plain image exists as bytes in memory only, and the reader's handle is closed before the container is written over the file.
             await using (var image = PlainImageReader.Open(sealedDbPath, pageKey))
-                container = await Bmbdb2Container.EncryptAsync(image, image.Length, masterDek);
-            await File.WriteAllBytesAsync(sealedDbPath, container);
+                container = await Bmbdb2Container.EncryptAsync(image, image.Length, masterDek, ct);
+            // Through a temp file that is renamed only when whole (like every other container write of the service): a full volume or a cancellation leaves the staging
+            // copy as it was and no half container behind.
+            await OwnerOnlyFile.ReplaceAsync(sealedDbPath, container, ct);
             return true;
         }
         finally
@@ -121,7 +103,7 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         }
     }
 
-    public async Task SealJoinSealedDatabaseAsync(string sealedDbPath, byte[] pageKey)
+    public async Task SealJoinSealedDatabaseAsync(string sealedDbPath, byte[] pageKey, CancellationToken ct = default)
     {
         if (session is not { IsUnlocked: true })
             throw new InvalidOperationException(
@@ -133,12 +115,11 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
             var label = ChunkedContainer.DekKeyLabel(DekFingerprint.Of(masterDek));
             await using (var image = PlainImageReader.Open(sealedDbPath, pageKey))
             await using (var output = OwnerOnlyFile.CreateNew(containerPath))
-                await ChunkedContainer.EncryptAsync(image, output, ChunkedContainer.PurposeJoin, label, masterDek);
-            // Written over the staging path in place, like the BMBDB2 container: a replace-by-rename fails on Windows while anything (an
-            // indexer, a scanner) still has the old file open.
-            await using (var container = new FileStream(containerPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
-            await using (var target = new FileStream(sealedDbPath, FileMode.Create, FileAccess.Write, FileShare.Read, 81920, useAsync: true))
-                await container.CopyToAsync(target);
+                await ChunkedContainer.EncryptAsync(image, output, ChunkedContainer.PurposeJoin, label, masterDek, ct: ct);
+            // The finished container takes the staging path in one rename: a cancellation or a failure up to here leaves the staging copy as it was, and a half-copied
+            // container (the old copy-over-in-place) can no longer be left under its name.
+            ct.ThrowIfCancellationRequested();
+            await OwnerOnlyFile.MoveReplaceAsync(containerPath, sealedDbPath, ct);
         }
         finally
         {
@@ -154,7 +135,7 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         return session.GetMasterDek();
     }
 
-    public async Task DecryptDatabaseIfNeededAsync(string extractedDbPath)
+    public async Task DecryptDatabaseIfNeededAsync(string extractedDbPath, CancellationToken ct = default)
     {
         if (session is not { IsUnlocked: true })
             throw new InvalidOperationException(
@@ -165,7 +146,7 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         {
             try
             {
-                await SnapshotService.DecryptDbFileAsync(extractedDbPath, masterDek);
+                await SnapshotService.DecryptDbFileAsync(extractedDbPath, masterDek, ct: ct);
             }
             catch (System.Security.Cryptography.CryptographicException ex)
             {
@@ -196,7 +177,7 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
             await using (var plain = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
             await using (var output = OwnerOnlyFile.CreateNew(sealedPath))
                 await ChunkedContainer.EncryptAsync(plain, output, ChunkedContainer.PurposeJoin, label, masterDek);
-            File.Move(sealedPath, dbPath, overwrite: true);
+            await OwnerOnlyFile.MoveReplaceAsync(sealedPath, dbPath);
         }
         finally
         {
@@ -282,10 +263,10 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
             sentinel = cmd.ExecuteScalar() as byte[];
         }
 
-        if (sentinel is not null && session is { IsUnlocked: true })
+        if (!MasterKeyManager.IsSentinelMissing(sentinel) && session is { IsUnlocked: true })
         {
             var current = session.GetMasterDek();
-            if (MasterKeyManager.VerifySentinel(sentinel, current)) return current;
+            if (MasterKeyManager.VerifySentinel(sentinel!, current)) return current;
             Array.Clear(current);
         }
 
@@ -321,13 +302,13 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
                 }
 
                 if (dek is null) continue;
-                if (sentinel is null || MasterKeyManager.VerifySentinel(sentinel, dek)) return dek;
+                if (MasterKeyManager.IsSentinelMissing(sentinel) || MasterKeyManager.VerifySentinel(sentinel!, dek)) return dek;
                 Array.Clear(dek);
             }
         }
 
         // Last: a database with no sentinel to check against. A password slot was tried first, since that is what an unlock uses.
-        if (sentinel is null && session is { IsUnlocked: true })
+        if (MasterKeyManager.IsSentinelMissing(sentinel) && session is { IsUnlocked: true })
             return session.GetMasterDek();
         return null;
     }

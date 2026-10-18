@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Services;
@@ -17,7 +18,6 @@ public partial class SetupPage : ContentPage
     private readonly PostUnlockRouter _router;
     private readonly IServiceProvider _services;
     private bool _busy;
-    private CancellationTokenSource? _statusCts;
 
     public SetupPage(NodeSetupService setupSvc, SessionService session, PostUnlockRouter router, IServiceProvider services)
     {
@@ -69,7 +69,6 @@ public partial class SetupPage : ContentPage
         // loop, so leaving the guard until after it would let a second tap slip through and start
         // a parallel setup.
         _busy = true;
-        SetBusy(true);
         try
         {
             bool isJoin = !string.IsNullOrWhiteSpace(serverUrl);
@@ -86,37 +85,56 @@ public partial class SetupPage : ContentPage
                 if (!confirmed) return; // finally resets the busy state
             }
 
-            // Rotating status messages so the user sees progress during the long join.
-            StartStatusCycler(isJoin);
-
-            // Heavy work (Argon2id KDF, network, snapshot import) runs off the UI thread so the
-            // status ticker keeps updating and the screen stays responsive on slow/old devices.
-            await Task.Run(async () =>
+            // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up (a second tap is impossible) with rotating status
+            // messages so the user sees progress during the long join, and puts the whole error under the button when it fails.
+            var failed = false;
+            var ran = await BusyAction.RunAsync(SetupButton, async busy =>
             {
-                if (isJoin)
-                    await _setupSvc.JoinAsync(name, serverUrl, password, code);
-                else
-                    await _setupSvc.InitAsync(name, password);
+                using var stop = new CancellationTokenSource();
+                _ = CycleStatusAsync(busy, isJoin, stop.Token);
+                try
+                {
+                    // Heavy work (Argon2id KDF, network, snapshot import) runs off the UI thread so the
+                    // status ticker keeps updating and the screen stays responsive on slow/old devices.
+                    await Task.Run(async () =>
+                    {
+                        if (isJoin)
+                            await _setupSvc.JoinAsync(name, serverUrl, password, code);
+                        else
+                            await _setupSvc.InitAsync(name, password);
 
-                await _session.UnlockAsync(password);
+                        await _session.UnlockAsync(password);
+                    });
+                }
+                finally
+                {
+                    stop.Cancel();
+                }
+            }, new BusyOptions
+            {
+                Long = true,
+                Title = isJoin ? "Joining the network" : "Creating your node",
+                Message = "Please wait. This can take several minutes on a slow connection. Do not close the app.",
+                Result = (ok, text) =>
+                {
+                    if (ok) return;
+                    failed = true;
+                    ShowError($"Error: {text}");
+                    // A failed join can leave a partial node ("already initialized") with no other way
+                    // out — expose the reset so the user can wipe and retry from this screen.
+                    ResetButton.IsVisible = true;
+                },
             });
+            if (!ran || failed) return;
 
+            // After the pop-up is gone: a navigation under a modal page is not reliable.
             RequestBatteryOptimizationException();
             await Permissions.RequestAsync<Permissions.PostNotifications>();
             await _router.RouteAsync();
         }
-        catch (Exception ex)
-        {
-            ShowError($"Error: {ex.Message}");
-            // A failed join can leave a partial node ("already initialized") with no other way
-            // out — expose the reset so the user can wipe and retry from this screen.
-            ResetButton.IsVisible = true;
-        }
         finally
         {
-            StopStatusCycler();
             _busy = false;
-            SetBusy(false);
         }
     }
 
@@ -136,26 +154,9 @@ public partial class SetupPage : ContentPage
         return (isLocal ? "http://" : "https://") + serverUrl;
     }
 
-    private void SetBusy(bool busy)
-    {
-        NameEntry.IsEnabled = !busy;
-        ServerUrlEntry.IsEnabled = !busy;
-        PasswordEntry.IsEnabled = !busy;
-        ResetButton.IsEnabled = !busy;
-
-        // Make the disabled state unmistakable: dim the button and change its label, since a
-        // plain IsEnabled=false doesn't visibly restyle the custom PrimaryButton.
-        SetupButton.IsEnabled = !busy;
-        SetupButton.Opacity = busy ? 0.5 : 1;
-        SetupButton.Text = busy ? "Connecting…" : "Setup & Connect";
-
-        LoadingIndicator.IsVisible = busy; // set visible before running so it actually animates
-        LoadingIndicator.IsRunning = busy;
-    }
-
     // Cycles short status messages every few seconds during the long setup so the user always
     // sees something happening, even while a single backend step (e.g. snapshot download) runs.
-    private void StartStatusCycler(bool isJoin)
+    private static async Task CycleStatusAsync(BusyProgress busy, bool isJoin, CancellationToken ct)
     {
         var messages = isJoin
             ? new[]
@@ -174,33 +175,14 @@ public partial class SetupPage : ContentPage
                 "Almost done…"
             };
 
-        _statusCts?.Cancel();
-        _statusCts = new CancellationTokenSource();
-        StatusLabel.IsVisible = true;
-        _ = RunStatusCyclerAsync(messages, _statusCts.Token);
-    }
-
-    private async Task RunStatusCyclerAsync(string[] messages, CancellationToken ct)
-    {
-        // Started from the UI thread and never offloads, so awaits resume on the UI context and
-        // the Label is touched safely on the UI thread.
         int i = 0;
         while (!ct.IsCancellationRequested)
         {
-            var text = messages[Math.Min(i, messages.Length - 1)];
-            MainThread.BeginInvokeOnMainThread(() => StatusLabel.Text = text);
+            busy.Report(null, messages[Math.Min(i, messages.Length - 1)]);
             i++;
             try { await Task.Delay(5000, ct); }
             catch (TaskCanceledException) { break; }
         }
-    }
-
-    private void StopStatusCycler()
-    {
-        _statusCts?.Cancel();
-        _statusCts = null;
-        StatusLabel.IsVisible = false;
-        StatusLabel.Text = string.Empty;
     }
 
     private void ShowError(string message)
@@ -219,36 +201,47 @@ public partial class SetupPage : ContentPage
             "Reset", "Cancel");
         if (!confirmed) return;
 
-        App.StopSyncService();
-        _services.GetService<IBiometricService>()?.Clear();
-        // Clear the ingest key too — it's bound to the OLD node identity. Leaving it means the next
-        // setup's enrolment is skipped (HasEnrolledKey()==true) and background sync signs with the
-        // wrong seed until it self-heals after a failed cycle.
-        _services.GetService<IIngestKeyStore>()?.Clear();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-
-        var dbPath = Path.Combine(
-            System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
-            "beememorybank.db");
-        // Delete the WAL/-shm/-journal sidecars too — SQLite runs in WAL mode, and an orphaned
-        // -wal left next to a fresh db gets replayed on next open, resurrecting the wiped state.
-        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+        // A long operation (BMB-311): the one busy helper puts up the pop-up until the app restarts; a failure is said in full under the button.
+        await BusyAction.RunAsync(sender as Button, () =>
         {
-            var f = dbPath + suffix;
-            if (File.Exists(f)) File.Delete(f);
-        }
+            App.StopSyncService();
+            _services.GetService<IBiometricService>()?.Clear();
+            // Clear the ingest key too — it's bound to the OLD node identity. Leaving it means the next
+            // setup's enrolment is skipped (HasEnrolledKey()==true) and background sync signs with the
+            // wrong seed until it self-heals after a failed cycle.
+            _services.GetService<IIngestKeyStore>()?.Clear();
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+            var dbPath = Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                "beememorybank.db");
+            // Delete the WAL/-shm/-journal sidecars too — SQLite runs in WAL mode, and an orphaned
+            // -wal left next to a fresh db gets replayed on next open, resurrecting the wiped state.
+            foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+            {
+                var f = dbPath + suffix;
+                if (File.Exists(f)) File.Delete(f);
+            }
 
 #if ANDROID
-        // Restart the process — the only reliable way to reinitialize singletons and re-run
-        // migrations on the fresh database.
-        var intent = Android.App.Application.Context.PackageManager!
-            .GetLaunchIntentForPackage(Android.App.Application.Context.PackageName!)!;
-        intent.AddFlags(ActivityFlags.ClearTop | ActivityFlags.NewTask);
-        Android.App.Application.Context.StartActivity(intent);
-        Process.KillProcess(Process.MyPid());
+            // Restart the process — the only reliable way to reinitialize singletons and re-run
+            // migrations on the fresh database.
+            var intent = Android.App.Application.Context.PackageManager!
+                .GetLaunchIntentForPackage(Android.App.Application.Context.PackageName!)!;
+            intent.AddFlags(ActivityFlags.ClearTop | ActivityFlags.NewTask);
+            Android.App.Application.Context.StartActivity(intent);
+            Process.KillProcess(Process.MyPid());
+            return Task.CompletedTask;
 #else
-        await Shell.Current.GoToAsync("//setup");
+            return Shell.Current.GoToAsync("//setup");
 #endif
+        }, new BusyOptions
+        {
+            Long = true,
+            Title = "Resetting this phone",
+            Message = "Please wait. The local data is being removed and the app restarts by itself.",
+            ResultLabel = ErrorLabel,
+        });
     }
 
 #if ANDROID

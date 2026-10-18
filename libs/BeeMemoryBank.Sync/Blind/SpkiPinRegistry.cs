@@ -15,9 +15,10 @@ namespace BeeMemoryBank.Sync.Blind;
 ///
 /// <para>A peer without a pin — a hub on a public CA (ADR 0007), or any ordinary full node — is checked the
 /// ordinary way, through <see cref="PublicCaTls"/>: the platform's chain, name included. <paramref name="anchors"/>
-/// is for tests (a test CA's root as an extra anchor); a shipped build passes none.</para>
+/// is for tests (a test CA's root as an extra anchor); a shipped build passes none. <paramref name="network"/> is for tests too (a name that resolves to
+/// what the test says); a shipped build dials by <see cref="PeerNetwork.Production"/>.</para>
 /// </summary>
-public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustAnchors? anchors = null)
+public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustAnchors? anchors = null, PeerNetwork? network = null)
 {
     // Re-read at most this often. A new pin arrives with a whitelist event and is needed on the
     // next cycle, not the next second; a stale cache only ever delays trusting a new key.
@@ -65,16 +66,29 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
 
     /// <summary>
     /// The primary handler for sync clients: ordinary TLS plus the pins above, never following a
-    /// redirect (see <see cref="SpkiPinGuardHandler"/>).
+    /// redirect (see <see cref="SpkiPinGuardHandler"/>), and a checked connect (<see cref="PeerSocketConnector"/>): the name is
+    /// resolved here, every answer must be an address a node may call, and only those are connected to - so a name that
+    /// resolves to a link-local or cloud-metadata address, or resolves differently the second time, never gets a connection.
     /// </summary>
-    public HttpMessageHandler CreateHandler() => new SpkiPinGuardHandler(this, new HttpClientHandler
+    public HttpMessageHandler CreateHandler()
     {
-        // A redirect would take the request to a host the pin never covered — an unpinned host
-        // with any CA-valid certificate passes the ordinary check (review L-stage1 #5).
-        AllowAutoRedirect = false,
-        ServerCertificateCustomValidationCallback = (request, certificate, chain, errors) =>
-            Validate(request, certificate, errors, chain)
-    });
+        var net = network ?? PeerNetwork.Production;
+        return new SpkiPinGuardHandler(this, new SocketsHttpHandler
+        {
+            // A redirect would take the request to a host the pin never covered — an unpinned host
+            // with any CA-valid certificate passes the ordinary check (review L-stage1 #5).
+            AllowAutoRedirect = false,
+            // A proxy would resolve and connect on this node's behalf: the check below would judge the proxy, not the peer.
+            UseProxy = false,
+            ConnectCallback = (context, ct) => PeerSocketConnector.ConnectAsync(context, net, ct),
+            SslOptions = new SslClientAuthenticationOptions
+            {
+                // The handler hands the request to this callback as the sender (the way HttpClientHandler's own callback gets it).
+                RemoteCertificateValidationCallback = (sender, certificate, chain, errors) =>
+                    Validate((HttpRequestMessage)sender, certificate as X509Certificate2 ?? (certificate is null ? null : new X509Certificate2(certificate)), errors, chain)
+            }
+        });
+    }
 
     /// <summary>True if this request goes to a pinned peer (by the request's own pin or the whitelist).</summary>
     public bool IsPinned(HttpRequestMessage request) =>

@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -130,6 +131,7 @@ public partial class ArticlesPage : ContentPage
         }
     }
 
+    // busy-exempt: a search reads the articles on this phone, nothing is sent
     private async void OnContentSearchToggled(object? sender, ToggledEventArgs e)
     {
         if (!string.IsNullOrWhiteSpace(SearchBar.Text))
@@ -138,17 +140,30 @@ public partial class ArticlesPage : ContentPage
 
     private async void OnRefreshing(object? sender, EventArgs e)
     {
-        var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
-        if (!syncNotify.HasPendingUpdates)
+        // Pulling the list down asks for a sync round: a request to the computer, not a read (BMB-311). The one busy helper refuses a second round while one runs;
+        // the spinner of the pull is the pull's own, so no pop-up; a failure to even ask is said in full.
+        try
         {
-            var syncStatus = _services.GetRequiredService<Services.SyncStatusService>();
-            await syncStatus.SyncNowAsync();
+            await BusyAction.RunAsync(RefreshView, async () =>
+            {
+                var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
+                if (!syncNotify.HasPendingUpdates)
+                {
+                    var syncStatus = _services.GetRequiredService<Services.SyncStatusService>();
+                    await syncStatus.SyncNowAsync();
+                }
+
+                await LoadArticlesAsync(SearchBar.Text);
+                syncNotify.ClearPendingUpdates();
+            }, new BusyOptions { FailureTitle = "Sync" });
         }
-        
-        await LoadArticlesAsync(SearchBar.Text);
-        syncNotify.ClearPendingUpdates();
+        finally
+        {
+            RefreshView.IsRefreshing = false;
+        }
     }
 
+    // busy-exempt: opens the article tapped (the screen has its own overlay while the page opens), nothing is sent
     private async void OnArticleTapped(object? sender, TappedEventArgs e)
     {
         if (sender is not BindableObject bo) return;
@@ -164,6 +179,7 @@ public partial class ArticlesPage : ContentPage
         finally { NavBusyOverlay.IsVisible = false; }
     }
 
+    // busy-exempt: opens the editor, nothing is sent and nothing waits
     private async void OnNewArticleClicked(object? sender, EventArgs e)
     {
         await Shell.Current.GoToAsync("articleEdit");

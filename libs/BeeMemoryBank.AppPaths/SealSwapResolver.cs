@@ -16,7 +16,7 @@ public enum SealResolveAction
 }
 
 /// <summary>A start refused by name (spec 10.6 (b)): the files, the way back, nothing touched.</summary>
-public sealed record SealStartRefusal(string Code, IReadOnlyList<string> Files, string? PreEncryptionSnapshot, string Message)
+public sealed record SealStartRefusal(string Code, IReadOnlyList<string> Files, string Message)
 {
     public const string SealLeftovers = "seal_leftovers";
 }
@@ -49,7 +49,6 @@ public static class SealSwapResolver
     private const string Chat = VaultStoreProbe.Chat;
     private const string Boot = VaultStoreProbe.Boot;
     private static readonly string[] SwapOrder = [Db, Chat, Boot];
-    private const string PreEncryptionDir = "pre-encryption";
     private static readonly (string Live, string Old)[] SidecarNames = [("-wal", ".seal-old-wal"), ("-shm", ".seal-old-shm"), ("-journal", ".seal-old-journal")];
 
     /// <summary>
@@ -59,6 +58,8 @@ public static class SealSwapResolver
     public static SealSwapResolution Resolve(string dataDir, Action<string>? afterStep = null, Func<string, bool>? wipe = null)
     {
         var d = Path.GetFullPath(dataDir);
+        // The link gate FIRST, before "does the folder exist": nothing is enumerated, read, renamed or wiped through a link, live or dangling.
+        if (LinkGate.Refusal(d) is { } gate) return new SealSwapResolution(SealResolveAction.Refused, Refusal: gate);
         if (!Directory.Exists(d)) return SealSwapResolution.Nothing;
 
         var (state, journal) = SealJournal.Read(d);
@@ -113,6 +114,7 @@ public static class SealSwapResolver
     public static SealSwapResolution GoForward(string dataDir, SealJournal journal, Action<string>? afterStep = null, Func<string, bool>? wipe = null)
     {
         var d = Path.GetFullPath(dataDir);
+        if (LinkGate.Refusal(d) is { } gate) return new SealSwapResolution(SealResolveAction.Refused, Refusal: gate);
         var linked = new List<string>();
 
         // Nothing is renamed over a file that is not what the migration replaces: a live file that is already encrypted next to a target means
@@ -200,6 +202,7 @@ public static class SealSwapResolver
     public static SealSwapResolution RetryWipe(string dataDir, Action<string>? afterStep = null, Func<string, bool>? wipe = null)
     {
         var d = Path.GetFullPath(dataDir);
+        if (LinkGate.Refusal(d) is { } gate) return new SealSwapResolution(SealResolveAction.Refused, Refusal: gate);
         return Directory.Exists(d) && Leftovers(d).Count > 0 ? Resolve(d, afterStep, wipe) : SealSwapResolution.Nothing;
     }
 
@@ -285,28 +288,17 @@ public static class SealSwapResolver
 
     private static SealStartRefusal LeftoverRefusal(string d, IReadOnlyList<string> files)
     {
-        string? snapshot = null;
-        var dir = Path.Combine(d, PreEncryptionDir);
-        try
-        {
-            if (Directory.Exists(dir))
-                snapshot = Directory.EnumerateFiles(dir).Select(Path.GetFileName).Where(n => n is not null && !n.EndsWith(".sig", StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(n => n, StringComparer.Ordinal).FirstOrDefault();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-
         var message = "This node's data folder holds files of an interrupted \"Encrypt this node\" that cannot be placed safely: "
                       + string.Join(", ", files) + ". Nothing was opened, moved or deleted. "
                       + "Restore the data folder from one backup set (docs/sealed-database.md, \"Restore a backup set\")"
-                      + (snapshot is null ? "" : $" or from the pre-encryption snapshot pre-encryption/{snapshot}")
                       + "; do not delete any *.seal-old* file before you have checked which of them is your database.";
-        return new SealStartRefusal(SealStartRefusal.SealLeftovers, files, snapshot, message);
+        return new SealStartRefusal(SealStartRefusal.SealLeftovers, files, message);
     }
 
     private static void KeepUnreadableJournal(string d)
     {
         var path = SealJournal.PathFor(d);
-        if (!File.Exists(path)) return;
+        if (!LinkEntry.Exists(path)) return;
         // Kept as evidence until the repair has ended; an older one of the same name is replaced.
         DurableFs.MoveFile(path, SealJournal.UnreadablePathFor(d));
     }
@@ -316,7 +308,7 @@ public static class SealSwapResolver
         // An unreadable journal still in place is renamed first, then both names go: nothing seal-related is left to repair.
         try
         {
-            if (File.Exists(SealJournal.PathFor(d)) && SealJournal.Read(d).State == SealJournalState.Unreadable) KeepUnreadableJournal(d);
+            if (LinkEntry.Exists(SealJournal.PathFor(d)) && SealJournal.Read(d).State == SealJournalState.Unreadable) KeepUnreadableJournal(d);
             File.Delete(SealJournal.UnreadablePathFor(d));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

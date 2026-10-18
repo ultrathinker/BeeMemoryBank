@@ -56,14 +56,14 @@
         if (commentBtn) {
             e.preventDefault();
             var cId = commentBtn.getAttribute('data-comment-id');
-            if (cId) deleteComment(cId);
+            if (cId) deleteComment(cId, commentBtn);
             return;
         }
         var attBtn = e.target.closest('.btn-delete-attachment');
         if (attBtn) {
             e.preventDefault();
             var aId = attBtn.getAttribute('data-attachment-id');
-            if (aId) deleteAttachment(aId);
+            if (aId) deleteAttachment(aId, attBtn);
             return;
         }
     }, pageOpts);
@@ -136,8 +136,10 @@
             if (unlockTimer) { clearInterval(unlockTimer); unlockTimer = null; }
             // The comments were opened with the passphrase (server-rendered); reload so they lock again.
             var hasComments = !!document.querySelector('#comments-list .comment-item');
-            fetch('/api-proxy/article/' + articleId + '/relock', { method: 'POST' })
-                .then(function () { if (hasComments) location.reload(); });
+            bmbBusy.run(btnRelock || lnkLockNow || null, function () {
+                return bmbBusy.request('/api-proxy/article/' + articleId + '/relock', { method: 'POST' })
+                    .then(function () { if (hasComments) location.reload(); });
+            }, { quiet: true });
             var body = document.getElementById('article-body');
             if (body) body.innerHTML = '';
             if (unlockBanner) unlockBanner.style.display = 'none';
@@ -150,33 +152,32 @@
             var pass = unlockPass ? (unlockPass.value || '') : '';
             if (!pass) { unlockPass?.focus(); return; }
             if (unlockError) unlockError.style.display = 'none';
-            if (btnUnlock) btnUnlock.loading = true;
-            fetch('/api-proxy/article/' + articleId + '/unlock', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ passphrase: pass })
-            }).then(function (r) {
-                if (r.ok) return r.json();
-                return r.json().catch(function () { return {}; }).then(function (j) {
-                    throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Unlock failed.'));
+            // The one busy helper (BMB-311): the button spins through the key derivation; the reason it failed is written in the error line.
+            bmbBusy.run(btnUnlock || null, function () {
+                return bmbBusy.request('/api-proxy/article/' + articleId + '/unlock', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ passphrase: pass })
+                }).then(function (res) {
+                    var data = res.body || {};
+                    // Comments are sealed under the passphrase too and were rendered locked; the server
+                    // opens them now that this session unlocked the article.
+                    if (document.querySelector('.comment-text.comment-locked')) { location.reload(); return; }
+                    renderMarkdown(data.content || '');
+                    if (unlockPass) unlockPass.value = '';
+                    if (lockCard) lockCard.style.display = 'none';
+                    if (unlockedCard) unlockedCard.style.display = '';
+                    startUnlockCountdown(data.unlockExpiresInSeconds);
                 });
-            }).then(function (data) {
-                // Comments are sealed under the passphrase too and were rendered locked; the server
-                // opens them now that this session unlocked the article.
-                if (document.querySelector('.comment-text.comment-locked')) { location.reload(); return; }
-                renderMarkdown(data.content || '');
-                if (unlockPass) unlockPass.value = '';
-                if (lockCard) lockCard.style.display = 'none';
-                if (unlockedCard) unlockedCard.style.display = '';
-                startUnlockCountdown(data.unlockExpiresInSeconds);
-            }).catch(function (err) {
-                if (unlockError) {
-                    unlockError.textContent = err.message;
-                    unlockError.style.display = '';
+            }, {
+                quiet: true,
+                error: function (err) {
+                    if (unlockError) {
+                        unlockError.textContent = err.status === 401 ? 'Wrong password.' : err.message;
+                        unlockError.style.display = '';
+                    }
+                    unlockPass?.focus();
                 }
-                unlockPass?.focus();
-            }).finally(function () {
-                if (btnUnlock) btnUnlock.loading = false;
             });
         }
 
@@ -192,23 +193,21 @@
     // ── Protect / change password / remove protection ──
     function postProtection(url, payload, errEl, btn) {
         if (errEl) errEl.style.display = 'none';
-        btn.loading = true;
-        return fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        }).then(function (r) {
-            if (r.ok) { location.reload(); return; }
-            return r.json().catch(function () { return {}; }).then(function (j) {
-                throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Operation failed.'));
-            });
-        }).catch(function (err) {
-            if (errEl) {
-                errEl.textContent = err.message;
-                errEl.style.display = '';
+        // The one busy helper (BMB-311): the button spins through the key derivation; the reason of a refusal is written in the dialog's error line.
+        return bmbBusy.run(btn, function () {
+            return bmbBusy.request(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function () { location.reload(); });
+        }, {
+            quiet: true,
+            error: function (err) {
+                if (errEl) {
+                    errEl.textContent = err.status === 401 ? 'Wrong password.' : err.message;
+                    errEl.style.display = '';
+                }
             }
-        }).finally(function () {
-            btn.loading = false;
         });
     }
 
@@ -320,15 +319,13 @@
             }
             var newPath = moveArticleSelectedPath || '/';
             if (newPath === treePath) { alert('Article is already in that folder'); return; }
-            moveBtn.loading = true;
-            fetch('/api-proxy/article/' + articleId + '/move', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ newPath: newPath })
-            }).then(function (r) {
-                if (r.ok) window.location.reload();
-                else r.json().then(function (e) { alert(e.error || 'Move failed'); }).catch(function () { alert('Move failed'); });
-            }).catch(function () { alert('Error'); }).finally(function () { moveBtn.loading = false; });
+            bmbBusy.run(moveBtn, function () {
+                return bmbBusy.request('/api-proxy/article/' + articleId + '/move', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ newPath: newPath })
+                }).then(function () { window.location.reload(); });
+            }, { quiet: true });
         });
     }
 
@@ -336,13 +333,10 @@
     var deleteBtn = document.getElementById('btn-confirm-delete-article');
     if (deleteBtn) {
         deleteBtn.addEventListener('click', function () {
-            deleteBtn.loading = true;
-            fetch('/api-proxy/article/' + articleId, {
-                method: 'DELETE'
-            }).then(function (r) {
-                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(treePath);
-                else r.json().then(function (d) { alert(d.error || 'Delete failed'); }).catch(function () { alert('Delete failed'); });
-            }).catch(function () { alert('Error'); }).finally(function () { deleteBtn.loading = false; });
+            bmbBusy.run(deleteBtn, function () {
+                return bmbBusy.request('/api-proxy/article/' + articleId, { method: 'DELETE' })
+                    .then(function () { window.location.href = '/Folder?path=' + encodeURIComponent(treePath); });
+            }, { quiet: true });
         });
     }
 
@@ -353,17 +347,13 @@
             var textarea = document.getElementById('new-comment-text');
             var text = textarea.value.trim();
             if (!text) return;
-            addCommentBtn.loading = true;
-            fetch('/api-proxy/comments', {
+            bmbBusy.run(addCommentBtn, function () {
+              return bmbBusy.request('/api-proxy/comments', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ articleId: articleId, text: text })
-            }).then(function (r) {
-                if (r.ok) return r.json();
-                return r.json().catch(function () { return {}; }).then(function (j) {
-                    throw new Error(j.error || 'Error adding comment');
-                });
-            }).then(function (comment) {
+              }).then(function (res) {
+                var comment = res.body || {};
                 textarea.value = '';
                 var list = document.getElementById('comments-list');
                 var div = document.createElement('div');
@@ -383,26 +373,25 @@
                     var cnt = list.querySelectorAll('.comment-item').length;
                     h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
                 }
-            }).catch(function (err) { alert(err.message || 'Error adding comment'); })
-            .finally(function () { addCommentBtn.loading = false; });
+              });
+            }, { quiet: true });
         });
     }
 
-    function deleteComment(id) {
+    function deleteComment(id, btn) {
         if (!confirm('Delete this comment?')) return;
-        fetch('/api-proxy/comments/' + id, { method: 'DELETE' })
-            .then(function (r) {
-                if (r.ok || r.status === 204) {
-                    var el = document.getElementById('comment-' + id);
-                    if (el) el.remove();
-                    var list = document.getElementById('comments-list');
-                    var h4 = list?.closest('.card')?.querySelector('h4');
-                    if (h4 && list) {
-                        var cnt = list.querySelectorAll('.comment-item').length;
-                        h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
-                    }
-                } else { alert('Delete failed'); }
+        bmbBusy.run(btn, function () {
+            return bmbBusy.request('/api-proxy/comments/' + id, { method: 'DELETE' }).then(function () {
+                var el = document.getElementById('comment-' + id);
+                if (el) el.remove();
+                var list = document.getElementById('comments-list');
+                var h4 = list?.closest('.card')?.querySelector('h4');
+                if (h4 && list) {
+                    var cnt = list.querySelectorAll('.comment-item').length;
+                    h4.innerHTML = '<sl-icon name="chat-dots"></sl-icon> Comments (' + cnt + ')';
+                }
             });
+        }, { quiet: true, scope: document.getElementById('comments-list') });
     }
     window.deleteComment = deleteComment;
 
@@ -455,6 +444,7 @@
             formData.append('file', file);
             formData.append('attachment', 'true');
             if (articleId) formData.append('articleId', articleId);
+            // bmb-busy-exempt: files dropped on the drop zone, not a button; the zone shows "Uploading N files..." until the queue is done
             return fetch('/api-proxy/media/upload', { method: 'POST', body: formData })
                 .then(function (r) {
                     if (!r.ok) return r.json().catch(function () { return {}; }).then(function (e) {
@@ -489,16 +479,15 @@
         }
     }
 
-    function deleteAttachment(id) {
+    function deleteAttachment(id, btn) {
         if (!confirm('Delete this attachment?')) return;
-        fetch('/api-proxy/media/' + id, { method: 'DELETE' })
-            .then(function (r) {
-                if (r.ok || r.status === 204) {
-                    var el = document.getElementById('attachment-' + id);
-                    if (el) el.remove();
-                    updateAttachmentsCount();
-                } else { alert('Delete failed'); }
+        bmbBusy.run(btn, function () {
+            return bmbBusy.request('/api-proxy/media/' + id, { method: 'DELETE' }).then(function () {
+                var el = document.getElementById('attachment-' + id);
+                if (el) el.remove();
+                updateAttachmentsCount();
             });
+        }, { quiet: true, scope: attachmentsListEl() });
     }
     window.deleteAttachment = deleteAttachment;
 
@@ -765,12 +754,15 @@
 
         var searchTimer = null;
 
+        // Resolves true when the node took the tags; false when it refused (the reason is written under the chips, in full).
         function putTags(tags) {
-            return fetch('/api-proxy/article/' + articleId + '/concept-tags', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ conceptTags: tags })
-            });
+            return bmbBusy.run(btnAdd, function () {
+                return bmbBusy.request('/api-proxy/article/' + articleId + '/concept-tags', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ conceptTags: tags })
+                });
+            }, { quiet: true, scope: chipsEl.parentElement });
         }
 
         function escConceptHtml(s) {
@@ -794,8 +786,8 @@
                     var prev = currentTags.slice();
                     currentTags.splice(idx, 1);
                     renderChips();
-                    putTags(currentTags).then(function (r) {
-                        if (!r.ok) { currentTags = prev; renderChips(); alert('Failed to remove tag'); }
+                    putTags(currentTags).then(function (ok) {
+                        if (!ok) { currentTags = prev; renderChips(); }
                     });
                 });
             });
@@ -814,8 +806,8 @@
             var prev = currentTags.slice();
             currentTags.push(name);
             renderChips();
-            putTags(currentTags).then(function (r) {
-                if (!r.ok) { currentTags = prev; renderChips(); alert('Failed to add tag'); }
+            putTags(currentTags).then(function (ok) {
+                if (!ok) { currentTags = prev; renderChips(); }
             });
             searchInput.value = '';
             dropdown.style.display = 'none';
@@ -958,30 +950,26 @@
         if (!btn) return;
         var dlg = document.getElementById('dlg-copy-article');
         var input = document.getElementById('copy-article-target');
-        btn.addEventListener('click', async function () {
+        btn.addEventListener('click', function () {
             var target = (input ? input.value : '').trim() || '/';
-            try {
-                var resp = await fetch('/api-proxy/article/' + articleId + '/copy', {
+            bmbBusy.run(btn, function () {
+                return bmbBusy.request('/api-proxy/article/' + articleId + '/copy', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ targetFolderPath: target })
-                });
-                if (resp.ok) {
+                }).then(function () {
                     dlg?.hide();
                     window.location.href = '/Folder?path=' + encodeURIComponent(target);
-                } else {
-                    var data = {}; try { data = await resp.json(); } catch (_) { }
+                });
+            }, {
+                quiet: true,
+                error: function (err) {
                     var box = document.getElementById('copy-article-error');
                     var errEl = document.getElementById('copy-article-error-msg');
-                    if (errEl) errEl.textContent = data.error || ('Copy failed (HTTP ' + resp.status + ')');
+                    if (errEl) errEl.textContent = err.message;
                     if (box) { box.style.display = ''; box.open = true; }
                 }
-            } catch (e) {
-                var box = document.getElementById('copy-article-error');
-                var errEl = document.getElementById('copy-article-error-msg');
-                if (errEl) errEl.textContent = String(e);
-                if (box) { box.style.display = ''; box.open = true; }
-            }
+            });
         });
     })();
 })();

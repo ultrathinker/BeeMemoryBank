@@ -62,7 +62,8 @@ Behind your own reverse proxy: copy `docker-compose.reverse-proxy.yml` and repla
 `image: ghcr.io/ultrathinker/beememorybank:${BMB_VERSION:-latest}`; nothing else changes.
 
 Updating: make a snapshot (Admin → Snapshots), then `docker compose pull && docker compose up -d`. Data migrations only go
-forward, so going back to an older tag means restoring that snapshot. The in-app "Apply update" button belongs to a
+forward, so going back to an older tag means restoring that snapshot. A node on a version before 2.6 updates to 2.6.1 first and
+to this version after that (this version refuses an older database and leaves it unchanged). The in-app "Apply update" button belongs to a
 source deployment with its own update script (`scripts/bmb-self-update.sh`); with the image, update with `docker compose pull`.
 
 The images are built by `.github/workflows/docker-publish.yml` when a release is published (the maintainer's approval of
@@ -286,8 +287,8 @@ pre-update copy for you, with the writes held for a few seconds, so an update do
 
 A restored folder brings the node back **as it was at the backup moment, with its node id and its place in the event log**.
 Whether that is safe for the other nodes is the question [snapshot-restore.md](snapshot-restore.md) answers; read it before
-restoring a node that has peers. A set taken before *Encrypt this node* is a plain set, and restoring it gives a plain node: that
-is the deliberate way back.
+restoring a node that has peers. A set taken before *Encrypt this node* is a plain set: copied back it is simply the open node it was, and no
+restore of the product (snapshot restore, network restore, the restore wizard) takes it. There is no way back to an open node.
 
 If the boot store is lost and the database is not, the database cannot be opened. Restore a snapshot (it opens with the master
 password and does not depend on the boot store), join again from a peer, or restore from a blind copy.
@@ -534,9 +535,11 @@ Inside the stable data root, files are organized as follows:
 
 ## Database Schema
 
-The database starts from a consolidated schema file (`001_initial_schema.sql`) plus incremental
-migrations (`002`–`024` as of this writing — roles, a content-addressed blob store, DEK-rotation
-resilience, whitelist versioning, persistent sync quarantine, and more). Key tables include:
+The database is built by one migration, the baseline (`040_baseline.sql`, the whole schema of the 2.6 series); later versions add
+migrations numbered `041` and up. A database written by 2.6.0 or 2.6.1 is adopted at its first start with this version (the structure is
+checked, nothing is re-run, the migration history is replaced by the baseline's single row). **A database older than 2.6 must be updated to
+2.6.1 first, then to this version**: this version refuses it, and leaves it unchanged, with a message that says so. The same goes for a
+backup: one made by a release before 2.6 is refused by the restore, before anything is replaced. Key tables include:
 
 | Table | Purpose |
 |---|---|
@@ -583,6 +586,6 @@ sees. `PRAGMA application_id = 0x424D4253`. Its tables, all of them allow-listed
 | `tbl_whitelist` | Mirror of the vault's peer list, same columns; status `S` = suspended while locked |
 | `tbl_relay_event`, `tbl_relay_blob`, `tbl_relay_report` | The holding area of a locked node (events, attachments, position reports) |
 
-Migration `040_sealed_unlock_material.sql` adds only triggers to the vault: any change to a key slot, a user's slot reference, an
+The schema of an encrypted node (migration 40 of the 2.6 series, now part of the baseline) adds only triggers to the vault: any change to a key slot, a user's slot reference, an
 auto-unlock agent or the node identity bumps `unlock_material_version` in the same transaction, and a watcher that checks every
 10 seconds rewrites the boot store when it is behind.

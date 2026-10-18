@@ -36,9 +36,10 @@ public sealed record RekeySwapJournal(
     public static RekeySwapJournal? Read(string dataDir)
     {
         var path = PathFor(dataDir);
-        if (!File.Exists(path)) return null;
-        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+        // The entry first: a link to nothing is no "missing journal" (what Exists answers for one depends on the platform and the runtime), it is a link and never trusted.
+        if (LinkEntry.IsLink(path))
             throw new InvalidDataException($"The re-key journal {path} is a link, not a file the swap wrote.");
+        if (!File.Exists(path)) return null;
         return JsonSerializer.Deserialize<RekeySwapJournal>(File.ReadAllText(path))
                ?? throw new InvalidDataException($"The re-key journal {path} is empty.");
     }
@@ -86,7 +87,9 @@ public sealed record RekeySwapJournal(
 /// <see cref="RekeySwapResolver.CompleteFirstStart"/> removes it with the journal once the start succeeded.</param>
 /// <param name="Seal">What the start did about an interrupted "Encrypt this node" (docs/design/step-b-spec.md 10.6); null when this start
 /// resolved nothing of the kind (and always null for a start that joined others already past the gate).</param>
-public sealed record RekeySwapResolution(string DataDir, bool FirstStartAfterSwap, SealSwapResolution? Seal = null);
+/// <param name="Intent">What the start did about a setup, join or restore that was interrupted before the node was encrypted (<see cref="SealIntent"/>);
+/// null when none was pending. A refusal of it is also in <paramref name="Seal"/>, which is where every host reads why a start is refused.</param>
+public sealed record RekeySwapResolution(string DataDir, bool FirstStartAfterSwap, SealSwapResolution? Seal = null, SealIntentResolution? Intent = null);
 
 /// <summary>
 /// Called by every process that resolves the data directory, before anything creates or opens it: finishes a swap a
@@ -106,6 +109,8 @@ public static class RekeySwapResolver
     public static RekeySwapResolution Resolve(string dataDir)
     {
         var d = RekeySwapJournal.Normalize(dataDir);
+        // The link gate FIRST: nothing below asks whether D exists, reads a journal or renames a directory through a link (the refusal is in Seal, as for every start).
+        if (LinkGate.RefusedStart(d) is { } gated) return gated;
         RekeySwapJournal? read;
         try
         {

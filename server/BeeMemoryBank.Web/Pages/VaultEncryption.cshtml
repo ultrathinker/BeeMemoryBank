@@ -1,32 +1,22 @@
 @page
 @model VaultEncryptionModel
 @{
-    ViewData["Title"] = "Database encryption";
+    ViewData["Title"] = Model.PageTitle;
     var status = Model.Status;
     var isMac = OperatingSystem.IsMacOS();
-    var wayBackDate = Model.WayBack?.CreatedAt is { } created ? created.ToUniversalTime().ToString("yyyy-MM-dd") + " UTC" : "the day it was made";
 }
 
 <div class="main-content">
-    <h2 style="margin:0 0 8px 0;"><sl-icon name="lock" style="margin-right:8px;vertical-align:middle;"></sl-icon>Database encryption</h2>
+    <h2 style="margin:0 0 8px 0;"><sl-icon name="lock" style="margin-right:8px;vertical-align:middle;"></sl-icon>@Model.PageTitle</h2>
     <p class="text-muted text-sm" style="margin:0 0 24px 0;max-width:720px;">
         An encrypted node keeps its database in a file that cannot be read without a key, so a stolen disk or a copy of the data folder shows nothing.
         The key is opened by your master password each time the node starts.
     </p>
 
-    @if (!string.IsNullOrEmpty(Model.SuccessMessage))
+    @* A message that names a card shows in that card (BMB-303); here only what no card claims. *@
+    @if (Model.MessageIsAtTop)
     {
-        <sl-alert variant="success" open style="margin-bottom:16px;max-width:720px;">
-            <sl-icon slot="icon" name="check2-circle"></sl-icon>
-            @Model.SuccessMessage
-        </sl-alert>
-    }
-    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
-    {
-        <sl-alert variant="danger" open style="margin-bottom:16px;max-width:720px;">
-            <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
-            @Model.ErrorMessage
-        </sl-alert>
+        @await Html.PartialAsync("~/Pages/Shared/_PageMessage.cshtml", new PageMessage(Model.SuccessMessage, Model.ErrorMessage))
     }
 
     @if (status is null)
@@ -38,7 +28,12 @@
     }
     else if (status.IsSealed)
     {
+        <h3 id="card-database-encryption" style="margin-bottom:12px;"><sl-icon name="shield-check"></sl-icon> Status</h3>
         <div class="card" id="vault-sealed-card" style="margin-bottom:32px;max-width:720px;">
+            @if (Model.MessageIsFor(VaultEncryptionModel.StateCard))
+            {
+                @await Html.PartialAsync("~/Pages/Shared/_PageMessage.cshtml", new PageMessage(Model.SuccessMessage, Model.ErrorMessage))
+            }
             <sl-badge variant="success" pill style="margin-bottom:12px;">encrypted</sl-badge>
             <p style="margin:0 0 8px 0;">
                 This node's database is encrypted@(status.SealedAt is { Length: > 0 } at && DateTime.TryParse(at, out var sealedAt) ? $" since {sealedAt.ToUniversalTime():yyyy-MM-dd HH:mm} UTC" : "").
@@ -62,36 +57,21 @@
                 </sl-alert>
             }
         </div>
-
-        @if (Model.WayBack is { Exists: true } wayBack)
-        {
-            <h3 style="margin-bottom:12px;"><sl-icon name="arrow-counterclockwise"></sl-icon> The way back</h3>
-            <div class="card" id="way-back-card" style="margin-bottom:32px;max-width:720px;">
-                <p style="margin:0 0 8px 0;">
-                    <code>@wayBack.Name</code>, @(wayBack.Bytes / (1024 * 1024)) MB, made @wayBackDate.
-                </p>
-                <p class="text-muted text-sm" style="margin-bottom:12px;">
-                    @string.Format(VaultEncryptionModel.WayBackExplained, wayBackDate)
-                </p>
-                <form method="post" asp-page-handler="DeleteWayBack" class="form-confirm"
-                      data-confirm="Delete the way-back snapshot? Afterwards this node cannot be taken back to its plain state.">
-                    @Html.AntiForgeryToken()
-                    <sl-input name="password" type="password" required password-toggle label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
-                    <sl-button type="submit" variant="danger" size="small">
-                        <sl-icon slot="prefix" name="trash"></sl-icon> Delete the way-back snapshot
-                    </sl-button>
-                </form>
-            </div>
-        }
     }
     else
     {
+        <h3 id="card-database-encryption" style="margin-bottom:12px;"><sl-icon name="lock"></sl-icon> Encrypt this node</h3>
         <div class="card" id="vault-plain-card" style="margin-bottom:32px;max-width:720px;">
+            @if (Model.MessageIsFor(VaultEncryptionModel.StateCard))
+            {
+                @await Html.PartialAsync("~/Pages/Shared/_PageMessage.cshtml", new PageMessage(Model.SuccessMessage, Model.ErrorMessage))
+            }
             <sl-badge variant="neutral" pill style="margin-bottom:12px;">not encrypted</sl-badge>
             <p style="margin:0 0 12px 0;">
-                This node's database is a plain file. Encrypting it takes a snapshot of the node first (the way back), keeps the node out of service while
-                it works, and then removes every unencrypted copy of the database. It is done on this node alone: your other devices are not touched.
+                This node's database is a plain file. Encrypting it keeps the node out of service while it works, and then removes every unencrypted copy
+                of the database. It is done on this node alone: your other devices are not touched.
             </p>
+
 
             @if (Model.Running)
             {
@@ -116,7 +96,16 @@
                         <ul style="margin:8px 0 0 20px;">
                             @foreach (var blocker in pre.Blockers)
                             {
-                                <li data-blocker="@blocker.Code">@blocker.Message</li>
+                                <li data-blocker="@blocker.Code">
+                                    @if (blocker.Code == "not_activated" && VaultEncryptionModel.SectionAt(blocker.Message) is var at and >= 0)
+                                    {
+                                        @blocker.Message[..at]<a href="/Admin#card-metadata">@VaultEncryptionModel.ActivationSection</a>@blocker.Message[(at + VaultEncryptionModel.ActivationSection.Length)..]
+                                    }
+                                    else
+                                    {
+                                        @blocker.Message
+                                    }
+                                </li>
                             }
                         </ul>
                     </sl-alert>
@@ -128,7 +117,7 @@
                         <p class="text-muted text-sm" style="margin-bottom:8px;">
                             These files are unencrypted copies of your vault. A stolen disk would open them. Move them out of the data folder, or erase them here.
                         </p>
-                        <form method="post" asp-page-handler="Erase" class="form-confirm"
+                        <form method="post" asp-page-handler="Erase" class="form-confirm" data-busy="long" data-busy-title="Erasing the plain copies"
                               data-confirm="Erase the ticked copies? They are overwritten and removed; this cannot be undone.">
                             @Html.AntiForgeryToken()
                             <table class="table" style="margin-bottom:12px;">
@@ -145,7 +134,8 @@
                                     }
                                 </tbody>
                             </table>
-                            <sl-input name="password" type="password" required password-toggle label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
+                            <sl-input name="password" type="password" required password-toggle autocomplete="off" data-1p-ignore data-lpignore="true"
+                                      label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
                             <sl-button type="submit" variant="warning" size="small">
                                 <sl-icon slot="prefix" name="eraser"></sl-icon> Erase these copies
                             </sl-button>
@@ -153,31 +143,13 @@
                     </div>
                 }
 
-                @if (pre.Blockers.Any(b => b.Code == "snapshot_limit") || Model.AcceptNoSnapshot)
-                {
-                    <div style="margin-bottom:12px;">
-                        <a href="?acceptNoSnapshot=@(Model.AcceptNoSnapshot ? "false" : "true")">
-                            @(Model.AcceptNoSnapshot ? "Make the way-back snapshot required again" : "My database is too large for the way-back snapshot: let me go on without it")
-                        </a>
-                    </div>
-                }
-
                 @if (pre.CanStart)
                 {
-                    <form method="post" asp-page-handler="Seal" id="seal-form" class="form-confirm"
-                          data-confirm="Encrypt this node now? The node is out of service while it works.">
+                    <form method="post" asp-page-handler="Seal" id="seal-form" class="form-confirm" data-busy="long" data-busy-title="Encrypting this node"
+                          data-confirm="Encrypt this node now? The node is out of service while it works, and it cannot be taken back to an unencrypted database from the node.">
                         @Html.AntiForgeryToken()
-                        @if (Model.AcceptNoSnapshot)
-                        {
-                            <sl-alert variant="warning" open style="margin-bottom:12px;">
-                                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-                                <label>
-                                    <input type="checkbox" name="acceptNoSnapshot" value="true" required />
-                                    I keep my own offline backup of this node; encrypting cannot be undone from the node itself.
-                                </label>
-                            </sl-alert>
-                        }
-                        <sl-input name="password" type="password" required password-toggle label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
+                        <sl-input name="password" type="password" required password-toggle autocomplete="off" data-1p-ignore data-lpignore="true"
+                                  label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
                         <sl-button type="submit" variant="primary">
                             <sl-icon slot="prefix" name="lock"></sl-icon> Encrypt this node
                         </sl-button>
@@ -208,7 +180,11 @@
 
     @if (status is not null && !Model.Running)
     {
-        <h3 style="margin-bottom:12px;"><sl-icon name="key"></sl-icon> Open by itself</h3>
+        <h3 id="card-auto-unlock" style="margin-bottom:12px;"><sl-icon name="key"></sl-icon> Open by itself</h3>
+        @if (Model.MessageIsFor(VaultEncryptionModel.AutoUnlockCard))
+        {
+            <div style="max-width:720px;">@await Html.PartialAsync("~/Pages/Shared/_PageMessage.cshtml", new PageMessage(Model.SuccessMessage, Model.ErrorMessage))</div>
+        }
         @if (Model.Role == "desktop")
         {
             @if (Model.OsAutoUnlockSupported)
@@ -229,7 +205,7 @@
                     @if (Model.OsAutoUnlockEnabled)
                     {
                         <sl-badge variant="success" pill style="margin-bottom:12px;">on</sl-badge>
-                        <form method="post" asp-page-handler="DisableOsAutoUnlock">
+                        <form method="post" asp-page-handler="DisableOsAutoUnlock" data-busy="short">
                             @Html.AntiForgeryToken()
                             <sl-button type="submit" variant="danger" size="small">Turn auto-unlock off</sl-button>
                         </form>
@@ -237,7 +213,7 @@
                     else
                     {
                         <sl-badge variant="neutral" pill style="margin-bottom:12px;">off</sl-badge>
-                        <form method="post" asp-page-handler="EnableOsAutoUnlock" class="form-confirm"
+                        <form method="post" asp-page-handler="EnableOsAutoUnlock" class="form-confirm" data-busy="short"
                               data-confirm="Turn auto-unlock on? @(status.IsSealed ? "Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without your password. If someone gets this computer or its disk, their protection rests only on your " + (isMac ? "macOS" : "Windows") + " account password (and on disk encryption, if you use it)." : "Anyone with access to this account will be able to open the vault without a password.")">
                             @Html.AntiForgeryToken()
                             <sl-button type="submit" variant="primary" size="small">Turn auto-unlock on</sl-button>
@@ -259,9 +235,10 @@
                 @if (server.Enabled)
                 {
                     <sl-badge variant="warning" pill style="margin-bottom:12px;">Start unlocked after a restart: on</sl-badge>
-                    <form method="post" asp-page-handler="DisableServerAutoUnlock">
+                    <form method="post" asp-page-handler="DisableServerAutoUnlock" data-busy="short">
                         @Html.AntiForgeryToken()
-                        <sl-input name="password" type="password" required password-toggle label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
+                        <sl-input name="password" type="password" required password-toggle autocomplete="off" data-1p-ignore data-lpignore="true"
+                                  label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
                         <sl-button type="submit" variant="default" size="small">Turn it off</sl-button>
                     </form>
                 }
@@ -288,10 +265,11 @@
             </sl-dialog>
 
             <sl-dialog id="server-auto-unlock-step2" label="Last check">
-                <form method="post" asp-page-handler="EnableServerAutoUnlock" id="server-auto-unlock-form">
+                <form method="post" asp-page-handler="EnableServerAutoUnlock" id="server-auto-unlock-form" data-busy="short">
                     @Html.AntiForgeryToken()
                     <p>@VaultEncryptionModel.ServerConfirmation</p>
-                    <sl-input name="password" type="password" required password-toggle label="Master password" style="margin-bottom:12px;"></sl-input>
+                    <sl-input name="password" type="password" required password-toggle autocomplete="off" data-1p-ignore data-lpignore="true"
+                              label="Master password" style="margin-bottom:12px;"></sl-input>
                     <sl-input name="confirmation" id="server-auto-unlock-phrase" required autocomplete="off"
                               label="Type @VaultEncryptionModel.Phrase to confirm"></sl-input>
                 </form>

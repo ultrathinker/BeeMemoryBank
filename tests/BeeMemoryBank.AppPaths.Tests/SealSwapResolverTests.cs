@@ -381,8 +381,6 @@ public sealed class SealSwapResolverTests : IClassFixture<SealSwapResolverTests.
         if (plainLive) PlainFile(Path.Combine(dir, "beememorybank.db"), Pool.PlainMain);
         PlainFile(Path.Combine(dir, "beememorybank.db.seal-old"), Pool.PlainMain);
         File.WriteAllText(Path.Combine(dir, "beememorybank.db.seal-old-wal"), _canary);
-        Directory.CreateDirectory(Path.Combine(dir, "pre-encryption"));
-        File.WriteAllText(Path.Combine(dir, "pre-encryption", "snap-1.tar.gz"), "x");
         File.WriteAllText(SealJournal.PathFor(dir), "garbage");
         var before = Hashes(dir);
 
@@ -391,8 +389,7 @@ public sealed class SealSwapResolverTests : IClassFixture<SealSwapResolverTests.
         result.Action.Should().Be(SealResolveAction.Refused, label);
         result.Refusal!.Code.Should().Be("seal_leftovers");
         result.Refusal.Files.Should().Contain("beememorybank.db.seal-old").And.Contain("beememorybank.db.seal-old-wal");
-        result.Refusal.PreEncryptionSnapshot.Should().Be("snap-1.tar.gz");
-        result.Refusal.Message.Should().Contain("beememorybank.db.seal-old").And.Contain("pre-encryption/snap-1.tar.gz");
+        result.Refusal.Message.Should().Contain("beememorybank.db.seal-old").And.NotContain("pre-encryption", "there is no way-back snapshot to point at (BMB-306)");
         Hashes(dir).Should().Equal(before, "no file is deleted, moved, renamed or changed, the bad journal included");
     }
 

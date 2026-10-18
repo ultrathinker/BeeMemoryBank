@@ -25,6 +25,13 @@ public enum ProxyRouteFlags
     /// closes stored-SVG XSS.
     /// </summary>
     UserContent = 2,
+
+    /// <summary>
+    /// A side-effect POST made by a script of a page of this site (not by a form): the request must carry the anti-forgery token of the page in the
+    /// <c>RequestVerificationToken</c> header (the same token Razor Pages validates for a form), checked here before anything is forwarded. The session
+    /// cookie is SameSite=Strict, which is a second line, not the check.
+    /// </summary>
+    RequireAntiforgery = 4,
 }
 
 /// <summary>
@@ -135,6 +142,9 @@ public static class ProxyRouteTable
         ["sync/delivery-status"] = new("/api/sync/delivery-status", [new("GET", UserRoles.Superadmin)]),
         ["sync/invisible"] = new("/api/sync/invisible",
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin)]),
+        // A double-click on a node of the sync status: this node asks that node now (/api/sync/nodes/{id}/check).
+        // It makes this node call out, so it carries the page's anti-forgery token (RequireAntiforgery).
+        ["sync/nodes"] = new("/api/sync/nodes", [new("POST", UserRoles.Superadmin)], ProxyRouteFlags.RequireAntiforgery),
 
         // ── Snapshots / compaction / search admin ────────────────────────────────
         ["snapshots"] = new("/api/snapshots",
@@ -187,7 +197,6 @@ public static class ProxyRouteTable
         //    "vault/seal" covers seal/progress; the status is the unauthenticated one the login page reads server-side. ──
         ["vault/status"] = new("/api/vault/status", [new("GET", null)]),
         ["vault/seal"] = new("/api/vault/seal", [new("GET", UserRoles.Superadmin)]),
-        ["vault/pre-encryption"] = new("/api/vault/pre-encryption", [new("GET", UserRoles.Superadmin)]),
 
         // ── Remote accounts: the whole API surface is superadmin-only (its group filter),
         //    and the entry states that so refusals stay local. ──

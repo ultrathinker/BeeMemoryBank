@@ -58,7 +58,9 @@ public partial class SnapshotService
         var tempDir = SnapshotStaging.NewDirectory(_dataPath);
         try
         {
-            await RequireNoPlainDatabaseOnSealedNodeAsync(tarGzPath);
+            // A join is the one import that lands in a node that is not encrypted yet (it is encrypted when the join ends, FreshNodeSealing); the
+            // joining entry points have already refused a host that does not seal its metadata, whose archive would be a plain database.
+            if (_connFactory.IsSealed) await RequireNoPlainDatabaseAsync(tarGzPath);
             await ExtractTarGzAsync(tarGzPath, tempDir, new FileInfo(tarGzPath).Length);
             await VerifyManifestAsync(tempDir);
 
@@ -199,6 +201,9 @@ public partial class SnapshotService
         BeeMemoryBank.Sync.RestoreNetworkEventPayload restorePayload,
         BeeMemoryBank.Core.Models.SyncEvent restoreEvent)
     {
+        // Before the archive is looked at: a node whose database is not encrypted takes no restore (BMB-306).
+        RequireEncryptedNodeForRestore();
+
         if (_replayShieldRepo == null)
             throw new InvalidOperationException("Replay shield repository is required for network restore");
 
@@ -246,7 +251,7 @@ public partial class SnapshotService
 
         try
         {
-            await RequireNoPlainDatabaseOnSealedNodeAsync(snapshotFilePath);
+            await RequireNoPlainDatabaseAsync(snapshotFilePath);
             await ExtractTarGzAsync(snapshotFilePath, tempDir, new FileInfo(snapshotFilePath).Length);
 
             var extractedDb = Path.Combine(tempDir, DbFileName);

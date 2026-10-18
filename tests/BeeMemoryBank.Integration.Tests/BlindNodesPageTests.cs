@@ -60,7 +60,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
             var path = request.RequestUri!.AbsolutePath;
             if (request.Method == HttpMethod.Post && path.StartsWith("/api/blind-nodes", StringComparison.Ordinal))
             {
-                if (Down) throw new HttpRequestException("Connection refused (localhost:5300)");
+                if (Down) throw new HttpRequestException("Connection refused (localhost:5300)", new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused));
                 var scripted = path.EndsWith("/reseed", StringComparison.Ordinal) ? Reseed : path.TrimEnd('/') == "/api/blind-nodes" ? Add : null;
                 if (scripted is { } s)
                     return Task.FromResult(new HttpResponseMessage(s.Status)
@@ -263,7 +263,9 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         var (status, html) = await AddAsync();
 
         status.Should().Be(HttpStatusCode.OK);
-        ShowsInOrder(html, "server on this computer did not answer", "restart Bee Memory Bank", "Technical detail: Connection refused");
+        // The technical line is the kind of failure, not the exception's own text (which carries the address that was dialled): BMB-306/307 fix round 3, G3.
+        ShowsInOrder(html, "server on this computer did not answer", "restart Bee Memory Bank", "Technical detail: no answer: connection refused");
+        html.Should().NotContain("localhost:5300");
         html.Should().Contain($">{PairCode}</textarea>");
     }
 

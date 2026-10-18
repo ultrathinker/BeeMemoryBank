@@ -31,6 +31,9 @@ public class PhoneVaultLifecycleTests
         public int? BatteryPercent { get; set; } = 80;
         public bool IsCharging { get; set; }
         public bool PeerHoldsHead { get; set; } = true;
+        public long? Free { get; set; }
+
+        public long? FreeBytes(string path) => Free;
     }
 
     /// <summary>
@@ -168,16 +171,16 @@ public class PhoneVaultLifecycleTests
         await app.CreateVaultWithCanaryAsync();
         var preflight = await app.Seal.PreflightAsync(new SealOptions());
         preflight.Blockers.Should().BeEmpty();
-        var done = await app.Seal.RunAsync(Password, new SealOptions());
+        var done = await app.Seal.RunAsync(new SealOptions());
         done.Phase.Should().Be(SealProgress.Done);
         return app;
     }
 
     [Fact]
-    public void PhoneEncryptionAvailable_is_false_in_this_build_and_a_plain_folder_starts_without_the_gate()
+    public void PhoneEncryptionAvailable_is_true_in_this_build_and_a_plain_folder_starts_through_the_gate()
     {
-        PhoneVaultLifecycle.PhoneEncryptionAvailable.Should().BeFalse("the phone's own encryption button waits for the native release gate (spec 12.4)");
-        PhoneVaultLifecycle.NeedsGate(TestFolders.New("phone-nogate")).Should().BeFalse("a plain phone starts exactly as it did before Step B");
+        PhoneVaultLifecycle.PhoneEncryptionAvailable.Should().BeTrue("this build offers the phone's own encryption button");
+        PhoneVaultLifecycle.NeedsGate(TestFolders.New("phone-gate")).Should().BeTrue("a phone that may be encrypted starts through the gate: lease, resolver, diagnosis");
     }
 
     [Fact]
@@ -188,7 +191,7 @@ public class PhoneVaultLifecycleTests
         var id = await app.CreateVaultWithCanaryAsync();
         AnyFileHoldsCanary(app.Dir).Should().BeTrue("the control: a plain phone shows the note to a raw scan");
 
-        var done = await app.Seal.RunAsync(Password, new SealOptions());
+        var done = await app.Seal.RunAsync(new SealOptions());
 
         done.Phase.Should().Be(SealProgress.Done);
         VaultStoreFiles.DetectMode(app.Dir).Should().Be(VaultStoreMode.Sealed);
@@ -273,7 +276,7 @@ public class PhoneVaultLifecycleTests
             id = await app.CreateVaultWithCanaryAsync();
             app.Seal.StepHook = s => { if (s == step) throw new SealKill(s); };
             app.Seal.SwapStepHook = s => { if (s == step) throw new SealKill(s); };
-            var kill = async () => await app.Seal.RunAsync(Password, new SealOptions());
+            var kill = async () => await app.Seal.RunAsync(new SealOptions());
             await kill.Should().ThrowAsync<SealKill>();
         }
 
@@ -346,6 +349,23 @@ public class PhoneVaultLifecycleTests
 
         environment.IsCharging = true;
         (await app.Seal.PreflightAsync(new SealOptions())).Blockers.Should().BeEmpty("a charger makes up for the battery");
+    }
+
+    [Fact]
+    public async Task The_free_space_is_the_phones_data_partition_not_the_drive_of_the_path_root()
+    {
+        // On Android the root of every path is the read-only system partition with no free space; the phone answers with the data partition.
+        var environment = new Env { Free = 0 };
+        await using var app = await PhoneApp.StartAsync(TestFolders.New("phone-free-space"), environment);
+        await app.CreateVaultWithCanaryAsync();
+
+        (await app.Seal.PreflightAsync(new SealOptions())).Blockers.Select(b => b.Code).Should().Equal(SealBlockers.FreeSpace);
+
+        environment.Free = 32L * 1024 * 1024 * 1024;
+        (await app.Seal.PreflightAsync(new SealOptions())).Blockers.Should().BeEmpty("the data partition has room");
+
+        environment.Free = null;
+        (await app.Seal.PreflightAsync(new SealOptions())).Blockers.Should().BeEmpty("no host answer falls back to the generic one, and a test disk has room");
     }
 
     [Fact]

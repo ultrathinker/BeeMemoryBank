@@ -38,3 +38,24 @@ public static class TestLinks
         if (!ok) throw new IOException($"Could not create a hard link (error {Marshal.GetLastWin32Error()}).");
     }
 }
+
+/// <summary>Real directory links for the tests: a junction on Windows (no privilege needed), a symbolic link elsewhere. Throws when the link cannot be made, so a test never passes for want of one.</summary>
+public static class TestDirectoryLinks
+{
+    public static void Create(string link, string target)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Directory.CreateSymbolicLink(link, target);
+            return;
+        }
+        var start = new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
+        };
+        using var process = System.Diagnostics.Process.Start(start)!;
+        process.WaitForExit(10_000);
+        if (process.ExitCode != 0 || !Directory.Exists(link))
+            throw new IOException($"Could not create a junction {link} -> {target}: {process.StandardError.ReadToEnd()}{process.StandardOutput.ReadToEnd()}");
+    }
+}

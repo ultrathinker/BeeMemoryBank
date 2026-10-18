@@ -29,8 +29,14 @@ public class KeyManagementService(
     /// any tbl_user pointing at the old slot is updated to point at the new one. To be removed
     /// once those mobile builds are retired.
     /// </summary>
-    public async Task ChangePasswordAsync(string oldPassword, string newPassword)
+    /// <summary>Test seam: called after the new key is derived and before the slot is written (a test stops the change from here).</summary>
+    internal Action? AfterDerivationForTests { get; set; }
+
+    /// <param name="ct">Stops the change while it is still only computation - before the old password is tried, and after the new key is derived - and never once the
+    /// new slot is being written: the swap of the two slots is one transaction that runs to its end.</param>
+    public async Task ChangePasswordAsync(string oldPassword, string newPassword, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var slots = await keySlotRepo.GetAllAsync();
         // Try ALL password-derived slots (legacy "password" + post-migration "user").
         // Recovery slots are intentionally excluded — they're not changed via this flow.
@@ -62,9 +68,12 @@ public class KeyManagementService(
         byte[]? newKek = null;
         try
         {
+            ct.ThrowIfCancellationRequested();
             var newSalt = KeyDerivation.GenerateSalt();
             newKek = KeyDerivation.DeriveKek(newPassword, newSalt);
             var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, newKek);
+            AfterDerivationForTests?.Invoke();
+            ct.ThrowIfCancellationRequested();   // the last point: from the transaction below it is one atomic swap of the two slots
 
             // Preserve the original slot type so we don't accidentally re-introduce "password"
             // slots on a node that's already been migrated to "user". For the unupgraded-mobile

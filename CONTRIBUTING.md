@@ -112,7 +112,7 @@ The project uses these conventions (enforced via `Directory.Build.props` and `.e
 - Models live in `libs/BeeMemoryBank.Core/Models/`
 - API endpoints are minimal APIs (`MapGroup`/`MapGet`/`MapPost`) in `server/BeeMemoryBank.Api/Endpoints/`
 - Request/Response records in `server/BeeMemoryBank.Api/Models/Requests.cs` and `Responses.cs`
-- Migrations are embedded SQL files in `libs/BeeMemoryBank.Storage/Migrations/NNN_name.sql`
+- Migrations are embedded SQL files in `libs/BeeMemoryBank.Storage/Migrations/NNN_name.sql`: today only `040_baseline.sql` (the whole schema), so a new migration is `041_name.sql`; the baseline is generated, never edited (see `AGENTS.md`)
 - UI uses [Shoelace 2](https://shoelace.style/) web components
 - All code, comments, and UI text must be in English
 

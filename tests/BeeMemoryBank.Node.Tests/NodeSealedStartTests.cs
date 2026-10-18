@@ -105,6 +105,49 @@ public sealed class NodeSealedStartTests
         .ToDictionary(f => Path.GetRelativePath(_d, f), f => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(f))), StringComparer.Ordinal);
 
     [Fact]
+    public async Task A_node_over_a_cut_setup_whose_leftover_cannot_be_wiped_refuses_to_start_its_api_and_says_which_file()
+    {
+        // BMB-306 fix round 2 (N1): the parent used to discard the refusal of the seal intent, and its Api child - which joins the parent's lease - went on to a plain start.
+        var db = Path.Combine(_d, "beememorybank.db");
+        File.WriteAllBytes(db, Sqlite(3));
+        SealIntent.Begin(_d, SealIntent.KindSetup);
+        File.AppendAllText(db, "written after the marker");   // the operation's own write: it is what the next start has to wipe
+        using var held = new FileStream(db, FileMode.Open, FileAccess.ReadWrite, FileShare.None);   // and a file that will not go
+
+        await using var node = Start(WriteConfig());
+
+        (await WaitForAsync(() => node.Process.HasExited)).Should().BeTrue("the node refuses and stops: " + node.Output);
+        node.Process.ExitCode.Should().Be(5);
+        node.Output.Should().Contain("beememorybank.db").And.Contain("interrupted").And.NotContain(_d);
+        File.Exists(ReadyFile).Should().BeFalse("the Api child was never started");
+        SealIntent.IsPending(_d).Should().BeTrue("the intent stays for the next start");
+        File.Exists(db).Should().BeTrue("nothing was guessed");
+    }
+
+    [Fact]
+    public async Task A_node_that_starts_beside_a_running_process_while_an_operation_is_pending_is_refused_by_name_and_wipes_nothing()
+    {
+        // Another process holds the vault (it is the one running the operation, or a node that was started before it); the real node binary joins it with a
+        // pending marker on disk. It must not resolve, wipe or serve: it is refused by name, exits before its Api child is started, and the files are untouched.
+        using var other = VaultStartup.TryAcquireShared(_d);
+        other.Should().NotBeNull();
+        SealIntent.Begin(_d, SealIntent.KindJoin);
+        var db = Path.Combine(_d, "beememorybank.db");
+        File.WriteAllBytes(db, Sqlite(3));
+        var written = File.ReadAllBytes(db);
+
+        await using var node = Start(WriteConfig());
+
+        (await WaitForAsync(() => node.Process.HasExited)).Should().BeTrue("the node refuses and stops: " + node.Output);
+        node.Process.ExitCode.Should().Be(5);
+        node.Output.Should().Contain("seal-intent.json").And.Contain("pending").And.NotContain(_d);
+        File.Exists(ReadyFile).Should().BeFalse("the Api child was never started");
+        File.ReadAllBytes(db).Should().Equal(written, "another live process may own the operation: nothing was wiped");
+        SealIntent.IsPending(_d).Should().BeTrue();
+        SealIntent.Complete(_d);
+    }
+
+    [Fact]
     public async Task A_node_over_a_migration_that_never_verified_undoes_it_before_it_starts_anything()
     {
         File.WriteAllBytes(Path.Combine(_d, "beememorybank.db"), Sqlite(3));

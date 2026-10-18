@@ -26,7 +26,7 @@ came from in `BeeMemoryBank.Api` (`Program.cs`, `Startup/ApiServices.cs`, `Start
 ## Startup tasks (in this order)
 
 1. `BlindSeedCutover.Recover` - a seed cutover a crash interrupted is finished or rolled back **before anything opens the database**.
-2. `MigrationRunner.RunMigrationsAsync` - needs no DEK; the full, byte-identical SQL set is embedded (the runner deletes the ledger rows of migrations it cannot find - see ADR 0001).
+2. `MigrationRunner.RunMigrationsAsync` - needs no DEK; the full, byte-identical SQL set is embedded (since 2.6.2 the one baseline; a 2.6.x ledger is adopted, an older or unknown one is refused and the database is left unchanged - see ADR 0001 and `AGENTS.md`).
 3. `StoredEventRepair.RunAsync`.
 4. `BlindRoleStartup.RunAsync` - blind temp dir cleaned, `RefuseDekMaterial` (key slots / wrapped agent DEK / `os-auto-unlock.dat` / `update-unlock.dat` -> refuse to start), identity from the key file (`EnsureIdentityAsync`), the three secrets in clear (key file, TLS pfx, `blind/settings.json`) made owner-only where an older build left them with the folder's inherited Windows ACL (`RepairSecretPermissions`: repaired in place and logged, a failure is a warning, never a refusal), pending restores and rotations retried.
 5. `FolderBootstrapper.RunIfNeededAsync`.

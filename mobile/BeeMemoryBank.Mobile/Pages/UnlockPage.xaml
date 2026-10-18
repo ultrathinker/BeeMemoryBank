@@ -36,13 +36,22 @@
                TextColor="{StaticResource SecondaryTextColor}"
                IsVisible="False" />
 
-        <Entry x:Name="PasswordEntry"
-               AutomationId="PasswordEntry"
-               Style="{StaticResource BaseEntry}"
-               Placeholder="Password"
-               IsPassword="True"
-               ReturnType="Done"
-               ReturnCommand="{Binding Source={x:Reference UnlockButton}, Path=Command}" />
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <Entry x:Name="PasswordEntry"
+                   Grid.Column="0"
+                   AutomationId="PasswordEntry"
+                   Style="{StaticResource BaseEntry}"
+                   Placeholder="Password"
+                   IsPassword="True"
+                   ReturnType="Done"
+                   ReturnCommand="{Binding Source={x:Reference UnlockButton}, Path=Command}" />
+            <Button x:Name="TogglePasswordButton"
+                    Grid.Column="1"
+                    AutomationId="TogglePasswordButton"
+                    Text="Show"
+                    VerticalOptions="Center"
+                    Clicked="OnTogglePasswordClicked" />
+        </Grid>
 
         <Label x:Name="ErrorLabel"
                TextColor="{StaticResource ErrorColor}"

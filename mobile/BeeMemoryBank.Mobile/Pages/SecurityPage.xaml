@@ -130,8 +130,8 @@
                 </VerticalStackLayout>
             </Frame>
 
-            <!-- Database encryption (docs/design/step-b-spec.md 10.8). Hidden until the native release gate (12.4) is green:
-                 PhoneVaultLifecycle.PhoneEncryptionAvailable. -->
+            <!-- Database encryption (docs/design/step-b-spec.md 10.8). Shown while PhoneVaultLifecycle.PhoneEncryptionAvailable is true
+                 (it is, in this build). -->
             <Frame Style="{StaticResource CardFrame}" x:Name="EncryptionCard" IsVisible="False">
                 <VerticalStackLayout Spacing="10">
                     <Label Text="Database encryption" FontAttributes="Bold" FontSize="16" />
@@ -144,13 +144,28 @@
                                FontSize="13" TextColor="{StaticResource SecondaryTextColor}"
                                LineBreakMode="WordWrap" />
 
-                        <Entry x:Name="EncryptPasswordEntry"
-                               AutomationId="EncryptPasswordEntry"
-                               Placeholder="Master password"
-                               IsPassword="True"
-                               BackgroundColor="{StaticResource SurfaceColor}"
-                               TextColor="{StaticResource TextColor}"
-                               PlaceholderColor="{StaticResource SecondaryTextColor}" />
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <Entry x:Name="EncryptPasswordEntry"
+                                   Grid.Column="0"
+                                   AutomationId="EncryptPasswordEntry"
+                                   Placeholder="Master password"
+                                   IsPassword="True"
+                                   BackgroundColor="{StaticResource SurfaceColor}"
+                                   TextColor="{StaticResource TextColor}"
+                                   PlaceholderColor="{StaticResource SecondaryTextColor}" />
+                            <Button x:Name="ToggleEncryptPasswordButton"
+                                    Grid.Column="1"
+                                    AutomationId="ToggleEncryptPasswordButton"
+                                    Text="Show"
+                                    VerticalOptions="Center"
+                                    Clicked="OnToggleEncryptPasswordClicked" />
+                        </Grid>
+
+                        <Button x:Name="EncryptFingerprintButton"
+                                AutomationId="EncryptFingerprintButton"
+                                Text="Confirm with fingerprint"
+                                IsVisible="False"
+                                Clicked="OnEncryptFingerprintClicked" />
 
                         <HorizontalStackLayout Spacing="8" x:Name="OnlyCopyRow" IsVisible="False">
                             <CheckBox x:Name="OnlyCopyCheck" AutomationId="OnlyCopyCheck" VerticalOptions="Center" />

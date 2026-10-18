@@ -53,6 +53,14 @@ public static class MasterKeyManager
         return result;
     }
 
+    /// <summary>
+    /// "This vault has no sentinel": NULL and an empty BLOB are the same thing (a vault older than the check has the one, a partly migrated row the
+    /// other). Every place that decides what a missing sentinel means asks this (or <see cref="BeeMemoryBank.Core.Services.NodeSentinel.IsMissing"/>, which
+    /// is the one definition and which the blind host, without this class, asks), never <c>== null</c>, so that the two shapes can not be treated
+    /// differently by two doors.
+    /// </summary>
+    public static bool IsSentinelMissing(byte[]? sentinel) => BeeMemoryBank.Core.Services.NodeSentinel.IsMissing(sentinel);
+
     public static bool VerifySentinel(byte[] sentinel, byte[] masterDek)
     {
         ArgumentNullException.ThrowIfNull(sentinel);

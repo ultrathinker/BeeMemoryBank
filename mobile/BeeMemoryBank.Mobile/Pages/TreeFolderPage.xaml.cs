@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Controls;
@@ -124,6 +125,7 @@ public partial class TreeFolderPage : ContentPage
         return "/" + path.Trim('/');
     }
 
+    // busy-exempt: opens the folder or article tapped (the screen has its own overlay while the page opens), nothing is sent
     private async void OnItemTapped(object? sender, TappedEventArgs e)
     {
         if (sender is not BindableObject bo) return;
@@ -145,6 +147,7 @@ public partial class TreeFolderPage : ContentPage
         finally { NavBusyOverlay.IsVisible = false; }
     }
 
+    // busy-exempt: opens the editor, nothing is sent and nothing waits
     private async void OnNewArticleClicked(object? sender, EventArgs e)
     {
         await Shell.Current.GoToAsync($"articleEdit?path={Uri.EscapeDataString(_currentPath)}");
@@ -169,7 +172,8 @@ public partial class TreeFolderPage : ContentPage
             accept: "Rename", cancel: "Cancel", initialValue: item.Name, maxLength: 100);
         if (string.IsNullOrWhiteSpace(newName) || newName.Trim() == item.Name) return;
 
-        try
+        // The one busy helper (BMB-311): a second long press cannot start a second rename; a failure is said in full in a dialog.
+        await BusyAction.RunAsync(null, async () =>
         {
             using var scope = _services.CreateScope();
             var folderRepo = scope.ServiceProvider.GetRequiredService<IFolderRepository>();
@@ -178,11 +182,7 @@ public partial class TreeFolderPage : ContentPage
             if (folder == null) return;
             await folderSvc.RenameAsync(folder.Id, newName.Trim());
             await LoadItemsAsync(_currentPath);
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 
     private async Task DeleteFolderAsync(TreeListItem item)
@@ -192,7 +192,7 @@ public partial class TreeFolderPage : ContentPage
             "Delete", "Cancel");
         if (!confirmed) return;
 
-        try
+        await BusyAction.RunAsync(null, async () =>
         {
             using var scope = _services.CreateScope();
             var folderRepo = scope.ServiceProvider.GetRequiredService<IFolderRepository>();
@@ -201,11 +201,7 @@ public partial class TreeFolderPage : ContentPage
             if (folder == null) return;
             await folderSvc.DeleteAsync(folder.Id);
             await LoadItemsAsync(_currentPath);
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 
     private async void OnNewFolderClicked(object? sender, EventArgs e)
@@ -214,17 +210,13 @@ public partial class TreeFolderPage : ContentPage
             accept: "Create", cancel: "Cancel", maxLength: 100);
         if (string.IsNullOrWhiteSpace(name)) return;
 
-        try
+        await BusyAction.RunAsync(sender as BindableObject, async () =>
         {
             using var scope = _services.CreateScope();
             var folderSvc = scope.ServiceProvider.GetRequiredService<FolderService>();
             var newPath = _currentPath.TrimEnd('/') + "/" + name.Trim().Trim('/');
             await folderSvc.CreateAsync(newPath);
             await LoadItemsAsync(_currentPath);
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 }

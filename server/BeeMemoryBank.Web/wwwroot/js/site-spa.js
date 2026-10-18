@@ -131,7 +131,8 @@
         }
         if (window.bmbHighlightActiveTreeItem) window.bmbHighlightActiveTreeItem(true);
         var mainContent = pageContent.querySelector('.main-content');
-        if (mainContent) mainContent.scrollTop = 0;
+        // A link with a fragment (/Admin#card-metadata) opens at that card, any other at the top.
+        if (!(window.bmbScrollToHash && window.bmbScrollToHash()) && mainContent) mainContent.scrollTop = 0;
 
         document.dispatchEvent(new CustomEvent('bmb:page-swapped'));
         document.dispatchEvent(new CustomEvent('bmb:page-loaded'));

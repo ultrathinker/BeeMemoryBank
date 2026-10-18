@@ -76,7 +76,7 @@
         if (dlg) dlg.addEventListener('sl-show', clearError);
 
         if (btn) {
-            btn.addEventListener('click', async function () {
+            btn.addEventListener('click', function () {
                 clearError();
                 var nameInput = document.getElementById('add-folder-home-name');
                 var name = (nameInput ? nameInput.value || '' : '').trim();
@@ -84,27 +84,18 @@
                     showError('Folder name is required.');
                     return;
                 }
-                btn.loading = true;
                 var path = '/' + name.replace(/^\/+/, '');
-                try {
-                    var r = await fetch('/api-proxy/folders', {
+                // The one busy helper (BMB-311): the button spins; a refusal is written in the dialog's own error box.
+                bmbBusy.run(btn, function () {
+                    return bmbBusy.request('/api-proxy/folders', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ path: path })
-                    });
-                    if (r.ok) {
+                    }).then(function () {
                         dlg?.hide();
                         window.location.href = '/Folder?path=' + encodeURIComponent(path);
-                        return;
-                    }
-                    var d = null;
-                    try { d = await r.json(); } catch (_) {}
-                    showError((d && d.error) || 'Failed to create folder');
-                } catch (_) {
-                    showError('Network error. Please try again.');
-                } finally {
-                    btn.loading = false;
-                }
+                    });
+                }, { quiet: true, error: function (err) { showError(err.message); } });
             });
         }
     })();
@@ -136,45 +127,33 @@
         }
 
         if (btn) {
-            btn.addEventListener('click', async function () {
+            btn.addEventListener('click', function () {
                 clearError();
                 var file = fileInput && fileInput.files ? fileInput.files[0] : null;
                 if (!file) {
                     showError('Please select a ZIP file.');
                     return;
                 }
-                btn.loading = true;
-                dlg?.hide();
-                if (window.bmbShowBusyModal) {
-                    window.bmbShowBusyModal('Importing…', "This can take a while for large vaults — please don't close this window.");
-                }
-                try {
+                // A long operation (BMB-311): the pop-up covers the page; a second import is refused by the node (409); a refusal is written in
+                // the dialog, which stays open, next to the button.
+                bmbBusy.run(btn, function () {
                     var formData = new FormData();
                     formData.append('file', file);
-                    var r = await fetch('/api-proxy/import/obsidian', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    var d = null;
-                    try { d = await r.json(); } catch (_) {}
-                    if (window.bmbHideBusyModal) window.bmbHideBusyModal();
-                    if (r.ok && d) {
-                        var msg = 'Imported ' + (d.articlesCreated || 0) + ' articles, '
+                    return bmbBusy.request('/api-proxy/import/obsidian', { method: 'POST', body: formData }).then(function (res) {
+                        var d = res.body || {};
+                        dlg?.hide();
+                        alert('Imported ' + (d.articlesCreated || 0) + ' articles, '
                             + (d.imagesImported || 0) + ' images, '
-                            + (d.filesSkipped || 0) + ' files skipped.';
-                        alert(msg);
+                            + (d.filesSkipped || 0) + ' files skipped.');
                         window.location.reload();
-                        return;
-                    }
-                    dlg?.show();
-                    showError((d && d.error) || 'Import failed');
-                } catch (_) {
-                    if (window.bmbHideBusyModal) window.bmbHideBusyModal();
-                    dlg?.show();
-                    showError('Network error. Please try again.');
-                } finally {
-                    btn.loading = false;
-                }
+                    });
+                }, {
+                    long: true,
+                    title: 'Importing\u2026',
+                    text: "This can take a while for large vaults \u2014 please don't close this window.",
+                    quiet: true,
+                    error: function (err) { showError(err.message); }
+                });
             });
         }
     })();
@@ -211,48 +190,36 @@
         }
 
         if (btn) {
-            btn.addEventListener('click', async function () {
+            btn.addEventListener('click', function () {
                 clearError();
                 var file = fileInput && fileInput.files ? fileInput.files[0] : null;
                 if (!file) {
                     showError('Please select a ZIP file.');
                     return;
                 }
-                btn.loading = true;
-                dlg?.hide();
-                if (window.bmbShowBusyModal) {
-                    window.bmbShowBusyModal('Importing…', "This can take a while for large vaults — please don't close this window.");
-                }
-                try {
+                // A long operation (BMB-311): the pop-up covers the page; a second import is refused by the node (409); a refusal is written in
+                // the dialog, which stays open, next to the button.
+                bmbBusy.run(btn, function () {
                     var formData = new FormData();
                     formData.append('file', file);
                     formData.append('destinationPath', pathSelector ? pathSelector.getEffectivePath() : '/');
-                    var r = await fetch('/api-proxy/import/bee', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    var d = null;
-                    try { d = await r.json(); } catch (_) {}
-                    if (window.bmbHideBusyModal) window.bmbHideBusyModal();
-                    if (r.ok && d) {
-                        var msg = 'Imported into ' + (d.rootFolderPath || '/') + ': '
+                    return bmbBusy.request('/api-proxy/import/bee', { method: 'POST', body: formData }).then(function (res) {
+                        var d = res.body || {};
+                        dlg?.hide();
+                        alert('Imported into ' + (d.rootFolderPath || '/') + ': '
                             + (d.foldersCreated || 0) + ' folders, '
                             + (d.articlesCreated || 0) + ' articles, '
                             + (d.imagesImported || 0) + ' images.'
-                            + (d.articlesSkippedProtected ? ' ' + d.articlesSkippedProtected + ' password-protected article(s) skipped.' : '');
-                        alert(msg);
+                            + (d.articlesSkippedProtected ? ' ' + d.articlesSkippedProtected + ' password-protected article(s) skipped.' : ''));
                         window.location.reload();
-                        return;
-                    }
-                    dlg?.show();
-                    showError((d && d.error) || 'Import failed');
-                } catch (_) {
-                    if (window.bmbHideBusyModal) window.bmbHideBusyModal();
-                    dlg?.show();
-                    showError('Network error. Please try again.');
-                } finally {
-                    btn.loading = false;
-                }
+                    });
+                }, {
+                    long: true,
+                    title: 'Importing\u2026',
+                    text: "This can take a while for large vaults \u2014 please don't close this window.",
+                    quiet: true,
+                    error: function (err) { showError(err.message); }
+                });
             });
         }
     })();

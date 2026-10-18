@@ -43,4 +43,7 @@ public sealed class UnreachablePeers
 
     /// <summary>Forgets the streak; returns how many attempts had failed before (0 if none).</summary>
     public int NoteSuccess(Guid nodeId) => _peers.TryRemove(nodeId, out var was) ? was.Failures : 0;
+
+    /// <summary>Forgets a peer whose address changed or that is gone: the pause and the streak were earned at another address.</summary>
+    public void Forget(Guid nodeId) => _peers.TryRemove(nodeId, out _);
 }

@@ -179,11 +179,11 @@ public class SyncClientTests : IAsyncLifetime
             }), Encoding.UTF8, "application/json")
         });
 
-        // Act
-        var result = await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+        // Act: BMB-307 fix round - the session did not happen, and it says so (it used to return 0, which every screen read as "nothing to do")
+        var act = async () => await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
 
         // Assert
-        result.Should().Be(0);
+        (await act.Should().ThrowAsync<PeerIncompatibleException>()).Which.RemoteProtocol.Should().Be(remoteVersion);
         _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/challenge") || s.Contains("/api/sync/authenticate")
             || s.Contains("/api/sync/events") || s.Contains("/api/sync/blobs") || s.Contains("/api/sync/report-position"),
             "no token is requested and no event goes either way");
@@ -421,7 +421,8 @@ public class SyncClientTests : IAsyncLifetime
     {
         MapIdentity(protocolVersion: 2);
 
-        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+        var act = async () => await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+        await act.Should().ThrowAsync<PeerIncompatibleException>("the session did not happen (BMB-307 fix round)");
 
         _mockHandler.CallLog.Should().NotContain(s => s.StartsWith("POST") && s.EndsWith("/api/sync/events"));
         _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/blobs"));

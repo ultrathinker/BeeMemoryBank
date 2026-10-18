@@ -18,10 +18,11 @@ namespace BeeMemoryBank.Vault.Sealed;
 public delegate void SealStepHook(string step);
 
 /// <summary>
-/// "Encrypt this node" (docs/design/step-b-spec.md 10): the owner-started migration of a plain full node to a sealed one. Preflight with named
-/// blockers, a pre-encryption snapshot with its key envelope, page-encrypted copies of the vault and chat databases, a boot store, a verification
-/// of everything before the journal says <c>verified</c>, the swap and the wipe of the replaced plain files through the resolver's forward path,
-/// and the gate's switch to Sealed. A node that fails before the swap is unchanged; a process that dies at any step starts either plain with its old
+/// "Encrypt this node" (docs/design/step-b-spec.md 10): the migration of a plain full node to a sealed one, started by the owner or, for a node that
+/// is being set up, by the setup itself. Preflight with named blockers, page-encrypted copies of the vault and chat
+/// databases, a boot store, a verification of everything before the journal says <c>verified</c>, the swap and the wipe of the replaced plain files
+/// through the resolver's forward path, and the gate's switch to Sealed. No copy of the plain database is kept: there is no way back from the node.
+/// A node that fails before the swap is unchanged; a process that dies at any step starts either plain with its old
 /// files or sealed with the new ones (<see cref="SealSwapResolver"/>), and no plain copy survives the next start.
 /// </summary>
 public sealed class SealMigrationService
@@ -40,6 +41,7 @@ public sealed class SealMigrationService
     private readonly SyncScheduler? _scheduler;
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger? _logger;
+    private volatile bool _swapUnfinished;
     private readonly SemaphoreSlim _running = new(1, 1);
     private readonly object _progressLock = new();
     private SealProgress _progress = new(SealProgress.Idle, 0, "idle");
@@ -105,6 +107,9 @@ public sealed class SealMigrationService
         IReadOnlyList<PlainCopyFinding> copies = [];
         void Block(string code, string message) => blockers.Add(new SealBlocker(code, message));
 
+        // Said before anything else, whatever else is in the way: there is no copy to go back to (BMB-306).
+        if (!_gate.IsSealed) warnings.Add(new SealWarning(SealWarnings.NoWayBack, SealWarnings.NoWayBackMessage));
+
         if (_gate.IsSealed) Block(SealBlockers.AlreadySealed, "This node's database is already encrypted.");
         if (!ignoreRunning && _running.CurrentCount == 0) Block(SealBlockers.MigrationRunning, "The encryption of this node is already running.");
         if (!_session.IsUnlocked) Block(SealBlockers.VaultLocked, "Unlock this node first: the master key is needed to encrypt it.");
@@ -120,11 +125,11 @@ public sealed class SealMigrationService
         databaseBytes = SizeWithWal(VaultPath);
 
         if (sp.GetService<ISyncProtocolPolicy>() is { SealsMetadata: false })
-            Block(SealBlockers.NotActivated, "Activate the new sync format first (Admin > Sync): an encrypted node can only relay changes that are already sealed.");
+            Block(SealBlockers.NotActivated, "Activate the new sync format first (Admin > Metadata encryption): an encrypted node can only relay changes that are already sealed.");
         if (sp.GetService<IHeldEventStatus>() is { } held && await held.AnyHeldAsync(ct))
             Block(SealBlockers.EventsHeld, "Some received changes are still waiting for their keys. Let them finish, then try again.");
-        if (await RotationPendingAsync(sp, ct))
-            Block(SealBlockers.RotationPending, "A key rotation is not finished. Let it finish, then try again.");
+        if (await RotationPendingAsync(sp, ct) is { } rotation)
+            Block(SealBlockers.RotationPending, "A key rotation is not finished (" + rotation + "). Let it finish, then try again.");
         if (_maintenance.IsInMaintenance || await RestoreRunningAsync(sp, ct))
             Block(SealBlockers.RestoreRunning, "A restore or another maintenance task is running. Try again when it has finished.");
         if (await sp.GetRequiredService<INodeIdentityRepository>().GetAsync() is { Ed25519PrivateKeyV: 0 })
@@ -134,11 +139,8 @@ public sealed class SealMigrationService
         if (integrity is not null) Block(SealBlockers.Integrity, integrity);
 
         var needed = (long)(3.5 * (SizeWithWal(VaultPath) + SizeWithWal(ChatPath)));
-        if (FreeBytes() is { } free && free < needed)
+        if ((_host.FreeBytes(_dataPath) ?? FreeBytes()) is { } free && free < needed)
             Block(SealBlockers.FreeSpace, $"Not enough free space on this disk: encrypting needs about {needed / (1024 * 1024)} MB.");
-
-        if (_host.CanMakeWayBackSnapshot && !_host.FitsWayBackSnapshot(new FileInfo(VaultPath).Length) && !options.AcceptNoSnapshot)
-            Block(SealBlockers.SnapshotLimit, "This database is too large for the way-back snapshot. Encrypting can be undone only from your own offline backup of this node; tick the box to go on without the snapshot.");
 
         var engine = EngineProblem();
         if (engine is not null) Block(SealBlockers.Engine, engine);
@@ -155,13 +157,17 @@ public sealed class SealMigrationService
         return new SealPreflightResult(blockers, warnings, copies, databaseBytes);
     }
 
-    private static async Task<bool> RotationPendingAsync(IServiceProvider sp, CancellationToken ct)
+    /// <summary>What is unfinished about a key rotation, in words for the person who must wait for it; null when nothing is.</summary>
+    private static async Task<string?> RotationPendingAsync(IServiceProvider sp, CancellationToken ct)
     {
         var states = sp.GetRequiredService<IDekRotationStateRepository>();
-        if ((await states.GetByStateAsync(DekRotationState.Proposed)).Count > 0 || (await states.GetByStateAsync(DekRotationState.Committing)).Count > 0) return true;
+        if ((await states.GetByStateAsync(DekRotationState.Proposed)).Count > 0) return "one is proposed and waits to be accepted";
+        if ((await states.GetByStateAsync(DekRotationState.Committing)).Count > 0) return "one is being committed";
         var factory = sp.GetRequiredService<IDbConnectionFactory>();
         using var connection = factory.CreateConnection();
-        return await connection.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_migration_marker WHERE key = 'mek_publish_pending'") > 0;
+        return await connection.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_migration_marker WHERE key = 'mek_publish_pending'") > 0
+            ? "the metadata key it made is not published yet"
+            : null;
     }
 
     private static async Task<bool> RestoreRunningAsync(IServiceProvider sp, CancellationToken ct)
@@ -242,11 +248,11 @@ public sealed class SealMigrationService
         var preflight = await PreflightAsync(options, ct);
         if (!preflight.CanStart)
             throw new SealMigrationException(preflight.Blockers[0].Code, preflight.Blockers[0].Message);
-        _ = Task.Run(() => RunAsync(masterPassword, options, CancellationToken.None));
+        _ = Task.Run(() => RunAsync(options, CancellationToken.None));
     }
 
     /// <summary>The whole migration, awaited. Never throws for a failure: the result is in <see cref="Progress"/>.</summary>
-    public async Task<SealProgress> RunAsync(string masterPassword, SealOptions options, CancellationToken ct = default)
+    public async Task<SealProgress> RunAsync(SealOptions options, CancellationToken ct = default)
     {
         if (!await _running.WaitAsync(0, ct))
             return Set(new SealProgress(SealProgress.Failed, 0, "start", SealBlockers.MigrationRunning, "The encryption of this node is already running."));
@@ -254,10 +260,9 @@ public sealed class SealMigrationService
         var token = _cancel.Token;
         var swapped = false;
         List<string> targets = [];
-        WayBackSnapshot? snapshot = null;
         IDisposable? writeGate = null;
         IDisposable? syncPause = null;
-        var quiesce = new List<IDisposable>();   // the connection barrier of the live files, held from the way-back snapshot to the swap
+        var quiesce = new List<IDisposable>();   // the connection barrier of the live files, held from the copy to the swap
         var maintenanceEntered = false;
         var gateSealed = false;
         try
@@ -273,6 +278,7 @@ public sealed class SealMigrationService
             maintenanceEntered = true;
             if (_scheduler is not null) syncPause = await _scheduler.PauseAsync(token);
             writeGate = await EventWriteGate.Instance.QuiesceAsync(token);
+            await _host.PrepareVaultAsync(token);   // a vault older than the sentinel gets its sentinel now, so the checkpoint folds it into the main file
             Set(new SealProgress(SealProgress.Running, 8, "checkpoint"));
             await CheckpointLiveAsync(token);
             Step("checkpoint");
@@ -282,15 +288,6 @@ public sealed class SealMigrationService
             if (File.Exists(ChatPath)) files.Add(VaultStoreFiles.Chat);
             SealJournal.Write(_dataPath, SealJournal.New(SealJournal.Building, files, string.Empty));
             Step("journal-building");
-
-            // 3. The pre-encryption snapshot with its key envelope: the way back (10.7).
-            if (_host.CanMakeWayBackSnapshot && !(options.AcceptNoSnapshot && !_host.FitsWayBackSnapshot(new FileInfo(VaultPath).Length)))
-            {
-                Set(new SealProgress(SealProgress.Running, 15, "snapshot"));
-                snapshot = await _host.CreateWayBackSnapshotAsync(masterPassword, token);
-                SealJournal.Write(_dataPath, SealJournal.New(SealJournal.Building, files, snapshot.RelativeName));
-                Step("snapshot");
-            }
 
             // From here to the swap nothing may write to the live files: a connection that wants one waits at its factory, and the ones still open are
             // waited for. The copy (step 5) and its comparison with the original (step 7) are then of one and the same state, whatever background work
@@ -360,12 +357,13 @@ public sealed class SealMigrationService
             // 8. The targets are flushed to disk; the journal says "verified". From here the migration is not cancellable.
             token.ThrowIfCancellationRequested();
             foreach (var t in targets) Flush(t);
-            var verified = SealJournal.New(SealJournal.Verified, files, snapshot?.RelativeName ?? string.Empty);
+            var verified = SealJournal.New(SealJournal.Verified, files, string.Empty);
             SealJournal.Write(_dataPath, verified);
             Step("journal-verified");
 
             // 9. No connection left; the swap and the wipe of the replaced plain files, by the resolver's forward path.
             Set(new SealProgress(SealProgress.Running, 80, "swap"));
+            _swapUnfinished = false;
             try
             {
                 SqliteConnection.ClearAllPools();
@@ -376,6 +374,8 @@ public sealed class SealMigrationService
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
+                    _logger?.LogError("The swap of the encrypted files failed ({Type}): {Message}", ex.GetType().Name, ex.Message);
+                    _swapUnfinished = true;
                     throw new SealMigrationException(SealFailures.Io,
                         "The swap was interrupted. Restart the node: the start finishes it, and no file is lost (" + ex.GetType().Name + ").");
                 }
@@ -403,7 +403,7 @@ public sealed class SealMigrationService
             {
                 _session.Lock();   // no key of a node that may not open stays in memory
                 _logger?.LogError("The encrypted node stays locked: {Code}, {Names}.", remains.Code, string.Join(", ", remains.Names));
-                return Set(new SealProgress(SealProgress.Failed, 0, LockedStep, remains.Code, remains.Message, Snapshot: snapshot, PlainCopiesFound: remains.Names));
+                return Set(new SealProgress(SealProgress.Failed, 0, LockedStep, remains.Code, remains.Message, PlainCopiesFound: remains.Names));
             }
 
             // 12. The session's master key opens the new database (4.4 steps 3-8, no door), then the node serves again.
@@ -421,7 +421,7 @@ public sealed class SealMigrationService
             // 13. The audit entry (no names) and the end.
             await AuditAsync(token);
             Step("audit");
-            return Set(new SealProgress(SealProgress.Done, 100, "done", Snapshot: snapshot, PlainCopiesFound: []));
+            return Set(new SealProgress(SealProgress.Done, 100, "done", PlainCopiesFound: []));
         }
         catch (OperationCanceledException)
         {
@@ -458,6 +458,12 @@ public sealed class SealMigrationService
 
     /// <summary>The <see cref="SealProgress.Step"/> of a run that ended after the swap with the node sealed and locked.</summary>
     public const string LockedStep = "locked";
+
+    /// <summary>
+    /// True when the last run stopped inside the swap: the journal says so, and the next start finishes it (or undoes it) from what is on disk. A caller must
+    /// not reset or delete anything then; the node is neither the plain one it was nor an encrypted one yet.
+    /// </summary>
+    public bool SwapUnfinished => _swapUnfinished;
 
     private sealed record PlainRemains(string Code, string Message, IReadOnlyList<string> Names);
 
@@ -591,6 +597,7 @@ public sealed class SealMigrationService
 
     private void Step(string name)
     {
+        _logger?.LogInformation("Encrypting the node: {Step} done.", name);
         StepHook?.Invoke(name);
     }
 }

@@ -35,8 +35,9 @@ public partial class RecoveryRestoreService
     }
 
     /// <summary>
-    /// The package a blind node handed over, in whichever format it is: a format-1 package restores as it always did, a format-2 one from
-    /// its baseline and deltas (<see cref="RestoreFromBaselineAsync"/>). A node that has activated Step A serves format 2 only.
+    /// The package a blind node handed over, in whichever format it is: a format-2 one restores from its baseline and deltas
+    /// (<see cref="RestoreFromBaselineAsync"/>); a format-1 one holds the vault in the open and is refused by <see cref="RestoreFromPackageAsync"/> (BMB-306).
+    /// A node that has activated Step A serves format 2 only.
     /// </summary>
     public async Task<RestoreResult> RestoreFromBlindPackageAsync(
         string archivePath, byte[] detachedSignature, byte[] servingNodePublicKey, RestoreIdentity who, RestoreBlindPeer blind,

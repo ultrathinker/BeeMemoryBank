@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.FullIos.Services;
 
 namespace BeeMemoryBank.FullIos.Pages;
@@ -7,7 +8,6 @@ public partial class CreateVaultPage : ContentPage
 {
     private readonly FullVault _vault;
     private readonly AppFlow _flow;
-    private bool _busy;
 
     public CreateVaultPage(FullVault vault, AppFlow flow)
     {
@@ -19,7 +19,6 @@ public partial class CreateVaultPage : ContentPage
 
     private async void OnCreate(object? sender, EventArgs e)
     {
-        if (_busy) return;
         ErrorLabel.IsVisible = false;
         var problem = FullVault.CheckNewPassword(PasswordEntry.Text, RepeatEntry.Text);
         if (problem is not null)
@@ -30,32 +29,23 @@ public partial class CreateVaultPage : ContentPage
 
         var name = FullVault.NodeName(NameEntry.Text, DeviceInfo.Current.Name);
         var password = PasswordEntry.Text!;
-        SetBusy(true, "Creating your memory bank. The key is derived from your password on purpose slowly; this takes a few seconds.");
-        try
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up, so Create cannot be tapped twice; the whole error
+        // is written under the button when it fails.
+        string? recoveryKey = null;
+        var ran = await BusyAction.RunAsync(sender as Button, async () =>
         {
             // Off the main thread: the Argon2id derivations take seconds on a phone and the screen must keep moving.
             // Both fields are emptied whatever the creation ends in (SecretFields), not just when it works.
-            var recoveryKey = await SecretFields.RunAsync(
+            recoveryKey = await SecretFields.RunAsync(
                 () => Task.Run(() => _vault.CreateAsync(name, password)), () => PasswordEntry.Text = "", () => RepeatEntry.Text = "");
-            _flow.ShowRecoveryKey(recoveryKey, firstTime: true);
-        }
-        catch (Exception ex)
+        }, new BusyOptions
         {
-            ShowError(ex.Message);
-        }
-        finally
-        {
-            SetBusy(false, null);
-        }
-    }
-
-    private void SetBusy(bool busy, string? status)
-    {
-        _busy = busy;
-        NameEntry.IsEnabled = PasswordEntry.IsEnabled = RepeatEntry.IsEnabled = CreateButton.IsEnabled = !busy;
-        Busy.IsVisible = Busy.IsRunning = busy;
-        StatusLabel.Text = status;
-        StatusLabel.IsVisible = status is not null;
+            Long = true,
+            Title = "Creating your memory bank",
+            Message = "Please wait. The key is derived from your password on purpose slowly; this takes a few seconds.",
+            ResultLabel = ErrorLabel,
+        });
+        if (ran && recoveryKey is not null) _flow.ShowRecoveryKey(recoveryKey, firstTime: true);
     }
 
     private void ShowError(string text)

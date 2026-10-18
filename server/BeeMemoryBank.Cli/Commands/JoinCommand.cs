@@ -1,3 +1,4 @@
+using BeeMemoryBank.Vault.Sealed;
 using System.Data;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -32,6 +33,7 @@ public static class JoinCommand
         TimeSpan? abortTimeout = null)
     {
         output ??= Console.Out;
+        using var flow = BeeMemoryBank.AppPaths.SealIntent.Flow.Enter();   // what a take-back may remove is what THIS command began
 
         // A join code from the other computer's Connect a device card (address, one-time token, certificate pin) replaces the
         // address: the join goes only to the computer whose key the code pins, and /api/join carries the code's token.
@@ -71,7 +73,16 @@ public static class JoinCommand
             return 2;
         }
 
-        await using var services = await CliServiceProvider.CreateAsync(dataPath);
+        // What was typed, or what the code carried, goes through the one policy for an address before a request is built from it.
+        var target = BeeMemoryBank.Sync.PeerAddressPolicy.Canonicalize(remoteUrl);
+        if (!target.Ok)
+        {
+            await output.WriteLineAsync($"Error: this computer cannot be joined through that address: {target.Refusal}");
+            return 2;
+        }
+        remoteUrl = target.Address!;
+
+        await using var services = await CliServiceProvider.CreateAsync(dataPath, forFreshSeal: true);
         using var scope = services.CreateScope();
 
         var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
@@ -88,6 +99,12 @@ public static class JoinCommand
             await output.WriteLineAsync("Error: node is already initialized. Delete the DB to re-join.");
             return 1;
         }
+
+        // A process that cannot encrypt what it is about to receive does not start the join: nothing is asked of the other computer and nothing is
+        // written (a composition without the sealing service used to finish the join without encrypting it).
+        var sealing = scope.ServiceProvider.GetRequiredService<FreshNodeSealing>();
+        var intents = scope.ServiceProvider.GetRequiredService<ISealIntents>();
+        var reset = scope.ServiceProvider.GetRequiredService<NodeResetService>();
 
         // What an earlier join killed half-way left in the staging folder (the downloaded archive, the extracted database).
         BeeMemoryBank.Core.IO.SnapshotStaging.Sweep(DataDirOf(scope.ServiceProvider));
@@ -148,7 +165,7 @@ public static class JoinCommand
         }
         catch (Exception ex)
         {
-            await output.WriteLineAsync($"Connection error: {ex.Message}");
+            await output.WriteLineAsync($"Connection error: {BeeMemoryBank.Sync.PeerContactLog.Describe(ex)}");
             if (ex is HttpRequestException unanswered && JoinAbortClient.MayHaveReachedHost(unanswered)) await TellHostAsync(rowCertain: false);
             return 1;
         }
@@ -164,12 +181,10 @@ public static class JoinCommand
                     "or its notes. Join a node that holds the data (a full node) instead.");
                 return 1;
             }
-            var errorBody = await response.Content.ReadAsStringAsync();
-            // Through a code the other computer is the pinned one, and its door says why in a sentence made for the person.
-            var doorSaid = code != null ? JoinCode.ReadDoorError(errorBody) : null;
-            await output.WriteLineAsync(doorSaid != null
-                ? $"Error from remote node ({(int)response.StatusCode}): {doorSaid}"
-                : $"Error from remote node ({(int)response.StatusCode}): {errorBody}");
+            // The other computer's answer is told by its STATUS: through a code its door says one of two things (JoinCode.DescribeDoorAnswer); what its body
+            // says is its own text and is never shown.
+            var doorSaid = code != null ? JoinCode.DescribeDoorAnswer((int)response.StatusCode) : null;
+            await output.WriteLineAsync($"Error from remote node ({(int)response.StatusCode}){(doorSaid != null ? ": " + doorSaid : "")}");
             // A server-side failure (a proxy that gave up while the host went on) may have come after the host wrote the row.
             if ((int)response.StatusCode >= 500) await TellHostAsync(rowCertain: false);
             return 1;
@@ -218,6 +233,14 @@ public static class JoinCommand
                 return 1;
             }
 
+            // A new node joins only a node that encrypts its metadata (protocol 4): to an older one it is refused, with nothing written here.
+            if (SyncProtocolVersion.JoinRefusal(hostProtocol) is { } notEncrypted)
+            {
+                await output.WriteLineAsync("Error: " + notEncrypted);
+                await TellHostAsync();
+                return 1;
+            }
+
             var slot = joinResponse.KeySlot;
             var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
             var iv = Convert.FromBase64String(slot.IvB64);
@@ -230,7 +253,7 @@ public static class JoinCommand
             }
             catch (System.Security.Cryptography.CryptographicException ex)
             {
-                await output.WriteLineAsync($"Error: the remote node sent an invalid key slot. {ex.Message}");
+                await output.WriteLineAsync("Error: the remote node sent a key slot with parameters this node does not accept.");
                 await TellHostAsync();
                 return 1;
             }
@@ -283,7 +306,7 @@ public static class JoinCommand
         {
             Array.Clear(privateKey);
             Array.Clear(masterDek);
-            await output.WriteLineAsync($"Error: the join could not be completed: {ex.Message}");
+            await output.WriteLineAsync($"Error: the join could not be completed ({BeeMemoryBank.Sync.FailureText.Say(ex)}).");
             await TellHostAsync();
             return 1;
         }
@@ -298,6 +321,8 @@ public static class JoinCommand
         var step = "writing this node's own records";
         try
         {
+            // From the first row of this node to the encrypted database, a cut is a join the next start wipes (SealIntent).
+            intents.Begin(BeeMemoryBank.AppPaths.SealIntent.KindJoin);
             await nodeRepo.CreateAsync(identity);
 
             var localSlot = new MasterKeyStore
@@ -364,7 +389,7 @@ public static class JoinCommand
                 NodeId = remote.NodeId,
                 DisplayName = remote.DisplayName,
                 Ed25519PublicKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64),
-                ApiAddress = remoteUrl.TrimEnd('/'),
+                ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(remoteUrl),
                 Status = "A",
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -399,7 +424,7 @@ public static class JoinCommand
                             NodeId = entry.NodeId,
                             DisplayName = entry.DisplayName,
                             Ed25519PublicKey = Convert.FromBase64String(entry.Ed25519PublicKeyB64),
-                            ApiAddress = entry.ApiAddress,
+                            ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(entry.ApiAddress),
                             Status = "A",
                             CreatedAt = now,
                             UpdatedAt = now,
@@ -417,15 +442,15 @@ public static class JoinCommand
                         // doesn't silently produce a peer with garbled key (events would later fail
                         // signature verification with no visible root cause).
                         if (ex.SqliteErrorCode != 19)
-                            await output.WriteLineAsync($"  Skipping peer {entry.DisplayName} ({entry.NodeId}): SQLite error {ex.SqliteErrorCode} — {ex.Message}");
+                            await output.WriteLineAsync($"  Skipping peer {entry.DisplayName} ({entry.NodeId}): SQLite error {ex.SqliteErrorCode}");
                     }
                     catch (FormatException ex)
                     {
-                        await output.WriteLineAsync($"  Skipping peer {entry.DisplayName} ({entry.NodeId}): bad base64 pubkey — {ex.Message}");
+                        await output.WriteLineAsync($"  Skipping peer {entry.DisplayName} ({entry.NodeId}): bad base64 pubkey");
                     }
                     catch (Exception ex)
                     {
-                        await output.WriteLineAsync($"  Skipping peer {entry.DisplayName} ({entry.NodeId}): {ex.GetType().Name} — {ex.Message}");
+                        await output.WriteLineAsync($"  Skipping peer {entry.DisplayName} ({entry.NodeId}): {ex.GetType().Name}");
                     }
                 }
             }
@@ -462,19 +487,16 @@ public static class JoinCommand
         }
         catch (Exception ex)
         {
-            await output.WriteLineAsync($"Error: the key exchange succeeded, but the join failed while {step}: {ex.Message}");
-            try
-            {
-                SnapshotJoin.RollbackPartialNode(dbFactory);
+            await output.WriteLineAsync($"Error: the key exchange succeeded, but the join failed while {step} ({BeeMemoryBank.Sync.FailureText.Say(ex)})");
+            // Everything the join wrote goes - the identity and keys and the notes copied from the snapshot - so that no readable half of a node stays.
+            // A join whose own begin was refused (another operation of this node is pending or running) wrote nothing, and takes nothing of that one back.
+            if (ex is BeeMemoryBank.AppPaths.SealIntentException)
+                await output.WriteLineAsync("Nothing was written on this node. Run `bmb join` again once the other operation has ended.");
+            else if (await reset.DiscardPendingSetupAsync($"cli join: failed while {step}"))
+                await output.WriteLineAsync("This node is not joined (everything the join wrote is gone), and `bmb join` can be run again.");
+            else
                 await output.WriteLineAsync(
-                    "This node is not joined (its identity and keys are gone), and `bmb join` can be run again; notes already copied from " +
-                    "the snapshot stay and are skipped on the next try.");
-            }
-            catch (Exception rollbackEx)
-            {
-                await output.WriteLineAsync(
-                    $"The half-made node could not be removed ({rollbackEx.Message}); delete the data folder before joining again.");
-            }
+                    "What the join wrote could not be removed now; it is removed when this node starts again (the next command), and `bmb join` can be run again then.");
             // The host recorded this node when the key exchange succeeded: ask it to take the row back.
             await TellHostAsync();
             return 1;
@@ -484,6 +506,27 @@ public static class JoinCommand
             Array.Clear(privateKey);
             Array.Clear(masterDek);
             Array.Clear(snapshotDek);
+        }
+
+        // The joined node is encrypted under the password it was given, like every node that is set up (BMB-306). It joined an activated node, so the
+        // activation came with the snapshot and there is nothing to switch on.
+        try
+        {
+            await sealing.SealAsync(password, activateMetadata: false);
+        }
+        catch (FreshNodeSealingException ex)
+        {
+            await output.WriteLineAsync($"Error: the key exchange and the snapshot succeeded, but {ex.Message}");
+            if (!ex.LeaveAsItIs)
+            {
+                if (await reset.DiscardPendingSetupAsync("cli join: encrypting the joined node failed"))
+                    await output.WriteLineAsync("This node is not joined (everything the join wrote is gone), and `bmb join` can be run again.");
+                else
+                    await output.WriteLineAsync("What the join wrote could not be removed now; it is removed when this node starts again, and `bmb join` can be run again then.");
+                // The host keeps the peer of a node that is (or becomes, at its restart) joined and encrypted; it is told only of one that is gone.
+                await TellHostAsync();
+            }
+            return 1;
         }
 
         await output.WriteLineAsync($"Node '{displayName}' successfully joined the network.");

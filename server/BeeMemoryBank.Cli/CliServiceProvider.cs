@@ -30,7 +30,8 @@ public static class CliServiceProvider
     /// The caller is responsible for calling Dispose() on the returned ServiceProvider.
     /// </summary>
     /// <param name="openSealed">False: a sealed folder is left closed (the caller opens it itself, for instance with a recovery key).</param>
-    public static async Task<ServiceProvider> CreateAsync(string dataPath, bool openSealed = true)
+    /// <param name="forFreshSeal">True for <c>bmb init</c>: a plain folder gets the pieces that encrypt the node it is about to set up (<see cref="CliSealed.AddFreshSealCli"/>).</param>
+    public static async Task<ServiceProvider> CreateAsync(string dataPath, bool openSealed = true, bool forFreshSeal = false)
     {
         // The vault gate (review release-b R1-2): refused while a re-key runs, an interrupted swap finished first, and
         // vault.lease held shared as long as the provider lives, so the re-key refuses while this command runs.
@@ -48,7 +49,7 @@ public static class CliServiceProvider
         Directory.CreateDirectory(dataPath);
         UseSiblingApiModelIfNotBundled();
 
-        var services = Compose(dataPath, sealedDir)
+        var services = Compose(dataPath, sealedDir, forFreshSeal && !sealedDir)
             // By a factory, so disposing the provider releases the lease; resolved at once so it is held from here.
             .AddSingleton<BeeMemoryBank.AppPaths.VaultLease>(_ => vaultLease)
             .BuildServiceProvider();
@@ -89,10 +90,11 @@ public static class CliServiceProvider
     public static ServiceProvider? CreateSealedForRekey(string dataPath) =>
         CliSealed.IsSealed(dataPath) ? Compose(dataPath, sealedDir: true).BuildServiceProvider() : null;
 
-    private static IServiceCollection Compose(string dataPath, bool sealedDir)
+    private static IServiceCollection Compose(string dataPath, bool sealedDir, bool freshSeal = false)
     {
         var collection = new ServiceCollection();
         if (sealedDir) collection.AddSealedCli(dataPath);   // the gate is registered first: the connection factories ask it for their key
+        else if (freshSeal) collection.AddFreshSealCli(dataPath);
         return collection
             // Console-backed logging at Warning+ level. Surfaces lazy-rewrap warnings,
             // signature mismatches, and other security-relevant signals directly to the

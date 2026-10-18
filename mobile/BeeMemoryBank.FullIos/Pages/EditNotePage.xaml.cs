@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.FullIos.Services;
 
 namespace BeeMemoryBank.FullIos.Pages;
@@ -14,7 +15,6 @@ public partial class EditNotePage : ContentPage
     private string? _passphrase;
     private bool _dirty;
     private bool _loading;
-    private bool _saving;
 
     public EditNotePage(NotesService notes, AppFlow flow)
     {
@@ -65,13 +65,12 @@ public partial class EditNotePage : ContentPage
 
     private async void OnSave(object? sender, EventArgs e) => await SaveAsync();
 
+    // The one busy helper (BMB-311): the Save button (also for the toolbar entry and the "Save" of the unsaved-changes question) is off and
+    // spins until the note is saved; the whole error is written under it.
     private async Task<bool> SaveAsync()
     {
-        if (_saving) return false;
-        _saving = true;
-        SaveButton.IsEnabled = false;
         ErrorLabel.IsVisible = false;
-        try
+        return await BusyAction.RunAsync(SaveButton, async () =>
         {
             var title = TitleEntry.Text ?? "";
             var path = PathEntry.Text ?? "/";
@@ -79,19 +78,7 @@ public partial class EditNotePage : ContentPage
             _id = await Task.Run(() => _notes.SaveAsync(_id, title, path, body, _passphrase));
             _dirty = false;
             await Navigation.PopAsync();
-            return true;
-        }
-        catch (Exception ex)
-        {
-            ErrorLabel.Text = ex.Message;
-            ErrorLabel.IsVisible = true;
-            return false;
-        }
-        finally
-        {
-            _saving = false;
-            SaveButton.IsEnabled = true;
-        }
+        }, new BusyOptions { ResultLabel = ErrorLabel });
     }
 
     private async Task LeaveAsync()

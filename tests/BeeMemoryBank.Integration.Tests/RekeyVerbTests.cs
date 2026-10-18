@@ -276,6 +276,50 @@ public sealed class RekeyVerbTests : IAsyncLifetime
         AssertOldVaultInUse(await RunAsync(password: "not the owner"), RekeyExit.PreflightRefused);
     }
 
+    /// <summary>BMB-307 fix2 (M2): a vault without a sentinel has no owner to take the keys from, whether the column is NULL or an empty BLOB (the one predicate, NodeSentinel).</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AVaultWithNoSentinel_NullOrEmpty_IsRefusedAsHavingNoOwner_AndLeftAsItWas(bool empty)
+    {
+        using (var db = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Pooling=False"))
+            await db.ExecuteAsync(empty ? "UPDATE tbl_node_identity SET sentinel_value = X''" : "UPDATE tbl_node_identity SET sentinel_value = NULL");
+        SqliteConnection.ClearAllPools();
+        _tree = Tree(_d);
+
+        var outcome = await RunAsync();
+
+        AssertOldVaultInUse(outcome, RekeyExit.PreflightRefused);
+        outcome.Message.Should().Contain("opens no superadmin key slot");
+    }
+
+    /// <summary>
+    /// BMB-314 fix S6: the adoption of a 2.6.x database tolerates a table the baseline does not have and leaves it alone, so the node runs on;
+    /// the re-key cannot account for it (it cannot tell whether such a table holds anything sealed under the old key) and refuses. The refusal
+    /// has to name the table and say what to do about it, and the vault must be as it was.
+    /// </summary>
+    [Fact]
+    public async Task AnExtraTableOfAnAdoptedVault_IsRefusedByName_WithWhatToDo_AndTheVaultIsLeftAsItWas()
+    {
+        using (var db = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Pooling=False"))
+        {
+            db.Open();
+            db.Execute("CREATE TABLE tbl_tag (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO tbl_tag (name) VALUES ('left over')");
+            db.Execute("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+        SqliteConnection.ClearAllPools();
+        foreach (var side in Directory.GetFiles(_d, "*-wal").Concat(Directory.GetFiles(_d, "*-shm"))) File.Delete(side);
+        _tree = Tree(_d);
+
+        var outcome = await RunAsync();
+
+        AssertOldVaultInUse(outcome, RekeyExit.FailedBeforeSwap);
+        outcome.Message.Should().Contain("tbl_tag", "the table is named")
+            .And.Contain("Export what you need", "the operator is told what to do about it")
+            .And.Contain("not changed", "and that the vault is as it was");
+        outcome.Message.Should().NotContain("left over", "no row content in a message");
+    }
+
     [Theory]
     [InlineData(RekeyRunner.FaultAfterCopy)]
     [InlineData(RekeyRunner.FaultAfterSteps)]

@@ -197,8 +197,13 @@ public static class BlindCommand
         {
             await output.WriteLineAsync("Peers:");
             foreach (var p in peers.EnumerateArray())
+            {
+                // The contact is the last completed session either way and whose call it was (contact_at); older nodes only know the delivery time (last_contact).
+                var direction = Str(p, "contact_direction") is { } d ? $" ({(d == "inbound" ? "it called" : "this node called")})" : "";
+                var failing = Str(p, "state") == "not_answering" && Str(p, "not_answering_since") is { } since ? $", NOT ANSWERING since {since}" : "";
                 await output.WriteLineAsync(
-                    $"  {Str(p, "name"),-20} lag {Str(p, "lag") ?? "?"} events, last contact {Str(p, "last_contact")}");
+                    $"  {Str(p, "name"),-20} lag {Str(p, "lag") ?? "?"} events, last contact {Str(p, "contact_at") ?? Str(p, "last_contact")}{direction}{failing}");
+            }
         }
         return 0;
     }

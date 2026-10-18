@@ -11,9 +11,22 @@ namespace BeeMemoryBank.Api.Services.BlindStatus;
 public sealed record BlindPeerStatus(
     [property: JsonPropertyName("node_id")] string NodeId,
     [property: JsonPropertyName("name")] string Name,
+    /// <summary>The later of the last pull from the peer and the last push of events to it: the DELIVERY time this field has always been (BMB-313 keeps its meaning).</summary>
     [property: JsonPropertyName("last_contact")] DateTime? LastContact,
     /// <summary>Events this peer has not pulled from us yet; null when we have never seen it sync.</summary>
-    [property: JsonPropertyName("lag")] long? Lag);
+    [property: JsonPropertyName("lag")] long? Lag,
+    /// <summary>The last completed session with the peer, either way, whether or not events moved: the same projection as the sync status of the full node (BMB-313).</summary>
+    [property: JsonPropertyName("contact_at")] DateTime? ContactAt = null,
+    /// <summary><c>outbound</c> (this node called), <c>inbound</c> (the peer called), or null.</summary>
+    [property: JsonPropertyName("contact_direction")] string? ContactDirection = null,
+    [property: JsonPropertyName("last_push_at")] DateTime? LastPushAt = null,
+    [property: JsonPropertyName("last_outbound_at")] DateTime? LastOutboundAt = null,
+    [property: JsonPropertyName("last_inbound_at")] DateTime? LastInboundAt = null,
+    /// <summary><c>answering</c>, <c>not_answering</c>, <c>calls_us</c> or <c>unknown</c> (not checked since this node started).</summary>
+    [property: JsonPropertyName("state")] string? State = null,
+    [property: JsonPropertyName("online")] bool? Online = null,
+    [property: JsonPropertyName("not_answering_since")] DateTime? NotAnsweringSince = null,
+    [property: JsonPropertyName("not_answering_reason")] string? NotAnsweringReason = null);
 
 /// <summary>
 /// One job row of <c>GET /api/blind/status</c> (<c>jobs[]</c>): a backup, verify or wipe the node

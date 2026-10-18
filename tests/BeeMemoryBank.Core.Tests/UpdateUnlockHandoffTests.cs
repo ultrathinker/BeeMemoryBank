@@ -57,6 +57,29 @@ public class UpdateUnlockHandoffTests : TestFixture
         File.Exists(handoff.FilePath).Should().BeFalse("a handoff is used once");
     }
 
+    /// <summary>
+    /// The handoff carries a bare key with nothing that authenticates it but the sentinel, so it is the one door that REFUSES a vault without a sentinel:
+    /// NULL and an empty BLOB alike (BMB-312/308: one predicate, one answer). The user types the password once, and that heals the sentinel.
+    /// </summary>
+    [Theory]
+    [InlineData("NULL")]
+    [InlineData("X''")]
+    public async Task AVaultWithNoSentinel_OfEitherShape_IsNotOpenedByTheHandoff_AndTheHandoffIsGone(string missing)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        await Session.UnlockAsync("correctPassword");
+        await For(Session).WriteAsync();
+        using (var c = Factory.CreateConnection())
+            await Dapper.SqlMapper.ExecuteAsync(c, $"UPDATE tbl_node_identity SET sentinel_value = {missing}");
+
+        var restarted = new SessionService(_keySlotRepo);
+        var handoff = For(restarted);
+        (await handoff.TryConsumeAsync(_nodeRepo)).Should().BeFalse("a key nothing can verify is not installed");
+
+        restarted.IsUnlocked.Should().BeFalse();
+        File.Exists(handoff.FilePath).Should().BeFalse("a handoff is used once, whatever it found");
+    }
+
     [Fact]
     public async Task SecondStart_AfterTheHandoffWasUsed_StaysLocked()
     {

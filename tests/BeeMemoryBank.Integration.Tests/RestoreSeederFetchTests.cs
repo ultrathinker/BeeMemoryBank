@@ -181,6 +181,39 @@ public class RestoreSeederFetchTests : IAsyncLifetime
         }
     }
 
+    /// <summary>
+    /// BMB-311 fix2 (R1): the download takes the token of the background work. A cancelled token ends it as a CANCELLATION - not as "this seeder failed, try the next one" and
+    /// then "all seeders failed" - and nothing is written.
+    /// </summary>
+    [Fact]
+    public async Task DownloadFromWhitelistedSeederAsync_CancelledWork_IsACancellation_NotAFailedSeeder_AndWritesNothing()
+    {
+        var (eventId, fileBytes) = await StageRestoreFileOnNodeAAsync();
+        var destPath = Path.Combine(Path.GetTempPath(), $"bmb-restore-fetch-{Guid.NewGuid():N}.bin");
+        try
+        {
+            using var scopeB = _nodeB.Services.CreateScope();
+            var restoreSvc = scopeB.ServiceProvider.GetRequiredService<RestoreInitiatorService>();
+            var identity = await scopeB.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync();
+            var whitelistRepo = scopeB.ServiceProvider.GetRequiredService<IWhitelistRepository>();
+            var originator = new WhitelistEntry
+            {
+                NodeId = _nodeAId, DisplayName = "NodeA", Ed25519PublicKey = new byte[32], ApiAddress = "http://127.0.0.1", Status = "A",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            };
+
+            var act = () => restoreSvc.DownloadFromWhitelistedSeederAsync(
+                eventId.ToString(), MakePayload(fileBytes.Length), originator, identity!, whitelistRepo, destPath, new CancellationToken(canceled: true));
+
+            await act.Should().ThrowAsync<OperationCanceledException>("the work was cancelled: it is not 'all candidate seeders failed'");
+            File.Exists(destPath).Should().BeFalse();
+        }
+        finally
+        {
+            try { File.Delete(destPath); } catch { }
+        }
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
     private static async Task UnlockAsync(HttpClient client, string password)

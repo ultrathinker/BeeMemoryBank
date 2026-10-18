@@ -10,6 +10,12 @@ Step A as it stands in 2.6.0. Where this document and the code disagree, the cod
 today and this document the target; a contradiction this document did not foresee is resolved by taking the reading that
 fails closed.
 
+**Amended in 2.6.2 (BMB-306):** the way-back snapshot, its key envelope, the `pre-encryption/` folder, the `snapshot_limit` blocker and the
+rollback (and everything that restores a way-back) no longer exist: encrypting a node keeps no copy of it, a
+node that is set up is encrypted from its first day, and no restore produces an open node. See the amendment at the end of
+[ADR 0010](../adr/0010-database-closed-until-unlock.md) and [sealed-database.md](../sealed-database.md#going-back); read the sections above as
+history where they disagree.
+
 Words: **MUST** is a contract other parts rely on; **SHOULD** is the recommended way, a part may deviate for a reason it states.
 "Part 1/2/3" are the parts of section 17.
 

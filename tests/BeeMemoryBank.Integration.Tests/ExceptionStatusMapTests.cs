@@ -30,6 +30,21 @@ public class ExceptionStatusMapTests
         ExceptionStatusMap.Map(new ReadOnlyAccessException("/Locked")).StatusCode.Should().Be(403);
         ExceptionStatusMap.Map(new InvalidOperationException("something else")).StatusCode.Should().Be(409);
         ExceptionStatusMap.Map(new MetadataKeyPublishPendingException()).StatusCode.Should().Be(503);
+        ExceptionStatusMap.Map(new BeeMemoryBank.Storage.Sealed.NotEnoughMemoryException("needs 709 MB", 1, 0, 1)).StatusCode.Should().Be(507);
+    }
+
+    /// <summary>
+    /// A job that cannot hold a database in memory (BMB-304) is a 507 with the words that name the memory limit, and a code a caller can act on - not the 409 its
+    /// <see cref="InvalidOperationException"/> base would give it, and not a 500 with an exception type name.
+    /// </summary>
+    [Fact]
+    public void ANodeWithTooLittleMemory_IsA507_WhoseMessageNamesTheLimit()
+    {
+        var ex = new BeeMemoryBank.Storage.Sealed.NotEnoughMemoryException(
+            "Making the snapshot of a 645 MB database needs about 709 MB ... to at least 1024 MB and try again. Nothing was changed.", 709, 300, 1024);
+        ex.Should().BeAssignableTo<InvalidOperationException>();
+        ExceptionStatusMap.Map(ex).Should().Be((507, ex.Message));
+        ExceptionStatusMap.Details(ex).Should().Be(("not_enough_memory", (int?)null));
     }
 
     /// <summary>

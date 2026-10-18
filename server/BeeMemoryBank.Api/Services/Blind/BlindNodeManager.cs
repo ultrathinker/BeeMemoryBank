@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync;
@@ -30,10 +31,13 @@ public sealed class BaselineNotReadyException(string message) : Exception(messag
 /// <param name="ProtocolSeenAt">When the node last declared its protocol to this PC (it called, or answered my-standing).</param>
 /// <param name="Capabilities">The capabilities the node advertised in its last my-standing answer (spec 5.1); null when it sent none.</param>
 /// <param name="Store">What the blind node holds, from the same answer (spec 10): the baseline's age and the deltas, no note count; null when unknown.</param>
+/// <param name="Contact">The contact with it as every status of this node tells it (<see cref="PeerContactView"/>, the same projection the Trusted Nodes
+/// and the header use): the last contact with its direction (whose call it was), the last time events went out, and since when this PC's calls to it fail
+/// and why. <paramref name="LastContact"/> is this projection's <c>LastContactAt</c>; an outbound timestamp is never taken for the node calling in.</param>
 public sealed record BlindNodeStatus(
     Guid NodeId, string DisplayName, string? Address, int? Protocol, DateTime? LastContact,
     IReadOnlyList<string> Alarms, long? AdoptedCheckpoint = null, DateTime CreatedAt = default, DateTime? ProtocolSeenAt = null,
-    IReadOnlyList<string>? Capabilities = null, BlindStoreSummary? Store = null);
+    IReadOnlyList<string>? Capabilities = null, BlindStoreSummary? Store = null, DeliveryNodeStatus? Contact = null);
 
 /// <summary>What a blind node's my-standing answer says it holds, kept in memory (the answer is asked every cycle; nothing of it is replicated).</summary>
 internal sealed record BlindObservation(BlindStoreSummary? Store, DateTime SeenAt);
@@ -95,20 +99,25 @@ public sealed class BlindNodeManager(
             .Where(r => BlindNodeId.IsBlind(r.NodeId));
         var pulled = (await sp.GetRequiredService<ISyncPositionRepository>().GetAllAsync())
             .ToDictionary(p => p.RemoteNodeId, p => p.UpdatedAt);
-        var pushed = (await sp.GetRequiredService<ISyncPushPositionRepository>().GetAllAsync())
-            .ToDictionary(p => p.RemoteNodeId, p => p.PushedAt);
+        var pushed = (await sp.GetRequiredService<ISyncPushPositionRepository>().GetAllAsync()).ToDictionary(p => p.RemoteNodeId);
         var adopted = await sp.GetRequiredService<BlindState>().GetAdoptedCheckpointsAsync();
+        var contacts = sp.GetService<PeerContactLog>();
+        var interval = sp.GetService<SyncScheduler>()?.Interval;
+        var now = UtcNow();
 
         return rows.Select(r =>
         {
-            // Most recent contact in either direction, or when it last authenticated to us — or, for a node this PC calls,
-            // when it last answered this PC's my-standing call (AsksForReseedAsync records that as its protocol sighting).
-            var latest = new[] { pulled.GetValueOrDefault(r.NodeId), pushed.GetValueOrDefault(r.NodeId), r.LastProtocolSeenAt ?? default }.Max();
-            DateTime? last = latest > DateTime.MinValue ? latest : null;
+            // The contact is told as every other status of this node tells it (PeerContactView, BMB-313): the last completed session either way - this
+            // PC's own call (a finished pull, a session that ended well, an answered my-standing call, all of them calls THIS PC made) or the node's call
+            // - with whose call it was, when events last went out, and since when this PC's calls fail and why. What this PC's own call stamped into
+            // the protocol column is outbound contact, never evidence of the node calling in.
+            pushed.TryGetValue(r.NodeId, out var push);
+            var view = PeerContactView.Build(r, contacts?.Get(r.NodeId, r.ApiAddress) ?? new PeerContactLog.Contact(), pulled.TryGetValue(r.NodeId, out var pull) ? pull : null,
+                push, headSeq: 0, unsyncedCount: 0, now, interval);
             _observed.TryGetValue(r.NodeId, out var seen);
-            return new BlindNodeStatus(r.NodeId, r.DisplayName, r.ApiAddress, r.LastProtocolVersion, last, [],
+            return new BlindNodeStatus(r.NodeId, r.DisplayName, r.ApiAddress, r.LastProtocolVersion, view.LastContactAt, [],
                 adopted.TryGetValue(r.NodeId, out var cp) ? cp : null, r.CreatedAt, r.LastProtocolSeenAt,
-                MetadataCapabilities.Parse(r.LastCapabilities), seen?.Store);
+                MetadataCapabilities.Parse(r.LastCapabilities), seen?.Store, view);
         }).ToList();
     }
 
@@ -134,20 +143,22 @@ public sealed class BlindNodeManager(
         var whitelist = sp.GetRequiredService<IWhitelistRepository>();
         var displayName = $"Blind {code.NodeId.ToString()[..8]}";
         var entry = await whitelist.GetByNodeIdAsync(code.NodeId, includeDeleted: true);
-        var eventLogger = sp.GetRequiredService<IEventLogger>();
+        var addresses = sp.GetRequiredService<PeerAddressService>();
         if (entry is { Status: "A" })
         {
             // Paired again (a recreated volume keeps the key, a renewed address or certificate
             // does not): update the row everyone dials instead of adding a second one.
-            var version = await eventLogger.LogWhitelistUpdateAsync(code.NodeId, code.Address, displayName: null,
-                tlsSpki: code.TlsSpki, tlsTrust: BlindTrust.Pin);
-            entry.ApiAddress = code.Address;
-            entry.TlsSpki = code.TlsSpki;
-            entry.TlsTrust = BlindTrust.Pin;
-            entry.UpdatedAt = UtcNow();
-            entry.LamportTs = version.LamportTs;
-            entry.SourceNodeId = version.SourceNodeId;
-            await whitelist.UpdateAsync(entry);
+            // The key a row is dialled by never changes through a pairing (the same rule as a join and the address change): the code must name the key on record.
+            if (!PeerKey.Matches(entry.Ed25519PublicKey, code.PublicKeyB64))
+                throw new BlindNodeUnreachableException(
+                    "The pair code names another key than the one this network knows this node by. Not trusting it.");
+            // The one writer of a peer's row on a running node: the event and the row carry the same canonical address (an address the policy refuses is neither
+            // stored nor announced), and the loop forgets whatever it learned at the old pairing - unreachable, closed, a failure, the contact log - whether or not
+            // the place moved, and tries the new pairing at once.
+            var repaired = await addresses.ApplyProofAsync(entry,
+                new PeerProof(code.Address, ProvenKey: Convert.FromBase64String(code.PublicKeyB64), TlsSpki: code.TlsSpki, TlsTrust: BlindTrust.Pin, PairingChanged: true),
+                "pair code", "web");
+            if (!repaired.Succeeded) throw new BlindNodeUnreachableException(repaired.Message);
         }
         else
         {
@@ -157,7 +168,6 @@ public sealed class BlindNodeManager(
                 NodeId = code.NodeId,
                 DisplayName = displayName,
                 Ed25519PublicKey = Convert.FromBase64String(code.PublicKeyB64),
-                ApiAddress = code.Address,
                 TlsSpki = code.TlsSpki,
                 TlsTrust = BlindTrust.Pin,
                 Status = "A",
@@ -167,18 +177,19 @@ public sealed class BlindNodeManager(
                 CreatedAt = now,
                 UpdatedAt = now
             };
-            // Log first, like every whitelist write: the row carries the version the mesh is told.
-            var version = await eventLogger.LogWhitelistAddAsync(entry);
-            entry.LamportTs = version.LamportTs;
-            entry.SourceNodeId = version.SourceNodeId;
-            if (await whitelist.GetByNodeIdAsync(code.NodeId, includeDeleted: true) is null)
-                await whitelist.CreateAsync(entry);
-            else
+            // The event is logged first, inside the one writer, so the row carries the version the mesh is told. A node removed and added again keeps its old row.
+            var admitted = await addresses.AdmitAsync(entry, code.Address, "pair code", "web", async row =>
             {
-                await whitelist.UpdateAsync(entry);
-                // Removed and added again: the row is the old one, and its clocks ran on while it was gone.
-                await whitelist.ResetLocalBookkeepingAsync(code.NodeId, entry.CreatedAt);
-            }
+                if (await whitelist.GetByNodeIdAsync(code.NodeId, includeDeleted: true) is not null)
+                {
+                    await whitelist.UpdateAsync(row);
+                    // Removed and added again: the row is the old one, and its clocks ran on while it was gone.
+                    await whitelist.ResetLocalBookkeepingAsync(code.NodeId, row.CreatedAt);
+                }
+                else
+                    await whitelist.CreateAsync(row);
+            });
+            if (!admitted.Succeeded) throw new BlindNodeUnreachableException(admitted.Message);
         }
         pins.Invalidate();
 
@@ -399,6 +410,8 @@ public sealed class BlindNodeManager(
         {
             var whitelist = sp.GetRequiredService<IWhitelistRepository>();
             await whitelist.RecordProtocolVersionAsync(peer.NodeId, standing.Protocol, UtcNow());
+            // An authenticated round trip THIS PC made and the node answered: outbound contact (we -> it), recorded as that and not as the node calling in.
+            sp.GetService<PeerContactLog>()?.NoteOutboundOk(peer.NodeId, UtcNow(), peer.ApiAddress);
             // What the node advertises (spec 5.1, 5.2): a node that sends none (a 2.5 one) records nothing, so the row keeps what it saw last.
             if (standing.Capabilities is { } capabilities)
                 await whitelist.RecordCapabilitiesAsync(peer.NodeId, capabilities, standing.AppVersion, UtcNow());
@@ -425,9 +438,10 @@ public sealed class BlindNodeManager(
         }
         catch (Exception ex) when (!ct.IsCancellationRequested && ex is not HttpRequestException { StatusCode: null })
         {
+            // A call to the blind node: told as the kind of failure (FailureText), never with the exception's or the node's own words.
             logger.LogWarning(
-                "Blind node {NodeId} could not be pulled from before it is seeded again ({Reason}); its pull position is dropped and " +
-                "what only it holds is not carried over", row.NodeId, ex.Message);
+                "Blind node {NodeId} could not be pulled from before it is seeded again ({Reason}, {ErrorType}); its pull position is dropped and " +
+                "what only it holds is not carried over", row.NodeId, FailureText.Say(ex), ex.GetType().Name);
             // A raw statement, not a repository method: nothing else drops one peer's cursor, and ISyncPositionRepository has fakes.
             using var conn = sp.GetRequiredService<IDbConnectionFactory>().CreateConnection();
             await conn.ExecuteAsync("DELETE FROM tbl_sync_position WHERE remote_node_id = @id COLLATE NOCASE", new { id = row.NodeId.ToString() });
@@ -494,13 +508,27 @@ public sealed class BlindNodeManager(
         }
         catch (HttpRequestException ex)
         {
+            // What kind of failure it was, from the closed set; never the address, the exception's own text or anything the other side said.
             throw new BlindNodeUnreachableException(
-                $"Could not reach the blind node at {code.Address} with the key in its code ({ex.Message}).", ex);
+                $"Could not reach the blind node with the key in its code: {PeerContactLog.Describe(ex)}.", ex);
         }
         if (identity.GetProperty("nodeId").GetGuid() != code.NodeId
             || identity.GetProperty("ed25519PublicKeyB64").GetString() != code.PublicKeyB64)
             throw new BlindNodeUnreachableException(
-                $"The node at {code.Address} is not the one in the pair code.");
+                "The node at the address in the code is not the one in the pair code.");
+    }
+
+    private static string RefusalSaid(int status, string body)
+    {
+        string? error = null;
+        try
+        {
+            if (JsonDocument.Parse(body).RootElement.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String) error = e.GetString();
+        }
+        catch (JsonException) { }
+        return BlindSeedRefusals.FromSentence(error) is { } code
+            ? $"The blind node refused the seed ({status}): {BlindSeedRefusals.Sentence(code)}"
+            : $"The blind node refused the seed ({status}).";
     }
 
     /// <summary>
@@ -537,8 +565,8 @@ public sealed class BlindNodeManager(
                     offset = JsonDocument.Parse(body).RootElement.GetProperty("received").GetInt64();
                     continue;
                 default:
-                    throw new BlindNodeUnreachableException(
-                        $"The blind node refused the seed ({(int)resp.StatusCode}): {body}");
+                    // The blind node's refusals are one of its fixed sentences (BlindSeedRefusals); any other body is its own text and is not shown.
+                    throw new BlindNodeUnreachableException(RefusalSaid((int)resp.StatusCode, body));
             }
         }
     }

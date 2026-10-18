@@ -57,15 +57,24 @@ public static class SpkiPin
     /// <para>It never follows a redirect: any 3xx is an error. A 307/308 keeps the method and body, so
     /// following one would carry the master password to wherever the pinned server pointed — plain
     /// http, or another host — past the pin that was the whole point.</para>
+    ///
+    /// <para>It opens its sockets through <see cref="PeerSocketConnector"/> and uses no proxy: a pinned
+    /// key says WHO answered, not WHERE the name led, and a name that resolves to a link-local or
+    /// cloud-metadata address is never dialled (BMB-307 fix round 3).</para>
     /// </summary>
-    public static HttpMessageHandler CreatePinnedHandler(string expectedPin) =>
-        new RedirectRefusingHandler(new SocketsHttpHandler
+    /// <param name="network">Test seam: how names are resolved and which addresses are allowed.</param>
+    public static HttpMessageHandler CreatePinnedHandler(string expectedPin, PeerNetwork? network = null)
+    {
+        var net = network ?? PeerNetwork.Production;
+        return new RedirectRefusingHandler(new SocketsHttpHandler
         {
             AllowAutoRedirect = false,
+            UseProxy = false,
+            ConnectCallback = (context, ct) => PeerSocketConnector.ConnectAsync(context, net, ct),
             SslOptions = new SslClientAuthenticationOptions
             {
                 RemoteCertificateValidationCallback = (_, certificate, _, _) => Matches(certificate, expectedPin)
             }
         });
-
+    }
 }

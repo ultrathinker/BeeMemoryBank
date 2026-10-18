@@ -50,7 +50,7 @@ public sealed class NodeLanClient(HttpClient http, string? dataPath = null, stri
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
         {
-            return LanStatus.Unavailable with { Error = $"The node could not be reached: {ex.Message}" };
+            return LanStatus.Unavailable with { Error = $"The node could not be reached ({BeeMemoryBank.Sync.FailureText.Say(ex)})." };
         }
     }
 

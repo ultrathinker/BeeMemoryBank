@@ -338,7 +338,7 @@ readinessCmd.SetHandler(async (data) =>
 syncCmd.AddCommand(readinessCmd);
 
 var activatePasswordStdinOpt = new Option<bool>("--password-stdin", "Read the master password from the first line of stdin");
-var activateYesOpt = new Option<bool>("--yes", "Confirm the one-way switch (take a backup first; it is the only way back).");
+var activateYesOpt = new Option<bool>("--yes", "Confirm the one-way switch (going back is not possible from the node; take your own offline backup first if you want one).");
 var activateCmd = new Command("activate", "Switch metadata encryption on for the whole network (one way)");
 activateCmd.AddOption(activatePasswordStdinOpt);
 activateCmd.AddOption(activateYesOpt);

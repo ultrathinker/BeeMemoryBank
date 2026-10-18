@@ -233,6 +233,12 @@ sentinel_value: BLOB  -- AES-256-GCM("BeeMemoryBank", master_dek)
 
 The `sentinel_value` column is part of the initial schema (`001_initial_schema.sql`).
 
+A vault can have **no sentinel**: NULL (a vault older than the check) or an empty value. They are one thing (`MasterKeyManager.IsSentinelMissing`, the
+only place that decides it). The doors that cannot verify a key without it (the update hand-off, a phone's quick-unlock key) refuse such a vault; the
+others (a password, the server and OS auto-unlock, an agent door, the key of a restored snapshot) have a slot or a session that already proved the key and
+open it. A password unlock and "Encrypt this node" make the missing sentinel from the key they proved, with one conditional statement (it stores only while
+the value is still missing, so a sentinel another unlock or a rotation stored in the meantime is never replaced).
+
 ## SessionService — Master DEK Lifecycle in Memory
 
 ```csharp
@@ -551,8 +557,8 @@ Both are off by default, both are warned about twice, and neither is ever in a b
 File sizes and counts; the already-encrypted `media/*.enc` and `search-index-segments/`; free-space remnants of the plain files from
 before the switch (SSD wear levelling and copy-on-write file systems keep old blocks: encrypt the volume as well); `os-auto-unlock.dat`
 or a server key file when switched on; process memory, swap, hibernation files and crash dumps of an *unlocked* node; plain exports and
-cold backups the owner made; and the pre-encryption snapshot, which is encrypted but opens with the master password of the day it was
-taken. The decision is [ADR 0010](adr/0010-database-closed-until-unlock.md); the design is in [design/step-b-spec.md](design/step-b-spec.md) (sections 2, 3 and 4).
+cold backups the owner made. (Up to 2.6.1 the migration also left an encrypted pre-encryption snapshot that opened with the master password of the
+day it was taken; 2.6.2 keeps no such copy, and no restore takes an unencrypted database.) The decision is [ADR 0010](adr/0010-database-closed-until-unlock.md); the design is in [design/step-b-spec.md](design/step-b-spec.md) (sections 2, 3 and 4).
 
 ## What is NOT Encrypted (by design)
 

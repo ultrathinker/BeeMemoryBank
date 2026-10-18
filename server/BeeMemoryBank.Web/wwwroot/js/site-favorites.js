@@ -47,16 +47,17 @@
         if (list) list.classList.toggle('fav-busy', value);
     }
 
-    function send(url, method, body) {
-        var opts = { method: method };
-        if (body) {
-            opts.headers = { 'Content-Type': 'application/json' };
-            opts.body = JSON.stringify(body);
-        }
-        return fetch(url, opts).then(function (r) {
-            if (!r.ok) throw new Error('request failed');
-            return r;
-        });
+    // The one busy helper (BMB-311): the button (if there is one) spins, the list is marked busy by the callers, and a refusal is written in the
+    // favorites block in full. Resolves true when the node took it.
+    function send(el, url, method, body) {
+        return bmbBusy.run(el, function () {
+            var opts = { method: method };
+            if (body) {
+                opts.headers = { 'Content-Type': 'application/json' };
+                opts.body = JSON.stringify(body);
+            }
+            return bmbBusy.request(url, opts);
+        }, { quiet: true, scope: block() });
     }
 
     function isStarred(id) {
@@ -135,9 +136,8 @@
             }));
             actions.appendChild(actionButton('star-fill', 'Remove from favorites', false, function () {
                 setBusy(true);
-                send('/api-proxy/favorites/' + encodeURIComponent(item.id), 'DELETE')
+                send(null, '/api-proxy/favorites/' + encodeURIComponent(item.id), 'DELETE')
                     .then(refresh)
-                    .catch(resync)
                     .finally(function () { setBusy(false); });
             }, 'fav-unstar'));
             row.appendChild(actions);
@@ -148,9 +148,8 @@
 
     function move(id, direction) {
         setBusy(true);
-        send('/api-proxy/favorites/' + encodeURIComponent(id) + '/move', 'POST', { direction: direction })
+        send(null, '/api-proxy/favorites/' + encodeURIComponent(id) + '/move', 'POST', { direction: direction })
             .then(refresh)
-            .catch(resync)
             .finally(function () { setBusy(false); });
     }
 
@@ -182,14 +181,9 @@
         if (!articleId) return;
         var starred = isStarred(articleId);
         setBusy(true);
-        btn.loading = true;
-        send('/api-proxy/favorites/' + encodeURIComponent(articleId), starred ? 'DELETE' : 'POST')
+        send(btn, '/api-proxy/favorites/' + encodeURIComponent(articleId), starred ? 'DELETE' : 'POST')
             .then(refresh)
-            .catch(resync)
-            .finally(function () {
-                btn.loading = false;
-                setBusy(false);
-            });
+            .finally(function () { setBusy(false); });
     });
 
     document.addEventListener('click', function (e) {
@@ -203,9 +197,8 @@
         var alpha = e.target.closest ? e.target.closest('#btn-favorites-alpha') : null;
         if (!alpha || busy) return;
         setBusy(true);
-        send('/api-proxy/favorites/reset-order', 'POST')
+        send(alpha, '/api-proxy/favorites/reset-order', 'POST')
             .then(refresh)
-            .catch(resync)
             .finally(function () { setBusy(false); });
     });
 

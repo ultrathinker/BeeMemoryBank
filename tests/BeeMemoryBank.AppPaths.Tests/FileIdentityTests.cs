@@ -25,6 +25,16 @@ public sealed class FileIdentityTests : IDisposable
         return path;
     }
 
+    [Theory]
+    [InlineData(true, false, false, true)]
+    [InlineData(false, true, false, true)]
+    [InlineData(false, false, true, true)]   // .NET says IsLinux() == false on Android; its libc has the same stat
+    [InlineData(false, false, false, false)]
+    public void The_stat_route_is_taken_on_linux_macos_and_android(bool isLinux, bool isMacOs, bool isAndroid, bool expected)
+    {
+        FileIdentity.UsesUnixStat(isLinux, isMacOs, isAndroid).Should().Be(expected);
+    }
+
     [Fact]
     public void A_single_file_has_a_link_count_of_one()
     {

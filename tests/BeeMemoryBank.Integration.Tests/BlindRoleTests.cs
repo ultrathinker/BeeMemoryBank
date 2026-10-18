@@ -265,11 +265,12 @@ public class BlindRoleTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Plan 3.4: migrations need no DEK, so a blind node upgrades its schema on start like any other
-    /// node. The database here is one migration behind (028, the first blind migration, undone).
+    /// Plan 3.4: migrations need no DEK, so a blind node takes its schema on start like any other node. Since 2.6.2 the vault has one
+    /// baseline migration; the database here carries the ledger of the 39 migrations of 2.6.x (what a blind node updated from 2.6.1 has) and
+    /// is adopted on start, DEK-less, with its identity untouched.
     /// </summary>
     [Fact]
-    public async Task BlindNode_MigratesFromThePreviousSchema_WithoutADek()
+    public async Task BlindNode_AdoptsTheLedgerOfTheOldMigrationChain_WithoutADek()
     {
         using var blind = new BlindNodeFactory();
         var keyPath = Path.Combine(blind.DataPath, FileNodeKey.FileName);
@@ -288,17 +289,20 @@ public class BlindRoleTests : IAsyncLifetime
                 CreatedAt = DateTime.UtcNow
             });
             using var conn = db.CreateConnection();
-            await conn.ExecuteAsync(@"DROP TABLE tbl_blind_state;
-                ALTER TABLE tbl_whitelist DROP COLUMN last_protocol_version;
-                ALTER TABLE tbl_whitelist DROP COLUMN last_protocol_seen_at;
-                DELETE FROM tbl_migration WHERE version = 28;");
+            // The ledger of a 2.6.1 node: the 39 rows of the old chain instead of the baseline's one (the guard that stops a delete from
+            // the ledger is what an old program meets, so it is dropped to forge the old state).
+            await conn.ExecuteAsync("DROP TRIGGER IF EXISTS trg_migration_ledger_guard; DELETE FROM tbl_migration");
+            foreach (var (version, name) in LegacyMigrationChain.LedgerRows)
+                await conn.ExecuteAsync("INSERT INTO tbl_migration (version, filename, applied_at, updated_at) VALUES (@version, @name, '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')",
+                    new { version, name });
         }
 
         var identity = await IdentityAsync(blind);
 
         identity.NodeId.Should().Be(nodeId);
         using var check = blind.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
-        (await check.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_migration WHERE version = 28")).Should().Be(1);
+        (await check.QueryAsync<(int, string)>("SELECT version, filename FROM tbl_migration")).Should().Equal(
+            [(MigrationRunner.BaselineVersion, MigrationRunner.BaselineResourceName)], "the 39 old rows became the baseline's one");
         (await check.ExecuteScalarAsync<long>(
             "SELECT COUNT(*) FROM pragma_table_info('tbl_whitelist') WHERE name = 'last_protocol_version'")).Should().Be(1);
     }

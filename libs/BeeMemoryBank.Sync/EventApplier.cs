@@ -72,7 +72,9 @@ public partial class EventApplier(
     // host relays them. There is deliberately no default: a host that registers none fails when the applier is resolved.
     IEnvelopeOpener envelopeOpener,
     // Full nodes only (spec 7.5): asked for an early baseline after a hard delete or a late protocol-3 content event.
-    IBaselineScheduler? baselineScheduler = null)
+    IBaselineScheduler? baselineScheduler = null,
+    // The sync loop, told when a replicated whitelist event revokes a peer or moves its address (BMB-313): it forgets what it learned about that peer.
+    IPeerStateResetter? peerState = null)
 {
     // whitelistRepoWrite is the same whitelist, just separated for read/write intent clarity
     // In reality it's the same object from DI

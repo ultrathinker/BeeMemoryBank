@@ -145,6 +145,61 @@ public sealed class BlindNodeAlarmsTests : IAsyncLifetime
         status.Protocol.Should().Be(SyncProtocolVersion.Current, "the page said \"Protocol: unknown\" for every server blind node");
         status.LastContact.Should().Be(Now, "an answered my-standing call is contact, even when nothing was pulled");
         status.Alarms.Should().BeEmpty();
+        // BMB-313 fix round: it is a call THIS PC made, recorded as outbound contact; the protocol column it also stamps is not the node calling in.
+        status.Contact!.LastContactDirection.Should().Be("outbound");
+        status.Contact.LastInboundAt.Should().BeNull("the node did not call this PC: this PC called it");
+        status.Contact.LastOutboundAt.Should().Be(Now);
+    }
+
+    [Fact]
+    public async Task ABlindNodeThisPcCannotCall_IsABannerAfterTheThreshold_AndTheCardAndTheBannerSaySinceWhenTheSame()
+    {
+        var id = await AddBlindRowAsync(Now - TimeSpan.FromDays(10));
+        await PulledAtAsync(id, Now - TimeSpan.FromHours(8));   // contact within the days of "silent": the node is not silent, it does not answer
+        var contacts = _pc.Services.GetRequiredService<PeerContactLog>();
+        contacts.Forget(id);   // the host's own loop may have dialled the row already, at the real time
+        var failingSince = Now - TimeSpan.FromHours(7);
+        contacts.NoteOutboundFailure(id, failingSince, "it answered 403: the door is closed to this node", Address);
+
+        var status = await StatusOfAsync(id);
+        var alarms = BlindAlarmService.Evaluate(Now, [status], new Dictionary<Guid, DateTime>());
+
+        var alarm = alarms.Single(a => a.Kind == BlindAlarmKinds.NotAnswering);
+        status.Contact!.State.Should().Be("not_answering");
+        status.Contact.NotAnsweringSince.Should().Be(failingSince);
+        alarm.Since.Should().Be(status.Contact.NotAnsweringSince, "one fact, one time, whichever page tells it");
+        alarm.Banner.Should().BeTrue();
+        alarm.Notify.Should().BeFalse("a banner only: the desktop's notifications are the silent and stale kinds'");
+        status.Contact.NotAnsweringReason.Should().Contain("403");
+    }
+
+    [Fact]
+    public async Task ABlindNodeThatHasNotAnsweredForAShortTime_IsNotABannerYet()
+    {
+        var id = await AddBlindRowAsync(Now - TimeSpan.FromDays(10));
+        await PulledAtAsync(id, Now - TimeSpan.FromHours(8));
+        var contacts = _pc.Services.GetRequiredService<PeerContactLog>();
+        contacts.Forget(id);
+        contacts.NoteOutboundFailure(id, Now - TimeSpan.FromHours(5), "no answer", Address);
+
+        var alarms = BlindAlarmService.Evaluate(Now, [await StatusOfAsync(id)], new Dictionary<Guid, DateTime>());
+
+        alarms.Should().NotContain(a => a.Kind == BlindAlarmKinds.NotAnswering, "five hours is inside the six of ServerNotifyAfter");
+    }
+
+    [Fact]
+    public async Task ABlindNodeThatCallsInAfterTheFailuresBegan_IsNotNotAnswering()
+    {
+        var id = await AddBlindRowAsync(Now - TimeSpan.FromDays(10));
+        var contacts = _pc.Services.GetRequiredService<PeerContactLog>();
+        contacts.Forget(id);
+        contacts.NoteOutboundFailure(id, Now - TimeSpan.FromHours(9), "no answer", Address);
+        contacts.NoteInbound(id, Now - TimeSpan.FromHours(1));
+
+        var status = await StatusOfAsync(id);
+
+        status.Contact!.State.Should().Be("answering", "it called this PC after this PC's calls began to fail: it is alive");
+        BlindAlarmService.Evaluate(Now, [status], new Dictionary<Guid, DateTime>()).Should().NotContain(a => a.Kind == BlindAlarmKinds.NotAnswering);
     }
 
     [Theory]

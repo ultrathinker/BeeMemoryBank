@@ -35,23 +35,11 @@ public class PlainDatabaseCompatibilityTests : IDisposable
     [Fact]
     public async Task A_vault_written_by_251_opens_and_works_on_the_current_engine()
     {
+        // The engine's side of the 2.5.1 compatibility: the file opens, reads and writes on the current engine. The migration runner
+        // is not part of it any more: it refuses a database older than 2.6 (Squash/ReleasedVersionsTests runs it on this very file).
         var path = FixtureCopy("beememorybank.db");
         var factory = new DbConnectionFactory(path);
-        var migrationsBefore = await CountAsync(factory, "SELECT COUNT(*) FROM tbl_migration");
-        var appliedBefore = await ReadLedgerAsync(factory);
-
-        await new MigrationRunner(factory).RunMigrationsAsync();
-
-        migrationsBefore.Should().BeGreaterThan(30);
-        // 2.6.0 added migrations after the fixture's 36: exactly those are pending now (Step A 037-039, Step B 040), nothing else;
-        // no 'ghost' migration of the 2.5.1 set is re-applied (its applied_at stays).
-        var embedded = typeof(MigrationRunner).Assembly.GetManifestResourceNames()
-            .Count(n => n.StartsWith("BeeMemoryBank.Storage.Migrations.", StringComparison.Ordinal) && n.EndsWith(".sql", StringComparison.OrdinalIgnoreCase));
-        (await CountAsync(factory, "SELECT COUNT(*) FROM tbl_migration")).Should().Be(embedded,
-            "the fixture holds the full 2.5.1 schema: only the migrations added since are applied");
-        var appliedAfter = await ReadLedgerAsync(factory);
-        foreach (var (version, appliedAt) in appliedBefore)
-            appliedAfter[version].Should().Be(appliedAt, $"migration {version} was not re-applied");
+        (await CountAsync(factory, "SELECT COUNT(*) FROM tbl_migration")).Should().Be(35, "the fixture is the full 2.5.1 ledger");
         using var conn = factory.CreateConnection();
         (await conn.QuerySingleAsync<string>("PRAGMA integrity_check")).Should().Be("ok");
         (await conn.QueryAsync<string>("PRAGMA foreign_key_check")).Should().BeEmpty();

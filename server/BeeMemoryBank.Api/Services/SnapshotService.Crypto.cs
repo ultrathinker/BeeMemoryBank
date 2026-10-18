@@ -4,9 +4,12 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -28,13 +31,11 @@ public partial class SnapshotService
 
     // internal, not private: the integration tests read what a snapshot actually contains by
     // decrypting the archived database the same way restore does (InternalsVisibleTo in the csproj).
-    /// <param name="masterPassword">The password the restore was confirmed with: when this node's own key does not open the container and the archive
-    /// holds a key envelope (the pre-encryption snapshot, docs/design/step-b-spec.md 10.7), it opens the envelope's slots.</param>
     /// <remarks>
     /// On an encrypted node the container is opened in memory and the file is replaced by a sealed staging copy (encrypted with this node's page
     /// key), never by a plain image (spec 8.4).
     /// </remarks>
-    internal async Task DecryptDbIfNeededAsync(string extractedDbPath, string? masterPassword = null)
+    internal async Task DecryptDbIfNeededAsync(string extractedDbPath, CancellationToken ct = default)
     {
         if (!IsDbEncrypted(await ReadEncryptionProbeAsync(extractedDbPath)))
             return;
@@ -46,19 +47,11 @@ public partial class SnapshotService
 
         if (_connFactory.IsSealed)
         {
-            await DecryptToSealedStagingAsync(extractedDbPath, masterPassword);
+            await DecryptToSealedStagingAsync(extractedDbPath, ct);
             return;
         }
 
-        try
-        {
-            await _keys.DecryptDatabaseIfNeededAsync(extractedDbPath);
-        }
-        catch (InvalidOperationException ex) when (ex.InnerException is System.Security.Cryptography.CryptographicException)
-        {
-            // Not this vault's key: the way-back snapshot carries an envelope that the old password opens.
-            if (!await TryDecryptWithEnvelopeAsync(extractedDbPath, masterPassword)) throw;
-        }
+        await _keys.DecryptDatabaseIfNeededAsync(extractedDbPath, ct);
     }
 
     internal static bool IsDbEncrypted(byte[] blob)
@@ -98,53 +91,28 @@ public partial class SnapshotService
                 $"Database file is {fileLength / (1024.0 * 1024.0):F1} MB, exceeds the 2 GB encryption limit. Use a smaller database.");
     }
 
-    /// <param name="wipePlain">The plain file is overwritten and removed (<c>SecureFileWipe</c>) before the container is written under its name
-    /// (spec 10.4 step 3): a truncate would leave the plain blocks on the disk. The snapshot is not made when the wipe fails.</param>
-    /// <param name="afterOverwrite">Test seam of the wipe: the plain file at its original length, overwritten.</param>
-    internal static async Task EncryptDbFileAsync(string dbPath, byte[] masterDek, long maxDbSize = MaxEncryptableDbSize,
-        bool wipePlain = false, Action<string>? afterOverwrite = null)
+    internal static async Task EncryptDbFileAsync(string dbPath, byte[] masterDek, long maxDbSize = MaxEncryptableDbSize, long? freeMemoryBytes = null,
+        CancellationToken ct = default, Func<FileStream, Stream>? wrapWrite = null)
     {
         // Size check BEFORE reading into memory: a database over the limit must fail with this
         // clear error, not with OutOfMemoryException from ReadAllBytesAsync. (The old guard
         // compared dbBytes.Length - an int, so at most int.MaxValue - against a 2 GiB long:
         // always false, and it only ran after the file had been read anyway.)
-        EnsureDbSizeWithinEncryptableLimit(new FileInfo(dbPath).Length, maxDbSize);
+        var length = new FileInfo(dbPath).Length;
+        EnsureDbSizeWithinEncryptableLimit(length, maxDbSize);
 
-        var dbBytes = await File.ReadAllBytesAsync(dbPath);
-        try
-        {
-            var salt = SecureRandom.GetBytes(16);
-            var snapDek = HKDF.DeriveKey(HashAlgorithmName.SHA256, masterDek, 32, salt, DbEncryptionAadV2);
-            try
-            {
-                var iv = SecureRandom.GetBytes(12);
-                var ct = new byte[dbBytes.Length];
-                var tag = new byte[16];
-                using (var gcm = new AesGcm(snapDek, 16))
-                {
-                    gcm.Encrypt(iv, dbBytes, ct, tag, DbEncryptionAadV2);
-                }
-                if (wipePlain && !BeeMemoryBank.AppPaths.SecureFileWipe.TryWipe(dbPath, afterOverwrite))
-                    throw new IOException("The plain staging copy of the database could not be wiped; no snapshot was made.");
-                await using var fs = File.Create(dbPath);
-                fs.Write(Encoding.ASCII.GetBytes(DbEncryptionMagicV2));
-                fs.Write(salt);
-                fs.Write(iv);
-                fs.Write(tag);
-                fs.Write(ct);
-            }
-            finally
-            {
-                Array.Clear(snapDek);
-            }
-        }
-        finally
-        {
-            Array.Clear(dbBytes);
-        }
+        // One buffer: the container codec reads the file into the place its ciphertext takes and encrypts it there (BMB-304), and says how much memory
+        // it needs before it takes any.
+        byte[] container;
+        await using (var plain = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
+            container = await Bmbdb2Container.EncryptAsync(plain, length, masterDek, ct, freeMemoryBytes);
+        // The file that held the plain image is replaced by the container only when the container is whole on the disk: a full volume or a cancelled
+        // write leaves the file as it was, never a half-written one (BMB-304 fix round).
+        await OwnerOnlyFile.ReplaceAsync(dbPath, container, ct, wrapWrite: wrapWrite);
     }
 
-    internal static async Task DecryptDbFileAsync(string dbPath, byte[] masterDek, long maxDbSize = MaxEncryptableDbSize)
+    internal static async Task DecryptDbFileAsync(string dbPath, byte[] masterDek, long maxDbSize = MaxEncryptableDbSize, long? freeMemoryBytes = null,
+        CancellationToken ct = default, Func<FileStream, Stream>? wrapWrite = null)
     {
         // An unencrypted database passes through untouched, so the size limit only applies to an
         // encrypted one: probe the header first, then enforce the limit BEFORE the whole blob is
@@ -152,44 +120,28 @@ public partial class SnapshotService
         if (!IsDbEncrypted(await ReadEncryptionProbeAsync(dbPath)))
             return;
 
-        EnsureDbSizeWithinEncryptableLimit(new FileInfo(dbPath).Length, maxDbSize);
+        var length = new FileInfo(dbPath).Length;
+        EnsureDbSizeWithinEncryptableLimit(length, maxDbSize);
 
-        var blob = await File.ReadAllBytesAsync(dbPath);
-        if (!IsDbEncrypted(blob))
-            return;
-
-        byte[] pt;
-        if (IsDbEncryptedV2(blob))
+        // Opened in place (BMB-304): one buffer holds the container and then the image; the file is rewritten from that window and the buffer is cleared.
+        DecryptedImage image;
+        try
         {
-            var salt = blob[6..22];
-            var iv = blob[22..34];
-            var tag = blob[34..50];
-            var ct = blob[50..];
-            var snapDek = HKDF.DeriveKey(HashAlgorithmName.SHA256, masterDek, 32, salt, DbEncryptionAadV2);
-            try
-            {
-                pt = new byte[ct.Length];
-                using var gcm = new AesGcm(snapDek, 16);
-                gcm.Decrypt(iv, ct, tag, pt, DbEncryptionAadV2);
-            }
-            finally
-            {
-                Array.Clear(snapDek);
-            }
+            await using var container = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+            image = await Bmbdb2Container.OpenAsync(container, length, masterDek, ct, freeMemoryBytes);
         }
-        else
+        catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
         {
-            var iv = blob[6..18];
-            var tag = blob[18..34];
-            var ct = blob[34..];
-            pt = new byte[ct.Length];
-            using var gcm = new AesGcm(masterDek, 16);
-            gcm.Decrypt(iv, ct, tag, pt, DbEncryptionAad);
+            // A cut-off or malformed container: said as what it is, with nothing of the exception's text (the endpoint answers 400 with it). A container that
+            // does not authenticate is a CryptographicException, which the key operations word as "made by a different vault".
+            throw new SnapshotContainerException(ex);
         }
-
-        await File.WriteAllBytesAsync(dbPath, pt);
-        Array.Clear(pt);
-        Array.Clear(blob);
+        using (image)
+        {
+            // The authenticated image replaces the container through an owner-only temp file and a rename: the file that held the container stays whole
+            // until the plain image is whole next to it, and the temp file (plain bytes) is wiped, not just deleted, when the write fails.
+            await OwnerOnlyFile.ReplaceAsync(dbPath, image.Memory, ct, discardTemp: p => SecureFileWipe.TryWipe(p), wrapWrite: wrapWrite);
+        }
     }
 
 }

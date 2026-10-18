@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using QRCoder;
@@ -32,6 +33,7 @@ public partial class BlindHomePage : ContentPage
     private string? _qrFor;
     private string _wipeName = "";
     private DateTimeOffset _backupAskedAt = DateTimeOffset.MinValue;
+    private BusyProgress? _busyProgress;   // the pop-up of the long operation now running, if any (the job's progress is shown in it too)
 
     public BlindHomePage(IBlindAppController app, BlindHeavyWork work, BlindActivity activity, IBlindPaths paths, BlindStoreStats stats)
     {
@@ -218,6 +220,7 @@ public partial class BlindHomePage : ContentPage
     {
         try
         {
+            _busyProgress?.Report(progress, $"{title}: {progress:P0}");
             JobProgress.IsVisible = JobLabel.IsVisible = progress < 1;
             JobProgress.Progress = progress;
             JobLabel.Text = $"{title}: {progress:P0}";
@@ -228,6 +231,7 @@ public partial class BlindHomePage : ContentPage
         }
     });
 
+    // busy-exempt: copies to the clipboard, nothing is sent and nothing waits
     private async void OnCopyPhoneCodeClicked(object? sender, EventArgs e)
     {
         try
@@ -242,8 +246,11 @@ public partial class BlindHomePage : ContentPage
 
     private async void OnConnectClicked(object? sender, EventArgs e)
     {
-        try
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up from the tap until the first load (started by the
+        // pairing) has ended, so Connect cannot be tapped twice; the reason it did not work is written under the field.
+        await BusyAction.RunAsync(sender as Button, async busy =>
         {
+            var ask = BlindJobWait.Ask(BlindJobWait.FirstLoad, _app.GetStatus(), DateTimeOffset.UtcNow);
             var error = _app.AcceptCallCode(CallCodeEntry.Text ?? "");
             CallErrorLabel.Text = error;
             CallErrorLabel.IsVisible = error != null;
@@ -254,12 +261,56 @@ public partial class BlindHomePage : ContentPage
                 // Paired: request the first load without waiting for the next hourly slot.
                 Platforms.Android.BlindWorkScheduler.RunHeavyNow(Platform.AppContext);
 #endif
+                // Locked until the first load has ended, or failed, or was never started (the state says which), not until a clock runs out.
+                var outcome = await WaitForJobAsync(busy, ask, BlindActivity.Heavy);
+                if (outcome.Phase is BlindJobPhase.Failed or BlindJobPhase.Unreported)
+                {
+                    NoticeLabel.Text = outcome.Phase == BlindJobPhase.Failed ? $"The first load did not finish: {outcome.Message}" : outcome.Message;
+                    NoticeLabel.IsVisible = true;
+                }
             }
             Refresh();
-        }
-        catch (Exception ex)
+        }, new BusyOptions
         {
-            await TellAsync("Connect", ex.Message);
+            Long = true,
+            Title = "Connecting",
+            Message = "Please wait. The first copy of the data is being loaded; this can take a while. You can leave the app: the job goes on.",
+            Result = (ok, text) =>
+            {
+                if (!ok) { CallErrorLabel.Text = text; CallErrorLabel.IsVisible = true; }
+            },
+        });
+    }
+
+    /// <summary>
+    /// Waits for the job just asked for, until the STATE of the phone says it has ended (<see cref="BlindJobWait.Judge"/>): it runs (the worker or service is
+    /// in <see cref="BlindActivity"/>, or the status names it), or it is queued by the system and not started yet, and it ends when its mark appears, its
+    /// failure is recorded, or - after a grace for the queue - nothing was ever seen of it. There is no limit on how long a running job may take: the
+    /// button is not given back while it runs, and after half an hour the pop-up says that it is still running and not to start it again. The job's own
+    /// progress reaches the pop-up through <see cref="OnJobProgress"/>.
+    /// </summary>
+    private async Task<BlindJobOutcome> WaitForJobAsync(BusyProgress busy, BlindJobAsk ask, params string[] kinds)
+    {
+        _busyProgress = busy;
+        try
+        {
+            var said = false;
+            for (;;)
+            {
+                var now = DateTimeOffset.UtcNow;
+                var outcome = BlindJobWait.Judge(ask, _app.GetStatus(), kinds.Any(_activity.IsActive), now);
+                if (!outcome.IsOpen) return outcome;
+                if (!said && now - ask.At > BlindJobWait.StillRunningAfter)
+                {
+                    busy.Report(null, BlindJobWait.StillRunningText);
+                    said = true;
+                }
+                await Task.Delay(1000);
+            }
+        }
+        finally
+        {
+            _busyProgress = null;
         }
     }
 
@@ -271,8 +322,13 @@ public partial class BlindHomePage : ContentPage
                     "This makes a new phone code for adding the phone on a computer again. The current connection stays until the computer's new answer is accepted.",
                     "Make a new code", "Cancel"))
                 return;
-            _app.StartRePair();
-            Refresh();
+            // The one busy helper (BMB-311): the button is off and spins until the new code is made; a failure is said in full.
+            await BusyAction.RunAsync(sender as Button, () =>
+            {
+                _app.StartRePair();
+                Refresh();
+                return Task.CompletedTask;
+            }, new BusyOptions { FailureTitle = "Re-pair" });
         }
         catch (Exception ex)
         {
@@ -282,47 +338,68 @@ public partial class BlindHomePage : ContentPage
 
     private async void OnSyncNowClicked(object? sender, EventArgs e)
     {
-        try
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up from the tap until the sync round has ended; a
+        // failure to even ask is said in full.
+        await BusyAction.RunAsync(sender as Button, async busy =>
         {
+            var ask = BlindJobWait.Ask(BlindJobWait.Sync, _app.GetStatus(), DateTimeOffset.UtcNow);
 #if ANDROID
             Platforms.Android.BlindWorkScheduler.SyncNow(Platform.AppContext);
 #endif
             NoticeLabel.Text = "Sync asked for.";
             NoticeLabel.IsVisible = true;
             Refresh();
-        }
-        catch (Exception ex)
+            var outcome = await WaitForJobAsync(busy, ask, BlindActivity.Sync);
+            NoticeLabel.Text = outcome.Phase == BlindJobPhase.Finished
+                ? "Sync finished. The time of the last sync is above, what happened is in the log below."
+                : outcome.Message ?? "Sync ended. What happened is in the log below.";
+            Refresh();
+        }, new BusyOptions
         {
-            await TellAsync("Sync now", ex.Message);
-        }
+            Long = true,
+            Title = "Syncing",
+            Message = "Please wait while this phone syncs. You can leave the app: the job goes on.",
+            FailureTitle = "Sync now",
+        });
     }
 
     private async void OnBackupNowClicked(object? sender, EventArgs e)
     {
-        try
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up from the tap until the backup has ended (the
+        // button is off at once, a second tap cannot start a second job; the service also ignores a start while its task runs).
+        var ran = await BusyAction.RunAsync(sender as Button, async busy =>
         {
-            // Off at once and until the service shows up in BlindActivity: a second tap cannot start a second job (the service
-            // also ignores a start while its task runs).
             _backupAskedAt = DateTimeOffset.UtcNow;
-            BackupNowButton.IsEnabled = false;
+            var ask = BlindJobWait.Ask(BlindJobWait.Backup, _app.GetStatus(), _backupAskedAt);
 #if ANDROID
             Platforms.Android.BlindBackupService.Start(Platform.AppContext);
 #endif
             NoticeLabel.Text = "Backup asked for.";
             NoticeLabel.IsVisible = true;
             Refresh();
-        }
-        catch (Exception ex)
+            var outcome = await WaitForJobAsync(busy, ask, BlindActivity.Heavy, BlindActivity.BackupService);
+            NoticeLabel.Text = outcome.Phase switch
+            {
+                BlindJobPhase.Finished => "Backup finished. The time of the last backup is above, what happened is in the log below.",
+                BlindJobPhase.Failed => $"The backup did not finish: {outcome.Message}",
+                _ => outcome.Message ?? "The backup ended. What happened is in the log below.",
+            };
+        }, new BusyOptions
         {
-            _backupAskedAt = DateTimeOffset.MinValue;
-            await TellAsync("Back up now", ex.Message);
-            Refresh();
-        }
+            Long = true,
+            Title = "Backing up",
+            Message = "Please wait while the backup is made. You can leave the app: the job goes on.",
+            FailureTitle = "Back up now",
+        });
+        if (!ran) _backupAskedAt = DateTimeOffset.MinValue;
+        Refresh();
     }
 
     private async void OnSaveToClicked(object? sender, EventArgs e)
     {
-        try
+        // A long operation (BMB-311): the file is copied out of the app to a place the person chooses, and the picker waits for them. The one busy helper
+        // keeps the screen covered until the file is saved, so nothing else is started meanwhile; a failure is said in full.
+        await BusyAction.RunAsync(sender as Button, async () =>
         {
             if (_app.GetStatus().Backups.FirstOrDefault() is not { } latest) return;
 #if ANDROID
@@ -333,12 +410,16 @@ public partial class BlindHomePage : ContentPage
                 NoticeLabel.Text = $"Saved {latest.Name} to the chosen place.";
                 NoticeLabel.IsVisible = true;
             }
+#else
+            await Task.CompletedTask;
 #endif
-        }
-        catch (Exception ex)
+        }, new BusyOptions
         {
-            await TellAsync("Save to…", ex.Message);
-        }
+            Long = true,
+            Title = "Saving the backup",
+            Message = "Please wait while the backup is saved to the place you chose.",
+            FailureTitle = "Save to…",
+        });
         Refresh();
     }
 
@@ -368,14 +449,35 @@ public partial class BlindHomePage : ContentPage
                 await DisplayAlertAsync("Disconnect and wipe", "The name does not match. Nothing was deleted.", "OK");
                 return;
             }
-            // Off the UI thread: the wipe waits (bounded) for a running sync, first load or backup to end before it deletes anything.
-            await Task.Run(() => _app.DisconnectAndWipeAsync());
-        }
-        catch (AggregateException ex)
-        {
-            // Not restarted over a half-wiped copy (or the work did not stop in time and nothing was deleted): say what is left and let
-            // the user press it again.
-            await TellAsync("Disconnect and wipe", $"{ex.Message}{System.Environment.NewLine}{System.Environment.NewLine}Press Disconnect and wipe again to finish.");
+            // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up until the wipe has ended. Off the UI thread: the
+            // wipe waits (bounded) for a running sync, first load or backup to end before it deletes anything.
+            var incomplete = false;
+            await BusyAction.RunAsync(sender as Button, async () =>
+            {
+                try
+                {
+                    await Task.Run(() => _app.DisconnectAndWipeAsync());
+                }
+                catch (AggregateException)
+                {
+                    incomplete = true;
+                    throw;
+                }
+            }, new BusyOptions
+            {
+                Long = true,
+                Title = "Disconnecting and wiping",
+                Message = "Please wait. A running sync or backup is stopped first, then this copy, its backups and its keys are deleted.",
+                Result = (ok, text) =>
+                {
+                    if (ok) return;
+                    // Not restarted over a half-wiped copy (or the work did not stop in time and nothing was deleted): say what is left and let
+                    // the user press it again.
+                    _ = TellAsync("Disconnect and wipe", incomplete
+                        ? $"{text}{System.Environment.NewLine}{System.Environment.NewLine}Press Disconnect and wipe again to finish."
+                        : $"Could not wipe: {text}");
+                },
+            });
             Refresh();
         }
         catch (Exception ex)

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.6.2 (2026-10-18)
+
+A node is now encrypted from its first day, long operations say what they are doing, and the database schema is folded into one baseline. **Updating from a version older than 2.6: update to 2.6.1 first, then to 2.6.2** (see "Notes for upgrading").
+
+### Changed
+
+- **A new node is encrypted from its first day.** A node you set up (Web Setup, `bmb init`, Docker, a join, the restore wizard) is created encrypted, under the master password you gave, with metadata encryption on. A new node joins only a node that already has metadata encryption on, and a restore never reads an unencrypted copy and never produces an unencrypted node. The "way back" snapshot that "Encrypt this node" made in 2.6.0 (and its block in Admin) is gone: going back to an unencrypted node is not possible from the node, and the warning before encryption says so.
+
+- **One database baseline.** The database schema is now one baseline migration instead of a chain of 39. A 2.6.0 or 2.6.1 database is adopted automatically at its first start: its structure is checked in full, missing indexes and triggers are repaired, nothing is re-run. A database (or a backup) older than 2.6 is refused untouched with a message that says to update through 2.6.1 first. Restoring a backup refuses one whose structure this version cannot open, before anything is replaced. A program of 2.6.1 or earlier no longer opens a database that 2.6.2 has taken over: it stops with a message instead of replaying its migrations. To go back, restore the snapshot made before the update.
+
+- **Admin shows what is left to do.** Once metadata encryption is on, its card is one line ("On since ..."); on an encrypted node the encryption page is "Storage protection" and does not offer "Encrypt this node". The result of an action shows in the card of its button, and the page opens at that card. Master password fields are password fields. "Activate the new sync format first" now names the real place (Admin > Metadata encryption) and links to it.
+
+- **Last contact says what really happened.** Trusted nodes and the sync list show when each device was last in contact, in which direction, and since when and why one does not answer; a device that only calls this node is said to call it. A node no longer shows another as online on a fixed five-minute rule and says "not checked since this node started" after a restart. Double-click a device in the sync list to ask it now.
+
+- **Long operations show a "please wait" pop-up.** Every button that starts something long (adding a blind node, encrypting a node or a phone, snapshots and backups, restores, key changes, updates, imports and exports, wiping) shows the pop-up, cannot be pressed twice, and shows the result, or the whole error, where the button was. Short actions disable their button and spin. The same holds in the desktop app, the Android and iPhone apps and the blind node's console page. A second identical long request is refused with HTTP 409 `already_running` instead of starting a second copy.
+
+- **Snapshots need less memory.** Making or restoring a snapshot of a large database needs about one copy of it in memory instead of two or three. A node that does not have the memory says so before it starts, names the memory limit that would be enough (for a container: its memory limit) and changes nothing, instead of failing with an out-of-memory error.
+
+- **Failure messages no longer carry other people's words.** Screens, answers, statuses and logs of join, restore, update, node check and the phone apps tell a failed call as a kind of failure ("no answer", "refused", "not a sync server"), never with the text of an exception or of the other computer. A peer's address has one rule and one writer, and every call to a peer connects only to addresses that were checked after name resolution (link-local, unspecified and cloud-metadata addresses are refused; loopback and the local network stay allowed).
+
+### Added
+
+- **"No sync server at this address."** The Android app and every node now say so when a peer's address answers 404 or with something that is not a sync server, instead of "ok (applied 0)". "Sync now", the background status, "Edit URL" and "Change node address" on the Trusted nodes page say it. A wrong address no longer fills the log with a warning every minute: one warning per streak, then growing pauses. A node's address is changed through one checked path on the server and on the phone (a sync server with the right node id and key must answer); the old route that changed an address without a password is closed.
+
+- A node that refuses a blind-node seed now says why in its own log.
+
+### Fixed
+
+- A vault made before the master-key check existed gets that check at the next password unlock, and "Encrypt this node" no longer blames the key slots when the check was what was missing. An empty check value counts as missing at every door a vault is opened through.
+- A setup, join or restore that is cut short is wiped at the next start instead of being left open; a leftover or foreign setup marker can no longer erase an existing node; a restore refuses a data folder that holds an open copy of the vault. A data folder, database, boot store or working folder that is a symbolic link or junction is refused by name, and nothing is read, moved or wiped through a link.
+- Windows: encrypting a node, and importing a sealed snapshot, no longer fail at random with "Could not move chat.db".
+- A snapshot that authenticates but holds no readable database is refused with a clear answer; the check of an encrypted copy fails when a table or the search index cannot be read; staged archives are written whole and honour cancellation. Restore and sealing measure memory against the real limit of the process (container, job object) and refuse with a clear 507 instead of crashing.
+- A long operation keeps its button locked until the work has really ended. The server refuses a second identical request for folder exports, folder copies, hard deletes, password changes and the metadata activation; a network restore keeps its guard while it runs in the background, and a folder copy, a restore from the trash or a password change stops, and undoes what it made, when the client goes away.
+- "Cancel" of a proposed key rotation no longer submits the confirmation; "Encrypt this node" asks for confirmation again. A refused metadata-encryption switch keeps its form, and its answer expires by itself after ten minutes.
+- A blind node no longer logs a warning a minute for a peer that answers 401 or 403: one line when the peer closes its door, a retry once an hour, and one line when it answers again. A closed-door episode ends when the peer answers 404 or with a page that is not a sync server.
+- The re-key names a table it does not know and says what to do about it; a sentinel that is empty is treated alike by the re-key and the sync check.
+
+### Notes for upgrading
+
+- **From a version older than 2.6, update to 2.6.1 first, then to 2.6.2.** 2.6.2 refuses an older database or backup, leaves it unchanged and says so.
+- After the first start of 2.6.2, a database cannot be opened by 2.6.1 or earlier. To go back, restore the snapshot or backup you made before the update.
+- Nodes that already run 2.6.0 or 2.6.1 keep their data, their keys and their settings; the schema is adopted at the first start, which takes a moment on a large database.
+- Before activating metadata encryption, check the readiness report in Admin > Metadata encryption: a device that does not declare `metadata-envelope-v1` must be updated, or revoked in Trusted nodes and joined again.
+
 #### 2.6.1 (2026-10-12)
 
 ### Fixed

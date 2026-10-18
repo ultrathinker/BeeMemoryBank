@@ -3,7 +3,7 @@
 
 <!-- Snapshots -->
 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap;">
-    <h3 style="margin:0;"><sl-icon name="archive"></sl-icon> Snapshots</h3>
+    <h3 id="card-snapshots" style="margin:0;"><sl-icon name="archive"></sl-icon> Snapshots</h3>
     <div style="display:flex;gap:8px;">
         <sl-button size="small" variant="default" id="btn-show-upload">
             <sl-icon slot="prefix" name="cloud-upload"></sl-icon> Upload
@@ -28,6 +28,8 @@
         <span id="upload-status" class="text-sm text-muted"></span>
     </div>
 </div>
+
+@await Html.PartialAsync("~/Pages/Shared/Admin/_CardMessage.cshtml", new AdminCardMessage(Model, AdminCards.Snapshots))
 
 @if (Model.Snapshots != null && Model.Snapshots.Count > 0)
 {
@@ -57,7 +59,7 @@
                                 class="btn-open-restore-snapshot"
                                 data-filename="@snap.FileName">
                             </sl-icon-button>
-                            <form method="post" asp-page-handler="DeleteSnapshot" style="display:inline;">
+                            <form data-busy="short" method="post" asp-page-handler="DeleteSnapshot" style="display:inline;">
                                 <input type="hidden" name="fileName" value="@snap.FileName" />
                                 <sl-icon-button name="trash" label="Delete"
                                     class="btn-confirm-submit"
@@ -82,11 +84,13 @@ else
 
 <!-- Event Log & Compaction -->
 <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px;margin-top:32px;">
-    <h3 style="margin:0;"><sl-icon name="archive"></sl-icon> Event Log &amp; Compaction</h3>
+    <h3 id="card-compaction" style="margin:0;"><sl-icon name="archive"></sl-icon> Event Log &amp; Compaction</h3>
     <sl-icon-button name="question-circle" label="About compaction"
         id="compaction-info-btn"
         style="font-size:1.2rem;color:var(--text-secondary);"></sl-icon-button>
 </div>
+
+@await Html.PartialAsync("~/Pages/Shared/Admin/_CardMessage.cshtml", new AdminCardMessage(Model, AdminCards.Compaction))
 
 @if (Model.CompactionPreview != null)
 {
@@ -119,12 +123,13 @@ else
                         else if (behind == 0)
                         {
                             <span>fully synced</span>
-                            <span>, last contact @AdminModel.RelativeTime(peer.UpdatedAt)</span>
+                            @* The position this peer last read or was sent (the one compaction judges by), not a contact time: BMB-313 *@
+                            <span>, events last delivered @AdminModel.RelativeTime(peer.UpdatedAt)</span>
                         }
                         else
                         {
                             <span>@behind operation(s) behind</span>
-                            <span>, last contact @AdminModel.RelativeTime(peer.UpdatedAt)</span>
+                            <span>, events last delivered @AdminModel.RelativeTime(peer.UpdatedAt)</span>
                         }
                     </div>
                 }
@@ -156,7 +161,7 @@ else
                 </div>
             </sl-alert>
 
-            <form method="post" asp-page-handler="Compact" style="display:inline;"
+            <form data-busy="long" data-busy-title="Compacting the event log" method="post" asp-page-handler="Compact" style="display:inline;"
                   class="form-confirm" data-confirm="Compact event log?&#10;&#10;Will delete the oldest @p.EventsToDelete events (kept as one signed snapshot).&#10;Will keep @p.EventsRemaining of the most recent events for continued sync.&#10;&#10;Continue?">
                 <sl-button type="submit" variant="warning">
                     <sl-icon slot="prefix" name="archive"></sl-icon>
@@ -309,11 +314,3 @@ else
     </sl-button>
 </sl-dialog>
 
-<!-- Snapshot progress dialog (non-closable) -->
-<sl-dialog id="dlg-snapshot-progress" no-header>
-    <div style="text-align:center;padding:24px 0;">
-        <sl-spinner style="font-size:2rem;margin-bottom:16px;"></sl-spinner>
-        <p id="snapshot-progress-label" style="margin:0;color:var(--text-primary);font-size:1.05rem;font-weight:600;">Creating snapshot…</p>
-        <p id="snapshot-progress-detail" class="text-muted text-sm" style="margin-top:8px;">This may take a while for large databases.</p>
-    </div>
-</sl-dialog>

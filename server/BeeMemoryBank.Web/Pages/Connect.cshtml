@@ -67,7 +67,7 @@
                        local network reach this computer on port @Model.Lan.Port, BeeMemoryBank needs
                        to add one firewall rule. Windows will ask for administrator permission; this
                        happens once, and BeeMemoryBank never changes the firewall without asking.</p>
-                    <form method="post" asp-page-handler="Firewall">
+                    <form data-busy="short" method="post" asp-page-handler="Firewall">
                         <sl-button type="submit" variant="default">
                             <sl-icon slot="prefix" name="shield-check"></sl-icon>
                             Allow in Windows Firewall&hellip;
@@ -106,7 +106,7 @@
                 <p class="instructions">This computer is not listening on the network right now.
                    Opening it lets one device join in the next 15 minutes; it closes by itself once
                    the device has joined or the time is up. The vault stays unlocked.</p>
-                <form method="post" asp-page-handler="Enable" class="action-row">
+                <form data-busy="short" method="post" asp-page-handler="Enable" class="action-row">
                     <sl-button type="submit" variant="primary">
                         <sl-icon slot="prefix" name="phone"></sl-icon>
                         Connect a device
@@ -147,7 +147,7 @@
                     <p class="instructions">This door is for joining only, and closes afterwards. For another computer to keep
                        syncing with this one it has to reach this computer again: switch on
                        <strong>Devices on my network</strong> in <a href="/Admin">Admin</a>.</p>
-                    <form method="post" asp-page-handler="Disable" class="action-row">
+                    <form data-busy="short" method="post" asp-page-handler="Disable" class="action-row">
                         <sl-button type="submit" variant="default">Stop listening</sl-button>
                     </form>
                 }
@@ -190,5 +190,6 @@
                (macOS, mark it as <em>Always Trust</em>).</p>
         </div>
     </div>
+    <script src="~/js/bmb-busy.js" asp-append-version="true"></script>
 </body>
 </html>

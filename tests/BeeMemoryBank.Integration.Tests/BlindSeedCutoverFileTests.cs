@@ -419,7 +419,7 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
     /// Windows (no privilege needed), a symbolic link elsewhere. False when the platform refused —
     /// the test that asked then has nothing to exercise and says so by returning.
     /// </summary>
-    private static bool TryCreateDirectoryLink(string link, string target)
+    internal static bool TryCreateDirectoryLink(string link, string target)
     {
         try
         {
@@ -450,7 +450,7 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
     /// a reparse point ("The parameter is incorrect"), and on any platform it must not touch what the
     /// link points at. Called before the class's own cleanup, which walks the data root.
     /// </summary>
-    private static void TryRemoveDirectoryLink(string link)
+    internal static void TryRemoveDirectoryLink(string link)
     {
         try
         {

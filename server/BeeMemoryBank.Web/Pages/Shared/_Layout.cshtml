@@ -108,6 +108,10 @@
             <div class="sync-status-wrapper" id="syncStatusWidget" style="position: relative;">
                 <sl-icon-button name="arrow-repeat" label="Sync status" id="syncStatusBtn" style="font-size: 1.2rem;"></sl-icon-button>
                 <span class="sync-badge" id="syncBadge" style="display:none;"></span>
+                @* BMB-313: shown while Invisible Mode is on (switched in Admin > Invisible Mode). *@
+                <span class="sync-invisible-badge" id="syncInvisibleBadge" style="display:none;" title="Invisible Mode is on: this node calls nobody and answers nobody">
+                    <sl-icon name="eye-slash"></sl-icon>
+                </span>
                 <div class="sync-dropdown" id="syncDropdown" style="display:none;">
                     <div class="sync-dropdown-header">Sync Status</div>
                     <div id="syncNodeList" class="sync-node-list">Loading...</div>
@@ -121,7 +125,7 @@
                         <sl-icon name="@item.Icon"></sl-icon><span class="header-link-label">@item.Label</span>
                     </a>
                 }
-                <form method="post" action="/Logout" class="header-link" style="display:inline;">
+                <form data-busy="short" method="post" action="/Logout" class="header-link" style="display:inline;">
                     @Html.AntiForgeryToken()
                     <button type="submit" class="logout-link" title="Logout">
                         <sl-icon name="box-arrow-right"></sl-icon><span class="header-link-label">Logout</span>
@@ -136,7 +140,7 @@
                     {
                         <a href="@item.Href" class="header-menu-item"><sl-icon name="@item.Icon"></sl-icon> @item.Label</a>
                     }
-                    <form method="post" action="/Logout" class="header-menu-form">
+                    <form data-busy="short" method="post" action="/Logout" class="header-menu-form">
                         @Html.AntiForgeryToken()
                         <button type="submit" class="header-menu-item"><sl-icon name="box-arrow-right"></sl-icon> Logout</button>
                     </form>
@@ -180,6 +184,7 @@
     </div>
 
     <script src="/lib/vendor.min.js"></script>
+    <script src="/js/bmb-busy.js" asp-append-version="true"></script>
     <script src="/js/site-tree.js" asp-append-version="true"></script>
     <script src="/js/site-search.js" asp-append-version="true"></script>
     <script src="/js/site-dialogs.js" asp-append-version="true"></script>

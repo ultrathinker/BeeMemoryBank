@@ -30,7 +30,7 @@ public class UserResetPasswordCommandTests : IDisposable
 
     private async Task<string> InitWithRecoveryKeyAsync()
     {
-        (await InitCommand.HandleAsync(_tempDir, NodeName, OldPassword)).Should().Be(0);
+        (await PlainNode.InitAsync(_tempDir, NodeName, OldPassword)).Should().Be(0);
         await using var services = await CliServiceProvider.CreateAsync(_tempDir);
         using var scope = services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<SessionService>().UnlockAsync(OldPassword)).Should().BeTrue();

@@ -43,6 +43,8 @@ public static class SyncActivationEndpoints
                 key_id = outcome.KeyId,
                 generation = outcome.Generation,
             });
-        }).RequireSuperadmin().RequireNonAgent().WithTags("Sync");
+        }).RequireSuperadmin().RequireNonAgent().WithTags("Sync")
+            // A second request while one runs is refused at once, not queued behind it to publish a second activation (BMB-311 fix round).
+            .SingleFlight("metadata-activation", "The metadata activation");
     }
 }

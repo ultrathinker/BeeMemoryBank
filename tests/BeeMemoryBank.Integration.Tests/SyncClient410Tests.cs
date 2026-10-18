@@ -93,7 +93,7 @@ public class SyncClient410Tests
             Assert.Equal(500, ex.LastCompactionCp);
             Assert.Equal(1886, ex.CurrentHeadSeq);
             Assert.Equal("http://test.local", ex.RemoteUrl);
-            Assert.Equal("Too old", ex.Message);
+            Assert.Equal("Your position is older than remote retained history.", ex.Message);   // the peer's own "message" is never taken over
         }
         finally
         {

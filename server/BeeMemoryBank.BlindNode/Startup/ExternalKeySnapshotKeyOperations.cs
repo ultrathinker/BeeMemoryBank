@@ -20,12 +20,12 @@ public sealed class ExternalKeySnapshotKeyOperations(IExternalNodeKey externalKe
         return NodeIdentityCrypto.SignWithExternalSeed(externalKey.ReadSeed, payload);
     }
 
-    public Task<bool> EncryptDatabaseAsync(string dbPath) =>
+    public Task<bool> EncryptDatabaseAsync(string dbPath, CancellationToken ct = default) =>
         throw new InvalidOperationException(
             "Cannot create an encrypted snapshot while the vault is locked. Unlock it first, " +
             "or request an unencrypted snapshot explicitly.");
 
-    public Task DecryptDatabaseIfNeededAsync(string extractedDbPath) =>
+    public Task DecryptDatabaseIfNeededAsync(string extractedDbPath, CancellationToken ct = default) =>
         throw new InvalidOperationException(
             "Snapshot database is encrypted but the session is locked. Unlock the vault before restoring.");
 

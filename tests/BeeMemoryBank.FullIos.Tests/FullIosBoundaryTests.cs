@@ -95,9 +95,9 @@ public class FullIosBoundaryTests
         packages.Should().BeEquivalentTo("Microsoft.Maui.Controls", "Microsoft.Extensions.Http", "Markdig");
         foreach (var name in NeverInTheApp)
             csproj.Should().NotContain(name + ".csproj", "the app must not reference " + name);
-        // What it links is source of the Android ordinary app, not an assembly of it.
+        // What it links is source of the Android ordinary app, not an assembly of it: the node setup, and the one busy helper every MAUI app shares (BMB-311).
         Regex.Matches(csproj, "<Compile Include=\"([^\"]+)\"").Select(m => m.Groups[1].Value.Replace('\\', '/'))
-            .Should().BeEquivalentTo("../BeeMemoryBank.Mobile/Services/NodeSetupService.cs");
+            .Should().BeEquivalentTo("../BeeMemoryBank.Mobile/Services/NodeSetupService.cs", "../BeeMemoryBank.Mobile/Services/BusyAction.cs");
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using BeeMemoryBank.Api.Endpoints;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services.Sealed;
 using BeeMemoryBank.Core.Interfaces;
@@ -18,6 +19,7 @@ public sealed class SealedVaultMiddleware(RequestDelegate next)
     public const string ClosedMessage = "This node's database is encrypted and closed: unlock it first.";
 
     private const string ProgressPath = "/api/vault/seal/progress";
+    private const string RestoreProgressPath = "/api/restore/progress";
 
     /// <summary>Method and path of the routes a closed node serves itself (none of them reads the database).</summary>
     private static readonly (string Method, string Path)[] AllowList =
@@ -30,6 +32,9 @@ public sealed class SealedVaultMiddleware(RequestDelegate next)
         ("POST", "/api/session/login"),
         ("POST", "/api/session/recover-access"),
         ("GET", "/api/vault/status"),
+        // A restore of this node (the whole network, or its own) ends with the vault locked, and the page that started it asks how it went: the
+        // route answers from memory with a coarse status, for a caller who has not signed in (SnapshotEndpoints).
+        ("GET", "/api/snapshots/restore/progress"),
     ];
 
     public async Task InvokeAsync(HttpContext context)
@@ -62,6 +67,15 @@ public sealed class SealedVaultMiddleware(RequestDelegate next)
         // route) goes on being answered, so the page sees "done" and not a refusal. A node that is not migrating does not serve it while closed.
         if (HttpMethods.IsGet(context.Request.Method) && path.Equals(ProgressPath, StringComparison.OrdinalIgnoreCase)
             && context.RequestServices?.GetService<SealMigrationService>() is { IsRunning: true })
+        {
+            await next(context);
+            return;
+        }
+
+        // The restore wizard of a new node ends in an encrypted node that is locked (BMB-306); the page that started it reads "done" from this route, which
+        // answers from memory and, while the node is closed, without any name of an entry or a peer (RestoreEndpoints).
+        if (HttpMethods.IsGet(context.Request.Method) && path.Equals(RestoreProgressPath, StringComparison.OrdinalIgnoreCase)
+            && context.RequestServices?.GetService<RestoreProgress>() is { State: not "idle" })
         {
             await next(context);
             return;

@@ -132,12 +132,12 @@ public class RemoteAccountSyncScheduler(
             catch (HttpRequestException ex)
             {
                 logger.LogWarning(ex, "Remote sync HTTP error for account {Account}", account.Id);
-                await accountRepo.UpdateStatusAsync(account.Id, "unreachable", ex.Message, null);
+                await accountRepo.UpdateStatusAsync(account.Id, "unreachable", BeeMemoryBank.Sync.PeerContactLog.Describe(ex), null);
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Remote sync failed for subscription {Sub}", sub.Id);
-                await accountRepo.UpdateStatusAsync(account.Id, "error", ex.Message, null);
+                await accountRepo.UpdateStatusAsync(account.Id, "error", BeeMemoryBank.Sync.PeerContactLog.Describe(ex), null);
             }
         }
     }

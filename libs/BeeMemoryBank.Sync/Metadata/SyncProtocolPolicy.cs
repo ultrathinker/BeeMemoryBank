@@ -11,7 +11,8 @@ namespace BeeMemoryBank.Sync.Metadata;
 ///
 /// <para>Activation is one way. Once seen it is cached for good. While it is not, the table is read again at most every
 /// few seconds, so a row that arrives by another way than the applier (a join snapshot or a restore imports the table)
-/// still switches the node: a node that holds an activation must never go on writing clear content.</para>
+/// still switches the node: a node that holds an activation must never go on writing clear content. A read that FAILS (the database is
+/// busy or still opening) says nothing and is not remembered: "not activated" is only ever remembered from a read that worked.</para>
 /// </summary>
 public sealed class SyncProtocolPolicy(IDbConnectionFactory connFactory) : ISyncProtocolPolicy
 {
@@ -27,8 +28,18 @@ public sealed class SyncProtocolPolicy(IDbConnectionFactory connFactory) : ISync
             if (_activated) return true;
             var now = Environment.TickCount64;
             if (now < Interlocked.Read(ref _nextCheckAt)) return false;
-            Interlocked.Exchange(ref _nextCheckAt, now + RecheckMilliseconds);
-            if (ReadActivated()) _activated = true;
+            switch (ReadActivated())
+            {
+                case true:
+                    _activated = true;
+                    break;
+                case false:
+                    Interlocked.Exchange(ref _nextCheckAt, now + RecheckMilliseconds);
+                    break;
+                case null:
+                    // Could not read (a lock, a database that is opening): ask again at the next call instead of answering "no" for the next few seconds.
+                    break;
+            }
             return _activated;
         }
     }
@@ -48,18 +59,25 @@ public sealed class SyncProtocolPolicy(IDbConnectionFactory connFactory) : ISync
 
     public void MarkActivated() => _activated = true;
 
-    private bool ReadActivated()
+    public void RecheckNow() => Interlocked.Exchange(ref _nextCheckAt, 0);
+
+    /// <summary>True: the activation row is there. False: it is not, or there is no table to hold it. Null: the read failed for another reason.</summary>
+    private bool? ReadActivated()
     {
         try
         {
             using var conn = connFactory.CreateConnection();
             return conn.ExecuteScalar<long>("SELECT EXISTS (SELECT 1 FROM tbl_metadata_activation)") == 1;
         }
-        catch (DbException)
+        catch (DbException ex) when (ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase))
         {
             // Before the migrations ran (a host resolving its services early) there is no table, and nothing can have
             // been activated in a database that has no table to record it.
             return false;
+        }
+        catch (DbException)
+        {
+            return null;
         }
     }
 }

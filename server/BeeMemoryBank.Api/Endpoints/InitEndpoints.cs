@@ -7,6 +7,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Vault.Sealed;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -39,8 +40,11 @@ public static class InitEndpoints
         group.MapPost("/standalone", async (
             InitStandaloneRequest req,
             HttpContext ctx,
-            InitializationService initSvc) =>
+            InitializationService initSvc,
+            NodeResetService resetService,
+            ILoggerFactory loggerFactory) =>
         {
+            using var flow = AppPaths.SealIntent.Flow.Enter();   // what a take-back may remove is what THIS request began
             await _initLock.WaitAsync();
             try
             {
@@ -71,14 +75,25 @@ public static class InitEndpoints
                 try { Core.Services.UserService.ValidatePassword(req.Password); }
                 catch (ArgumentException ex) { return Results.BadRequest(new ErrorResponse(ex.Message)); }
 
-                await initSvc.InitializeAsync(req.AdminUsername, req.DisplayName, req.Password);
-                return Results.Ok(new { success = true });
+                if (CannotEncrypt(ctx.RequestServices) is { } cannot) return cannot;
+                try
+                {
+                    // The seal intent begins inside, before the first write; SealNewNodeAsync ends it with the encrypted database.
+                    await initSvc.InitializeAsync(req.AdminUsername, req.DisplayName, req.Password);
+                }
+                catch
+                {
+                    await resetService.DiscardPendingSetupAsync("setup: the vault could not be written", CancellationToken.None);
+                    throw;
+                }
+                return await SealNewNodeAsync(ctx.RequestServices, resetService, loggerFactory, req.Password, activateMetadata: true);
             }
             finally
             {
                 _initLock.Release();
             }
-        });
+        })
+            .SingleFlight("node-init", "The setup of this node");
 
         // POST /api/init/join — first-time node initialization (join existing network).
         // This endpoint is only callable from the Web UI server (localhost or X-Internal-Key).
@@ -97,8 +112,10 @@ public static class InitEndpoints
             Services.SnapshotService snapshotService,
             ISyncPositionRepository syncPositionRepo,
             ILamportClock lamportClock,
-            IDbConnectionFactory dbConnFactory) =>
+            IDbConnectionFactory dbConnFactory,
+            NodeResetService resetService) =>
         {
+            using var flow = AppPaths.SealIntent.Flow.Enter();   // what a take-back may remove is what THIS request began
             var logger = loggerFactory.CreateLogger("BeeMemoryBank.Api.InitEndpoints");
 
             await _initLock.WaitAsync();
@@ -148,11 +165,18 @@ public static class InitEndpoints
                     return Results.BadRequest(new ErrorResponse("Remote URL must be a valid HTTP(S) URL."));
                 }
 
+                // A host that cannot encrypt what it is about to receive does not start: nothing is asked of the other computer and nothing is written.
+                if (CannotEncrypt(ctx.RequestServices) is { } cannotEncrypt) return cannotEncrypt;
+
                 var (publicKey, privateKey) = Ed25519Signer.GenerateKeyPair();
                 var nodeId = Guid.NewGuid();
 
                 // Where every request of this join goes. With a code it is the code's address and nothing the caller typed.
                 var remoteBase = code?.Address ?? req.RemoteUrl.TrimEnd('/');
+                // What the person typed, or what a code carried, goes through the one policy for an address before a request is built from it.
+                var target = BeeMemoryBank.Sync.PeerAddressPolicy.Canonicalize(remoteBase);
+                if (!target.Ok) return Results.BadRequest(new ErrorResponse("This computer cannot be joined through that address: " + target.Refusal));
+                remoteBase = target.Address!;
 
                 // No redirects: this request carries the master password, and a 307/308 would resend it to
                 // wherever the remote pointed. A 3xx then fails the join below like any non-success answer.
@@ -225,7 +249,7 @@ public static class InitEndpoints
                 catch (Exception ex)
                 {
                     return Results.Json(
-                        new ErrorResponse($"Cannot reach remote node: {ex.Message}"
+                        new ErrorResponse($"Cannot reach remote node: {BeeMemoryBank.Sync.PeerContactLog.Describe(ex)}"
                             + (ex is HttpRequestException unanswered && BeeMemoryBank.Sync.JoinAbortClient.MayHaveReachedHost(unanswered)
                                 ? " " + await AbortNoteAsync(rowCertain: false) : "")),
                         statusCode: 502);
@@ -233,12 +257,10 @@ public static class InitEndpoints
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var errorBody = await response.Content.ReadAsStringAsync();
-                    logger.LogWarning("Remote node rejected join request (HTTP {Status}): {Body}",
-                        (int)response.StatusCode, errorBody);
-                    // Through a code the other computer is the pinned one, and its door says why in a sentence made for the person
-                    // ("not valid", "already used"); show that. Otherwise only the status, as before.
-                    var doorSaid = code != null ? BeeMemoryBank.Core.Models.JoinCode.ReadDoorError(errorBody) : null;
+                    // The other computer's body is its own text: not read, not logged, not shown. Through a code its door says one of two things, told by the status
+                    // (JoinCode.DescribeDoorAnswer); otherwise only the status.
+                    logger.LogWarning("Remote node rejected join request (HTTP {Status}).", (int)response.StatusCode);
+                    var doorSaid = code != null ? BeeMemoryBank.Core.Models.JoinCode.DescribeDoorAnswer((int)response.StatusCode) : null;
                     // A server-side failure (a proxy that gave up while the host went on) may have come after the host wrote the row.
                     var rejectedNote = (int)response.StatusCode >= 500 ? " " + await AbortNoteAsync(rowCertain: false) : "";
                     return Results.Json(
@@ -280,6 +302,12 @@ public static class InitEndpoints
                             statusCode: 400);
                     }
 
+                    // A new node joins only a node that encrypts its metadata (protocol 4): to an older one it is refused, with nothing written here.
+                    if (BeeMemoryBank.Sync.SyncProtocolVersion.JoinRefusal(joinResponse.RemoteNode.ProtocolVersion) is { } notEncrypted)
+                    {
+                        return Results.Json(new ErrorResponse(notEncrypted + " " + await AbortNoteAsync()), statusCode: 400);
+                    }
+
                     var slot = joinResponse.KeySlot;
                     var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
                     var remoteIv = Convert.FromBase64String(slot.IvB64);
@@ -293,7 +321,7 @@ public static class InitEndpoints
                     }
                     catch (System.Security.Cryptography.CryptographicException ex)
                     {
-                        return Results.Json(new ErrorResponse($"Cannot join: the remote node sent an invalid key slot. {ex.Message} " + await AbortNoteAsync()), statusCode: 400);
+                        return Results.Json(new ErrorResponse("Cannot join: the remote node sent a key slot with parameters this node does not accept. " + await AbortNoteAsync()), statusCode: 400);
                     }
 
                     try
@@ -336,6 +364,9 @@ public static class InitEndpoints
                         InitialSyncCompleted = false,
                         CreatedAt = now
                     };
+                    // From the first row of this node to the encrypted database, a cut is a join the next start wipes (SealIntent), whatever the
+                    // snapshot import or the error branches below did or did not get to.
+                    ctx.RequestServices.GetRequiredService<ISealIntents>().Begin(AppPaths.SealIntent.KindJoin);
                     await nodeRepo.CreateAsync(identity);
 
                     var localSlot = new MasterKeyStore
@@ -408,7 +439,7 @@ public static class InitEndpoints
                                 NodeId = entry.NodeId,
                                 DisplayName = entry.DisplayName,
                                 Ed25519PublicKey = Convert.FromBase64String(entry.Ed25519PublicKeyB64),
-                                ApiAddress = entry.ApiAddress,
+                                ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(entry.ApiAddress),
                                 Status = "A",
                                 CreatedAt = now,
                                 UpdatedAt = now,
@@ -434,7 +465,7 @@ public static class InitEndpoints
                         NodeId = remote.NodeId,
                         DisplayName = remote.DisplayName,
                         Ed25519PublicKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64),
-                        ApiAddress = remoteBase,
+                        ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(remoteBase),
                         Status = "A",
                         CreatedAt = now,
                         UpdatedAt = now,
@@ -452,9 +483,10 @@ public static class InitEndpoints
                     Array.Clear(privateKey);
                     Array.Clear(masterDek);
                     Array.Clear(snapshotDek);
-                    logger.LogError(ex, "The answer of the remote node could not be used after the key exchange. Node is in partial state.");
+                    logger.LogError(ex, "The answer of the remote node could not be used after the key exchange; what was written is being taken back.");
+                    await resetService.DiscardPendingSetupAsync("join: the answer of the other computer could not be used", CancellationToken.None);
                     return Results.Json(
-                        new ErrorResponse($"The join could not be completed: {ex.Message} " + await AbortNoteAsync()),
+                        new ErrorResponse($"The join could not be completed ({BeeMemoryBank.Sync.FailureText.Say(ex)}). Nothing was kept on this node: run the join again. " + await AbortNoteAsync()),
                         statusCode: 500);
                 }
 
@@ -544,11 +576,14 @@ public static class InitEndpoints
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Snapshot join failed after key setup. Node is in partial state.");
+                    logger.LogError(ex, "Snapshot join failed after key setup; what was written is being taken back.");
+                    var takenBack = await resetService.DiscardPendingSetupAsync("join: the snapshot could not be imported", CancellationToken.None);
                     return Results.Json(
                         new ErrorResponse(
-                            $"Key exchange succeeded but snapshot import failed: {ex.Message}. Node may need wipe & retry. " +
-                            await AbortNoteAsync()),
+                            $"Key exchange succeeded but snapshot import failed ({BeeMemoryBank.Sync.FailureText.Say(ex)}). "
+                            + (takenBack ? "Nothing was kept on this node: run the join again. "
+                                         : "What was written could not be removed now; it is removed when this node starts again, and the join is then run again. ")
+                            + await AbortNoteAsync()),
                         statusCode: 500);
                 }
                 finally
@@ -556,13 +591,16 @@ public static class InitEndpoints
                     Array.Clear(snapshotDek);
                 }
 
-                return Results.Ok(new { success = true });
+                // The joined node is encrypted under the password it was given, like every node that is set up (BMB-306). It joined an activated node, so the
+                // activation came with the snapshot and there is nothing to switch on. A node that cannot be encrypted is taken back, and the host is told.
+                return await SealNewNodeAsync(ctx.RequestServices, resetService, loggerFactory, req.Password, activateMetadata: false, afterFailure: () => AbortNoteAsync());
             }
             finally
             {
                 _initLock.Release();
             }
-        });
+        })
+            .SingleFlight("node-init", "The setup of this node");
 
         // Superadmin AND non-agent, on top of the group's internal-key gate. This is the most
         // destructive call in the product — the master password alone must never be enough to
@@ -599,9 +637,69 @@ public static class InitEndpoints
             }
             catch (Exception ex)
             {
-                return Results.Json(new ErrorResponse($"Reset failed: {ex.Message}"), statusCode: 500);
+                ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("BeeMemoryBank.Api.InitEndpoints").LogError(ex, "Node reset failed ({Type})", ex.GetType().Name);
+                return Results.Json(new ErrorResponse("Reset failed. The details are in this node's log."), statusCode: 500);
             }
-        }).RequireSuperadmin().RequireNonAgent();
+        }).RequireSuperadmin().RequireNonAgent()
+            .SingleFlight("node-init", "The setup of this node");
+    }
+
+    /// <summary>
+    /// A setup or a join writes in the open before it encrypts, so a host that cannot encrypt (it was composed without the encrypted-database services, or
+    /// without the seal intent) refuses it before the first write, with the reason, instead of ending in a node that stays open.
+    /// </summary>
+    private static IResult? CannotEncrypt(IServiceProvider services) =>
+        services.GetService<FreshNodeSealing>() is not null && services.GetService<ISealIntents>() is not null
+            ? null
+            : Results.Json(new ErrorResponse("This node was started without the encrypted-database services, so it cannot be set up."), statusCode: 500);
+
+    /// <summary>
+    /// The end of every setup (BMB-306): the new node's database is encrypted under the master password it was given - and, for a node that starts a
+    /// network, metadata encryption is on - or the setup did not happen. A node that could not be encrypted is taken back to the empty node it was
+    /// (it holds nothing yet but the identity it was just given), so that no installation ever runs with its database in the open; a node that is
+    /// encrypted but kept locked (the migration says so) is left as it is.
+    /// </summary>
+    internal static async Task<IResult> SealNewNodeAsync(
+        IServiceProvider services, NodeResetService resetService, ILoggerFactory loggerFactory, string masterPassword, bool activateMetadata,
+        Func<Task<string>>? afterFailure = null)
+    {
+        var logger = loggerFactory.CreateLogger("BeeMemoryBank.Api.InitEndpoints");
+        // Resolved here, not as a parameter of the route: a host that is composed without the encrypted-database services (AddSealedVault) still builds its
+        // route table, and only a setup through it fails - closed, with the reason - instead of ending in an unencrypted node.
+        var sealing = services.GetService<FreshNodeSealing>();
+
+        try
+        {
+            if (sealing is null)
+                throw new FreshNodeSealingException("This node was started without the encrypted-database services, so it cannot be encrypted.", nodeIsEncrypted: false);
+
+            // Not cancelled by the caller going away: a setup that stops half-way is the one case that would leave a node in the open.
+            await sealing.SealAsync(masterPassword, activateMetadata, CancellationToken.None);
+            return Results.Ok(new { success = true });
+        }
+        catch (FreshNodeSealingException ex)
+        {
+            logger.LogError("The new node could not be set up encrypted: {Message}", ex.Message);
+            // Encrypted, or a restart makes it so (the message says which): not a node to take back, and the host that was joined keeps its peer.
+            if (ex.LeaveAsItIs)
+                return Results.Json(new ErrorResponse(ex.RestartFinishes ? ex.Message
+                    : ex.Message + " The node is encrypted and locked; unlock it with the master password."), statusCode: 500);
+
+            var told = afterFailure is null ? "" : " " + await afterFailure();
+            try
+            {
+                // The intent says this node is not a node yet: its rows go without asking for a password. When that cannot be done, the reset (which
+                // does ask) is the second try; and a node that is neither taken back nor encrypted is wiped at its next start.
+                if (!await resetService.DiscardPendingSetupAsync("setup: encrypting the new node failed", CancellationToken.None))
+                    await resetService.ResetAsync(masterPassword, "setup: encrypting the new node failed", CancellationToken.None);
+            }
+            catch (Exception resetEx) when (resetEx is not OperationCanceledException)
+            {
+                logger.LogError(resetEx, "The new node could not be taken back after its encryption failed ({Type}).", resetEx.GetType().Name);
+                return Results.Json(new ErrorResponse(ex.Message + " The setup could not be undone either: reset this node (bmb init reset) and set it up again." + told), statusCode: 500);
+            }
+            return Results.Json(new ErrorResponse(ex.Message + " Nothing was kept: run the setup again." + told), statusCode: 500);
+        }
     }
 
     private sealed record JoinResponseDto(

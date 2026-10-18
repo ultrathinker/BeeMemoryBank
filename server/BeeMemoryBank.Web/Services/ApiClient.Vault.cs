@@ -21,11 +21,11 @@ public partial class ApiClient
     }
 
     /// <summary>The preflight of "Encrypt this node"; null when the API did not answer.</summary>
-    public async Task<SealPreflightDto?> GetSealPreflightAsync(bool acceptNoSnapshot)
+    public async Task<SealPreflightDto?> GetSealPreflightAsync()
     {
         try
         {
-            return await http.GetFromJsonAsync<SealPreflightDto>("/api/vault/seal/preflight" + (acceptNoSnapshot ? "?accept_no_snapshot=true" : ""), JsonOpts);
+            return await http.GetFromJsonAsync<SealPreflightDto>("/api/vault/seal/preflight", JsonOpts);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
@@ -34,9 +34,9 @@ public partial class ApiClient
     }
 
     /// <summary>Starts the migration. The page then follows <c>/api-proxy/vault/seal/progress</c>.</summary>
-    public async Task<(bool Ok, string? Error)> StartSealAsync(string password, bool acceptNoSnapshot)
+    public async Task<(bool Ok, string? Error)> StartSealAsync(string password)
     {
-        var resp = await http.PostAsJsonAsync("/api/vault/seal", new { password, accept_no_snapshot = acceptNoSnapshot }, JsonOpts);
+        var resp = await http.PostAsJsonAsync("/api/vault/seal", new { password }, JsonOpts);
         if (resp.IsSuccessStatusCode) return (true, null);
         return (false, resp.StatusCode == HttpStatusCode.Unauthorized ? "Invalid master password." : await ReadErrorAsync(resp) ?? "The encryption could not be started.");
     }
@@ -48,27 +48,6 @@ public partial class ApiClient
         if (resp.StatusCode == HttpStatusCode.Unauthorized) return (null, "Invalid master password.");
         if (!resp.IsSuccessStatusCode) return (null, await ReadErrorAsync(resp) ?? "The copies could not be erased.");
         return (await resp.Content.ReadFromJsonAsync<EraseResultDto>(JsonOpts), null);
-    }
-
-    /// <summary>The way-back snapshot of the encryption (name, size, date), for a signed-in superadmin only.</summary>
-    public async Task<WayBackDto?> GetWayBackAsync()
-    {
-        try
-        {
-            return await http.GetFromJsonAsync<WayBackDto>("/api/vault/pre-encryption", JsonOpts);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
-        {
-            return null;
-        }
-    }
-
-    public async Task<(bool Ok, string? Error)> DeleteWayBackAsync(string password)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Delete, "/api/vault/pre-encryption") { Content = JsonContent.Create(new { password }, options: JsonOpts) };
-        var resp = await http.SendAsync(request);
-        if (resp.IsSuccessStatusCode) return (true, null);
-        return (false, resp.StatusCode == HttpStatusCode.Unauthorized ? "Invalid master password." : await ReadErrorAsync(resp) ?? "The snapshot could not be deleted.");
     }
 
     /// <summary>"Start unlocked after a restart" of a server (spec 11.2); null when the API did not answer or the node is a desktop.</summary>
@@ -156,11 +135,5 @@ public sealed record EraseResultDto(
     [property: JsonPropertyName("unlinked_only")] List<string> UnlinkedOnly,
     [property: JsonPropertyName("not_erased")] List<string> NotErased,
     [property: JsonPropertyName("refused")] List<EraseRefusalDto> Refused);
-
-public sealed record WayBackDto(
-    [property: JsonPropertyName("exists")] bool Exists,
-    [property: JsonPropertyName("name")] string? Name,
-    [property: JsonPropertyName("bytes")] long Bytes,
-    [property: JsonPropertyName("created_at")] DateTime? CreatedAt);
 
 public sealed record ServerAutoUnlockDto(string Role, bool Enabled, string State, bool KeyFileConfigured, string? Notice);

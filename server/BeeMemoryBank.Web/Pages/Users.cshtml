@@ -88,7 +88,7 @@
                                     data-name="@user.Username" data-form-id="form-del-@user.Id"
                                     class="btn-user-delete">
                                 </sl-icon-button>
-                                <form id="form-del-@user.Id" method="post" asp-page-handler="Delete" style="display:none;">
+                                <form data-busy="short" id="form-del-@user.Id" method="post" asp-page-handler="Delete" style="display:none;">
                                     <input type="hidden" name="id" value="@user.Id" />
                                 </form>
                             </td>

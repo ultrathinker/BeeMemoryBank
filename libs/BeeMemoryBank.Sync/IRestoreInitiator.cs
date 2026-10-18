@@ -12,5 +12,6 @@ public interface IRestoreInitiator : IRestoreRetrier
     /// </summary>
     bool RequiresApproval => true;
 
-    Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent);
+    /// <param name="ct">Ends the work before it changes anything on this node (the download, the pre-restore backup): the apply itself, once begun, is not interrupted.</param>
+    Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent, CancellationToken ct = default);
 }

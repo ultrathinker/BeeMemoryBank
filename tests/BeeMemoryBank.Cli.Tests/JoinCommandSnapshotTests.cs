@@ -16,6 +16,7 @@ namespace BeeMemoryBank.Cli.Tests;
 /// The host is a local HTTP listener (<see cref="FakeJoinHost"/>); the real host and a compacted log are in the
 /// integration tests (CliJoinTests).
 /// </summary>
+[Collection("CliSealedStatics")]
 public class JoinCommandSnapshotTests : IDisposable
 {
     private const string Password = "cliJoinSnapshotPassword";
@@ -24,6 +25,7 @@ public class JoinCommandSnapshotTests : IDisposable
 
     public void Dispose()
     {
+        JoinedNode.Reset();
         if (Directory.Exists(_tempDir))
             try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
@@ -41,7 +43,7 @@ public class JoinCommandSnapshotTests : IDisposable
         output.ToString().Should().Contain("checkpoint 42");
         server.Paths.Should().ContainInOrder("/api/join", "/api/sync/challenge", "/api/sync/authenticate", "/api/sync/snapshot/for-join");
 
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<ISyncPositionRepository>().GetAsync(host.HostId))!
             .LastSequenceNum.Should().Be(42, "the first sync continues after the snapshot, not from 0");
@@ -66,7 +68,7 @@ public class JoinCommandSnapshotTests : IDisposable
             output.ToString().Should().Contain("still lists this node ('CliJoiner'").And.Contain("revoke it").And.NotContain("Nothing was kept");
         }
 
-        await using (var services = await CliServiceProvider.CreateAsync(_tempDir))
+        await using (var services = await JoinedNode.OpenAsync(_tempDir, Password))
         {
             using var scope = services.CreateScope();
             (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull("no half-made node");
@@ -96,7 +98,7 @@ public class JoinCommandSnapshotTests : IDisposable
         output.ToString().Should().Contain($"protocol version ({hostProtocol})");
         // Nothing is written here, but the host already wrote this node's row, so it is asked to take it back (JoinCommandAbortTests).
         server.Paths.Should().Equal("/api/join", "/api/join/abort");
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull();
     }

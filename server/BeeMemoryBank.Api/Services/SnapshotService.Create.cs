@@ -22,6 +22,9 @@ public partial class SnapshotService
     /// <summary>The clock of the snapshot file names, to the second. The integration tests set it so that two snapshots share a second.</summary>
     internal Func<DateTime> SnapshotNameClock { get; set; } = () => DateTime.UtcNow;
 
+    /// <summary>Test seam (BMB-304): the free memory the container steps are measured against instead of what the runtime says; a test sets a ceiling here.</summary>
+    internal long? FreeMemoryOverride { get; set; }
+
     /// <summary>The fingerprint of the master DEK a join snapshot is sealed under, or null while the vault is locked (the join cache key).</summary>
     public string? JoinKeyFingerprint() => _keys?.GetJoinKeyFingerprint();
 
@@ -52,9 +55,6 @@ public partial class SnapshotService
     /// A file there is invisible to listing, retention and delete, which only read the snapshots directory.</param>
     /// <param name="sealForJoin">After activation (docs/design/step-a-spec.md 11): the database entry is a BMBCH1 container under the master DEK
     /// ("dbCipher": "bmbch1" in the manifest) instead of plain SQLite. Refuses while the vault is locked; wins over <paramref name="encryptDb"/>.</param>
-    /// <param name="wipeStaging">The plain working copy goes through <c>SecureFileWipe</c> (overwritten with random bytes, then removed) instead of
-    /// being truncated and deleted: the pre-encryption snapshot of a node that is about to be sealed (docs/design/step-b-spec.md 10.4 step 3). The
-    /// container takes the copy's name only after the wipe. A node that is already sealed has no plain copy to wipe.</param>
     /// <remarks>
     /// On a sealed node (docs/design/step-b-spec.md 8.1, 8.3) the working copy is a <c>VACUUM INTO</c> of the keyed vault, so it is encrypted with the
     /// vault's page key at every moment; it is filtered through keyed connections, and its database entry is a container built from its plain image
@@ -68,7 +68,7 @@ public partial class SnapshotService
         SnapshotAdditions? additions = null,
         string? outputDirectory = null,
         bool sealForJoin = false,
-        bool wipeStaging = false)
+        CancellationToken ct = default)
     {
         // A sealed node never writes a plain image (spec 8.1): the only container writer it has for a join is sealForJoin.
         if (_connFactory.IsSealed && !encryptDb && !sealForJoin)
@@ -95,6 +95,16 @@ public partial class SnapshotService
                 if (tempDriveInfo.AvailableFreeSpace < requiredBytes)
                     throw new InsufficientDiskSpaceException(
                         $"Insufficient disk space for snapshot: need ~{requiredBytes / (1024 * 1024)}MB in {tempDriveInfo.Name}, have {tempDriveInfo.AvailableFreeSpace / (1024 * 1024)}MB");
+                // The database entry of an encrypted snapshot is one AES-GCM message, held in memory as one buffer (BMB-304): ask for that room now, before
+                // the working copy is made, and say which memory limit would be enough instead of dying with an OutOfMemoryException halfway.
+                if (encryptDb && !sealForJoin)
+                {
+                    // What the container will hold is the live image (VACUUM INTO leaves the free pages out), not the length of the file.
+                    long image;
+                    using (var sizeConn = _connFactory.CreateConnection()) image = Bmbdb2Container.LiveImageBytes(sizeConn, dbSize);
+                    MemoryBudget.RequireFree(image + Bmbdb2Container.OverheadV2 + MemoryBudget.Slack,
+                        $"Making the snapshot of a {Math.Max(1, image / (1024 * 1024))} MB database", FreeMemoryOverride);
+                }
                 if (snapshotsDriveInfo.AvailableFreeSpace < requiredBytes)
                     throw new InsufficientDiskSpaceException(
                         $"Insufficient disk space for snapshot: need ~{requiredBytes / (1024 * 1024)}MB in {snapshotsDriveInfo.Name}, have {snapshotsDriveInfo.AvailableFreeSpace / (1024 * 1024)}MB");
@@ -106,9 +116,9 @@ public partial class SnapshotService
         // Inside the data folder, owner-only, swept at the next start if this process dies before the finally below:
         // until FilterSecretsFrom has run, this is the whole database (key slots, wrapped key, password hashes).
         var tempDb = SnapshotStaging.NewFile(_dataPath);
-        var plainWiped = false;
         var completed = false;
         string? archive = null;
+        string? tempArchive = null;
         try
         {
             using (var conn = (SqliteConnection)_connFactory.CreateConnection())
@@ -138,7 +148,7 @@ public partial class SnapshotService
                 if (_connFactory.IsSealed)
                 {
                     var pageKey = _connFactory.CopyPageKey()!;
-                    try { await _keys.SealJoinSealedDatabaseAsync(tempDb, pageKey); }
+                    try { await _keys.SealJoinSealedDatabaseAsync(tempDb, pageKey, ct); }
                     finally { Array.Clear(pageKey); }
                 }
                 else
@@ -172,17 +182,12 @@ public partial class SnapshotService
                     {
                         // The working copy is encrypted with the vault's page key; the container is built from its plain image in memory.
                         var pageKey = _connFactory.CopyPageKey()!;
-                        try { dbEncrypted = await _keys.EncryptSealedDatabaseAsync(tempDb, pageKey); }
+                        try { dbEncrypted = await _keys.EncryptSealedDatabaseAsync(tempDb, pageKey, ct); }
                         finally { Array.Clear(pageKey); }
-                    }
-                    else if (wipeStaging)
-                    {
-                        dbEncrypted = await _keys.EncryptDatabaseAsync(tempDb, wipePlain: true, AfterStagingOverwrite);
-                        plainWiped = dbEncrypted;
                     }
                     else
                     {
-                        dbEncrypted = await _keys.EncryptDatabaseAsync(tempDb);
+                        dbEncrypted = await _keys.EncryptDatabaseAsync(tempDb, ct);
                     }
                 }
             }
@@ -288,8 +293,7 @@ public partial class SnapshotService
             // the second file then overwrote the first under an identical name — silently
             // destroying the one copy that exists to be restored if the restore goes wrong.
             // Disambiguate with a counter rather than widening the timestamp, so file names keep
-            // the shape operators and older snapshots already have. The counter also skips a name taken in the other snapshot folder: a restore by
-            // name looks in snapshots/ first, so the same name in pre-encryption/ would open the wrong archive.
+            // the shape operators and older snapshots already have.
             var fileName = SnapshotFileNames.Unique(_dataPath, outputDir, SnapshotNameClock());
             var filePath = Path.Combine(outputDir, fileName);
 
@@ -319,8 +323,12 @@ public partial class SnapshotService
                 manifestSignature = SignWithIdentity(nodeIdentity, manifestPayload);
             }
 
-            await using (var fs = File.Create(filePath))
-            await using (var gz = new GZipStream(fs, CompressionLevel.Optimal))
+            // The archive is written under a temp name, owner-only from its first byte, and takes its name only when it is whole: a full volume or a
+            // cancellation at any point leaves no half-written *.tar.gz (the finally below removes the temp file), and nothing can list or restore one
+            // that is still being written.
+            tempArchive = filePath + "." + Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant() + ".tmp";
+            await using (var fs = OwnerOnlyFile.CreateNew(tempArchive))
+            await using (var gz = new GZipStream(WrapArchiveStream?.Invoke(fs) ?? fs, CompressionLevel.Optimal))
             using (var tar = new TarWriter(gz, TarEntryFormat.Pax))
             {
                 {
@@ -328,7 +336,7 @@ public partial class SnapshotService
                     await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, DbFileName)
                     {
                         DataStream = dbStream
-                    });
+                    }, ct);
                 }
 
                 foreach (var encFile in mediaFiles)
@@ -338,20 +346,20 @@ public partial class SnapshotService
                     await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, relativePath)
                     {
                         DataStream = mediaStream
-                    });
+                    }, ct);
                 }
 
                 await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, ManifestFileName)
                 {
                     DataStream = new MemoryStream(manifestBytes)
-                });
+                }, ct);
 
                 foreach (var (name, bytes) in extraFiles)
                 {
                     await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, name)
                     {
                         DataStream = new MemoryStream(bytes)
-                    });
+                    }, ct);
                 }
 
                 if (manifestSignature != null)
@@ -359,10 +367,13 @@ public partial class SnapshotService
                     await tar.WriteEntryAsync(new PaxTarEntry(TarEntryType.RegularFile, ManifestFileName + ".sig")
                     {
                         DataStream = new MemoryStream(manifestSignature)
-                    });
+                    }, ct);
                 }
             }
 
+            ct.ThrowIfCancellationRequested();
+            OwnerOnlyFile.MoveNoReplace(tempArchive, filePath);
+            tempArchive = null;
             archive = filePath;
             if (sign)
             {
@@ -381,21 +392,42 @@ public partial class SnapshotService
         }
         finally
         {
-            // A failure before the container was written leaves the plain working copy: with wipeStaging it is overwritten before it goes.
             AfterStagingWork?.Invoke(tempDb);
-            RemoveWorkingCopy(tempDb, wipe: wipeStaging && !plainWiped, completed, archive);
+            // Whatever is left of an archive that was not completed goes: the unfinished temp file, and a published archive whose sidecar was not written.
+            DiscardArchive(tempArchive);
+            if (!completed && archive is not null)
+            {
+                DiscardArchive(archive);
+                DiscardArchive(archive + ".sig");
+            }
+            RemoveWorkingCopy(tempDb, completed, archive);
         }
     }
 
-    /// <summary>
-    /// Removes a working copy with its SQLite sidecars: the one cleanup of <see cref="SqliteStaging"/>, wiped when <paramref name="wipe"/> asks
-    /// for it. A copy that stays is repair-required: after a completed snapshot that is the failure reported, never a snapshot made, so the
-    /// archive written for it goes as well.
-    /// </summary>
-    private void RemoveWorkingCopy(string tempDb, bool wipe, bool completed, string? archive)
+    /// <summary>Removes an archive file that is not a snapshot (wiped first: it may hold a plain database); a file that will not go is logged, never thrown over the real error.</summary>
+    private void DiscardArchive(string? path)
     {
-        Func<string, bool>? wipeFile = wipe ? path => SecureFileWipe.TryWipe(path, AfterStagingOverwrite) : null;
-        if (SqliteStaging.TryCleanup(tempDb, wipeFile)) return;
+        if (path is null || !File.Exists(path)) return;
+        try
+        {
+            if (!SecureFileWipe.TryWipe(path)) File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger?.LogError("An unfinished snapshot archive could not be removed ({Type}); it is not a snapshot and may be deleted by hand.", ex.GetType().Name);
+        }
+    }
+
+    /// <summary>Test seam: wraps the stream the archive is written to, so that a test can make the write fail the way a full volume does.</summary>
+    internal Func<Stream, Stream>? WrapArchiveStream { get; set; }
+
+    /// <summary>
+    /// Removes a working copy with its SQLite sidecars: the one cleanup of <see cref="SqliteStaging"/>. A copy that stays is repair-required:
+    /// after a completed snapshot that is the failure reported, never a snapshot made, so the archive written for it goes as well.
+    /// </summary>
+    private void RemoveWorkingCopy(string tempDb, bool completed, string? archive)
+    {
+        if (SqliteStaging.TryCleanup(tempDb)) return;
         _logger?.LogError("A working copy of a snapshot could not be removed; node repair is required.");
         if (!completed) return;
         if (archive is not null)
@@ -403,9 +435,6 @@ public partial class SnapshotService
                 try { File.Delete(file); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* a leftover file is no snapshot */ }
         throw new IOException("The working copy of the snapshot could not be removed. The snapshot requires repair and was not reported as made.");
     }
-
-    /// <summary>Test seam of <c>wipeStaging</c>: called with the working copy after it was overwritten and flushed, before it is truncated.</summary>
-    internal Action<string>? AfterStagingOverwrite { get; set; }
 
     /// <summary>Test seam: called with the working copy once its work is done and before it is removed; a test plants or holds a sidecar of it here.</summary>
     internal Action<string>? AfterStagingWork { get; set; }

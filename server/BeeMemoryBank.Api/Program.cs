@@ -57,7 +57,7 @@ dataPath = rekeySwap.DataDir;
 var brokenStart = BeeMemoryBank.Vault.Sealed.BrokenStart.For(dataPath, rekeySwap.Seal);
 if (brokenStart is not null)
 {
-    var exitCode = BeeMemoryBank.Api.Startup.BrokenStartHost.Run(builder, brokenStart);
+    var exitCode = BeeMemoryBank.Api.Startup.BrokenStartHost.Run(builder, brokenStart, vaultLease);
     GC.KeepAlive(vaultLease);
     return exitCode;
 }

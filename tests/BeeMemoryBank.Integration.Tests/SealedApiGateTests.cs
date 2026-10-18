@@ -156,7 +156,7 @@ public sealed class SealedApiGateTests(SealedNodeTemplate template) : IClassFixt
         var relay = node.Services.GetRequiredService<ISealedRelay>();
         var served = new[]
         {
-            "GET /health", "GET /version", "GET /api/version", "GET /api/session/status", "GET /api/vault/status",
+            "GET /health", "GET /version", "GET /api/version", "GET /api/session/status", "GET /api/vault/status", "GET /api/snapshots/restore/progress",
             "POST /api/session/unlock", "POST /api/session/login", "POST /api/session/recover-access",
         };
         var blocked = new List<string>();

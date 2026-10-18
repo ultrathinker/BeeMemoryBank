@@ -106,9 +106,8 @@ public sealed class BlindPhonePullClient(
         using var response = await http.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.Gone)
         {
-            var body = await response.Content.ReadAsStringAsync(ct);
-            throw new SnapshotRequiredException(address, after, 0,
-                string.IsNullOrWhiteSpace(body) ? "The remote node compacted this phone's receive position." : body,
+            // Whatever the body says is the other side's text: not taken over (it would reach the phone's screens and log).
+            throw new SnapshotRequiredException(address, after, 0, "The remote node compacted this phone's receive position.",
                 SnapshotRequiredException.SequenceTooOldCode, headReported: false);
         }
         response.EnsureSuccessStatusCode();

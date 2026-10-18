@@ -82,7 +82,7 @@ public static class UpdateEndpoints
             }
             catch (JsonException ex)
             {
-                return Results.Json(new ErrorResponse($"Manifest JSON is malformed: {ex.Message}"), statusCode: 400);
+                return Results.Json(new ErrorResponse("Manifest JSON is malformed."), statusCode: 400);
             }
 
             try

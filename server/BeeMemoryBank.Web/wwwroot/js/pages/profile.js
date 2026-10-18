@@ -92,27 +92,19 @@
                 return;
             }
 
-            btn.loading = true;
-            fetch('/api-proxy/users/me/change-password', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
-            }).then(function (r) {
-                if (r.ok) {
+            // The one busy helper (BMB-311): the button spins; the answer is written in the page's own alert.
+            bmbBusy.run(btn, function () {
+                return bmbBusy.request('/api-proxy/users/me/change-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
+                }).then(function () {
                     showAlert('success', 'Password changed successfully.');
                     document.getElementById('cp-old').value = '';
                     document.getElementById('cp-new').value = '';
                     document.getElementById('cp-confirm').value = '';
-                } else {
-                    return r.json().then(function (data) {
-                        showAlert('danger', data.error || 'Failed to change password.');
-                    });
-                }
-            }).catch(function () {
-                showAlert('danger', 'Network error.');
-            }).finally(function () {
-                btn.loading = false;
-            });
+                });
+            }, { quiet: true, error: function (err) { showAlert('danger', err.message || 'Failed to change password.'); } });
         });
     }
 
@@ -155,25 +147,22 @@
                 });
                 tbody.querySelectorAll('.agent-delete-btn').forEach(function (btn) {
                     btn.addEventListener('click', function () {
-                        deleteAgent(btn.dataset.agentId, btn.dataset.agentName);
+                        deleteAgent(btn.dataset.agentId, btn.dataset.agentName, btn);
                     });
                 });
                 tableContainer.style.display = 'block';
             });
     }
 
-    function deleteAgent(id, name) {
+    function deleteAgent(id, name, btn) {
         if (!confirm('Revoke agent "' + name + '"? Any applications using this key will lose access.')) return;
 
-        fetch('/api-proxy/agents/' + id, { method: 'DELETE' })
-            .then(function (r) {
-                if (r.ok) {
-                    showAlert('success', 'Agent revoked');
-                    loadAgents();
-                } else {
-                    showAlert('danger', 'Failed to revoke agent');
-                }
+        bmbBusy.run(btn, function () {
+            return bmbBusy.request('/api-proxy/agents/' + id, { method: 'DELETE' }).then(function () {
+                showAlert('success', 'Agent revoked');
+                loadAgents();
             });
+        }, { quiet: true, error: function (err) { showAlert('danger', err.message || 'Failed to revoke agent'); } });
     }
 
     var btnDoCreate = document.getElementById('btn-do-create-agent');
@@ -188,18 +177,14 @@
                 return;
             }
 
-            btn.loading = true;
-            fetch('/api-proxy/agents', {
+            // The dialog stays open when the node refuses: the reason is written in it, next to the button (BMB-311).
+            bmbBusy.run(btn, function () {
+              return bmbBusy.request('/api-proxy/agents', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: name, description: desc })
-            }).then(function (r) {
-                if (r.ok) {
-                    return r.json();
-                } else {
-                    return r.json().then(function (data) { throw new Error(data.error || 'Failed to create agent'); });
-                }
-            }).then(function (data) {
+              }).then(function (res) {
+                var data = res.body || {};
                 document.getElementById('dlg-create-agent').hide();
                 document.getElementById('agent-name').value = '';
                 document.getElementById('agent-desc').value = '';
@@ -231,11 +216,8 @@
 
                 document.getElementById('dlg-show-secret').show();
                 loadAgents();
-            }).catch(function (err) {
-                alert(err.message);
-            }).finally(function () {
-                btn.loading = false;
-            });
+              });
+            }, { quiet: true });
         });
     }
 
@@ -250,13 +232,16 @@
 
         autoApproveToggle.addEventListener('sl-change', function () {
             var enabled = autoApproveToggle.checked;
-            fetch('/api-proxy/chat/settings/auto-approve', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: enabled })
-            }).then(function (r) {
-                if (!r.ok) autoApproveToggle.checked = !enabled;
-            }).catch(function () { autoApproveToggle.checked = !enabled; });
+            bmbBusy.run(autoApproveToggle, function () {
+                return bmbBusy.request('/api-proxy/chat/settings/auto-approve', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: enabled })
+                });
+            }, {
+                quiet: true,
+                error: function (err) { autoApproveToggle.checked = !enabled; bmbBusy.showResult(autoApproveToggle, false, err.message); }
+            });
         });
     }
 

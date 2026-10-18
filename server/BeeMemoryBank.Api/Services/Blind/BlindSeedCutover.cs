@@ -80,11 +80,9 @@ public sealed class BlindSeedCutover
             switch (PhaseOf().Phase)
             {
                 case Switching:
-                    throw new BlindSeedRejectedException(
-                        "An earlier seed's switch was interrupted and is not resolved; this node rolls it back at its next start. Restart it, then send the seed again.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.CutoverInterrupted);
                 case Unresolved:
-                    throw new BlindSeedRejectedException(
-                        "An earlier seed's cutover is unresolved: its marker is missing or unreadable and the database it replaced is still kept in blind-cutover. Nothing was discarded. Restart this node, which keeps or restores what is there; resolve blind-cutover by hand if it stays unresolved. No seed is accepted until then.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.CutoverUnresolved);
                 case Done:
                     FinishDone();
                     break;
@@ -266,8 +264,7 @@ public sealed class BlindSeedCutover
         if (!File.Exists(path)) return;
         RefuseLink(path);
         if (!IsDirectlyUnder(path, parent))
-            throw new BlindSeedRejectedException(
-                $"Refusing to wipe {path}: it is not directly under {parent}. Nothing was changed; resolve it by hand.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.CutoverPathOutside);
         WipeFile(path);
     }
 
@@ -457,8 +454,7 @@ public sealed class BlindSeedCutover
     private static void RefuseLink(string path)
     {
         if (IsLink(path))
-            throw new BlindSeedRejectedException(
-                $"Refusing to touch {path}: it is a link (or another reparse point), not this cutover's own file. Nothing was changed; resolve it by hand.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.CutoverLink);
     }
 
     /// <summary>
@@ -490,8 +486,7 @@ public sealed class BlindSeedCutover
         if (!File.Exists(path)) return;
         RefuseLink(path);
         if (!IsDirectlyUnder(path, parent))
-            throw new BlindSeedRejectedException(
-                $"Refusing to delete {path}: it is not directly under {parent}. Nothing was changed; resolve it by hand.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.CutoverPathOutside);
         File.Delete(path);
     }
 
@@ -504,8 +499,7 @@ public sealed class BlindSeedCutover
         if (!Directory.Exists(path)) return;
         RefuseLink(path);
         if (!IsDirectlyUnder(path, parent))
-            throw new BlindSeedRejectedException(
-                $"Refusing to delete {path}: it is not directly under {parent}. Nothing was changed; resolve it by hand.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.CutoverPathOutside);
         Directory.Delete(path, recursive: true);
     }
 

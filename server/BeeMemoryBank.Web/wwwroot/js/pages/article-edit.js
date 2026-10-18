@@ -54,6 +54,7 @@
         var artId = document.querySelector('input[name="id"]');
         if (artId && artId.value) formData.append('articleId', artId.value);
 
+        // bmb-busy-exempt: a picture pasted or dropped into the editor, not a button; an "Uploading name..." placeholder stands where it will go
         return fetch('/api-proxy/media/upload', {
             method: 'POST',
             body: formData
@@ -386,33 +387,32 @@
             var pass = protPassInput.value || '';
             if (!pass) { protPassInput.focus(); return; }
             protError.style.display = 'none';
-            protUnlockBtn.loading = true;
-            fetch('/api-proxy/article/' + articleId + '/unlock', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ passphrase: pass })
-            }).then(function (r) {
-                if (r.ok) return r.json();
-                return r.json().catch(function () { return {}; }).then(function (j) {
-                    throw new Error(r.status === 401 ? 'Wrong password.' : (j.error || 'Unlock failed.'));
+            // The one busy helper (BMB-311): the button spins through the key derivation; the reason it failed is written in the error line.
+            bmbBusy.run(protUnlockBtn, function () {
+                return bmbBusy.request('/api-proxy/article/' + articleId + '/unlock', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ passphrase: pass })
+                }).then(function (res) {
+                    var data = res.body || {};
+                    protPass = pass;
+                    if (!reauthPending) {
+                        easyMDE.value(data.content || '');
+                        originalContent = data.content || '';
+                    }
+                    protPassInput.value = '';
+                    if (protGate) protGate.hidden = true;
+                    if (contentBlock) contentBlock.hidden = false;
+                    easyMDE.codemirror.refresh();
+                    if (reauthPending) { reauthPending = false; doProtectedSave(); }
                 });
-            }).then(function (data) {
-                protPass = pass;
-                if (!reauthPending) {
-                    easyMDE.value(data.content || '');
-                    originalContent = data.content || '';
+            }, {
+                quiet: true,
+                error: function (err) {
+                    protError.textContent = err.status === 401 ? 'Wrong password.' : err.message;
+                    protError.style.display = '';
+                    protPassInput.focus();
                 }
-                protPassInput.value = '';
-                if (protGate) protGate.hidden = true;
-                if (contentBlock) contentBlock.hidden = false;
-                easyMDE.codemirror.refresh();
-                if (reauthPending) { reauthPending = false; doProtectedSave(); }
-            }).catch(function (err) {
-                protError.textContent = err.message;
-                protError.style.display = '';
-                protPassInput.focus();
-            }).finally(function () {
-                protUnlockBtn.loading = false;
             });
         }
         if (protUnlockBtn) protUnlockBtn.addEventListener('click', protUnlock);
@@ -427,37 +427,38 @@
                 content: easyMDE.value()
             };
             if (protPass) payload.passphrase = protPass;
-            fetch('/api-proxy/article/' + articleId, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            }).then(function (r) {
-                if (!r.ok) {
-                    if (r.status === 401) protPass = null;
-                    return r.json().catch(function () { return {}; }).then(function (j) {
-                        // Only this code means the server-side unlock expired; any other 400 is a
-                        // validation error (e.g. a blank title) and is shown as is.
-                        if (r.status === 400 && j.code === 'PassphraseRequired') {
-                            reauthPending = true;
-                            if (protGate) protGate.hidden = false;
-                            protError.textContent = 'Your unlock expired — re-enter the password to save.';
-                            protError.style.display = '';
-                            protPassInput.focus();
-                            return 'reauth';
-                        }
-                        throw new Error(r.status === 401 ? 'Wrong password — re-enter to save.' : (j.error || 'Save failed.'));
-                    });
-                }
-                var tags = conceptTagify ? conceptTagify.value.map(function (t) { return t.value; }) : [];
-                return fetch('/api-proxy/article/' + articleId + '/concept-tags', {
+            // The one busy helper (BMB-311): the Save button spins until the article is saved; a refusal is said in a toast, in full.
+            bmbBusy.run(form.querySelector('sl-button[type="submit"]'), function () {
+                return bmbBusy.request('/api-proxy/article/' + articleId, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ conceptTags: tags })
-                }).catch(function () { }).then(function () {
-                    window.location.href = '/Article/View?id=' + articleId;
+                    body: JSON.stringify(payload)
+                }).then(function () {
+                    var tags = conceptTagify ? conceptTagify.value.map(function (t) { return t.value; }) : [];
+                    return bmbBusy.request('/api-proxy/article/' + articleId + '/concept-tags', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ conceptTags: tags })
+                    }).catch(function () { }).then(function () {
+                        window.location.href = '/Article/View?id=' + articleId;
+                    });
                 });
-            }).catch(function (err) {
-                showToast(err.message);
+            }, {
+                quiet: true,
+                error: function (err) {
+                    if (err.status === 401) protPass = null;
+                    // Only this code means the server-side unlock expired; any other 400 is a
+                    // validation error (e.g. a blank title) and is shown as is.
+                    if (err.status === 400 && err.body && err.body.code === 'PassphraseRequired') {
+                        reauthPending = true;
+                        if (protGate) protGate.hidden = false;
+                        protError.textContent = 'Your unlock expired — re-enter the password to save.';
+                        protError.style.display = '';
+                        protPassInput.focus();
+                        return;
+                    }
+                    showToast(err.status === 401 ? 'Wrong password — re-enter to save.' : err.message);
+                }
             });
         }
 
@@ -526,6 +527,7 @@
             formData.append('file', file);
             formData.append('attachment', 'true');
             if (articleId) formData.append('articleId', articleId);
+            // bmb-busy-exempt: files dropped on the drop zone, not a button; the zone shows "Uploading N files..." and saving waits for the queue
             return fetch('/api-proxy/media/upload', { method: 'POST', body: formData })
                 .then(function (r) {
                     if (!r.ok) return r.json().catch(function () { return {}; }).then(function (e) {
@@ -585,14 +587,15 @@
             e.preventDefault();
             var id = btn.getAttribute('data-delete-attachment');
             if (!confirm('Delete this attachment?')) return;
-            fetch('/api-proxy/media/' + id, { method: 'DELETE' }).then(function (r) {
-                if (!(r.ok || r.status === 204)) { showToast('Delete failed'); return; }
-                var row = document.getElementById('attachment-' + id);
-                if (row) row.remove();
-                pendingAttachments = pendingAttachments.filter(function (p) { return p.id !== id; });
-                syncPending();
-                updateAttachmentsCount();
-            });
+            bmbBusy.run(btn, function () {
+                return bmbBusy.request('/api-proxy/media/' + id, { method: 'DELETE' }).then(function () {
+                    var row = document.getElementById('attachment-' + id);
+                    if (row) row.remove();
+                    pendingAttachments = pendingAttachments.filter(function (p) { return p.id !== id; });
+                    syncPending();
+                    updateAttachmentsCount();
+                });
+            }, { quiet: true, error: function (err) { showToast(err.message || 'Delete failed'); } });
         });
     }
 

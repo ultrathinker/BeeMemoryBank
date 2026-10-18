@@ -29,6 +29,8 @@
   <ItemGroup>
     <!-- The rescan of a folder that is still changing: one source in tests/shared, for the MetadataCanaries copy of this project. -->
     <Compile Include="..\shared\MetadataCanariesRescanTests.cs" Link="Shared\MetadataCanariesRescanTests.cs" />
+    <!-- A copy of a data folder taken as the image of a cut, with the seal-intent marker pointed at the files of the copy: one source in tests/shared. -->
+    <Compile Include="..\shared\CutImage.cs" Link="Shared\CutImage.cs" />
   </ItemGroup>
 
   <ItemGroup>

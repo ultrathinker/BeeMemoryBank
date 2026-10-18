@@ -116,7 +116,7 @@ public sealed class QuickUnlock(IUnlockKeyStore store, IServiceProvider services
             byte[]? sentinel;
             using (var scope = services.CreateScope())
                 sentinel = await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetSentinelAsync();
-            if (sentinel is null || !MasterKeyManager.VerifySentinel(sentinel, masterDek))
+            if (MasterKeyManager.IsSentinelMissing(sentinel) || !MasterKeyManager.VerifySentinel(sentinel!, masterDek))
             {
                 Array.Clear(masterDek);
                 store.Forget();

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Controls;
@@ -63,16 +64,27 @@ public partial class TagsPage : ContentPage
 
     private async void OnRefreshing(object? sender, EventArgs e)
     {
-        var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
-        if (!syncNotify.HasPendingUpdates)
+        // Pulling the list down asks for a sync round: a request to the computer, not a read (BMB-311). The one busy helper refuses a second round while one runs;
+        // the spinner of the pull is the pull's own, so no pop-up; a failure to even ask is said in full.
+        try
         {
-            var syncStatus = _services.GetRequiredService<Services.SyncStatusService>();
-            await syncStatus.SyncNowAsync();
+            await BusyAction.RunAsync(RefreshView, async () =>
+            {
+                var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
+                if (!syncNotify.HasPendingUpdates)
+                {
+                    var syncStatus = _services.GetRequiredService<Services.SyncStatusService>();
+                    await syncStatus.SyncNowAsync();
+                }
+
+                await LoadTagsAsync();
+                syncNotify.ClearPendingUpdates();
+            }, new BusyOptions { FailureTitle = "Sync" });
         }
-        
-        await LoadTagsAsync();
-        syncNotify.ClearPendingUpdates();
-        RefreshView.IsRefreshing = false;
+        finally
+        {
+            RefreshView.IsRefreshing = false;
+        }
     }
 
     private void ApplyTags(List<ConceptTagInfo> tags)
@@ -97,6 +109,7 @@ public partial class TagsPage : ContentPage
             .ToList();
     }
 
+    // busy-exempt: opens the articles of the tag tapped, nothing is sent and nothing waits
     private async void OnTagTapped(object? sender, TappedEventArgs e)
     {
         if (sender is not BindableObject bo) return;
@@ -121,7 +134,8 @@ public partial class TagsPage : ContentPage
         if (string.IsNullOrWhiteSpace(newName) || newName.Trim() == oldName) return;
         newName = newName.Trim();
 
-        try
+        // The one busy helper (BMB-311): a second tap cannot start a second rename; a failure is said in full in a dialog.
+        await BusyAction.RunAsync(null, async () =>
         {
             await Task.Run(async () =>
             {
@@ -130,8 +144,7 @@ public partial class TagsPage : ContentPage
                 await conceptTagSvc.RenameAsync(oldName, newName);
             });
             await LoadTagsAsync();
-        }
-        catch (Exception ex) { await DisplayAlert("Error", ex.Message, "OK"); }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 
     private async Task DeleteTagAsync(string tagName)
@@ -139,7 +152,7 @@ public partial class TagsPage : ContentPage
         bool confirmed = await DisplayAlert("Delete Tag", $"Delete tag \"{tagName}\" from all articles?", "Delete", "Cancel");
         if (!confirmed) return;
 
-        try
+        await BusyAction.RunAsync(null, async () =>
         {
             await Task.Run(async () =>
             {
@@ -148,7 +161,6 @@ public partial class TagsPage : ContentPage
                 await conceptTagSvc.DeleteAsync(tagName);
             });
             await LoadTagsAsync();
-        }
-        catch (Exception ex) { await DisplayAlert("Error", ex.Message, "OK"); }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 }

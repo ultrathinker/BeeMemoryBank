@@ -23,7 +23,7 @@
            a change; nothing in the announcement says whether it moved to the same password this
            node is already on. Without this the warning survived the operator doing exactly what it
            asked, on every node but the last one they touched. *@
-        <form method="post" asp-page-handler="DismissPasswordNotice" style="margin-top:10px;">
+        <form data-busy="short" method="post" asp-page-handler="DismissPasswordNotice" style="margin-top:10px;">
             <sl-button type="submit" size="small" variant="warning" outline>
                 Already changed here — dismiss
             </sl-button>
@@ -39,40 +39,19 @@
 <div class="main-content">
     <h2 style="margin-bottom:20px;"><sl-icon name="gear"></sl-icon> Admin</h2>
 
-    @if (!string.IsNullOrEmpty(Model.SuccessMessage))
+    @* A message that names a card shows in that card (BMB-303); here only what no card claims. *@
+    @if (Model.MessageIsAtTop && !string.IsNullOrEmpty(Model.SuccessMessage))
     {
         <sl-alert variant="success" open closable style="margin-bottom:20px;">
             <sl-icon slot="icon" name="check-circle"></sl-icon>
             @Model.SuccessMessage
         </sl-alert>
     }
-    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+    @if (Model.MessageIsAtTop && !string.IsNullOrEmpty(Model.ErrorMessage))
     {
         <sl-alert variant="danger" open closable style="margin-bottom:20px;">
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             @Model.ErrorMessage
-        </sl-alert>
-    }
-
-    @if (!string.IsNullOrEmpty(Model.GraphRebuildReport))
-    {
-        var graphDoc = JsonDocument.Parse(Model.GraphRebuildReport);
-        var graphR = graphDoc.RootElement;
-        var graphBefore = graphR.GetProperty("beforeEdgeRows").GetInt64();
-        var graphAfter = graphR.GetProperty("afterEdgeRows").GetInt64();
-        var graphExpected = graphR.GetProperty("expectedEdgeRows").GetInt64();
-        var graphConsistent = graphR.GetProperty("wasConsistent").GetBoolean();
-        var graphMs = graphR.GetProperty("durationMs").GetInt64();
-        <sl-alert variant="@(graphConsistent ? "success" : "primary")" open closable style="margin-bottom:20px;">
-            <sl-icon slot="icon" name="@(graphConsistent ? "check-circle" : "arrow-repeat")"></sl-icon>
-            @if (graphConsistent)
-            {
-                <text>Tag graph integrity verified — everything is in sync (@graphBefore connections, checked in @graphMs ms).</text>
-            }
-            else
-            {
-                <text>Tag graph rebuilt: @graphBefore → @graphAfter connections (expected @graphExpected). Took @graphMs ms.</text>
-            }
         </sl-alert>
     }
 
@@ -99,7 +78,7 @@
                     To stay in sync, apply the rotation on this node.
                 </div>
                 <div style="display:flex;gap:8px;margin-top:12px;">
-                    <form method="post" asp-page-handler="PeerAcceptDekRotation" style="display:inline;">
+                    <form data-busy="long" data-busy-title="Accepting the data-key change" method="post" asp-page-handler="PeerAcceptDekRotation" style="display:inline;">
                         <input type="hidden" name="eventId" value="@pending.EventId" />
                         <sl-button type="submit" variant="primary" size="small">Apply</sl-button>
                     </form>
@@ -110,7 +89,7 @@
             </sl-alert>
             <sl-dialog id="@dlgId" label="Reject DEK rotation?">
                 <p>Rejecting will permanently disconnect this node from the rotated network. Continue?</p>
-                <form method="post" asp-page-handler="PeerRejectDekRotation" slot="footer" style="display:flex;gap:8px;justify-content:flex-end;">
+                <form data-busy="short" method="post" asp-page-handler="PeerRejectDekRotation" slot="footer" style="display:flex;gap:8px;justify-content:flex-end;">
                     <input type="hidden" name="eventId" value="@pending.EventId" />
                     <sl-button type="button" variant="default" autofocus data-dlg-cancel="@dlgId">Cancel</sl-button>
                     <sl-button type="submit" variant="danger">Reject rotation</sl-button>

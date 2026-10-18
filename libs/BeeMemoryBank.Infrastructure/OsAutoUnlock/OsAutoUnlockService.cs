@@ -233,7 +233,7 @@ public class OsAutoUnlockService(
                 {
                     // Verify against the sentinel to guard against a corrupt/stale slot.
                     var sentinel = await nodeRepo.GetSentinelAsync();
-                    if (sentinel != null && !MasterKeyManager.VerifySentinel(sentinel, masterDek))
+                    if (!MasterKeyManager.IsSentinelMissing(sentinel) && !MasterKeyManager.VerifySentinel(sentinel!, masterDek))
                     {
                         Array.Clear(masterDek);
                         return false;

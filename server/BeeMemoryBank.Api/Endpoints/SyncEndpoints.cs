@@ -91,7 +91,7 @@ public static class SyncEndpoints
             // other way must not make it look like a node on a particular key.
             if (role.IsBlind) return Results.NotFound();
             var sentinel = await nodeRepo.GetSentinelAsync();
-            if (sentinel == null) return Results.NotFound();
+            if (NodeSentinel.IsMissing(sentinel)) return Results.NotFound();
             return Results.Ok(new { sentinelB64 = Convert.ToBase64String(sentinel) });
         }).WithTags("Sync");
 
@@ -216,6 +216,8 @@ public static class SyncEndpoints
             }
 
             var token = store.IssueToken(req.NodeId, req.ProtocolVersion!.Value, req.Capabilities);
+            // The peer called this node and the session got as far as a token: that is contact, it -> us (BMB-313).
+            httpCtx.RequestServices.GetService<PeerContactLog>()?.NoteInbound(req.NodeId, DateTime.UtcNow);
             return Results.Ok(new SyncAuthResponse(token));
         }).WithTags("Sync");
 
@@ -876,9 +878,12 @@ public static class SyncEndpoints
             HttpContext ctx,
             IEventLogRepository eventLogRepo,
             ISyncPushPositionRepository pushPositionRepo,
+            ISyncPositionRepository pullPositionRepo,
             IWhitelistRepository whitelistRepo,
+            PeerContactLog contacts,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
-            INodeIdentityRepository nodeRepo) =>
+            INodeIdentityRepository nodeRepo,
+            SyncScheduler? scheduler) =>
         {
             var identity = await nodeRepo.GetAsync();
             // Use the head sequence number (MAX), NOT COUNT(*): after compaction trims early
@@ -887,6 +892,7 @@ public static class SyncEndpoints
             // worse — behind nodes as "Up to date" once their seq exceeds the shrunken count.
             var headSeq = await eventLogRepo.GetMaxSequenceAsync();
             var pushPositions = await pushPositionRepo.GetAllAsync();
+            var pullPositions = (await pullPositionRepo.GetAllAsync()).ToDictionary(p => p.RemoteNodeId, p => (DateTime?)p.UpdatedAt);
             var whitelist = await whitelistRepo.GetAllActiveAsync();
 
             var statuses = new List<DeliveryNodeStatus>();
@@ -896,25 +902,57 @@ public static class SyncEndpoints
             foreach (var node in whitelist.Where(node => node.NodeId != identity?.NodeId)) // exclude self
             {
                 var push = pushPositions.FirstOrDefault(p => p.RemoteNodeId == node.NodeId);
-                var nodeType = string.IsNullOrEmpty(node.ApiAddress) ? "private" : "public";
                 var lastPushed = push?.LastPushedSeq ?? 0;
                 // Exact count of events the node hasn't received yet — robust to gaps left by
                 // compaction (head - lastPushed would over-count deleted events).
                 var unsyncedCount = await eventLogRepo.CountEventsAfterSequenceAsync(lastPushed);
-                statuses.Add(new DeliveryNodeStatus(
-                    node.NodeId,
-                    node.DisplayName,
-                    nodeType,
-                    lastPushed,
-                    headSeq,
-                    unsyncedCount,
-                    unsyncedCount == 0,
-                    push?.PushedAt));
+                // LastContactAt is the last successful contact, either way (BMB-313); the last push of events is LastPushAt.
+                statuses.Add(PeerContactView.Build(node, contacts.Get(node.NodeId, node.ApiAddress), pullPositions.GetValueOrDefault(node.NodeId), push, headSeq, unsyncedCount, DateTime.UtcNow,
+                    scheduler?.Interval));
             }
 
             return Results.Ok(new DeliveryStatusResponse(identity?.NodeId, invisibleMode.IsInvisible, statuses));
         // Network topology — peer node ids, display names and, in /status, their API addresses. Every browser consumer already reaches it through an /api-proxy route that requires the superadmin role, so this only stops a signed-in user calling the API directly.
         }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
+
+        // ─── Check one node now (BMB-313: a double-click on a node of the sync status) ───────────────────────────────────────────────────────
+        // A node with an address is called once, now, in a full session, and the answer is what that session found. A node without an address (a
+        // phone, a node behind a NAT) calls this node: nothing is asked, and the answer says so with the time of its last call. Superadmin and
+        // internal key like the status it is opened from; never an agent (it makes this node call out).
+        app.MapPost("/api/sync/nodes/{nodeId:guid}/check", async (
+            Guid nodeId,
+            SyncScheduler scheduler,
+            IEventLogRepository eventLogRepo,
+            ISyncPushPositionRepository pushPositionRepo,
+            ISyncPositionRepository pullPositionRepo,
+            IWhitelistRepository whitelistRepo,
+            PeerContactLog contacts,
+            BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
+            INodeIdentityRepository nodeRepo,
+            CancellationToken ct) =>
+        {
+            var identity = await nodeRepo.GetAsync();
+            var node = (await whitelistRepo.GetAllActiveAsync()).FirstOrDefault(n => n.NodeId == nodeId && n.NodeId != identity?.NodeId);
+            if (node is null) return Results.Json(new NodeCheckResponse("unknown_node", "This node is not in the whitelist.", 0, null), statusCode: 404);
+
+            async Task<DeliveryNodeStatus> StatusAsync()
+            {
+                var push = (await pushPositionRepo.GetAllAsync()).FirstOrDefault(p => p.RemoteNodeId == nodeId);
+                var pulled = (await pullPositionRepo.GetAllAsync()).FirstOrDefault(p => p.RemoteNodeId == nodeId)?.UpdatedAt;
+                return PeerContactView.Build(node, contacts.Get(nodeId, node.ApiAddress), pulled, push, await eventLogRepo.GetMaxSequenceAsync(),
+                    await eventLogRepo.CountEventsAfterSequenceAsync(push?.LastPushedSeq ?? 0), DateTime.UtcNow, scheduler.Interval);
+            }
+
+            if (invisibleMode.IsInvisible)
+                return Results.Json(new NodeCheckResponse("invisible", "Invisible Mode is on: this node calls nobody and answers nobody.", 0, await StatusAsync()), statusCode: 409);
+            if (string.IsNullOrEmpty(node.ApiAddress))
+                return Results.Ok(new NodeCheckResponse("calls_us", null, 0, await StatusAsync()));
+
+            var check = await scheduler.CheckPeerNowAsync(nodeId, ct);
+            if (check.Busy)
+                return Results.Json(new NodeCheckResponse("busy", "A sync is running or this node is busy; try again in a moment.", 0, await StatusAsync()), statusCode: 409);
+            return Results.Ok(new NodeCheckResponse(check.Answered ? "answered" : "not_answering", check.Reason, check.Applied, await StatusAsync()));
+        }).RequireInternalKey().RequireSuperadmin().RequireNonAgent().WithTags("Sync");
 
         // ─── Quarantined events (M5c operator visibility) ───────────────────────
         // Events that have repeatedly failed to apply during pull — see SyncEventQuarantine's doc
@@ -1153,8 +1191,8 @@ public static class SyncEndpoints
             catch (HttpRequestException ex)
             {
                 var category = ClassifyHttpError(ex);
-                logger.LogInformation("Probe-relay: target {Url} unreachable ({Category}): {Msg}",
-                    target, category, ex.Message);
+                logger.LogInformation("Probe-relay: target {Url} unreachable ({Category}, {Type})",
+                    target, category, ex.GetType().Name);
                 // Category only, never ex.Message: this runs on OUR node on behalf of a peer, and
                 // the exception text can name our internal resolver, proxy or certificate chain.
                 // The category is what the wizard actually renders; the full text stays in our log.
@@ -1213,13 +1251,16 @@ public static class SyncEndpoints
     /// checked against the whitelist on every request, so revoking a peer cuts it off immediately
     /// instead of when its hour-long token happens to expire.
     /// </summary>
-    internal static Task<Guid?> AuthenticatePeerAsync(HttpContext ctx, SyncTokenStore store)
+    internal static async Task<Guid?> AuthenticatePeerAsync(HttpContext ctx, SyncTokenStore store)
     {
         var authHeader = ctx.Request.Headers.Authorization.FirstOrDefault();
         if (authHeader == null || !authHeader.StartsWith("Bearer ", StringComparison.Ordinal))
-            return Task.FromResult<Guid?>(null);
+            return null;
         var whitelistRepo = ctx.RequestServices.GetRequiredService<IWhitelistRepository>();
-        return store.ValidateActivePeerAsync(authHeader["Bearer ".Length..], whitelistRepo);
+        var peer = await store.ValidateActivePeerAsync(authHeader["Bearer ".Length..], whitelistRepo);
+        // Every request with a good token is the peer calling this node: contact, it -> us (BMB-313).
+        if (peer is { } nodeId) ctx.RequestServices.GetService<PeerContactLog>()?.NoteInbound(nodeId, DateTime.UtcNow);
+        return peer;
     }
 
     /// <summary>

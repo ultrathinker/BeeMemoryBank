@@ -28,6 +28,8 @@ public class InitJoinAbortTests : IAsyncLifetime
         await _host.InitializeNodeAsync("AbortHost", MasterPassword);
         _hostClient = _host.CreateClient();
         (await _hostClient.PostAsJsonAsync("/api/session/unlock", new { Password = MasterPassword })).EnsureSuccessStatusCode();
+        // A new node joins only a node on protocol 4 (BMB-306): these tests are about what goes wrong after that check.
+        await StepANode.ActivateAsync(_host);
     }
 
     public Task DisposeAsync()
@@ -102,7 +104,7 @@ public class InitJoinAbortTests : IAsyncLifetime
         resp.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
         var error = (await resp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts)).GetProperty("error").GetString();
         error.Should().Contain("The join could not be completed").And.Contain(cause)
-            .And.Contain("no longer lists").And.NotContain("revoke it").And.NotContain(MasterPassword);
+            .And.Contain("no longer lists").And.NotContain("revoke it").And.NotContain(MasterPassword).And.NotContain("Base-64").And.NotContain("JSON value");
         paths.Count(p => p == "/api/join/abort").Should().Be(1);
         activeRowId.Should().Be(Guid.Empty, "the host took the failed joiner's row back; compaction no longer waits for it");
     }
@@ -114,7 +116,7 @@ public class InitJoinAbortTests : IAsyncLifetime
     {
         var (resp, paths, activeRowId) = await JoinWithRewrittenAnswerAsync(_ => body);
 
-        await AssertTakenBackAsync(resp, paths, activeRowId, "JSON");
+        await AssertTakenBackAsync(resp, paths, activeRowId, "cannot read");
     }
 
     [Theory]
@@ -125,7 +127,7 @@ public class InitJoinAbortTests : IAsyncLifetime
     {
         var (resp, paths, activeRowId) = await JoinWithRewrittenAnswerAsync(json => WithField(json, section, field, "***not base64***"));
 
-        await AssertTakenBackAsync(resp, paths, activeRowId, "Base-64");
+        await AssertTakenBackAsync(resp, paths, activeRowId, "cannot read or verify");
     }
 
     [Fact]
@@ -134,7 +136,7 @@ public class InitJoinAbortTests : IAsyncLifetime
         var (resp, paths, activeRowId) = await JoinWithRewrittenAnswerAsync(
             json => WithField(json, "remoteNode", "ed25519PublicKeyB64", "***not base64***"));
 
-        await AssertTakenBackAsync(resp, paths, activeRowId, "Base-64");
+        await AssertTakenBackAsync(resp, paths, activeRowId, "cannot read or verify");
     }
 
     private async Task<(HttpResponseMessage Response, SabotagingHandler Handler, Guid JoinerId)> JoinThroughAsync(Func<HttpRequestMessage, HttpStatusCode?> refuse)

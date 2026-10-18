@@ -33,6 +33,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The one busy helper of the MAUI apps (BMB-311), shared as source with the other three. -->
+    <Compile Include="..\BeeMemoryBank.Mobile\Services\BusyAction.cs" Link="Shared\BusyAction.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <TrimmerRootDescriptor Include="Linker.xml" />
   </ItemGroup>
 

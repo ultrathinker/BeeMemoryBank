@@ -153,7 +153,7 @@ public static class RekeyD1Check
             && old.Masters.Any(k => Opens(() => NodeIdentityVault.GetDecryptedPrivateKey(identity.Pk, identity.Iv, 1, nodeId, k))))
             Opened("tbl_node_identity", "ed25519_private_key", "master key");
         var sentinel = await db.ExecuteScalarAsync<byte[]?>("SELECT sentinel_value FROM tbl_node_identity LIMIT 1");
-        if (sentinel == null || !MasterKeyManager.VerifySentinel(sentinel, ctx.Keys.CampaignDek))
+        if (BeeMemoryBank.Core.Services.NodeSentinel.IsMissing(sentinel) || !MasterKeyManager.VerifySentinel(sentinel!, ctx.Keys.CampaignDek))
             problems.Add(new("tbl_node_identity", "sentinel_value", "the sentinel does not name the new key"));
         foreach (var table in new[] { "tbl_dek_retired_link", "tbl_recovery_box" })
             if (await db.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM {table}") is var n and > 0)

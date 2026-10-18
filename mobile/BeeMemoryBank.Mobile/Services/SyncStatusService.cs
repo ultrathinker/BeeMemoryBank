@@ -104,19 +104,24 @@ public class SyncStatusService : INotifyPropertyChanged
         }
     }
 
-    public async Task SyncNowAsync()
+    /// <summary>
+    /// One sync with every peer that has an address, now. Returns what each peer that could not be served said (empty when all were): a wrong
+    /// address answers "no sync server at this address", never a clean pass (BMB-307). Callers that have a place to say it (the Status page) show it.
+    /// </summary>
+    public async Task<IReadOnlyList<PeerSyncFailure>> SyncNowAsync()
     {
+        var failures = new List<PeerSyncFailure>();
         if (IsInvisible)
         {
             MainThread.BeginInvokeOnMainThread(() => StatusText = "Invisible");
-            return;
+            return failures;
         }
 
         var newCts = new CancellationTokenSource();
         if (Interlocked.CompareExchange(ref _manualSyncCts, newCts, null) != null)
         {
             newCts.Dispose();
-            return;
+            return failures;
         }
         var token = newCts.Token;
 
@@ -143,10 +148,12 @@ public class SyncStatusService : INotifyPropertyChanged
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Sync error with {node.ApiAddress}: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine($"Sync error with {node.NodeId}: {ex.GetType().Name}");   // no address, no message: either may carry what must not be logged
+                    failures.Add(PeerSyncFailure.From(node, ex));
                 }
             }
-            MainThread.BeginInvokeOnMainThread(() => StatusText = "Idle");
+            var said = failures.Count == 0 ? "Idle" : "Error: " + string.Join("; ", failures);
+            MainThread.BeginInvokeOnMainThread(() => StatusText = said);
             if (!token.IsCancellationRequested)
                 await RefreshAsync();
         }
@@ -163,6 +170,7 @@ public class SyncStatusService : INotifyPropertyChanged
         {
             Interlocked.Exchange(ref _manualSyncCts, null)?.Dispose();
         }
+        return failures;
     }
 
     public void CancelSync()

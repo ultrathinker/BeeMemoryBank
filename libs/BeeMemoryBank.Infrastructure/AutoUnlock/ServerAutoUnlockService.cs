@@ -280,7 +280,7 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
             }
 
             var sentinel = await nodeRepo.GetSentinelAsync().ConfigureAwait(false);
-            if (sentinel != null && !MasterKeyManager.VerifySentinel(sentinel, masterDek))
+            if (!MasterKeyManager.IsSentinelMissing(sentinel) && !MasterKeyManager.VerifySentinel(sentinel!, masterDek))
             {
                 _logger?.LogWarning("Start unlocked after a restart: the key does not match this vault's sentinel; the vault stays locked.");
                 return false;

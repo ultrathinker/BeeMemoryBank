@@ -134,7 +134,7 @@ public sealed class BlindAppController(
         {
             // An error nobody planned for: the log is where the user can read it, the next slot tries again.
             BlindRunReport.RecordFailure(log, forceBackup ? "backup" : "run", ex);
-            return $"Stopped by an unexpected error: {ex.Message}";
+            return $"Stopped by an unexpected error: {BeeMemoryBank.Sync.FailureText.Say(ex)}";
         }
         finally
         {

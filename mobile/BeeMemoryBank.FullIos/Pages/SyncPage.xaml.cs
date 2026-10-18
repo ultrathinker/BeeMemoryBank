@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.FullIos.Services;
 
@@ -35,9 +36,15 @@ public partial class SyncPage : ContentPage
 
     private async void OnSyncNow(object? sender, EventArgs e)
     {
-        SyncButton.IsEnabled = false;
-        try { await _sync.RoundAsync(); }
-        finally { SyncButton.IsEnabled = true; }
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up, so Sync now cannot be tapped twice; what each
+        // peer answered is on the page below, whatever happened.
+        await BusyAction.RunAsync(SyncButton, () => _sync.RoundAsync(), new BusyOptions
+        {
+            Long = true,
+            Title = "Syncing",
+            Message = "Please wait while this iPhone syncs. Keep the app open until it is done.",
+            FailureTitle = "Sync now",
+        });
     }
 
     private async Task RefreshAsync()

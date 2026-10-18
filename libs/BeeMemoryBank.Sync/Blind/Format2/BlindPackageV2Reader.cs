@@ -48,7 +48,8 @@ public sealed class BlindPackageV2Reader : IBlindPackageV2Reader
         {
             TryDelete(targetDirectory);
             if (ex is InvalidDataException) throw;
-            throw new InvalidDataException($"Not a valid format-2 package: {ex.Message}", ex);
+            // The type, never the text: an IOException or a parser says where it was reading (a path of this node).
+            throw new InvalidDataException($"Not a valid format-2 package ({ex.GetType().Name}).", ex);
         }
     }
 
@@ -89,14 +90,14 @@ public sealed class BlindPackageV2Reader : IBlindPackageV2Reader
             {
                 listed.Add(file.Name);
                 if (!entries.Contains(file.Name))
-                    throw new InvalidDataException($"The package's manifest lists {file.Name}, which it does not carry.");
+                    throw new InvalidDataException("The package's manifest lists a file the package does not carry.");   // no name: a package file's name is the sender's text
                 var actual = await Format2Package.HashFileAsync(Path.Combine(dir, file.Name), ct);
                 if (!string.Equals(actual, file.Value.GetString(), StringComparison.Ordinal))
-                    throw new InvalidDataException($"{file.Name} does not match its hash in the signed manifest.");
+                    throw new InvalidDataException("A file of the package does not match its hash in the signed manifest.");
             }
             foreach (var entry in entries)
                 if (entry is not (Format2Package.ManifestFileName or Format2Package.ManifestSignatureFileName) && !listed.Contains(entry))
-                    throw new InvalidDataException($"The package carries {entry}, which its manifest does not list.");
+                    throw new InvalidDataException("The package carries a file its manifest does not list.");
         }
 
         // 2. The blind manifest: format and kind, the serving node named with the signing key, unique whitelist rows.

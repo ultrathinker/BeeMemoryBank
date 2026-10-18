@@ -112,6 +112,9 @@ public class LegacyVaultSetupRefusalTests : IAsyncLifetime
         var resp = await client.PostAsJsonAsync("/api/init/standalone", StandaloneBody());
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        // The new node is encrypted and locked (BMB-306): the password of the setup opens it, and it is an initialized node.
+        BeeMemoryBank.Storage.Sealed.VaultStoreFiles.DetectMode(empty.DataPath).Should().Be(BeeMemoryBank.Storage.Sealed.VaultStoreMode.Sealed);
+        (await empty.Services.GetRequiredService<SessionService>().UnlockAsync("Another-password-1")).Should().BeTrue();
         using var scope = empty.Services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync())
             .Should().BeTrue();

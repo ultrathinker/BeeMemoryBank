@@ -54,7 +54,7 @@ public sealed record BrokenStart(string Reason, IReadOnlyList<string> Files, str
                 names + " is cut off inside a page, as a copy interrupted halfway is. Restore the data directory from one backup set." + untouched,
             "seal_leftovers_no_journal" =>
                 "Files of an interrupted \"Encrypt this node\" lie in the data folder without their journal: " + names + ". "
-                + "Restore the data directory from one backup set or from the pre-encryption snapshot (docs/sealed-database.md); "
+                + "Restore the data directory from one backup set (docs/sealed-database.md); "
                 + "do not delete any *.seal-old* file before you have checked which of them is your database." + untouched,
             _ => "This node's data folder cannot start (" + reason + "): " + names + "." + untouched,
         };

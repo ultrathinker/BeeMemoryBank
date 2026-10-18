@@ -34,4 +34,11 @@ public interface ISyncProtocolPolicy
 
     /// <summary>Called by the activation and by the metadata_activation applier. Idempotent.</summary>
     void MarkActivated();
+
+    /// <summary>
+    /// Forgets that the last read said "not activated", so that the next <see cref="SealsMetadata"/> reads the table again. For the caller that has just
+    /// written the activation by another way than the applier (a restore, a join snapshot imports the table) and must not act on the answer of a few
+    /// seconds ago. A policy that reads nothing has nothing to forget.
+    /// </summary>
+    void RecheckNow() { }
 }

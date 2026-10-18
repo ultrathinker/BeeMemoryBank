@@ -2,10 +2,14 @@
 @model BeeMemoryBank.Web.Pages.AdminModel
 @{
     // docs/design/step-a-spec.md 5.3, 5.4: the readiness report, the blockers in words and the one-way switch.
+    // BMB-305: a finished switch is one status line, nothing else. BMB-303: what "Ask every device now" found sits next to its button, and a refused switch
+    // leaves the form where it was.
     var report = Model.MetadataReadiness;
     var activated = report is { } r0 && r0.TryGetProperty("activated", out var a0) && a0.GetBoolean();
     var checkedAll = Model.MetadataReadinessCheckedAll;
     var ready = report is { } r1 && r1.TryGetProperty("ready", out var ready0) && ready0.GetBoolean();
+    // The node refused the switch (the answer is kept with this mark): the form stays, with the list of what stands in the way, so that it can be pressed again.
+    var refused = report is { } r2 && r2.TryGetProperty("refused", out var refused0) && refused0.ValueKind == JsonValueKind.True;
     static string StatusWords(string? status) => status switch
     {
         "ready" => "ready",
@@ -28,11 +32,20 @@
             _ => code ?? "",
         };
     }
+    static string Since(JsonElement activation)
+    {
+        if (activation.ValueKind != JsonValueKind.Object || !activation.TryGetProperty("activated_at", out var at) || at.ValueKind != JsonValueKind.String) return "";
+        var raw = at.GetString();
+        return DateTimeOffset.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var when)
+            ? $" since {when.UtcDateTime:yyyy-MM-dd HH:mm} UTC"
+            : $" since {raw}";
+    }
 }
 
 <!-- Metadata encryption (Step A) -->
-<h3 style="margin-bottom:12px;"><sl-icon name="incognito"></sl-icon> Metadata encryption</h3>
+<h3 id="@AdminCards.Metadata" style="margin-bottom:12px;"><sl-icon name="incognito"></sl-icon> Metadata encryption</h3>
 <div class="card mt-md" style="margin-bottom:32px;max-width:760px;">
+    @await Html.PartialAsync("~/Pages/Shared/Admin/_CardMessage.cshtml", new AdminCardMessage(Model, AdminCards.Metadata))
     @if (Model.HeldEvents is { } held && held.TryGetProperty("count", out var heldCount) && heldCount.GetInt32() > 0)
     {
         <p class="text-sm" style="margin-bottom:12px;">
@@ -48,15 +61,9 @@
     }
     else if (activated)
     {
-        var activation = report.Value.GetProperty("activation");
-        <p class="text-sm" style="margin-bottom:8px;">
-            <strong>On</strong>@(activation.ValueKind == JsonValueKind.Object ? $" since {activation.GetProperty("activated_at").GetString()}" : "").
-            Titles, folder and tag names, file names and the shape of the tree travel encrypted between devices, and blind
-            copies hold them only encrypted.
-        </p>
-        <p class="text-muted text-sm">
-            This cannot be switched off. The way back is restoring the backup taken before the switch, which loses
-            every change made since.
+        <p class="text-sm" id="metadata-status" style="margin:0;">
+            <sl-icon name="check-circle" style="color:var(--sl-color-success-600);vertical-align:-2px;"></sl-icon>
+            <strong>On</strong>@Since(report.Value.GetProperty("activation")).
         </p>
     }
     else
@@ -69,8 +76,23 @@
         </p>
         <p class="text-muted text-sm" style="margin-bottom:12px;">
             <strong>Before you switch it on, take a fresh backup of this node and keep it offline.</strong> The switch is
-            one way; restoring that backup is the only way back, and the backup itself holds your titles in clear.
+            one way, and going back is not possible from the node: the backup holds your titles in clear, so it is yours
+            to keep and the node will not restore it.
         </p>
+
+        @* The button, and next to it what it found: the answer is not at the other end of the card, and while the devices answer (up to ten
+           seconds) the button says so. *@
+        <form method="post" asp-page-handler="CheckMetadataReadiness" id="metadata-ask-form" data-busy="short"
+              style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+            <sl-button type="submit" size="small" variant="default">
+                <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Ask every device now
+            </sl-button>
+            <span class="text-muted text-sm" data-busy-note hidden role="status">Asking every device. This can take up to 10 seconds.</span>
+            @if (Model.MetadataAskSummary is { } summary)
+            {
+                <span class="text-sm" id="metadata-ask-result" role="status">@summary</span>
+            }
+        </form>
 
         var peers = report.Value.GetProperty("peers");
         if (peers.GetArrayLength() > 0)
@@ -97,7 +119,7 @@
         if (blockers.GetArrayLength() > 0)
         {
             <p class="text-sm" style="margin-bottom:4px;"><strong>Not yet:</strong></p>
-            <ul class="text-sm" style="margin-bottom:12px;">
+            <ul class="text-sm" id="metadata-blockers" style="margin-bottom:12px;">
                 @foreach (var b in blockers.EnumerateArray())
                 {
                     <li>@BlockerWords(b)</li>
@@ -105,24 +127,19 @@
             </ul>
         }
 
-        <form method="post" asp-page-handler="CheckMetadataReadiness" style="margin-bottom:12px;">
-            <sl-button type="submit" size="small" variant="default">
-                <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Ask every device now
-            </sl-button>
-        </form>
-
-        @if (checkedAll && ready)
+        if (checkedAll && (ready || refused))
         {
-            <form method="post" asp-page-handler="ActivateMetadata" style="display:flex;flex-direction:column;gap:12px;">
+            <form method="post" asp-page-handler="ActivateMetadata" id="metadata-activate-form" data-busy="long" data-busy-title="Switching on metadata encryption" style="display:flex;flex-direction:column;gap:12px;">
                 <sl-checkbox name="backupTaken" value="true" required>I took a fresh backup of this node and keep it offline</sl-checkbox>
-                <sl-input name="masterPassword" type="text" inputmode="text" autocomplete="off"
-                          class="bmb-secret" data-1p-ignore data-lpignore="true" required
+                <sl-input name="masterPassword" type="password" password-toggle autocomplete="off"
+                          data-1p-ignore data-lpignore="true" required
                           label="Master password"></sl-input>
-                <div>
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
                     <sl-button type="submit" variant="danger" class="btn-confirm-click"
-                        data-confirm="Switch metadata encryption on for the whole network? This cannot be undone; the backup you took is the only way back.">
+                        data-confirm="Switch metadata encryption on for the whole network? This cannot be undone, and going back is not possible from the node.">
                         <sl-icon slot="prefix" name="shield-lock"></sl-icon> Switch metadata encryption on
                     </sl-button>
+                    <span class="text-muted text-sm" data-busy-note hidden role="status">Switching metadata encryption on...</span>
                 </div>
             </form>
         }

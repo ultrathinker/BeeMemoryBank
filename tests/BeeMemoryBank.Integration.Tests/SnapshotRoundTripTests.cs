@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Sqlite;
+using Dapper;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -29,7 +31,7 @@ public class SnapshotRoundTripTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _client = _factory.CreateClient();
-        await _factory.InitializeNodeAsync(password: Password);
+        await _factory.InitializeEncryptedNodeAsync(password: Password);
         await UnlockAsync();
     }
 
@@ -96,6 +98,103 @@ public class SnapshotRoundTripTests : IAsyncLifetime
             "the refusal happens before anything on disk is replaced");
     }
 
+    // ---- BMB-314: backups across the squash ----------------------------------------------------------------------------------------
+
+    /// <summary>Gives the live database the ledger a node of an older release has (the rows of the old chain, as many as asked).</summary>
+    private async Task ForgeLedgerAsync(int rows)
+    {
+        using var conn = _factory.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        await conn.ExecuteAsync("DROP TRIGGER IF EXISTS trg_migration_ledger_guard");
+        await conn.ExecuteAsync("DELETE FROM tbl_migration");
+        foreach (var (version, name) in LegacyMigrationChain.LedgerRows.Take(rows))
+            await conn.ExecuteAsync("INSERT INTO tbl_migration (version, filename, applied_at, updated_at) VALUES (@version, @name, @at, @at)",
+                new { version, name, at = DateTime.UtcNow.ToString("o") });
+    }
+
+    [Fact]
+    public async Task ABackupMadeByA261Node_RestoresIntoThisVersion_AndIsAdoptedAtTheNextStart()
+    {
+        // The backup's database has the 39-row ledger of 2.6.1. Restoring replaces the files; the runner of this version takes the database
+        // over when the node starts, so the next start is simulated by running it on the restored file.
+        await ForgeLedgerAsync(39);
+        await CreateArticleAsync("in-the-261-backup");
+        var fileName = await CreateSnapshotThroughTheApiAsync();
+        await CreateArticleAsync("written-after-the-backup");
+
+        var restore = await RestoreAsync(fileName);
+        restore.StatusCode.Should().Be(HttpStatusCode.OK, await restore.Content.ReadAsStringAsync());
+        (await UnlockAsync()).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var factory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        await new MigrationRunner(factory).RunMigrationsAsync();
+        using (var conn = factory.CreateConnection())
+            (await conn.QueryAsync<(int, string)>("SELECT version, filename FROM tbl_migration")).Should().Equal(
+                [(MigrationRunner.BaselineVersion, MigrationRunner.BaselineResourceName)], "the restored 2.6.1 ledger became the baseline's");
+        var titles = await ListArticleTitlesAsync();
+        titles.Should().Contain("in-the-261-backup").And.NotContain("written-after-the-backup");
+    }
+
+    [Fact]
+    public async Task ABackupMadeByAReleaseBefore26_IsRefusedBeforeAnythingIsReplaced()
+    {
+        await ForgeLedgerAsync(35); // the ledger of 2.3.0 .. 2.5.2: this is what the backup's database will carry
+        var fileName = await CreateSnapshotThroughTheApiAsync();
+        await ForgeLedgerAsync(39); // the live node is a 2.6.x one again (an older ledger would be refused at the next unlock, which is right)
+        await CreateArticleAsync("must-survive-the-refusal");
+
+        var resp = await RestoreAsync(fileName);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await resp.Content.ReadAsStringAsync();
+        body.Should().Contain("before 2.6").And.Contain("2.6.1", "the operator needs to know what to do");
+        (await UnlockAsync()).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ListArticleTitlesAsync()).Should().Contain("must-survive-the-refusal", "the refusal happens before anything on disk is replaced");
+    }
+
+    /// <summary>Runs SQL on the live database: a defect of structure in something these tests never read, so that the snapshot made next carries it.</summary>
+    private async Task BreakTheLiveDatabaseAsync(string sql)
+    {
+        using var conn = _factory.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        await conn.ExecuteAsync(sql);
+    }
+
+    [Fact]
+    public async Task ABackupOfA261NodeWhoseStructureIsBroken_IsRefusedBeforeAnythingIsReplaced()
+    {
+        // Its ledger is the 39 rows of 2.6.1 (adopted at the next start), but a column the program reads is gone: the node would be replaced
+        // and then refuse to start. The restore asks the adoption's own structural question of the staged copy and says no.
+        await ForgeLedgerAsync(39);
+        await BreakTheLiveDatabaseAsync("ALTER TABLE tbl_hard_delete_audit DROP COLUMN entity_title");
+        var fileName = await CreateSnapshotThroughTheApiAsync();
+        await BreakTheLiveDatabaseAsync("ALTER TABLE tbl_hard_delete_audit ADD COLUMN entity_title TEXT"); // the live node is whole again, only the backup is not
+        await CreateArticleAsync("must-survive-the-refusal");
+
+        var resp = await RestoreAsync(fileName);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await resp.Content.ReadAsStringAsync();
+        body.Should().Contain("tbl_hard_delete_audit.entity_title").And.Contain("2.6.1", "the operator learns what is wrong and what to do");
+        (await UnlockAsync()).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ListArticleTitlesAsync()).Should().Contain("must-survive-the-refusal", "the refusal happens before anything on disk is replaced");
+    }
+
+    [Fact]
+    public async Task ABackupWithTheBaselineLedgerThatNeedsARepair_IsRefusedBeforeAnythingIsReplaced()
+    {
+        // The live node carries the baseline's ledger, so does the backup; nothing repairs a missing index of such a database at the next
+        // start (only an adoption repairs), so the restore must not install it.
+        await BreakTheLiveDatabaseAsync("DROP INDEX idx_hard_delete_audit_occurred_at");
+        var fileName = await CreateSnapshotThroughTheApiAsync();
+        await CreateArticleAsync("must-survive-the-refusal");
+
+        var resp = await RestoreAsync(fileName);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("idx_hard_delete_audit_occurred_at");
+        (await UnlockAsync()).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ListArticleTitlesAsync()).Should().Contain("must-survive-the-refusal", "the refusal happens before anything on disk is replaced");
+    }
+
     [Fact]
     public async Task CreatingAnEncryptedSnapshotWhileLocked_IsRefusedRatherThanWrittenInTheClear()
     {
@@ -108,7 +207,7 @@ public class SnapshotRoundTripTests : IAsyncLifetime
         // unencrypted under the same file name — a full plaintext copy of every article, produced
         // exactly when nobody is watching (right after a restart, or from a scheduled job).
         await create.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*locked*");
+            .WithMessage("*encrypted and closed*");
         Directory.GetFiles(SnapshotsDir, "*.tar.gz").Should().BeEmpty();
     }
 
@@ -182,9 +281,8 @@ public class SnapshotRoundTripTests : IAsyncLifetime
                 .DecryptDbIfNeededAsync(extracted);
 
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(
-                $"Data Source={extracted};Pooling=False");
-            conn.Open();
+            // On an encrypted node the opened archive is a staging copy under the node's own page key: opened the way the node opens its files.
+            using var conn = _factory.Services.GetRequiredService<BeeMemoryBank.Storage.Sqlite.DbConnectionFactory>().OpenFile(extracted);
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
             using var reader = cmd.ExecuteReader();

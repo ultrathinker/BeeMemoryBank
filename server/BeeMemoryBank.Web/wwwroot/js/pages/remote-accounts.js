@@ -38,7 +38,7 @@
             b.addEventListener('click', function () { openSubsDialog(b.dataset.accountId, b.dataset.accountName); });
         });
         container.querySelectorAll('.account-remove-btn').forEach(function (b) {
-            b.addEventListener('click', function () { removeAccount(b.dataset.accountId); });
+            b.addEventListener('click', function () { removeAccount(b.dataset.accountId, b); });
         });
     }
 
@@ -51,27 +51,20 @@
             showAddErr('All fields are required'); return;
         }
         const btn = document.getElementById('btn-save-account');
-        if (btn) btn.loading = true;
-        try {
-            const resp = await fetch('/api-proxy/remote-accounts', {
+        // The one busy helper (BMB-311): the button spins; a refusal is written in the dialog's own error box.
+        await bmbBusy.run(btn, async function () {
+            await bmbBusy.request('/api-proxy/remote-accounts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ displayName: display, baseUrl: url, username: username, password: password })
             });
-            if (resp.ok) {
-                document.getElementById('dlg-add-account')?.hide();
-                ['add-display', 'add-url', 'add-username', 'add-password'].forEach(function (id) {
-                    const el = document.getElementById(id);
-                    if (el) el.value = '';
-                });
-                await refresh();
-            } else {
-                const data = await resp.json().catch(function () { return {}; });
-                showAddErr(data.error || ('HTTP ' + resp.status));
-            }
-        } finally {
-            if (btn) btn.loading = false;
-        }
+            document.getElementById('dlg-add-account')?.hide();
+            ['add-display', 'add-url', 'add-username', 'add-password'].forEach(function (id) {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            await refresh();
+        }, { quiet: true, error: function (err) { showAddErr(err.message); } });
     }
 
     function showAddErr(msg) {
@@ -83,10 +76,12 @@
         }
     }
 
-    async function removeAccount(id) {
+    async function removeAccount(id, btn) {
         if (!confirm('Remove this remote account and all its mirrored folders?')) return;
-        await fetch('/api-proxy/remote-accounts/' + id, { method: 'DELETE' });
-        refresh();
+        await bmbBusy.run(btn, async function () {
+            await bmbBusy.request('/api-proxy/remote-accounts/' + id, { method: 'DELETE' });
+            refresh();
+        }, { quiet: true });
     }
 
     async function openSubsDialog(id, name) {
@@ -135,7 +130,7 @@
 
         c.querySelectorAll('.sub-remove-btn').forEach(function (btn) {
             btn.addEventListener('click', function () {
-                removeSub(btn.dataset.subId);
+                removeSub(btn.dataset.subId, btn);
             });
         });
     }
@@ -157,37 +152,36 @@
         }).join('');
 
         a.querySelectorAll('.subs-add-btn').forEach(function (b) {
-            b.addEventListener('click', function () { addSub(b.dataset.folderId, b.dataset.folderPath); });
+            b.addEventListener('click', function () { addSub(b.dataset.folderId, b.dataset.folderPath, b); });
         });
     }
 
-    async function addSub(remoteFolderId, remoteFolderPath) {
+    async function addSub(remoteFolderId, remoteFolderPath, btn) {
         const defaultMount = '/Shared' + remoteFolderPath;
         const mount = prompt('Mount path on this device:', defaultMount);
         if (!mount) return;
-        const resp = await fetch('/api-proxy/remote-accounts/subscriptions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                remoteAccountId: currentAccountId,
-                remoteFolderId: remoteFolderId,
-                remoteFolderPath: remoteFolderPath,
-                mountPath: mount.trim()
-            })
-        });
-        if (resp.ok) {
+        await bmbBusy.run(btn, async function () {
+            await bmbBusy.request('/api-proxy/remote-accounts/subscriptions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    remoteAccountId: currentAccountId,
+                    remoteFolderId: remoteFolderId,
+                    remoteFolderPath: remoteFolderPath,
+                    mountPath: mount.trim()
+                })
+            });
             openSubsDialog(currentAccountId, document.getElementById('dlg-subs-account-info').textContent.replace(/^Account: /, ''));
             refresh();
-        } else {
-            const data = await resp.json().catch(function () { return {}; });
-            alert(data.error || 'Failed to subscribe');
-        }
+        }, { quiet: true });
     }
 
-    async function removeSub(id) {
+    async function removeSub(id, btn) {
         if (!confirm('Stop mirroring this folder?')) return;
-        await fetch('/api-proxy/remote-accounts/subscriptions/' + id, { method: 'DELETE' });
-        openSubsDialog(currentAccountId, document.getElementById('dlg-subs-account-info').textContent.replace(/^Account: /, ''));
+        await bmbBusy.run(btn, async function () {
+            await bmbBusy.request('/api-proxy/remote-accounts/subscriptions/' + id, { method: 'DELETE' });
+            openSubsDialog(currentAccountId, document.getElementById('dlg-subs-account-info').textContent.replace(/^Account: /, ''));
+        }, { quiet: true });
     }
 
     var btnAddAccount = document.getElementById('btn-add-account');

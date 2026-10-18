@@ -68,6 +68,8 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
             http.DefaultRequestHeaders.Add("X-Internal-Key", BmbWebApplicationFactory.InternalKeyForTests);
             (await http.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
         }
+        // A new node joins only a node on protocol 4 (BMB-306).
+        await StepANode.ActivateAsync(_nodeA.Services);
 
         // The door in front of it: TLS with a certificate from nobody's CA, pinned by the code.
         _cert = CreateServerCertificate();
@@ -116,6 +118,7 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
         var (status, body) = await JoinAsync(b, CodeFor(session));
 
         status.Should().Be(HttpStatusCode.OK, body);
+        (await b.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue("the joiner is encrypted and locked after its join (BMB-306)");
         using var scope = b.Services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().NotBeNull("the joiner is initialized");
         var row = await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(_nodeAId);
@@ -140,7 +143,8 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
         {
             Content = JsonContent.Create(new
             {
-                masterPassword = Password, nodeId, displayName = "Failing", ed25519PublicKeyB64 = Convert.ToBase64String(publicKey)
+                masterPassword = Password, nodeId, displayName = "Failing", ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
+                protocolVersion = BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol
             }, options: JsonOpts)
         })
         {

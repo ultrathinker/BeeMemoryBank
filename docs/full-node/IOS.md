@@ -91,9 +91,9 @@ Until the release gate on real devices has passed, the page stays hidden and the
 After the encryption, nothing changes in the hand. Face ID / Touch ID quick unlock still opens the sealed vault (the
 Keychain key remains one of its doors, and a key that no longer opens turns quick unlock off as before), and locking
 the app closes the database as it always did. A closed phone's app container holds the ciphertext and the small
-plaintext boot store — no names, no notes — still excluded from iCloud and computer backups. The way back on a phone
-is not a snapshot: it is removing the vault and joining again from a peer, which produces a plain vault you can
-encrypt again. [sealed-database.md](../sealed-database.md) is the full guide.
+plaintext boot store — no names, no notes — still excluded from iCloud and computer backups. There is no snapshot
+to go back to on a phone: removing the vault and joining again from a peer gives the phone the notes again (a new node joins only
+a node on protocol 4). [sealed-database.md](../sealed-database.md) is the full guide.
 
 ## Notes
 

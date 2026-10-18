@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using BeeMemoryBank.Cli.Commands;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Sync.Metadata;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -11,6 +12,7 @@ namespace BeeMemoryBank.Cli.Tests;
 /// <c>bmb join</c> against a host that has activated metadata encryption (docs/design/step-a-spec.md 11, 16.4 item 6): it says what it
 /// can read, opens the sealed archive with the key the host just handed it, and refuses a plain archive from a host that seals.
 /// </summary>
+[Collection("CliSealedStatics")]
 public class JoinCommandActivatedHostTests : IDisposable
 {
     private const string Password = "cliActivatedJoinPassword";
@@ -19,6 +21,7 @@ public class JoinCommandActivatedHostTests : IDisposable
 
     public void Dispose()
     {
+        JoinedNode.Reset();
         if (Directory.Exists(_tempDir))
             try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
@@ -49,10 +52,12 @@ public class JoinCommandActivatedHostTests : IDisposable
             auth.RootElement.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()).Should().Equal(
                 [MetadataCapabilities.EnvelopeV1], "an activated host takes a protocol-3 peer only with the capability");
 
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        VaultStoreFiles.DetectMode(_tempDir).Should().Be(VaultStoreMode.Sealed, "a node that joined is encrypted under the password it was given (BMB-306)");
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!.InitialSyncCompleted.Should().BeTrue();
         (await scope.ServiceProvider.GetRequiredService<ISyncPositionRepository>().GetAsync(host.HostId))!.LastSequenceNum.Should().Be(42);
+        scope.ServiceProvider.GetRequiredService<ISyncProtocolPolicy>().SealsMetadata.Should().BeTrue("the activation came with the snapshot of the host");
     }
 
     [Fact]
@@ -66,7 +71,7 @@ public class JoinCommandActivatedHostTests : IDisposable
 
         rc.Should().NotBe(0);
         output.ToString().Should().Contain("plain snapshot").And.Contain("can be run again").And.NotContain(Password);
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull("no half-made node");
     }
@@ -82,22 +87,30 @@ public class JoinCommandActivatedHostTests : IDisposable
 
         rc.Should().NotBe(0);
         output.ToString().Should().Contain("could not be opened with this vault's master key").And.NotContain(Password);
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull();
     }
 
     [Fact]
-    public async Task Join_ToAHostBeforeActivation_StillTakesThePlainArchive()
+    public async Task Join_ToAHostBeforeActivation_IsRefused_WithTheSentence_AndLeavesNothing()
     {
-        var host = new FakeJoinHost(Guid.NewGuid(), cpSeq: 7);
+        // A new node joins only a node on protocol 4 (BMB-306): no plain archive is taken, there is no compatibility mode.
+        var host = new FakeJoinHost(Guid.NewGuid(), cpSeq: 7, activation: FakeHostActivation.None);
         using var server = HostFor(host);
 
         var output = new StringWriter();
         var rc = await JoinCommand.HandleAsync(_tempDir, server.Url, Password, "CliJoiner", output: output);
 
-        rc.Should().Be(0, output.ToString());
-        output.ToString().Should().Contain("checkpoint 7");
+        rc.Should().Be(1, output.ToString());
+        output.ToString().Should().Contain("Cannot join: the other computer does not encrypt its metadata yet")
+            .And.Contain("protocol 3").And.Contain("Switch metadata encryption on there first").And.NotContain(Password);
+        server.Requests.Should().NotContain(r => r.Path == "/api/sync/snapshot/for-join", "the refusal comes before any archive is asked for");
+        server.Requests.Should().Contain(r => r.Path == "/api/join/abort", "the host is told that the joiner gave up, so its pending row is not left behind");
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
+        using var scope = services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull("no node was made, and nothing was imported");
+        VaultStoreFiles.DetectMode(_tempDir).Should().NotBe(VaultStoreMode.Sealed);
     }
 
     [Fact]

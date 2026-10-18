@@ -159,22 +159,6 @@
         });
     }
 
-    var dlg = document.getElementById('setup-loader');
-    var title = document.getElementById('setup-loader-title');
-    var msg = document.getElementById('setup-loader-msg');
-    document.querySelectorAll('form[data-setup-form]').forEach(function (form) {
-        form.addEventListener('submit', function () {
-            var kind = form.getAttribute('data-setup-form');
-            if (kind === 'join') {
-                if (title) title.textContent = 'Connecting\u2026';
-                if (msg) msg.textContent = 'Copying your notes from the other device. This may take up to a minute.';
-            } else {
-                if (title) title.textContent = 'Setting up\u2026';
-                if (msg) msg.textContent = 'This takes a few seconds.';
-            }
-            form.querySelectorAll('[data-submit-btn]').forEach(function (b) { b.loading = true; b.disabled = true; });
-            if (dlg && typeof dlg.show === 'function') dlg.show();
-            else if (dlg) dlg.open = true;
-        });
-    });
+    // The "please wait" pop-up and the busy buttons of the three forms are the one busy helper's (bmb-busy.js, BMB-311): the forms carry
+    // data-busy="long", a title and a text.
 })();

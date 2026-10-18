@@ -19,7 +19,7 @@ public partial class SnapshotService
         var tempDir = SnapshotStaging.NewDirectory(_dataPath);
         try
         {
-            await RequireNoPlainDatabaseOnSealedNodeAsync(sourceArchivePath);
+            await RequireNoPlainDatabaseAsync(sourceArchivePath);
             await ExtractTarGzAsync(sourceArchivePath, tempDir, new FileInfo(sourceArchivePath).Length);
 
             var dbPath = Path.Combine(tempDir, DbFileName);

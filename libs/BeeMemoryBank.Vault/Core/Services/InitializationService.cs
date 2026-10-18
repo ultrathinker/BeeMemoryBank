@@ -1,9 +1,11 @@
 using System.Data;
 using System.Security.Cryptography;
 using System.Text;
+using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Vault.Sealed;
 
 namespace BeeMemoryBank.Core.Services;
 
@@ -12,7 +14,8 @@ public class InitializationService(
     IKeySlotRepository keySlotRepo,
     IUserRepository userRepo,
     IDbConnectionFactory dbFactory,
-    RestoreBootstrapMarker? restoreMarker = null)
+    RestoreBootstrapMarker? restoreMarker = null,
+    ISealIntents? intents = null)
 {
     // Optional only for the callers that build this service by hand (tests, the odd tool): the
     // default is a working marker over the same database, never "no marker" — a flag that silently
@@ -110,6 +113,9 @@ public class InitializationService(
                 CanGenerateEmbeddings = canGenerateEmbeddings,
                 CreatedAt = now
             };
+            // The first thing of this setup that is written in the open: the marker is on disk before it, so a cut anywhere from here to the
+            // encrypted database is a setup the next start wipes (SealIntent), never a node that starts plain. FreshNodeSealing ends it.
+            intents?.Begin(SealIntent.KindSetup);
             await nodeRepo.CreateAsync(identity);
 
             var salt = KeyDerivation.GenerateSalt();

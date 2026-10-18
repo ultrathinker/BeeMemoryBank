@@ -13,8 +13,11 @@ push anywhere or write to the real backup repository. After each step the node i
 is read back:
 
   * the node starts and becomes healthy, keeps its NodeId and the TLS pin;
-  * the migration ledger is unchanged (the migration runner deletes ledger rows it has no SQL for: a build that lost
-    a migration would show here);
+  * the migration ledger is unchanged (the runner of 2.6.1 and older deletes ledger rows it has no SQL for: a build that lost
+    a migration would show here). Across the 2.6.2 squash (`--squash`) the ledger legitimately changes once: the 39 rows of
+    2.6.x become the baseline's one row (adoption), and the ROLLBACK is expected to be REFUSED: the old image meets the guard
+    trigger on the ledger, stops with "version 2.6.2 or later", and must leave the data directory exactly as the new image
+    left it (to go back, restore the snapshot made before the update);
   * the database passes `PRAGMA integrity_check` and keeps its event and article counts;
   * no file of the data directory disappears; the identity key, TLS material and settings stay byte-identical.
 
@@ -142,14 +145,20 @@ def step(image, label, vol, suffix, work):
     return dict(health=health, status=status, files=files, digests=digests, facts=f, log=logs.stdout + logs.stderr)
 
 
-def compare(a, b, what):
-    check('%s: migration ledger identical' % what, a['facts']['ledger'] == b['facts']['ledger'],
-          '%d vs %d rows' % (len(a['facts']['ledger']), len(b['facts']['ledger'])))
+def compare(a, b, what, squash=False):
+    if squash:
+        # 39 legacy rows -> the baseline's one row (version 40): the adoption of a 2.6.x database; nothing else may differ in the ledger.
+        check('%s: ledger collapsed to the baseline row' % what,
+              len(a['facts']['ledger']) == 39 and b['facts']['ledger'] == [40], '%d rows vs %s' % (len(a['facts']['ledger']), b['facts']['ledger']))
+    else:
+        check('%s: migration ledger identical' % what, a['facts']['ledger'] == b['facts']['ledger'],
+              '%d vs %d rows' % (len(a['facts']['ledger']), len(b['facts']['ledger'])))
     check('%s: same node identity' % what, a['facts']['node'] == b['facts']['node'], '%s vs %s' % (a['facts']['node'], b['facts']['node']))
     check('%s: same events and articles' % what,
           (a['facts']['events'], a['facts']['articles']) == (b['facts']['events'], b['facts']['articles']),
           '%s vs %s' % ((a['facts']['events'], a['facts']['articles']), (b['facts']['events'], b['facts']['articles'])))
-    check('%s: whole ledger rows identical (names and timestamps)' % what, a['facts']['ledger_rows'] == b['facts']['ledger_rows'])
+    if not squash:
+        check('%s: whole ledger rows identical (names and timestamps)' % what, a['facts']['ledger_rows'] == b['facts']['ledger_rows'])
     ta, tb = a['facts']['tables'], b['facts']['tables']
     changed = sorted(n for n in set(ta) | set(tb) if ta.get(n) != tb.get(n))
     say('%s: %d tables compared, %d changed%s' % (what, len(ta), len(changed), (': ' + ', '.join(changed)) if changed else ''))
@@ -170,6 +179,9 @@ def main():
     ap.add_argument('--old', required=True)
     ap.add_argument('--new', required=True)
     ap.add_argument('--work', required=True)
+    ap.add_argument('--squash', action='store_true',
+                    help='--old is 2.6.1 or older on the 2.6 schema and --new is 2.6.2 or later (one baseline migration): expect the adoption of the '
+                         'ledger and a REFUSED rollback that leaves the data directory untouched')
     ap.add_argument('--aeza-compose', action='store_true', help='run with the environment and the memory/cpu limits of the Aeza compose file')
     a = ap.parse_args()
     if a.aeza_compose:
@@ -193,6 +205,16 @@ def main():
             if res is None:
                 check(label + ' image runs on the volume', False)
                 break
+            if a.squash and label == 'rollback':
+                # The old image must NOT come up on a database the new one adopted; it must say why and change nothing.
+                check('rollback: refused by the ledger guard, not healthy', res['health'] != 'healthy', res['health'])
+                check('rollback: the refusal says what to do', 'version 2.6.2 or later' in res['log'], res['log'][-300:])
+                if results.get('new'):
+                    check('rollback: the refused start left the database as the new image left it',
+                          res['facts']['ledger_rows'] == results['new']['facts']['ledger_rows'] and res['facts']['tables'] == results['new']['facts']['tables'])
+                    check('rollback: no file lost, identity and TLS material byte-identical',
+                          not (set(results['new']['files']) - set(res['files'])) and res['digests'] == results['new']['digests'])
+                continue
             check(label + ': healthy on a copy of the real data', res['health'] == 'healthy', res['health'])
             check(label + ': database passes integrity_check', res['facts']['integrity'] == [('ok',)])
             say(label + ' status: ' + ' | '.join(l.strip() for l in res['status'].splitlines()[:6]))
@@ -201,8 +223,8 @@ def main():
             bad = [l for l in res['log'].splitlines() if re.search(r'\b(fail|crit|unhandled|exception)\b', l, re.I)]
             check(label + ': no failure lines in the log', not bad, ' | '.join(bad[:3])[:300])
         if results.get('old') and results.get('new'):
-            compare(results['old'], results['new'], 'upgrade (old -> new)')
-        if results.get('new') and results.get('rollback'):
+            compare(results['old'], results['new'], 'upgrade (old -> new)', squash=a.squash)
+        if results.get('new') and results.get('rollback') and not a.squash:
             compare(results['new'], results['rollback'], 'rollback (new -> old again)')
     finally:
         run(['docker', 'volume', 'rm', vol])

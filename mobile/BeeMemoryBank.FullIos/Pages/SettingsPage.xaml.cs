@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.FullIos.Services;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Vault.Sealed;
@@ -48,6 +49,7 @@ public partial class SettingsPage : ContentPage
                           (identity is null ? "" : $"This node: {identity.DisplayName}, {identity.NodeId}.");
     }
 
+    // busy-exempt: switches the quick unlock of this phone, a local setting (the calls are synchronous); nothing is sent and nothing waits
     private async void OnQuickToggled(object? sender, ToggledEventArgs e)
     {
         if (_loading) return;
@@ -78,17 +80,14 @@ public partial class SettingsPage : ContentPage
     private async void OnNewRecoveryKey(object? sender, EventArgs e)
     {
         if (!await DisplayAlertAsync("New recovery key", "Make a new recovery key? It is shown once.", "Make one", "Cancel")) return;
-        try
-        {
-            var key = await Task.Run(_vault.NewRecoveryKeyAsync);
-            _flow.ShowRecoveryKey(key, firstTime: false);
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlertAsync("New recovery key", ex.Message, "OK");
-        }
+        // The one busy helper (BMB-311): the button is off and spins through the key derivation; a failure is said in full.
+        string? key = null;
+        var ran = await BusyAction.RunAsync(sender as Button, async () => key = await Task.Run(_vault.NewRecoveryKeyAsync),
+            new BusyOptions { FailureTitle = "New recovery key" });
+        if (ran && key is not null) _flow.ShowRecoveryKey(key, firstTime: false);
     }
 
+    // busy-exempt: opens the encryption page, nothing is sent and nothing waits
     private async void OnEncryption(object? sender, EventArgs e) =>
         await Navigation.PushAsync(_services.GetRequiredService<EncryptDatabasePage>());
 

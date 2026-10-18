@@ -19,10 +19,10 @@ public interface ISnapshotKeyOperations
     /// Encrypts the snapshot database <paramref name="dbPath"/> in place under the master DEK. Throws when the vault is locked rather
     /// than silently leaving the file plain. Returns whether the file was encrypted.
     /// </summary>
-    Task<bool> EncryptDatabaseAsync(string dbPath);
+    Task<bool> EncryptDatabaseAsync(string dbPath, CancellationToken ct = default);
 
     /// <summary>Decrypts the extracted snapshot database <paramref name="extractedDbPath"/> in place when it is encrypted; no-op when it is plain.</summary>
-    Task DecryptDatabaseIfNeededAsync(string extractedDbPath);
+    Task DecryptDatabaseIfNeededAsync(string extractedDbPath, CancellationToken ct = default);
 
     /// <summary>
     /// Encrypts <paramref name="dbPath"/> in place when the vault is unlocked (a filtered variant keeps the encryption of the archive it
@@ -50,27 +50,18 @@ public interface ISnapshotKeyOperations
     /// <summary>The fingerprint of the master DEK a join snapshot is sealed under, or null while the vault is locked (spec 11 step 2, the join cache key).</summary>
     string? GetJoinKeyFingerprint() => throw new NotSupportedException("This node cannot seal a join snapshot.");
 
-    // ---- Encrypted ("sealed") node, docs/design/step-b-spec.md 8.3, 8.4, 10.4 step 3, 10.7. A blind node implements none of these.
-
-    /// <summary>
-    /// As <see cref="EncryptDatabaseAsync(string)"/>. With <paramref name="wipePlain"/> the plain staging file is overwritten with random
-    /// bytes, flushed and removed (<c>SecureFileWipe</c>, spec 10.6) before the container takes its name, instead of being truncated in place
-    /// (which leaves the plain blocks on the disk): the pre-encryption snapshot (spec 10.4 step 3). <paramref name="afterOverwrite"/> is the
-    /// test seam of the wipe.
-    /// </summary>
-    Task<bool> EncryptDatabaseAsync(string dbPath, bool wipePlain, Action<string>? afterOverwrite) =>
-        wipePlain ? throw new NotSupportedException("This node cannot wipe a plain staging copy.") : EncryptDatabaseAsync(dbPath);
+    // ---- Encrypted ("sealed") node, docs/design/step-b-spec.md 8.3, 8.4. A blind node implements none of these.
 
     /// <summary>
     /// On a sealed node: builds the BMBDB2 container of the sealed staging copy <paramref name="sealedDbPath"/> from its plain image (read page
     /// by page with <paramref name="pageKey"/>, in memory only) under the master DEK and writes it over the staging path. Throws while the vault
     /// is locked. The caller clears <paramref name="pageKey"/>. Returns whether the file was encrypted.
     /// </summary>
-    Task<bool> EncryptSealedDatabaseAsync(string sealedDbPath, byte[] pageKey) =>
+    Task<bool> EncryptSealedDatabaseAsync(string sealedDbPath, byte[] pageKey, CancellationToken ct = default) =>
         throw new NotSupportedException("This node cannot encrypt a sealed snapshot database.");
 
     /// <summary>As <see cref="SealJoinDatabaseAsync"/> for a sealed staging copy: the BMBCH1 container is streamed from its plain image, no plain file exists.</summary>
-    Task SealJoinSealedDatabaseAsync(string sealedDbPath, byte[] pageKey) =>
+    Task SealJoinSealedDatabaseAsync(string sealedDbPath, byte[] pageKey, CancellationToken ct = default) =>
         throw new NotSupportedException("This node cannot seal a join snapshot.");
 
     /// <summary>A copy of the master DEK the snapshot containers of this node are made under; the caller clears it. Throws while the vault is locked.</summary>

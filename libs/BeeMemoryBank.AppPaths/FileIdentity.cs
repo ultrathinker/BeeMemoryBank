@@ -18,13 +18,21 @@ public readonly record struct FileIdentityInfo(ulong Volume, ulong Index, uint L
 /// </summary>
 public static class FileIdentity
 {
+    /// <summary>
+    /// True where the identity is read through libc <c>stat</c>/<c>fstat</c>. .NET answers false to <c>IsLinux()</c> on Android although its libc
+    /// (bionic) has the same calls and, on arm64, the same <c>struct stat</c> layout; without it a phone could never pass the scan of its own folder.
+    /// </summary>
+    internal static bool UsesUnixStat(bool isLinux, bool isMacOs, bool isAndroid) => isLinux || isMacOs || isAndroid;
+
+    private static bool UsesUnixStat() => UsesUnixStat(OperatingSystem.IsLinux(), OperatingSystem.IsMacOS(), OperatingSystem.IsAndroid());
+
     /// <summary>The identity of <paramref name="path"/> (symbolic links are followed, as an open would), or null when it cannot be read.</summary>
     public static FileIdentityInfo? TryGet(string path)
     {
         try
         {
             if (OperatingSystem.IsWindows()) return TryGetWindows(path);
-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) return TryGetUnix(path);
+            if (UsesUnixStat()) return TryGetUnix(path);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
@@ -41,7 +49,7 @@ public static class FileIdentity
         {
             if (handle is null || handle.IsInvalid) return null;
             if (OperatingSystem.IsWindows()) return TryGetWindowsHandle(handle);
-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) return TryGetUnixHandle(handle);
+            if (UsesUnixStat()) return TryGetUnixHandle(handle);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException

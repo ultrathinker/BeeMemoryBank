@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.FullIos.Services;
 
 namespace BeeMemoryBank.FullIos.Pages;
@@ -24,15 +25,12 @@ public partial class TrashPage : ContentPage
     private async void OnRestore(object? sender, EventArgs e)
     {
         if ((sender as BindableObject)?.BindingContext is not TrashItem item) return;
-        try
+        // The one busy helper (BMB-311): the button is off and spins until the note is back; a failure is said in full.
+        await BusyAction.RunAsync(sender as Button, async () =>
         {
             await _notes.RestoreAsync(item.Id);
             await DisplayAlertAsync("Restored", $"\"[RESTORED] {item.Title}\" is at the top of your notes.", "OK");
             await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlertAsync("Restore", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Restore" });
     }
 }

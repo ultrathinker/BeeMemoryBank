@@ -354,7 +354,8 @@ public sealed class HubSetupAddressGuardTests : IAsyncLifetime
 
         var text = await resp.Content.ReadAsStringAsync();
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, text);
-        text.Should().Contain("can never be a hub");
+        // The probe's own sentence for a place a hub can never be, or the address policy's for a metadata address (the policy judges the address first).
+        text.Should().ContainAny("can never be a hub", "cloud metadata services");
         _server.Requests.Should().Be(0);
         using var scope = _api.Services.CreateScope();
         var row = (await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(_node))!;

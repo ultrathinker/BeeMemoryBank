@@ -60,7 +60,7 @@ public sealed class SealedCliTests : IDisposable
     /// <summary>A real node's folder, sealed: one article with a canary title, a recovery key, the boot store of the migration.</summary>
     private async Task BuildSealedAsync()
     {
-        (await InitCommand.HandleAsync(_dir, "admin", Password)).Should().Be(0);
+        (await PlainNode.InitAsync(_dir, "admin", Password)).Should().Be(0);
         (await ArticleCommand.HandleCreateAsync(_dir, _canary, "/Work", "body text", Password)).Should().Be(0);
         byte[] dek;
         await using (var services = await CliServiceProvider.CreateAsync(_dir))
@@ -255,7 +255,7 @@ public sealed class SealedCliTests : IDisposable
     [Fact]
     public async Task Verify_on_a_plain_folder_says_so()
     {
-        (await InitCommand.HandleAsync(_dir, "admin", Password)).Should().Be(0);
+        (await PlainNode.InitAsync(_dir, "admin", Password)).Should().Be(0);
         var output = new StringWriter();
 
         (await VaultCommand.VerifyAsync(_dir, output)).Should().Be(1);

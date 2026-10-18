@@ -67,8 +67,9 @@ public static class SyncActivationCommand
         if (!yes)
         {
             await output.WriteLineAsync(
-                "Metadata encryption cannot be switched off again. Take a fresh backup of this node first and keep it " +
-                "offline: it is the only way back. Every device must run 2.6.0 or newer. Run again with --yes to switch it on.");
+                "Metadata encryption cannot be switched off again, and going back is not possible from the node. Take a fresh backup of " +
+                "this node first and keep it offline if you want one: it holds your titles in clear, and the node will not restore it. " +
+                "Every device must run 2.6.0 or newer. Run again with --yes to switch it on.");
             return 1;
         }
         try

@@ -10,6 +10,9 @@ namespace BeeMemoryBank.Core.Services;
 /// trash (Superadmin can hard-delete it separately). The copy flows through the
 /// normal create paths, so sync to other nodes and all side effects (embeddings,
 /// event log, audit) happen for free.
+///
+/// Stopping (BMB-311 fix round 3): both restores look at the caller's token before their first write and not after it. An article restore is that one write; a folder
+/// restore that has created its root runs to the end of the (cheap) subtree, so a stop never leaves half a restored tree.
 /// </summary>
 public class RestoreService(
     IArticleRepository articleRepo,
@@ -21,6 +24,9 @@ public class RestoreService(
 {
     private const string RestoredPrefix = "[RESTORED] ";
 
+    /// <summary>Test seam: called once the restored folder's root exists (a test stops the restore from here, to show that the subtree is still written whole).</summary>
+    internal Action? AfterRootCreated { get; set; }
+
     public record RestoreArticleResult(Guid NewArticleId, string NewTitle);
     public record RestoreFolderResult(string NewFolderPath, int RestoredSubfolderCount);
 
@@ -29,8 +35,9 @@ public class RestoreService(
     /// in root with title "[RESTORED] {title}", copying concept tags. Comments and
     /// version history are not copied.
     /// </summary>
-    public async Task<RestoreArticleResult> RestoreArticleAsync(Guid id)
+    public async Task<RestoreArticleResult> RestoreArticleAsync(Guid id, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (!session.IsUnlocked)
             throw new InvalidOperationException("Session must be unlocked to restore articles (body needs to be decrypted).");
 
@@ -51,6 +58,8 @@ public class RestoreService(
         var tags = await conceptTagService.GetByArticleIdAsync(id);
 
         var newTitle = RestoredPrefix + article.Title;
+        // The last point at which the restore can stop: from here it is one write.
+        ct.ThrowIfCancellationRequested();
         var newArticle = await articleService.CreateAsync(newTitle, "/", tags, plaintext);
 
         return new RestoreArticleResult(newArticle.Id, newTitle);
@@ -64,8 +73,9 @@ public class RestoreService(
     /// it orphans them (folder_id = NULL, tree_path = '/'). Those orphans remain active in
     /// the root and the user can move them into the restored folder if they wish.
     /// </summary>
-    public async Task<RestoreFolderResult> RestoreFolderAsync(Guid id)
+    public async Task<RestoreFolderResult> RestoreFolderAsync(Guid id, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var folder = await folderRepo.GetByIdAsync(id, includeDeleted: true)
             ?? throw new KeyNotFoundException($"Folder {id} not found.");
         if (folder.Status != "D")
@@ -77,12 +87,15 @@ public class RestoreService(
         string newRootPath = "";
         for (int attempt = 0; attempt < 5; attempt++)
         {
+            // Before the first write only: once the root exists the subtree is written to its end.
+            if (attempt == 0) ct.ThrowIfCancellationRequested();
             var candidate = await GenerateUniqueRootNameAsync(baseName);
             var candidatePath = "/" + candidate;
             try
             {
                 await folderService.CreateAsync(candidatePath);
                 newRootPath = candidatePath;
+                AfterRootCreated?.Invoke();
                 break;
             }
             catch (InvalidOperationException) when (attempt < 4)

@@ -155,6 +155,27 @@ public class BlindRestoreEndpointsTests : IAsyncLifetime
         (await PackageAsync(code)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    /// <summary>BMB-306/307 fix round 2 (T1): the address a claiming device states about itself goes through the one policy for a peer's address.</summary>
+    [Theory]
+    [InlineData("HTTPS://New-Pc.LOCAL:443/", "https://new-pc.local")]
+    [InlineData("https://user:pw@new-pc.local", null)]
+    [InlineData("http://169.254.169.254", null)]
+    public async Task Claim_StoresTheDevicesAddressByTheOnePolicy_OrNone(string sent, string? stored)
+    {
+        var code = await IssueAsync();
+        var device = Guid.NewGuid();
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/blind/claim")
+        {
+            Content = JsonContent.Create(new { nodeId = device, displayName = "New PC", publicKeyB64 = NewKey(), apiAddress = sent })
+        };
+        req.Headers.Add("X-Restore-Code", code);
+
+        (await _public.SendAsync(req)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var scope = _blind.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(device))!.ApiAddress.Should().Be(stored);
+    }
+
     // ─── Review release-a #9: the claim is idempotent for the device that spent the code ───
 
     [Fact]

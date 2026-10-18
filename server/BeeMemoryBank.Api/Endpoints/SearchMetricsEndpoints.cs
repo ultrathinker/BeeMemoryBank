@@ -106,6 +106,7 @@ public static class SearchMetricsEndpoints
             SessionService session,
             PendingEmbeddingProcessor embeddingProcessor,
             PendingIndexProcessor indexProcessor,
+            LongOperationGate gate,
             IHostApplicationLifetime lifetime,
             ILogger<PendingEmbeddingProcessor> logger) =>
         {
@@ -116,6 +117,13 @@ public static class SearchMetricsEndpoints
             // background drain ignores app shutdown entirely, delaying it and risking
             // ObjectDisposedException from DB pools torn down mid-batch.
             var shutdownToken = lifetime.ApplicationStopping;
+
+            // The request returns at once but the drain goes on: the lease lasts as long as the drain, so a second press while it
+            // runs is refused instead of starting a second drain (BMB-311).
+            var lease = gate.TryEnter("embeddings-backfill");
+            if (lease == null)
+                return Results.Json(new ErrorResponse("The embeddings backfill is already running. Wait until it has finished.", SingleFlightFilter.Code), statusCode: 409);
+
             _ = Task.Run(async () =>
             {
                 try
@@ -127,6 +135,10 @@ public static class SearchMetricsEndpoints
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Manual backfill failed");
+                }
+                finally
+                {
+                    lease.Dispose();
                 }
             });
 

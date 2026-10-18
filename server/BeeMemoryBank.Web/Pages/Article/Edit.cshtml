@@ -52,7 +52,7 @@
         </div>
     </sl-dialog>
 
-    <form method="post" class="sl-form" id="edit-form">
+    <form data-busy="short" method="post" class="sl-form" id="edit-form">
         @if (!string.IsNullOrEmpty(Model.ErrorMessage))
         {
             <sl-alert variant="danger" open closable style="margin-bottom:16px;">

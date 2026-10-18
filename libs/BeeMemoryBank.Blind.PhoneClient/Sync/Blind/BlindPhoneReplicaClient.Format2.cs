@@ -124,7 +124,7 @@ public sealed partial class BlindPhoneReplicaClient
                     NodeId = peer.NodeId,
                     DisplayName = peer.DisplayName,
                     Ed25519PublicKey = Convert.FromBase64String(peer.PublicKeyB64),
-                    ApiAddress = peer.ApiAddress,
+                    ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(peer.ApiAddress),
                     IsSuperadmin = peer.IsSuperadmin,
                     TlsSpki = BlindTrust.PinOf(peer.TlsTrust, peer.TlsSpki),
                     TlsTrust = BlindTrust.Effective(peer.TlsTrust, peer.TlsSpki),
@@ -179,7 +179,7 @@ public sealed partial class BlindPhoneReplicaClient
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         // Spec 8.5: a delta that cannot be stored (an originator this copy does not know, a signature that fails) fails the install.
-                        throw new InvalidDataException($"Delta {evt.EventId} cannot be stored: {ex.Message}", ex);
+                        throw new InvalidDataException($"Delta {evt.EventId} cannot be stored ({ex.GetType().Name})", ex);
                     }
                 }
             }

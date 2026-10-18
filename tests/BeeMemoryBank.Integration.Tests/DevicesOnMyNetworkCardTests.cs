@@ -162,6 +162,31 @@ public class DevicesOnMyNetworkCardTests
         answer.Error.Should().Contain("BMB_HTTPS_ENABLED");
     }
 
+    private sealed class FailingHandler(Exception failure) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => throw failure;
+    }
+
+    [Theory]
+    [InlineData("connection refused")]
+    [InlineData("a proxy page")]
+    public async Task TheClient_TellsAFailedCallAsAKindOfFailure_NeverWithTheExceptionsOwnText(string what)
+    {
+        // BMB-306/307 fix round 3 (G3): LanStatus.Error went to the page with the message of the exception: the address dialled, whatever a proxy in between said.
+        const string hostile = "Could not reach http://127.0.0.1:5311/node/lan?token=tok_5c4b3a29 (<html>Pay now</html>)";
+        Exception failure = what == "connection refused"
+            ? new HttpRequestException(hostile, new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused))
+            : new System.Text.Json.JsonException(hostile);
+        await using var front = await StartFrontAsync(ctx => Task.CompletedTask);
+        var client = new NodeLanClient(new HttpClient(new FailingHandler(failure)), front.DataPath, "the-key");
+
+        var answer = await client.GetAsync();
+
+        answer.Error.Should().StartWith("The node could not be reached");
+        answer.Error.Should().NotContain("tok_5c4b3a29").And.NotContain("127.0.0.1").And.NotContain("Pay now").And.NotContain("Could not reach");
+        if (what == "connection refused") answer.Error.Should().Contain("connection refused");
+    }
+
     [Fact]
     public async Task TheClient_WithoutARunningNode_AnswersUnavailable_SoDockerGetsTheDockerCard()
     {

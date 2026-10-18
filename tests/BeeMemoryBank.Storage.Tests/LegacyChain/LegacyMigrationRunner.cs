@@ -1,0 +1,427 @@
+using System.Text;
+using System.Text.RegularExpressions;
+using Dapper;
+using Microsoft.Data.Sqlite;
+using BeeMemoryBank.Storage.Sqlite;
+
+namespace BeeMemoryBank.Storage.Tests.Squash;
+
+/// <summary>
+/// The migration runner of releases 2.2.0 .. 2.6.1, frozen. The only differences from the file of the tag v2.6.1 (git blob 58751e1a, byte
+/// identical in every tag from v2.2.0 on) are the namespace, the class name, and that the SQL files come from the list passed in instead
+/// of the assembly's embedded resources. It builds the databases of the released versions for the adoption tests, the way a node of
+/// that version built them: one file after the other, the same statement splitting, the same savepoints and idempotent errors, the same
+/// ghost hunter. Do not "fix" it: its value is that it is the old behaviour.
+/// </summary>
+public class LegacyMigrationRunner
+{
+    private readonly DbConnectionFactory _factory;
+    private readonly IReadOnlyList<(string ResourceName, string Sql)> _files;
+
+    public LegacyMigrationRunner(DbConnectionFactory factory, IReadOnlyList<(string ResourceName, string Sql)> files)
+    {
+        _factory = factory;
+        _files = files;
+    }
+
+    public async Task RunMigrationsAsync()
+    {
+        using var connection = _factory.CreateConnection();
+
+        await connection.ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS tbl_migration (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                version    INTEGER NOT NULL UNIQUE,
+                filename   TEXT NOT NULL,
+                applied_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )");
+
+        var resourceNames = _files.Select(f => f.ResourceName).OrderBy(r => r).ToList();
+
+        // Ghost Hunter: a tbl_migration row is a ghost if its FILENAME no longer
+        // matches the assembly's resource at the same version. Two cases:
+        //   (a) Squashed away — version absent in assembly (file deleted).
+        //   (b) Replaced in place — same version, different filename. This
+        //       happens when a later squash reassigns numbers (e.g. old v3 was
+        //       '003_add_hash_fail_count' but the current v3 is '003_system_folders').
+        //       Same number does NOT mean same schema change — comparing by version
+        //       alone would treat the migration as applied and never run the new
+        //       statements, producing schema drift like a missing column.
+        // Either way: drop the row, the main loop below re-applies the current file.
+        // IsIdempotentError handles overlap with statements that already ran.
+        var assemblyByVersion = new Dictionary<int, string>();
+        foreach (var r in resourceNames)
+            if (TryParseVersion(r, out var v))
+                assemblyByVersion[v] = r;
+
+        var dbMigrations = (await connection.QueryAsync<MigrationRow>(
+            "SELECT version AS Version, filename AS Filename FROM tbl_migration")).ToList();
+
+        var ghostVersions = dbMigrations
+            .Where(m => !assemblyByVersion.TryGetValue(m.Version, out var asmFile) || asmFile != m.Filename)
+            .Select(m => m.Version)
+            .ToList();
+
+        if (ghostVersions.Count > 0)
+        {
+            await connection.ExecuteAsync(
+                "DELETE FROM tbl_migration WHERE version IN @ghostVersions",
+                new { ghostVersions });
+        }
+
+        var applied = (await connection.QueryAsync<int>("SELECT version FROM tbl_migration"))
+            .ToHashSet();
+
+        foreach (var resourceName in resourceNames)
+        {
+            if (!TryParseVersion(resourceName, out var version)) continue;
+
+            if (applied.Contains(version)) continue;
+
+            var sql = _files.First(f => f.ResourceName == resourceName).Sql;
+
+            // Replace {{ENV:VAR_NAME}} placeholders with environment variable values.
+            // If the variable is not set, substitutes NULL (SQL null literal).
+            // Used by migrations that need runtime configuration (e.g. BMB_AGENT_DEFAULT_OWNER_ID).
+            sql = Regex.Replace(sql, @"\{\{ENV:([A-Z0-9_]+)\}\}", m =>
+                Environment.GetEnvironmentVariable(m.Groups[1].Value) ?? "NULL");
+
+            var sqlStatements = SplitStatements(sql)
+                .Select(StripComments)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Where(s => !s.TrimStart().StartsWith("PRAGMA", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // Migrations that DROP or RENAME tables need two PRAGMAs set before the transaction:
+            //   foreign_keys = OFF       — disables FK *enforcement* so intermediate states
+            //                              (e.g. rows in a child table pointing at a not-yet-
+            //                              recreated parent) don't fail.
+            //   legacy_alter_table = ON  — prevents SQLite from *auto-rewriting* FK references
+            //                              in OTHER tables when we RENAME a table. Without this
+            //                              flag, `ALTER TABLE parent RENAME TO parent_old`
+            //                              silently rewrites every `REFERENCES parent(id)` in
+            //                              unrelated child tables to `REFERENCES parent_old(id)`,
+            //                              and when we then DROP parent_old the children are
+            //                              left with dangling FKs pointing at a non-existent
+            //                              table.
+            bool needsFkOff = sqlStatements.Any(s =>
+                s.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) ||
+                s.Contains("RENAME TO", StringComparison.OrdinalIgnoreCase));
+
+            if (needsFkOff)
+            {
+                await connection.ExecuteAsync("PRAGMA foreign_keys = OFF");
+                await connection.ExecuteAsync("PRAGMA legacy_alter_table = ON");
+            }
+
+            using var transaction = connection.BeginTransaction();
+            try
+            {
+                foreach (var statement in sqlStatements)
+                {
+                    // Use a savepoint per statement so that idempotent failures (e.g. "duplicate
+                    // column name" from ALTER TABLE ADD COLUMN on a column that already exists
+                    // because the squashed 001_initial_schema.sql includes it) can be silently
+                    // skipped without aborting the transaction.
+                    await connection.ExecuteAsync("SAVEPOINT bmb_stmt", transaction: transaction);
+                    try
+                    {
+                        await connection.ExecuteAsync(statement, transaction: transaction);
+                        await connection.ExecuteAsync("RELEASE SAVEPOINT bmb_stmt", transaction: transaction);
+                    }
+                    catch (SqliteException ex) when (IsIdempotentError(statement, ex))
+                    {
+                        await connection.ExecuteAsync("ROLLBACK TO SAVEPOINT bmb_stmt", transaction: transaction);
+                        await connection.ExecuteAsync("RELEASE SAVEPOINT bmb_stmt", transaction: transaction);
+                        // Schema change already present — treat as applied and continue.
+                    }
+                }
+
+                var now = DateTime.UtcNow.ToString("o");
+                await connection.ExecuteAsync(
+                    "INSERT INTO tbl_migration (version, filename, applied_at, updated_at) VALUES (@version, @filename, @now, @now)",
+                    new { version, filename = resourceName, now },
+                    transaction: transaction);
+
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+            finally
+            {
+                if (needsFkOff)
+                {
+                    await connection.ExecuteAsync("PRAGMA legacy_alter_table = OFF");
+                    await connection.ExecuteAsync("PRAGMA foreign_keys = ON");
+                }
+            }
+
+            // A migration that frees a lot of space (dropping a column that held every article
+            // body, say) leaves the pages on SQLite's freelist — the file does not shrink until
+            // VACUUM rewrites it, and VACUUM cannot run inside a transaction, so it cannot be a
+            // statement of the migration itself. The migration opts in with a marker comment and
+            // the rewrite happens here, once, right after its transaction has committed. Doubles
+            // disk usage for its duration and takes seconds per hundred MB; on a migration that
+            // just shed a third of the file that is the right trade.
+            if (sql.Contains(VacuumAfterMarker, StringComparison.Ordinal))
+            {
+                // Best effort. The migration itself has committed; failing to reclaim space (no
+                // room for VACUUM's temporary copy on a full phone, say) is not a reason to refuse
+                // to start — and since the tbl_migration row is already written, a throw here would
+                // only crash this one launch without ever being retried anyway.
+                try { await connection.ExecuteAsync("VACUUM"); }
+                catch (SqliteException) { }
+            }
+        }
+    }
+
+    /// <summary>Put this in a comment in a migration to have the runner VACUUM after it commits.</summary>
+    public const string VacuumAfterMarker = "bmb:vacuum-after";
+
+    /// <summary>
+    /// Extracts the numeric version prefix from an embedded resource name.
+    /// Resource names look like "BeeMemoryBank.Storage.Migrations.007_drop_duplicate.sql".
+    /// The version segment is the first dot-separated part that starts with a digit.
+    /// </summary>
+    private static bool TryParseVersion(string resourceName, out int version)
+    {
+        var parts = resourceName.Split('.');
+        var migPart = parts.FirstOrDefault(p => p.Length > 0 && char.IsDigit(p[0]));
+        if (migPart == null) { version = 0; return false; }
+        var versionStr = new string(migPart.TakeWhile(char.IsDigit).ToArray());
+        return int.TryParse(versionStr, out version);
+    }
+
+    /// <summary>
+    /// Returns true if the exception represents a schema change that is already
+    /// present — i.e. the statement is safe to skip as a no-op.
+    /// Currently handles:
+    ///   ALTER TABLE ADD COLUMN → "duplicate column name" (column already exists)
+    ///   CREATE TABLE           → "table ... already exists"
+    ///   CREATE INDEX           → "index ... already exists"
+    /// </summary>
+    private static bool IsIdempotentError(string statement, SqliteException ex)
+    {
+        if (ex.SqliteErrorCode != 1) return false; // SQLITE_ERROR only
+
+        var stmt = statement.TrimStart();
+        if (stmt.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase) &&
+            stmt.Contains("ADD COLUMN", StringComparison.OrdinalIgnoreCase) &&
+            ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (stmt.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase) &&
+            stmt.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+            ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // CREATE TABLE / INDEX / UNIQUE INDEX / TRIGGER / VIEW — any "already exists"
+        // is treated as idempotent. Re-applying a squashed 001_initial_schema on top
+        // of a DB that already has the full schema lights up every one of these.
+        if (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) &&
+            (stmt.StartsWith("CREATE ", StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        return false;
+    }
+
+    public static List<string> SplitStatements(string sql)
+    {
+        var statements = new List<string>();
+        var sb = new StringBuilder();
+        var len = sql.Length;
+        var i = 0;
+        var depth = 0;
+        var blockStack = new Stack<bool>();
+
+        while (i < len)
+        {
+            var c = sql[i];
+
+            if (c == '-' && i + 1 < len && sql[i + 1] == '-')
+            {
+                while (i < len && sql[i] != '\n')
+                {
+                    sb.Append(sql[i]);
+                    i++;
+                }
+                continue;
+            }
+
+            if (c == '/' && i + 1 < len && sql[i + 1] == '*')
+            {
+                sb.Append("/*");
+                i += 2;
+                while (i < len)
+                {
+                    if (sql[i] == '*' && i + 1 < len && sql[i + 1] == '/')
+                    {
+                        sb.Append("*/");
+                        i += 2;
+                        break;
+                    }
+                    sb.Append(sql[i]);
+                    i++;
+                }
+                continue;
+            }
+
+            if (c == '\'')
+            {
+                sb.Append(c);
+                i++;
+                while (i < len)
+                {
+                    sb.Append(sql[i]);
+                    if (sql[i] == '\'')
+                    {
+                        i++;
+                        if (i < len && sql[i] == '\'')
+                        {
+                            sb.Append(sql[i]);
+                            i++;
+                            continue;
+                        }
+                        break;
+                    }
+                    i++;
+                }
+                continue;
+            }
+
+            if (c == '"')
+            {
+                sb.Append(c);
+                i++;
+                while (i < len)
+                {
+                    sb.Append(sql[i]);
+                    if (sql[i] == '"')
+                    {
+                        i++;
+                        if (i < len && sql[i] == '"')
+                        {
+                            sb.Append(sql[i]);
+                            i++;
+                            continue;
+                        }
+                        break;
+                    }
+                    i++;
+                }
+                continue;
+            }
+
+            // SQLite accepts [bracketed] and `backtick` delimited identifiers in addition
+            // to "double-quoted". Treat their contents as opaque so keywords inside
+            // (e.g. CREATE TABLE [BEGIN]) can't skew BEGIN/END nesting.
+            if (c == '[')
+            {
+                sb.Append(c);
+                i++;
+                while (i < len && sql[i] != ']')
+                {
+                    sb.Append(sql[i]);
+                    i++;
+                }
+                if (i < len) { sb.Append(sql[i]); i++; }
+                continue;
+            }
+
+            if (c == '`')
+            {
+                sb.Append(c);
+                i++;
+                while (i < len)
+                {
+                    sb.Append(sql[i]);
+                    if (sql[i] == '`')
+                    {
+                        i++;
+                        if (i < len && sql[i] == '`')
+                        {
+                            sb.Append(sql[i]);
+                            i++;
+                            continue;
+                        }
+                        break;
+                    }
+                    i++;
+                }
+                continue;
+            }
+
+            if (c == ';')
+            {
+                i++;
+                if (depth == 0)
+                {
+                    var stmt = sb.ToString().Trim();
+                    if (!string.IsNullOrWhiteSpace(stmt))
+                        statements.Add(stmt);
+                    sb.Clear();
+                }
+                else
+                {
+                    sb.Append(';');
+                }
+                continue;
+            }
+
+            if (IsWordChar(c))
+            {
+                var wordStart = i;
+                while (i < len && IsWordChar(sql[i]))
+                    i++;
+
+                var word = sql.Substring(wordStart, i - wordStart);
+
+                if (word.Equals("BEGIN", StringComparison.OrdinalIgnoreCase))
+                {
+                    blockStack.Push(true);
+                    depth++;
+                }
+                else if (word.Equals("CASE", StringComparison.OrdinalIgnoreCase))
+                {
+                    blockStack.Push(false);
+                }
+                else if (word.Equals("END", StringComparison.OrdinalIgnoreCase) && blockStack.Count > 0)
+                {
+                    if (blockStack.Pop())
+                        depth--;
+                }
+
+                sb.Append(word);
+                continue;
+            }
+
+            sb.Append(c);
+            i++;
+        }
+
+        var last = sb.ToString().Trim();
+        if (!string.IsNullOrWhiteSpace(last))
+            statements.Add(last);
+
+        return statements;
+    }
+
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    private class MigrationRow
+    {
+        public int Version { get; set; }
+        public string Filename { get; set; } = "";
+    }
+
+    private static string StripComments(string sql)
+    {
+        var lines = sql.Split('\n')
+            .Where(line => !line.TrimStart().StartsWith("--"));
+        return string.Join('\n', lines).Trim();
+    }
+}

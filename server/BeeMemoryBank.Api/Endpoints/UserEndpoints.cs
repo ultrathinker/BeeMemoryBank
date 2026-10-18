@@ -130,12 +130,13 @@ public static class UserEndpoints
 
             try
             {
-                await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword);
+                using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
+                await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword, stop.Token);
                 // A superadmin's password is a master password: rebuild this node's strong recovery
                 // box with it while it is in memory (plan 6.3). Background; the response does not wait.
                 if ((await users.GetByIdAsync(userId))?.KeySlotId != null)
                     _ = recovery.OnPasswordChanged(req.NewPassword);
-                return ConfirmedWithWayBackNotice(ctx);
+                return Results.Ok();
             }
             catch (UnauthorizedAccessException)
             {
@@ -153,19 +154,24 @@ public static class UserEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 400);
             }
-        });
+        })
+        // A password replacement is Argon2 and a rewrite of the key slot: once at a time per user, whoever starts it (the user, or a superadmin for them), so that
+        // two of them never race over one slot (BMB-311 fix round). The same key as the admin route below.
+        .SingleFlight("user-password:{userId}", "The password change of this user", ctx =>
+            int.TryParse(ctx.HttpContext.Request.Headers["X-User-Id"].FirstOrDefault(), out var userId) ? "user-password:" + userId : null);
 
         group.MapPost("/{id:int}/change-password", async (int id, ChangeUserPasswordRequest req, UserService userService, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
             try
             {
-                await userService.AdminChangePasswordAsync(id, req.NewPassword);
+                using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
+                await userService.AdminChangePasswordAsync(id, req.NewPassword, stop.Token);
                 // Admin password reset bypasses old-password verification — high-impact
                 // and silent to the target user. Logged so target/reviewer can spot it.
                 var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
                 await auditRepo.LogAsync("user", id.ToString(), "user_password_admin_reset", "web",
                     $"Admin reset password for user #{id} by user {actor}");
-                return ConfirmedWithWayBackNotice(ctx);
+                return Results.Ok();
             }
             catch (KeyNotFoundException)
             {
@@ -179,13 +185,6 @@ public static class UserEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 400);
             }
-        }).RequireSuperadmin();
+        }).RequireSuperadmin().SingleFlight("user-password:{id}", "The password change of this user");
     }
-
-    /// <summary>
-    /// The confirmation of a password change: empty as it always was, and with the sentence of docs/design/step-b-spec.md 10.7 while the way-back
-    /// snapshot of "Encrypt this node" exists (it still opens with the old password).
-    /// </summary>
-    private static IResult ConfirmedWithWayBackNotice(HttpContext ctx) =>
-        Services.Sealed.WayBackNotice.For(ctx.RequestServices) is { } notice ? Results.Ok(new { notice }) : Results.Ok();
 }

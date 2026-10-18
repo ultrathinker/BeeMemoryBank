@@ -46,6 +46,8 @@ public class RestoreInitiatorService : IRestoreInitiator
     private volatile int _percentage = 0;
     private volatile string? _statusMessage;
     private volatile string? _errorMessage;
+
+    private static string Say(Exception ex) => BeeMemoryBank.Sync.FailureText.Say(ex);   // BeeMemoryBank.Sync.FailureText: the one rule for what a page says about a failure
     private string? _currentEventId;
 
     // Single-flight: only one restore-flow instance can run on this node at a time.
@@ -53,6 +55,49 @@ public class RestoreInitiatorService : IRestoreInitiator
     // AcceptRestoreAsync via Task.Run, so concurrent attempts are real (e.g. two pulls
     // delivering the same event in quick succession, or two events from different peers).
     private readonly SemaphoreSlim _executeLock = new(1, 1);
+
+    private Task? _background;
+
+    /// <summary>
+    /// The accepted restore that runs in the background of a request that answered 202 (<see cref="StartBackground"/>): the task of the work, or null when none was started.
+    /// It ends when the work does - done, failed, or cancelled because the node is stopping - and the lease of the route is given back at that moment, not before.
+    /// </summary>
+    public Task? BackgroundTask => Volatile.Read(ref _background);
+
+    /// <summary>
+    /// Runs <paramref name="accept"/> (the accepted restore) in the background, tracked: it gets a token linked to <paramref name="stopping"/> (the application's), so the
+    /// work of a node that is shutting down is cancelled instead of left running untracked; a cancellation leaves the terminal step
+    /// <see cref="RestoreFlowStep.Cancelled"/>; and <paramref name="lease"/> (the single-flight claim of the route, which has no time limit) is disposed when the work
+    /// is over, whichever way it ended.
+    /// </summary>
+    public Task StartBackground(Func<CancellationToken, Task> accept, CancellationToken stopping, IDisposable lease)
+    {
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+        var task = Task.Run(async () =>
+        {
+            try
+            {
+                await accept(linked.Token);
+            }
+            catch (OperationCanceledException) when (linked.IsCancellationRequested)
+            {
+                _currentStep = RestoreFlowStep.Cancelled;
+                _statusMessage = "Cancelled: the node was stopping before the restore was applied. Nothing was replaced.";
+                _logger.LogWarning("The background restore was cancelled before it was applied (the node is stopping)");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Background restore failed");
+            }
+            finally
+            {
+                lease.Dispose();
+                linked.Dispose();
+            }
+        });
+        Volatile.Write(ref _background, task);
+        return task;
+    }
 
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
 
@@ -94,14 +139,29 @@ public class RestoreInitiatorService : IRestoreInitiator
     /// </summary>
     public async Task<string?> InitiationRefusalAsync()
     {
+        // A restore this node is running already, started here or accepted from a peer, is not started a second time next to the first.
+        if (_executeLock.CurrentCount == 0)
+            return "A restore of this node is already running. Wait until it has finished.";
         using var scope = _scopeFactory.CreateScope();
-        return scope.ServiceProvider.GetService<BeeMemoryBank.Sync.Metadata.IHeldEventStatus>() is { } held && await held.AnyHeldAsync()
-            ? BeeMemoryBank.Sync.Metadata.HeldEventStatus.RefusalMessage("start the restore")
-            : null;
+        if (scope.ServiceProvider.GetService<BeeMemoryBank.Sync.Metadata.IHeldEventStatus>() is { } held && await held.AnyHeldAsync())
+            return BeeMemoryBank.Sync.Metadata.HeldEventStatus.RefusalMessage("start the restore");
+        // A restore never produces an unencrypted node (BMB-306): this node applies the restore to itself too.
+        return _snapshotService.IsEncryptedNode ? null : RestoreRefusedException.PlainNodeMessage;
     }
 
-    public async Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent)
+    public virtual async Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent, CancellationToken ct = default)
     {
+        // A node whose database is not encrypted takes no restore, whoever asks (BMB-306). The row is closed as rejected, so the sweep after an
+        // unlock does not try it again, and the sentence is the one the owner can act on.
+        if (!_snapshotService.IsEncryptedNode)
+        {
+            using var refusedScope = _scopeFactory.CreateScope();
+            await refusedScope.ServiceProvider.GetRequiredService<IRestoreEventStateRepository>()
+                .UpdateStateAsync(eventId, RestoreEventState.Rejected, RestoreRefusedException.PlainNodeMessage);
+            _logger.LogWarning("Restore event {EventId} refused: this node's database is not encrypted, and a restore never produces an unencrypted node.", eventId);
+            throw new RestoreRefusedException(RestoreRefusedException.PlainNodeMessage);
+        }
+
         if (!await _executeLock.WaitAsync(TimeSpan.Zero))
         {
             _logger.LogWarning("Refusing concurrent restore for event {EventId} — another restore is in progress (current={Current})", eventId, _currentEventId);
@@ -185,7 +245,7 @@ public class RestoreInitiatorService : IRestoreInitiator
 
             try
             {
-                await _snapshotService.CreateAsync(filterSecrets: false, sign: false);
+                await _snapshotService.CreateAsync(filterSecrets: false, sign: false, ct: ct);
             }
             catch (InsufficientDiskSpaceException)
             {
@@ -197,7 +257,7 @@ public class RestoreInitiatorService : IRestoreInitiator
 
             try
             {
-                await ExecuteDownloadAndApplyAsync(eventId, payload, restoreEvent, stateRepo, nodeRepo, whitelistRepo);
+                await ExecuteDownloadAndApplyAsync(eventId, payload, restoreEvent, stateRepo, nodeRepo, whitelistRepo, ct);
 
                 // Apply succeeded — restored DB has different key slots than the in-memory DEK
                 // was derived against. Force re-unlock so the user re-authenticates against the
@@ -209,20 +269,31 @@ public class RestoreInitiatorService : IRestoreInitiator
                 // Disk-space failures during apply (extract + ATTACH need ~2x snapshot size)
                 // get the same NeedsAdminDecision treatment as backup-time disk failures so the
                 // admin sees the same UI flow rather than a generic "Failed".
+                // Our own sentence (a size, a path-free refusal); the exception type is ours.
                 await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Failed, ex.Message);
                 _currentStep = RestoreFlowStep.NeedsAdminDecision;
                 _errorMessage = ex.Message;
                 throw new NeedsAdminDecisionException(eventId, ex.Message);
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Stopped before anything was replaced (the node is stopping): not a failure of the restore. The row is left as it is, so that the sweep after the next start
+            // can take it up again where the originator's auto-accept allows; the step says "cancelled".
+            _currentStep = RestoreFlowStep.Cancelled;
+            _statusMessage = "Cancelled: the node was stopping before the restore was applied. Nothing was replaced.";
+            _errorMessage = null;
+            _logger.LogWarning("Restore for event {EventId} was cancelled before it was applied", eventId);
+            throw;
+        }
         catch (Exception ex)
         {
             if (ex is NeedsAdminDecisionException) throw;
 
             _currentStep = RestoreFlowStep.Failed;
-            _errorMessage = ex.Message;
+            _errorMessage = Say(ex);
             _logger.LogError(ex, "Restore failed for event {EventId}", eventId);
-            await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Failed, ex.Message);
+            await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Failed, _errorMessage);
             throw;
         }
         finally
@@ -363,9 +434,9 @@ public class RestoreInitiatorService : IRestoreInitiator
             if (ex is NeedsAdminDecisionException) throw;
 
             _currentStep = RestoreFlowStep.Failed;
-            _errorMessage = ex.Message;
+            _errorMessage = Say(ex);
             _logger.LogWarning("Restore failed during ContinueWithoutBackup for event {EventId}: {ExceptionType}", eventId, ex.GetType().Name);
-            await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Failed, ex.Message);
+            await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Failed, _errorMessage);
             throw;
         }
         }
@@ -412,7 +483,8 @@ public class RestoreInitiatorService : IRestoreInitiator
         string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent,
         IRestoreEventStateRepository stateRepo,
         INodeIdentityRepository nodeRepo,
-        IWhitelistRepository whitelistRepo)
+        IWhitelistRepository whitelistRepo,
+        CancellationToken ct = default)
     {
         _currentStep = RestoreFlowStep.DownloadingSnapshot;
         _percentage = 30;
@@ -468,7 +540,7 @@ public class RestoreInitiatorService : IRestoreInitiator
         {
             // Extracted into DownloadFromWhitelistedSeederAsync below — see that method for the
             // candidate-selection and challenge/authenticate/download logic.
-            await DownloadFromWhitelistedSeederAsync(eventId, payload, originator!, identity, whitelistRepo, filePath);
+            await DownloadFromWhitelistedSeederAsync(eventId, payload, originator!, identity, whitelistRepo, filePath, ct);
         }
 
         // Hash check runs for BOTH self-originator AND remote paths. Catches:
@@ -478,7 +550,7 @@ public class RestoreInitiatorService : IRestoreInitiator
         //       local-tamper window if another process briefly has write access to
         //       restore-pending/<eventId>.bin (uclaw isolation breach, container
         //       escape, etc.). Cheap defense (one SHA256 pass).
-        var actualHash = await ComputeHashAsync(filePath);
+        var actualHash = await ComputeHashAsync(filePath, ct);
         if (!string.Equals(actualHash, payload.SnapshotHash, StringComparison.OrdinalIgnoreCase))
         {
             File.Delete(filePath);
@@ -500,6 +572,8 @@ public class RestoreInitiatorService : IRestoreInitiator
         _currentStep = RestoreFlowStep.ApplyingSnapshot;
         _percentage = 70;
         _statusMessage = "Applying snapshot (this may take a while)...";
+        // The last place the work can be stopped: once the apply begins it replaces the database and is not interrupted (a half-replaced vault is the worse end).
+        ct.ThrowIfCancellationRequested();
         await stateRepo.UpdateStateAsync(eventId, RestoreEventState.Applying);
 
         await _snapshotService.ApplyNetworkRestoreAsync(filePath, payload, restoreEvent);
@@ -528,7 +602,8 @@ public class RestoreInitiatorService : IRestoreInitiator
         WhitelistEntry originator,
         NodeIdentity identity,
         IWhitelistRepository whitelistRepo,
-        string filePath)
+        string filePath,
+        CancellationToken ct = default)
     {
         // Build seeder candidate list: prefer originator (canonical source), then any other
         // whitelisted peer (distributed seeding — any peer that already accepted this restore
@@ -596,14 +671,14 @@ public class RestoreInitiatorService : IRestoreInitiator
         {
             try
             {
-                var (resolvedUrl, originalHost) = await ResolveAndPinSeederAsync(sourceUrl);
+                var (resolvedUrl, originalHost) = await ResolveAndPinSeederAsync(sourceUrl, ct);
 
                 using var challengeReq = new HttpRequestMessage(HttpMethod.Post, $"{resolvedUrl}/api/sync/challenge");
                 if (!string.IsNullOrEmpty(originalHost))
                     challengeReq.Headers.Host = originalHost;
-                var challengeResp = await client.SendAsync(challengeReq);
+                var challengeResp = await client.SendAsync(challengeReq, ct);
                 challengeResp.EnsureSuccessStatusCode();
-                var challengeData = await challengeResp.Content.ReadFromJsonAsync<ChallengeDto>(JsonOpts)
+                var challengeData = await challengeResp.Content.ReadFromJsonAsync<ChallengeDto>(JsonOpts, ct)
                     ?? throw new InvalidDataException("Invalid challenge response.");
 
                 var challengeBytes = Convert.FromBase64String(challengeData.Challenge);
@@ -650,9 +725,9 @@ public class RestoreInitiatorService : IRestoreInitiator
                 };
                 if (!string.IsNullOrEmpty(originalHost))
                     authReq.Headers.Host = originalHost;
-                var authResp = await client.SendAsync(authReq);
+                var authResp = await client.SendAsync(authReq, ct);
                 authResp.EnsureSuccessStatusCode();
-                var authData = await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts)
+                var authData = await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts, ct)
                     ?? throw new InvalidDataException("Invalid authenticate response.");
 
                 using var req = new HttpRequestMessage(HttpMethod.Get, $"{resolvedUrl}/api/snapshots/restore/{eventId}/file");
@@ -660,7 +735,7 @@ public class RestoreInitiatorService : IRestoreInitiator
                 if (!string.IsNullOrEmpty(originalHost))
                     req.Headers.Host = originalHost;
 
-                using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+                using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
                 resp.EnsureSuccessStatusCode();
 
                 seederSigB64 = resp.Headers.TryGetValues("X-BMB-Snapshot-Signature", out var sigVals)
@@ -669,14 +744,18 @@ public class RestoreInitiatorService : IRestoreInitiator
                 await using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
                     var maxDownload = payload.FileSizeBytes + 1_048_576;
-                    var cappedStream = new CappedStream(await resp.Content.ReadAsStreamAsync(), maxDownload);
-                    await cappedStream.CopyToAsync(fs);
+                    var cappedStream = new CappedStream(await resp.Content.ReadAsStreamAsync(ct), maxDownload);
+                    await cappedStream.CopyToAsync(fs, ct);
                 }
 
                 downloaded = true;
                 _logger.LogInformation("Downloaded restore snapshot from seeder {Display} ({Url}) for event {EventId}",
                     seederPeer.DisplayName, sourceUrl, eventId);
                 break;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;   // the work was cancelled: not "this seeder failed, try the next"
             }
             catch (Exception ex)
             {
@@ -687,7 +766,7 @@ public class RestoreInitiatorService : IRestoreInitiator
 
         if (!downloaded)
             throw new InvalidOperationException(
-                $"All {candidates.Count} candidate seeders failed for restore. Last error: {lastError?.Message}", lastError);
+                $"All {candidates.Count} candidate seeders failed for restore. Last error: {(lastError is null ? "none" : Say(lastError))}", lastError);
 
         // Note: the X-BMB-Snapshot-Signature header is signed by the SEEDER's own key (see
         // SnapshotEndpoints.cs:289), but distributed seeding means the seeder may not be the
@@ -701,10 +780,10 @@ public class RestoreInitiatorService : IRestoreInitiator
         // through every relay hop (extra complexity for no gain over hash verify).
     }
 
-    private static async Task<string> ComputeHashAsync(string path)
+    private static async Task<string> ComputeHashAsync(string path, CancellationToken ct = default)
     {
         await using var stream = File.OpenRead(path);
-        var hash = await SHA256.HashDataAsync(stream);
+        var hash = await SHA256.HashDataAsync(stream, ct);
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
@@ -760,7 +839,7 @@ public class RestoreInitiatorService : IRestoreInitiator
         return true;
     }
 
-    private static async Task<(string resolvedUrl, string originalHost)> ResolveAndPinSeederAsync(string url)
+    private static async Task<(string resolvedUrl, string originalHost)> ResolveAndPinSeederAsync(string url, CancellationToken ct = default)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var u))
             throw new InvalidOperationException($"Invalid seeder URL: {url}");
@@ -773,11 +852,15 @@ public class RestoreInitiatorService : IRestoreInitiator
         IPAddress[] addresses;
         try
         {
-            addresses = await Dns.GetHostAddressesAsync(host);
+            addresses = await Dns.GetHostAddressesAsync(host, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"DNS resolution failed for seeder {host}: {ex.Message}", ex);
+            throw new InvalidOperationException("DNS resolution failed for the name of a seeder.", ex);
         }
 
         foreach (var addr in addresses)

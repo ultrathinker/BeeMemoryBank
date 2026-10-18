@@ -5,7 +5,8 @@ namespace BeeMemoryBank.Crypto;
 /// the Web setup join uses the Api's no-redirect named client). It never follows a redirect and treats any
 /// 3xx as an error: a 307/308 keeps the method and body, so following one would resend the master password
 /// to wherever the server pointed — plain http, another host. With a join code's SPKI pin, TLS completes
-/// only with the pinned key as well (<see cref="SpkiPin"/>).
+/// only with the pinned key as well (<see cref="SpkiPin"/>). Every client it makes opens its sockets through <see cref="PeerSocketConnector"/> and uses no proxy: the
+/// name the person typed (or the code carried) is resolved here, and an address a node does not call is never dialled, whatever the name says.
 /// </summary>
 public static class JoinHttp
 {
@@ -17,10 +18,12 @@ public static class JoinHttp
     /// </summary>
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(30);
 
-    public static HttpClient CreateClient(string? spkiPin = null) =>
+    /// <param name="spkiPin">The key the join code pins, or null for a join by a typed address.</param>
+    /// <param name="network">Test seam: how names are resolved and which addresses are allowed.</param>
+    public static HttpClient CreateClient(string? spkiPin = null, PeerNetwork? network = null) =>
         new(spkiPin != null
-            ? SpkiPin.CreatePinnedHandler(spkiPin)
-            : new RedirectRefusingHandler(new SocketsHttpHandler { AllowAutoRedirect = false }))
+            ? SpkiPin.CreatePinnedHandler(spkiPin, network)
+            : new RedirectRefusingHandler(PeerHttp.NoRedirectHandler(network)))
         {
             Timeout = Timeout.InfiniteTimeSpan
         };

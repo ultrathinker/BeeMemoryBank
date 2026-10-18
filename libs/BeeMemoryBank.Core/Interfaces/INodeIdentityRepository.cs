@@ -7,6 +7,11 @@ public interface INodeIdentityRepository
     Task<NodeIdentity?> GetAsync();
     Task CreateAsync(NodeIdentity identity);
     Task StoreSentinelAsync(byte[] sentinelValue);
+    /// <summary>
+    /// Stores the sentinel only while the row has none (NULL or empty) and says whether it did. A vault older than the sentinel has none;
+    /// the unlock that heals it must not overwrite one a rotation wrote in the meantime.
+    /// </summary>
+    Task<bool> StoreSentinelIfMissingAsync(byte[] sentinelValue);
     Task<byte[]?> GetSentinelAsync();
     Task MarkInitialSyncCompletedAsync();
 

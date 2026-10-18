@@ -21,6 +21,7 @@ namespace BeeMemoryBank.Cli.Tests;
 /// node's join door (a certificate nobody trusts, a token check) and records what reached it; after the join it answers the
 /// challenge, the authentication and the for-join snapshot (<see cref="FakeJoinHost"/>) over the same pinned TLS.
 /// </summary>
+[Collection("CliSealedStatics")]
 public class JoinCommandCodeTests : IDisposable
 {
     private const string Password = "cliJoinCodePassword1";
@@ -30,6 +31,7 @@ public class JoinCommandCodeTests : IDisposable
 
     public void Dispose()
     {
+        JoinedNode.Reset();
         _cert.Dispose();
         if (Directory.Exists(_tempDir))
             try { Directory.Delete(_tempDir, recursive: true); } catch { }
@@ -50,7 +52,7 @@ public class JoinCommandCodeTests : IDisposable
             .Which.Token.Should().Be(Token, "the code's token travels in X-BMB-Join-Token");
         door.Requests.Select(r => r.Path).Should().Contain("/api/sync/snapshot/for-join",
             "the snapshot comes through the same pinned connection as the join");
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         var row = await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(hostId);
         row!.ApiAddress.Should().Be(door.Address);
@@ -87,7 +89,7 @@ public class JoinCommandCodeTests : IDisposable
     }
 
     [Fact]
-    public async Task WrongToken_ShowsTheDoorsOwnSentence()
+    public async Task WrongToken_ShowsTheSentenceOfTheDoorsStatus_NotTheDoorsOwnText()
     {
         await using var door = new TlsDoor(_cert, expectedToken: Token, new FakeJoinHost(Guid.NewGuid()));
         var code = new JoinCode(door.Address, OtherToken, SpkiPin.Of(_cert)).ToString();
@@ -96,7 +98,22 @@ public class JoinCommandCodeTests : IDisposable
         var rc = await JoinCommand.HandleAsync(_tempDir, "", Password, "CliJoiner", output: output, joinCode: code);
 
         rc.Should().Be(1);
-        output.ToString().Should().Contain("403").And.Contain("This join code is not valid");
+        output.ToString().Should().Contain("403").And.Contain(JoinCode.DoorRefusedMessage, "the status tells it").And.NotContain("Open Connect a device on the computer and use the code shown there", "the door's own words are not shown");
+    }
+
+    [Fact]
+    public async Task ADoorThatAnswersWithText_AnythingElse_IsToldByStatusOnly_AndItsOwnWordsAreNeverShown()
+    {
+        // BMB-306/307 fix round 2 (T3): the other computer's body is its own text (a URL, a token, markup).
+        const string Hostile = "{\"error\":\"Pay at https://evil.example/pay?token=abc123 <b>now</b>\"}";
+        await using var door = new TlsDoor(_cert, expectedToken: Token, new FakeJoinHost(Guid.NewGuid()), refusalBody: Hostile);
+        var code = new JoinCode(door.Address, OtherToken, SpkiPin.Of(_cert)).ToString();
+
+        var output = new StringWriter();
+        var rc = await JoinCommand.HandleAsync(_tempDir, "", Password, "CliJoiner", output: output, joinCode: code);
+
+        rc.Should().Be(1);
+        output.ToString().Should().Contain("403").And.NotContain("evil.example").And.NotContain("abc123").And.NotContain("<b>");
     }
 
     [Fact]
@@ -144,14 +161,14 @@ public class JoinCommandCodeTests : IDisposable
 
     private static string JoinResponseJson(FakeJoinHost host)
     {
-        var dek = MasterKeyManager.GenerateMasterDek();
+        var dek = host.Dek;
         var salt = KeyDerivation.GenerateSalt();
         var (encDek, iv) = MasterKeyManager.WrapMasterDek(dek, KeyDerivation.DeriveKek(Password, salt));
         return JsonSerializer.Serialize(new
         {
             remoteNode = new
             {
-                nodeId = host.HostId, displayName = "Host", protocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current,
+                nodeId = host.HostId, displayName = "Host", protocolVersion = BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol,
                 ed25519PublicKeyB64 = host.PublicKeyB64
             },
             keySlot = new
@@ -181,13 +198,15 @@ public class JoinCommandCodeTests : IDisposable
         private readonly string _joinResponse;
         private readonly FakeJoinHost _host;
         private readonly Task _loop;
+        private readonly string _refusalBody;
 
         public ConcurrentQueue<(string Path, string? Token)> RequestQueue { get; } = new();
         public IReadOnlyCollection<(string Path, string? Token)> Requests => RequestQueue.ToArray();
         public string Address { get; }
 
-        public TlsDoor(X509Certificate2 cert, string expectedToken, FakeJoinHost host)
+        public TlsDoor(X509Certificate2 cert, string expectedToken, FakeJoinHost host, string? refusalBody = null)
         {
+            _refusalBody = refusalBody ?? JsonSerializer.Serialize(new { error = "This join code is not valid. Open Connect a device on the computer and use the code shown there." });
             _cert = cert;
             _expectedToken = expectedToken;
             _host = host;
@@ -233,7 +252,7 @@ public class JoinCommandCodeTests : IDisposable
                     {
                         (status, var body) = token == _expectedToken
                             ? ("200 OK", _joinResponse)
-                            : ("403 Forbidden", JsonSerializer.Serialize(new { error = "This join code is not valid. Open Connect a device on the computer and use the code shown there." }));
+                            : ("403 Forbidden", _refusalBody);
                         bytes = Encoding.UTF8.GetBytes(body);
                     }
                     var head = $"HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extraHeaders}Content-Length: {bytes.Length}\r\nConnection: close\r\n\r\n";

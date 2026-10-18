@@ -1,4 +1,5 @@
 using BeeMemoryBank.Api.Helpers;
+using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync;
@@ -34,7 +35,9 @@ public sealed class CoreBlindStatusContributor(
     string? dataPath = null,
     ISyncProtocolPolicy? protocolPolicy = null,
     IBlindStoreSummarySource? storeSummary = null,
-    IBaselineStore? baselineStore = null) : IBlindStatusContributor
+    IBaselineStore? baselineStore = null,
+    PeerContactLog? contacts = null,
+    SyncScheduler? scheduler = null) : IBlindStatusContributor
 {
     private readonly INodeRole _role = role ?? new EnvironmentNodeRole();
     private readonly string _dataPath =
@@ -71,6 +74,8 @@ public sealed class CoreBlindStatusContributor(
             .ToDictionary(p => p.RemoteNodeId);
         var pushPositions = (await pushPositionRepo.GetAllActivePeersWithPushPositionsAsync())
             .ToDictionary(p => p.NodeId);
+        var pushRows = (await pushPositionRepo.GetAllAsync()).ToDictionary(p => p.RemoteNodeId);
+        var headSeq = await eventLogRepo.GetMaxSequenceAsync();
 
         foreach (var entry in whitelist.Where(w => w.NodeId != selfId))
         {
@@ -86,11 +91,19 @@ public sealed class CoreBlindStatusContributor(
             if (havePush && theirPull.LastPushedSeq is { } lastPulled)
                 lag = await eventLogRepo.CountEventsAfterSequenceAsync(lastPulled);
 
+            // The contact as every status of the mesh tells it (PeerContactView, BMB-313): the last completed session either way and whose call it was, when
+            // events last went out, and since when this node's calls to it fail and why. The legacy last_contact keeps the delivery time it always was.
+            pushRows.TryGetValue(entry.NodeId, out var pushRow);
+            var view = PeerContactView.Build(entry, contacts?.Get(entry.NodeId, entry.ApiAddress) ?? new PeerContactLog.Contact(),
+                havePull ? ourPull!.UpdatedAt : null, pushRow, headSeq, (int)Math.Min(lag ?? 0, int.MaxValue), DateTime.UtcNow, scheduler?.Interval);
+
             b.AddPeer(new BlindPeerStatus(
                 entry.NodeId.ToString(),
                 entry.DisplayName,
                 lastContact,
-                lag));
+                lag,
+                view.LastContactAt, view.LastContactDirection, view.LastPushAt, view.LastOutboundAt, view.LastInboundAt,
+                view.State, view.Online, view.NotAnsweringSince, view.NotAnsweringReason));
         }
     }
 

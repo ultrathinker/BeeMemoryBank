@@ -128,7 +128,7 @@ public sealed class UpdateUnlockHandoff(SessionService session, string dataPath,
             }
 
             var sentinel = await nodeRepo.GetSentinelAsync();
-            if (sentinel == null || !MasterKeyManager.VerifySentinel(sentinel, dek))
+            if (MasterKeyManager.IsSentinelMissing(sentinel) || !MasterKeyManager.VerifySentinel(sentinel!, dek))
             {
                 Array.Clear(dek);
                 return false;

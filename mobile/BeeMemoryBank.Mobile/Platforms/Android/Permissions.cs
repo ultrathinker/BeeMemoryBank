@@ -9,3 +9,6 @@ using Android.App;
 [assembly: UsesPermission(Android.Manifest.Permission.ReceiveBootCompleted)]
 [assembly: UsesPermission("android.permission.POST_NOTIFICATIONS")]
 [assembly: UsesPermission("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")]
+// .NET MAUI's Battery API refuses to read the charge level and state unless this is declared (Permissions.EnsureDeclared); the encryption's preflight
+// (battery at least 30 % or charging, spec 10.8) reads both. Declaring it grants nothing: the values come from the sticky battery broadcast.
+[assembly: UsesPermission("android.permission.BATTERY_STATS")]

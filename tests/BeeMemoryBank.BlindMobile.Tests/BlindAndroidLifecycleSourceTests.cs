@@ -45,9 +45,15 @@ public sealed class BlindAndroidLifecycleSourceTests
     {
         var page = Source("Pages", "BlindHomePage.xaml.cs");
 
-        page.Should().Contain("BackupNowButton.IsEnabled = false", "the tap turns the button off at once");
+        // The tap turns the button off at once: through the one busy helper (BMB-311), which disables the target before anything starts and keeps the
+        // pop-up up until the job's state says it has ended.
+        var handler = page[page.IndexOf("async void OnBackupNowClicked", StringComparison.Ordinal)..];
+        handler = handler[..handler.IndexOf("\n    }\n", StringComparison.Ordinal)];
+        handler.Should().Contain("BusyAction.RunAsync(sender as Button");
+        handler.Should().Contain("BlindJobWait.Ask(BlindJobWait.Backup", "the wait is judged from the state of the phone, not from a clock");
         page.Should().Contain("_activity.IsActive(BlindActivity.BackupService)");
         page.Should().Contain("BackupNowButton.Text = view.BackupNowText");
+        page.Should().Contain("BackupNowButton.IsEnabled = view.CanBackupNow", "and the button stays off while the job runs, whoever started it");
     }
 
     // ---- F-03: the wipe stops and waits for every worker -----------------------------------------------------------------------------
@@ -81,7 +87,8 @@ public sealed class BlindAndroidLifecycleSourceTests
 
         page.Should().Contain("Task.Run(() => _app.DisconnectAndWipeAsync())");
         page.Should().NotContain("BlindPhoneReset.WipeAndRestart(", "the synchronous wipe would block the UI thread while it waits for the work");
-        page.Should().Contain("catch (AggregateException ex)", "an incomplete wipe is reported, with 'press it again'");
+        page.Should().Contain("catch (AggregateException)", "an incomplete wipe is noted, and reported with 'press it again'");
+        page.Should().Contain("Press Disconnect and wipe again to finish.");
     }
 
     [Fact]
@@ -118,7 +125,8 @@ public sealed class BlindAndroidLifecycleSourceTests
             var end = page.IndexOf("\n    }\n", start, StringComparison.Ordinal);
             var body = page[start..end];
             var name = Regex.Match(body, @"async void (\w+)").Groups[1].Value;
-            body.Should().Contain("catch (Exception", $"{name} is an async void: an exception in it would end the app");
+            // The busy helper catches everything its work throws and says it (BMB-311); a handler that does not use it catches for itself.
+            (body.Contains("catch (Exception") || body.Contains("BusyAction.RunAsync(")).Should().BeTrue($"{name} is an async void: an exception in it would end the app");
         }
     }
 

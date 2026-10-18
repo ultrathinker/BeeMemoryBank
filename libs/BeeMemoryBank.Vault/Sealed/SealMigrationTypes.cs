@@ -8,6 +8,16 @@ public sealed record SealBlocker(string Code, string Message);
 /// <summary>A non-blocking remark of the preflight (spec 10.2, 11.2 item 1).</summary>
 public sealed record SealWarning(string Code, string Message);
 
+/// <summary>The warnings every client shows before "Encrypt this node" is started.</summary>
+public static class SealWarnings
+{
+    public const string NoWayBack = "no_way_back";
+
+    /// <summary>The sentence of <see cref="NoWayBack"/>: encrypting keeps no copy of the plain database, so nothing on the node can undo it.</summary>
+    public const string NoWayBackMessage =
+        "Going back is not possible from the node: encrypting it keeps no copy of the unencrypted database. Keep your own backup if you may want one.";
+}
+
 /// <summary>The codes of <see cref="SealBlocker"/> (spec 10.2).</summary>
 public static class SealBlockers
 {
@@ -22,7 +32,6 @@ public static class SealBlockers
     public const string IdentityV0 = "identity_v0";
     public const string Integrity = "integrity";
     public const string FreeSpace = "free_space";
-    public const string SnapshotLimit = "snapshot_limit";
     public const string Engine = "engine";
     public const string UncPath = "unc_path";
     public const string PlainCopies = "plain_copies";
@@ -34,7 +43,7 @@ public static class SealBlockers
 /// <summary>The failure codes of a migration (spec 10.9).</summary>
 public static class SealFailures
 {
-    public const string Snapshot = "snapshot";
+    public const string Sentinel = "sentinel";
     public const string PlainCopies = "plain_copies";
     public const string VerifyIntegrity = "verify_integrity";
     public const string VerifyCounts = "verify_counts";
@@ -67,12 +76,9 @@ public sealed record SealPreflightResult(
     public bool CanStart => Blockers.Count == 0;
 }
 
-/// <summary>What the owner ticked for a start (spec 10.2 <c>snapshot_limit</c>, 10.8 <c>phone_no_copy</c>).</summary>
-/// <param name="AcceptNoSnapshot">"I keep my own offline backup of this node; encrypting cannot be undone from the node itself": the way-back snapshot is skipped.</param>
+/// <summary>What the owner ticked for a start (spec 10.8 <c>phone_no_copy</c>).</summary>
+/// <param name="AcceptNoSnapshot">A phone only: "this phone holds the only copy of these notes; encrypting cannot be undone". A full node has no such tick: encrypting it keeps no copy of the plain database, and says so before it starts.</param>
 public sealed record SealOptions(bool CallerIsSuperadmin = true, bool AcceptNoSnapshot = false);
-
-/// <summary>The way-back snapshot of a node (spec 10.7): its name inside the data folder, size and date. Never in the unauthenticated status.</summary>
-public sealed record WayBackSnapshot(string RelativeName, long Bytes, DateTime CreatedUtc);
 
 /// <summary>What the page polls (spec 10.9).</summary>
 public sealed record SealProgress(
@@ -81,7 +87,6 @@ public sealed record SealProgress(
     string Step,
     string? ErrorCode = null,
     string? Error = null,
-    WayBackSnapshot? Snapshot = null,
     IReadOnlyList<string>? PlainCopiesFound = null)
 {
     public const string Idle = "idle";
@@ -91,23 +96,23 @@ public sealed record SealProgress(
 }
 
 /// <summary>
-/// What a host adds to the migration: the way-back snapshot (the snapshot service is the Api's, a phone has none) and the blockers only the host
-/// knows (a phone's foreground and battery).
+/// What a host adds to the migration: what it has to make right in the live vault first, and the blockers only the host knows (a phone's foreground
+/// and battery). Encrypting keeps no copy of the plain database: there is no way back from the node itself.
 /// </summary>
 public interface ISealMigrationHost
 {
-    /// <summary>True when this host can make the way-back snapshot (spec 10.4 step 3); a phone cannot (10.8).</summary>
-    bool CanMakeWayBackSnapshot { get; }
-
-    /// <summary>True when a database of this size fits what the way-back snapshot can hold (spec 10.2 <c>snapshot_limit</c>).</summary>
-    bool FitsWayBackSnapshot(long databaseBytes);
+    /// <summary>
+    /// What the host has to make right in the live vault before its files are folded and copied: a vault older than the sentinel has none, and the
+    /// verification of the encrypted copy names the master key through it. Runs once the sync loop is paused and no
+    /// event write is in flight, before the checkpoint. Nothing to do by default.
+    /// </summary>
+    Task PrepareVaultAsync(CancellationToken ct) => Task.CompletedTask;
 
     /// <summary>
-    /// The pre-encryption snapshot with its key envelope, written to <c>&lt;data&gt;/pre-encryption/</c>, its staging copy wiped, and self-checked
-    /// with <paramref name="masterPassword"/> (spec 10.4 step 3). Throws <see cref="SealMigrationException"/> with code <c>snapshot</c> and deletes
-    /// the file on failure.
+    /// Free bytes of the file system that holds <paramref name="path"/>, when the host can say it better than the generic answer (the drive of the path
+    /// root): on Android the root of every path is the read-only system partition, which has no free space at all. Null: use the generic answer.
     /// </summary>
-    Task<WayBackSnapshot> CreateWayBackSnapshotAsync(string masterPassword, CancellationToken ct);
+    long? FreeBytes(string path) => null;
 
     /// <summary>Blockers that depend on the host (spec 10.2 <c>mobile_foreground</c>, 10.8 <c>phone_no_copy</c>).</summary>
     Task<IReadOnlyList<SealBlocker>> HostBlockersAsync(SealOptions options, CancellationToken ct);

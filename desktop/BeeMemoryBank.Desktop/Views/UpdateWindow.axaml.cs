@@ -136,13 +136,16 @@ public partial class UpdateWindow : Window
 
     private async void OnPrimaryClick(object? sender, RoutedEventArgs e)
     {
+        // The one busy helper (BMB-311): the button is off and shows its loader from the click until the window itself moves on to "Updating"
+        // (or says why not), so the click cannot start the update twice. This window is the pop-up of the long part: it hides the buttons, shows
+        // "Please wait" and, if the update fails, the reason, in place.
         switch (_mode)
         {
             case Mode.Ready:
-                await _applyUpdate();
+                await BusyAction.RunAsync(this, PrimaryButton, _applyUpdate, new BusyOptions { FailureTitle = "The update could not be applied" });
                 break;
             case Mode.Failed:
-                await CheckAsync();
+                await BusyAction.RunAsync(this, PrimaryButton, CheckAsync, new BusyOptions { FailureTitle = "Couldn't check for updates" });
                 break;
             default:
                 Close();

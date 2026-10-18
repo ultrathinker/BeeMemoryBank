@@ -82,9 +82,9 @@ public class IosBoundaryTests
         packages.Should().BeEquivalentTo("Microsoft.Maui.Controls", "Microsoft.Extensions.Http", "QRCoder");
         foreach (var name in NeverInTheApp.Where(n => n != "BeeMemoryBank.BlindDesktop" && n != "BeeMemoryBank.BlindDesktop.MacOS"))
             csproj.Should().NotContain(name + ".csproj", "the app must not reference " + name);
-        // The two files it links from the desktop copies are source, not their assemblies.
+        // The files it links from the desktop copies and the other phone apps are source, not their assemblies (BusyAction.cs: the one busy helper, BMB-311).
         Regex.Matches(csproj, "<Compile Include=\"([^\"]+)\"").Select(m => Path.GetFileName(m.Groups[1].Value.Replace('\\', '/')))
-            .Should().BeEquivalentTo("BlindTimerScheduler.cs", "MacOsBlindStateStore.cs");
+            .Should().BeEquivalentTo("BlindTimerScheduler.cs", "MacOsBlindStateStore.cs", "BusyAction.cs");
     }
 
     [Fact]

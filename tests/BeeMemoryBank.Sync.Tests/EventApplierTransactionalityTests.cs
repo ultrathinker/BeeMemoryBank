@@ -163,7 +163,7 @@ public class EventApplierTransactionalityTests : IAsyncLifetime
 
     private sealed class NullRestoreInitiator : IRestoreInitiator
     {
-        public Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent)
+        public Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent, CancellationToken ct = default)
             => Task.CompletedTask;
         public Task RetryPendingRestoresAsync() => Task.CompletedTask;
     }

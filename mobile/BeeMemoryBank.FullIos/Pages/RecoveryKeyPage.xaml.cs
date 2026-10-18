@@ -1,3 +1,5 @@
+using BeeMemoryBank.Busy;
+
 namespace BeeMemoryBank.FullIos.Pages;
 
 /// <summary>A recovery key, shown once: copied only on request (this phone only, two minutes), forgotten when the page goes.</summary>
@@ -34,7 +36,11 @@ public partial class RecoveryKeyPage : ContentPage
     {
         _key = null;
         KeyLabel.Text = "";
-        if (_firstTime) await _flow.OfferQuickUnlockAsync(this);
-        _flow.ShowMain();
+        // The one busy helper (BMB-311): the button is off and spins while the Face ID question is open and the main screen comes up.
+        await BusyAction.RunAsync(sender as Button, async () =>
+        {
+            if (_firstTime) await _flow.OfferQuickUnlockAsync(this);
+            _flow.ShowMain();
+        });
     }
 }

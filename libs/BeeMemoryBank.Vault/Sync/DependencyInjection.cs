@@ -19,6 +19,8 @@ public static class DependencyInjection
         services.AddNodeSync();
 
         services.AddScoped<IEventLogger, EventLogger>();
+        // The one writer of a peer's address: the node's "Change node address" and the phone's "Edit URL" both call it (BMB-307).
+        services.AddScoped<PeerAddressService>();
         // The master-DEK sentinel check of SyncClient (a blind node registers none and skips the check).
         services.TryAddScoped<IRemoteSentinelVerifier, RemoteSentinelVerifier>();
 
@@ -87,7 +89,7 @@ public static class DependencyInjection
     // the misconfiguration into operator logs immediately.
     private sealed class NoOpRestoreInitiator(ILogger<NoOpRestoreInitiator> logger) : IRestoreInitiator
     {
-        public Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent)
+        public Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent, CancellationToken ct = default)
         {
             logger.LogWarning(
                 "NoOpRestoreInitiator invoked for event {EventId} — server's real IRestoreInitiator is NOT registered. " +

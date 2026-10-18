@@ -27,7 +27,7 @@ public sealed class BlindRestoreInitiator(
     /// </summary>
     public bool RequiresApproval => false;
 
-    public async Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent)
+    public async Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent, CancellationToken ct = default)
     {
         await FlagAsync(eventId);
         logger.LogWarning(

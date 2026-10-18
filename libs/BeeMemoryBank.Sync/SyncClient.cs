@@ -104,7 +104,7 @@ public class SyncClient(
     private async Task<string?> WhyNotToAdoptAsync(SnapshotRequiredException ex, Guid peerNodeId)
     {
         if (!string.Equals(ex.ErrorCode, SnapshotRequiredException.SequenceTooOldCode, StringComparison.Ordinal))
-            return $"its 410 does not carry the {SnapshotRequiredException.SequenceTooOldCode} code (it says \"{ex.ErrorCode ?? "nothing"}\")";
+            return $"its 410 does not carry the {SnapshotRequiredException.SequenceTooOldCode} code";   // what it says instead is its own text: not quoted
         if (await syncPositionRepo.GetAsync(peerNodeId) is { } held)
             return $"this node already holds a pull position for it ({held.LastSequenceNum}), and a 410 never moves a cursor that exists";
         if (ex.LastCompactionCp <= 0)
@@ -187,11 +187,15 @@ public class SyncClient(
             // gives a far clearer diagnosis for the mundane case — a stale/wrong ApiAddress in
             // our own whitelist — than a "challenge audience mismatch" thrown from deep inside
             // the auth handshake.
-            throw new InvalidOperationException(
-                $"Peer at {remoteApiBase} declares NodeId {remoteIdentity.NodeId}, but we dialed it as " +
-                $"{expectedPeerNodeId}. Refusing to sync — this is either a stale/incorrect ApiAddress " +
-                "entry in our own whitelist, or a peer impersonation attempt.");
+            // Typed, and without the address: the message reaches the status pages and logs, which keep addresses (and anything that could ride in one) out.
+            throw new PeerIdentityMismatchException(expectedPeerNodeId, remoteIdentity.NodeId);
         }
+
+        // The node id is only what the peer says about itself; the network knows a node by its key. Same id and another key is not this node (BMB-307 fix round).
+        if (whitelistRepo is not null
+            && await whitelistRepo.GetByNodeIdAsync(expectedPeerNodeId) is { Ed25519PublicKey.Length: 32 } onRecord
+            && !PeerKey.Matches(onRecord.Ed25519PublicKey, remoteIdentity.Ed25519PublicKeyB64))
+            throw new PeerKeyMismatchException(expectedPeerNodeId);
 
         // Below protocol 3 a peer would accept a blind node's events and seal the DEK for it
         // (SyncProtocolVersion.MinPeer). It must not learn of one from us, and anything we pulled
@@ -203,9 +207,10 @@ public class SyncClient(
                          ?? SyncProtocolVersion.IsCompatiblePeer(remoteIdentity.ProtocolVersion);
         if (!compatible)
         {
-            logger.LogWarning("Remote node {NodeId} is on protocol {Remote}, which this node no longer syncs with; not syncing with it until it upgrades.",
-                remoteIdentity.NodeId, remoteIdentity.ProtocolVersion);
-            return 0;
+            // Not "nothing to do": the session did not happen, and every caller has to say so (the phone's heartbeat, "Sync now", the status page).
+            // The scheduler writes the one line per streak; the peer is asked again with a growing pause.
+            logger.LogDebug("Remote node {NodeId} is on protocol {Remote}, which this node no longer syncs with.", remoteIdentity.NodeId, remoteIdentity.ProtocolVersion);
+            throw new PeerIncompatibleException(remoteIdentity.ProtocolVersion);
         }
 
         var token = await AuthenticateAsync(http, remoteApiBase, identity, expectedPeerNodeId, ct);
@@ -508,14 +513,10 @@ public class SyncClient(
         return appliedCount;
     }
 
-    private static async Task<RemoteIdentityDto> GetRemoteIdentityAsync(
-        HttpClient http, string baseUrl, CancellationToken ct)
-    {
-        var resp = await http.GetAsync($"{baseUrl}/api/sync/identity", ct);
-        resp.EnsureSuccessStatusCode();
-        return await resp.Content.ReadFromJsonAsync<RemoteIdentityDto>(JsonOpts, ct)
-            ?? throw new InvalidDataException("Invalid identity response.");
-    }
+    // BMB-307: an address that answers 404 (or with a page that is not an identity) has no sync server behind it; that is said as such
+    // (NoSyncServerException), not as a bare "404" a person cannot place, and never as a cycle that ended well.
+    private static Task<RemoteIdentity> GetRemoteIdentityAsync(HttpClient http, string baseUrl, CancellationToken ct)
+        => SyncAddress.ReadIdentityAsync(http, baseUrl, ct);
 
     // Delegates to the shared PeerAuthenticator helper — same flow, single source of truth,
     // also used by the reachability self-test (POST /api/sync/probe) endpoint.
@@ -537,7 +538,9 @@ public class SyncClient(
             long lastCp = 0, headSeq = 0;
             string? code = null;
             var headReported = false;
-            string msg = "Your position is older than remote retained history.";
+            // The peer's own "message" is never taken over: it would travel through the exception to every screen and log. The code and the numbers are read
+            // strictly below; the sentence is this node's.
+            const string msg = "Your position is older than remote retained history.";
             try
             {
                 using var doc = JsonDocument.Parse(body);
@@ -553,7 +556,6 @@ public class SyncClient(
                         headSeq = h;
                         headReported = true;
                     }
-                    if (root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String) msg = m.GetString() ?? msg;
                 }
             }
             catch (JsonException) { }
@@ -707,8 +709,6 @@ public class SyncClient(
     }
 
     // Local DTOs for remote API responses
-    private sealed record RemoteIdentityDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0,
-        IReadOnlyList<string>? Capabilities = null, string? AppVersion = null);
     // LastAppliedSequence is nullable for backward compat with older servers — fall back to
     // advancing to the batch end (batch[^1]) if absent. Current servers always populate it (see
     // SyncApplyResult in BeeMemoryBank.Api.Models).

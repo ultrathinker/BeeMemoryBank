@@ -29,16 +29,21 @@ public static partial class BlindNodeErrors
     /// <summary>This app's own server (the Api) did not answer at all.</summary>
     public static BlindNodeError AppDidNotAnswer(Exception ex) => BlindNodeError.Of(
         "The Bee Memory Bank server on this computer did not answer. Wait a moment and try again; if it keeps happening, restart Bee Memory Bank.",
-        Short(ex.Message));
+        Short(BeeMemoryBank.Sync.FailureText.Say(ex)));
 
     public static BlindNodeError ForDisconnect() => BlindNodeError.Of(
         "The blind node could not be disconnected. Try again; if it fails again, restart Bee Memory Bank and check that you are signed in as a superadmin.");
+
+    /// <summary>The Api's code for "the same operation is already running" (409, LongOperationGate).</summary>
+    private const string AlreadyRunning = "already_running";
 
     public static BlindNodeError ForAdd(HttpStatusCode status, string body)
     {
         var b = ApiBody.Parse(body);
         switch ((int)status)
         {
+            case 409 when b.Code == AlreadyRunning:
+                return BlindNodeError.Of("A blind node is being added right now. Wait until it has finished, then look at the list below.", b.Error);
             case 400:
                 return BlindNodeError.Of(
                     "This is not a valid pair code. Copy the whole code again from the blind node's console page (section Pairing), paste it here and press Add.",
@@ -63,6 +68,8 @@ public static partial class BlindNodeErrors
         var b = ApiBody.Parse(body);
         return (int)status switch
         {
+            409 when b.Code == AlreadyRunning => BlindNodeError.Of(
+                "This blind node is being reseeded right now. Wait until it has finished, then look at the list below.", b.Error),
             404 => BlindNodeError.Of(
                 "This blind node is not in the list any more, or it has no address. Reload the page; if it was disconnected, add it again with a new pair code."),
             401 or 403 => Refusal(b),

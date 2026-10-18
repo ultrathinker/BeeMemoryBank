@@ -25,7 +25,7 @@ public static class BlindRunReport
     /// not die silently in WorkManager's logcat, the screen's log is where the user can read it.
     /// </summary>
     public static void RecordFailure(BlindPhoneLog log, string kind, Exception error) =>
-        Record(log, kind, $"Stopped by an unexpected error ({error.GetType().Name}): {error.Message}{Where(error)}");
+        Record(log, kind, $"Stopped by an unexpected error ({error.GetType().Name}): {(BeeMemoryBank.Sync.FailureText.IsRemoteInfluenced(error) ? BeeMemoryBank.Sync.PeerContactLog.Describe(error) : error.Message)}{Where(error)}");
 
     /// <summary>
     /// The exception's message, followed by the messages of its inner exceptions that say something new (type and words). The TLS and socket
@@ -34,6 +34,9 @@ public static class BlindRunReport
     /// </summary>
     public static string Reason(Exception error)
     {
+        // A failure of a call to the other computer is told as the KIND of failure (refused connection, certificate not accepted, no answer in time, an answer that cannot be
+        // read): the HTTP stack's own words carry the reason phrase of the answer and the address that was dialled, which are the other side's and this network's text.
+        if (BeeMemoryBank.Sync.FailureText.IsRemoteInfluenced(error)) return BeeMemoryBank.Sync.PeerContactLog.Describe(error);
         var text = new System.Text.StringBuilder(OneLine(error.Message));
         var seen = new HashSet<string>(StringComparer.Ordinal) { OneLine(error.Message) };
         for (var inner = error.InnerException; inner is not null && seen.Count <= MaxInner; inner = inner.InnerException)

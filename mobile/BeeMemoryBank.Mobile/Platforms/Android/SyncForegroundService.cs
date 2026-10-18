@@ -62,8 +62,10 @@ public class SyncForegroundService : Service
                 // Persistent heartbeat: each cycle (success OR failure) stamps Preferences so the
                 // Status page can show when background sync last actually ran on this device.
                 Services.SyncHeartbeat.RecordServiceStart();
+                // Problem, not Error: a peer that answered 404 (a wrong address) or did not answer ends the cycle with a failure per peer, and
+                // that must read "error: no sync server at this address ...", never "ok (applied 0)" (BMB-307).
                 scheduler.SyncCycleCompleted += (_, r) =>
-                    Services.SyncHeartbeat.RecordCycle(r.Error == null, r.TotalApplied, r.Error, "fg");
+                    Services.SyncHeartbeat.RecordCycle(r.Problem == null, r.TotalApplied, r.Problem, "fg");
 
                 await scheduler.StartAsync(token);
             });

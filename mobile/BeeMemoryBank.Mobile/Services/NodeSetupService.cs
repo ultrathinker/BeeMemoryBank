@@ -72,6 +72,11 @@ public class NodeSetupService
         if (await _initSvc.IsInitializedAsync())
             throw new InvalidOperationException("Node already initialized. Delete the database to re-join.");
 
+        // What was typed, or what the code carried, goes through the one policy for an address before a request is built from it.
+        var target = BeeMemoryBank.Sync.PeerAddressPolicy.Canonicalize(remoteUrl);
+        if (!target.Ok) throw new InvalidOperationException("This computer cannot be joined through that address: " + target.Refusal);
+        remoteUrl = target.Address!;
+
         // Never the app's default client: it follows redirects, and a 307 would resend the password.
         using var http = JoinHttp.CreateClient(code?.SpkiPin);
         var snapshotJoinClient = _snapshotJoinClientOver(http);
@@ -128,17 +133,19 @@ public class NodeSetupService
         }
         catch (Exception ex)
         {
-            throw new InvalidOperationException($"Cannot reach remote node: {ex.Message}"
+            throw new InvalidOperationException($"Cannot reach remote node: {BeeMemoryBank.Sync.PeerContactLog.Describe(ex)}"
                 + (ex is HttpRequestException unanswered && JoinAbortClient.MayHaveReachedHost(unanswered)
                     ? " " + await AbortNoteAsync(rowCertain: false) : ""));
         }
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync();
+            // The other computer's answer is told by its STATUS: through a code its door says one of two things (JoinCode.DescribeDoorAnswer); what its body
+            // says is its own text and is never shown.
+            var doorSaid = code != null ? JoinCode.DescribeDoorAnswer((int)response.StatusCode) : null;
             // A server-side failure (a proxy that gave up while the host went on) may have come after the host wrote the row.
             var rejectedNote = (int)response.StatusCode >= 500 ? " " + await AbortNoteAsync(rowCertain: false) : "";
-            throw new InvalidOperationException($"Join rejected ({(int)response.StatusCode}): {errorBody}{rejectedNote}");
+            throw new InvalidOperationException($"Join rejected ({(int)response.StatusCode}){(doorSaid != null ? ": " + doorSaid : "")}{rejectedNote}");
         }
 
         // From the host's answer on, the host holds this phone's row, so any failure before the snapshot step (an answer that cannot be
@@ -158,6 +165,10 @@ public class NodeSetupService
                 throw new InvalidOperationException("The answer of the remote node is incomplete.");
             joinResponse = answer;
 
+            // A new node joins only a node that encrypts its metadata (protocol 4): to an older one it is refused, with nothing written here.
+            if (SyncProtocolVersion.JoinRefusal(joinResponse.RemoteNode.ProtocolVersion) is { } notEncrypted)
+                throw new InvalidOperationException(notEncrypted + " " + await AbortNoteAsync());
+
             var slot = joinResponse.KeySlot;
             var encryptedMasterDek = Convert.FromBase64String(slot.EncryptedMasterDekB64);
             var remoteIv = Convert.FromBase64String(slot.IvB64);
@@ -170,7 +181,7 @@ public class NodeSetupService
             }
             catch (System.Security.Cryptography.CryptographicException ex)
             {
-                throw new InvalidOperationException($"The remote node sent an invalid key slot. {ex.Message} " + await AbortNoteAsync());
+                throw new InvalidOperationException("The remote node sent a key slot with parameters this phone does not accept. " + await AbortNoteAsync());
             }
 
             try
@@ -273,7 +284,7 @@ public class NodeSetupService
                         NodeId = entry.NodeId,
                         DisplayName = entry.DisplayName,
                         Ed25519PublicKey = Convert.FromBase64String(entry.Ed25519PublicKeyB64),
-                        ApiAddress = entry.ApiAddress,
+                        ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(entry.ApiAddress),
                         Status = "A",
                         CreatedAt = now,
                         UpdatedAt = now,
@@ -299,7 +310,7 @@ public class NodeSetupService
                 NodeId = remote.NodeId,
                 DisplayName = remote.DisplayName,
                 Ed25519PublicKey = Convert.FromBase64String(remote.Ed25519PublicKeyB64),
-                ApiAddress = remoteUrl.TrimEnd('/'),
+                ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(remoteUrl),
                 Status = "A",
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -320,7 +331,7 @@ public class NodeSetupService
             _logger.LogError(ex, "The answer of the host could not be used — rolling back the partial node so a retry can start clean.");
             try { RollbackPartialNode(); }
             catch (Exception rbEx) { _logger.LogError(rbEx, "Rollback of partial node failed; a manual reset may be required."); }
-            throw new InvalidOperationException($"The join could not be completed: {ex.Message}. " + await AbortNoteAsync(), ex);
+            throw new InvalidOperationException($"The join could not be completed ({BeeMemoryBank.Sync.FailureText.Say(ex)}). " + await AbortNoteAsync(), ex);
         }
 
 
@@ -355,7 +366,7 @@ public class NodeSetupService
             catch (Exception rbEx) { _logger.LogError(rbEx, "Rollback of partial node failed; a manual reset may be required."); }
             // The host recorded this phone when the key exchange succeeded: ask it to take the row back.
             throw new InvalidOperationException(
-                $"Key exchange succeeded but snapshot import failed: {ex.Message}. Please try again. " +
+                $"Key exchange succeeded but snapshot import failed ({BeeMemoryBank.Sync.FailureText.Say(ex)}). Please try again. " +
                 await AbortNoteAsync(), ex);
         }
         finally

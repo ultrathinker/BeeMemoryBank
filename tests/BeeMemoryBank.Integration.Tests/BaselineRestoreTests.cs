@@ -1,5 +1,6 @@
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Api.Services.Recovery;
+using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Sync.Metadata;
 using BeeMemoryBank.Core.Interfaces;
@@ -242,6 +243,9 @@ public class BaselineRestoreTests(BaselineRestoreFixture src)
             using (var db = target.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
                 (await db.ExecuteScalarAsync<string?>("SELECT value FROM tbl_migration_marker WHERE key = 'restore_replay_seq'")).Should().NotBeNull();
 
+            // The engine's own resume is under test here, not the node's: the cut restore's seal intent is out of the picture (a node's next start would wipe what
+            // the cut wrote, and the endpoint takes it back at once; a second begin over a pending intent is refused on purpose - SealIntentHostTests).
+            SealIntent.Complete(target.DataPath);
             restore.StepForTests = null;
             var result = await restore.RestoreFromBaselineAsync(Source(), Who, null, []);
 

@@ -7,7 +7,7 @@
         every other device already sees this PC as superadmin and runs a current version, then sends
         the node its first copy.
     </p>
-    <form method="post" asp-page-handler="Add">
+    <form data-busy="long" data-busy-title="Adding the blind node" method="post" asp-page-handler="Add">
         <textarea name="code" rows="3" placeholder="BMBBLIND1...." required style="width:100%;font-family:monospace;">@Model.Code</textarea>
         <sl-button type="submit" variant="primary" size="small" style="margin-top:8px;">
             <sl-icon slot="prefix" name="link-45deg"></sl-icon> Add
@@ -66,7 +66,15 @@ else
                 <span class="article-id-badge">@node.NodeId</span>
                 <span>@(node.Address ?? "no address")</span>
                 <span>Protocol: @(node.Protocol?.ToString() ?? "unknown")</span>
-                <span>Last contact: @(node.LastContact?.ToLocalTime().ToString("g") ?? "never")</span>
+                <span>Last contact: @(node.LastContact?.ToLocalTime().ToString("g") ?? "never")@(node.Contact?.LastContactDirection is { } direction ? " (" + AdminModel.ContactDirectionWords(direction) + ")" : "")</span>
+                @if (node.Contact?.LastPushAt is { } pushedAt)
+                {
+                    <span>Changes delivered: @pushedAt.ToLocalTime().ToString("g")</span>
+                }
+                @if (node.Contact is { State: "unknown" } && node.Address is not null)
+                {
+                    <span>Not checked since this node started</span>
+                }
                 @if (node.AdoptedCheckpoint is { } adopted)
                 {
                     <span title="This node held no position for the blind node's log, and took the point where the log starts as its own.">Adopted checkpoint @adopted</span>
@@ -85,6 +93,13 @@ else
                     This blind node runs a newer sync protocol than this PC. Update this PC: until then it takes nothing from the blind node.
                 </sl-alert>
             }
+            @if (node.Alarms.Contains("not_answering") && node.Contact is { NotAnsweringSince: { } notAnsweringSince })
+            {
+                <sl-alert variant="warning" open style="margin-top:8px;">
+                    This PC's calls to this blind node have failed since @notAnsweringSince.ToLocalTime().ToString("g")@(string.IsNullOrEmpty(node.Contact.NotAnsweringReason) ? "" : ": " + node.Contact.NotAnsweringReason).
+                    Nothing is delivered to it meanwhile.
+                </sl-alert>
+            }
             @if (node.Alarms.Contains("stale_baseline"))
             {
                 <sl-alert variant="warning" open style="margin-top:8px;">
@@ -100,11 +115,11 @@ else
                 </sl-alert>
             }
             <div style="display:flex;gap:8px;margin-top:10px;">
-                <form method="post" asp-page-handler="Reseed">
+                <form data-busy="long" data-busy-title="Reseeding the blind node" method="post" asp-page-handler="Reseed">
                     <input type="hidden" name="nodeId" value="@node.NodeId" />
                     <sl-button type="submit" size="small"><sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Reseed</sl-button>
                 </form>
-                <form method="post" asp-page-handler="Disconnect">
+                <form data-busy="short" method="post" asp-page-handler="Disconnect">
                     <input type="hidden" name="nodeId" value="@node.NodeId" />
                     <sl-button type="submit" size="small" variant="danger"><sl-icon slot="prefix" name="x-circle"></sl-icon> Disconnect</sl-button>
                 </form>

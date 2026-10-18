@@ -84,9 +84,9 @@ public static class S3Put
         using var resp = await http.SendAsync(req, ct);
         if (!resp.IsSuccessStatusCode)
         {
-            var body = await resp.Content.ReadAsStringAsync(ct);
-            throw new InvalidOperationException(
-                $"recovery-set S3 PUT to {url} failed: {(int)resp.StatusCode} {Truncate(body, 300)}");
+            // The store's answer and the address it was sent to are not part of the sentence (the answer is the store's own text; the address may carry the
+            // account's host): the status says what happened.
+            throw new InvalidOperationException($"The recovery-set upload to the S3 store failed (HTTP {(int)resp.StatusCode}).");
         }
     }
 

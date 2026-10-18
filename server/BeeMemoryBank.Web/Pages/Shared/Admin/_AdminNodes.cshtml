@@ -6,13 +6,14 @@
     <!-- Devices a restore kept inactive -->
     <h3 style="margin-bottom:12px;"><sl-icon name="shield-exclamation"></sl-icon> Restored devices awaiting confirmation</h3>
     <div class="card" style="margin-bottom:32px;" id="restored-peers">
+        @await Html.PartialAsync("~/Pages/Shared/Admin/_CardMessage.cshtml", new AdminCardMessage(Model, AdminCards.RestoredPeers))
         <p style="margin-top:0;color:var(--text-secondary);">No integrity anchor under your master key vouched for these devices when
             this node was restored, so they cannot sync with it yet. Confirm the ones you recognise; pair the others again.</p>
         @foreach (var peer in Model.RestoredPeers)
         {
             <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
                 <span style="flex:1;"><strong>@peer.DisplayName</strong> <code style="font-size:0.78rem;">@peer.NodeId</code> @peer.ApiAddress</span>
-                <form method="post" asp-page-handler="ConfirmRestoredPeer" style="display:inline;">
+                <form data-busy="short" method="post" asp-page-handler="ConfirmRestoredPeer" style="display:inline;">
                     <input type="hidden" name="nodeId" value="@peer.NodeId" />
                     <sl-button size="small" type="submit">Confirm</sl-button>
                 </form>
@@ -57,6 +58,7 @@ else
 }
 <h3 style="margin-bottom:12px;"><sl-icon name="wifi"></sl-icon> Devices on my network</h3>
 <div class="card mt-md" id="devices-on-my-network" style="margin-bottom:32px;max-width:640px;">
+    @await Html.PartialAsync("~/Pages/Shared/Admin/_CardMessage.cshtml", new AdminCardMessage(Model, AdminCards.Devices))
     @if (devices.Kind == DevicesCardKind.NotADesktopNode)
     {
         <p class="text-muted text-sm" style="margin-bottom:8px;">
@@ -106,11 +108,11 @@ else
                 Close it and try again, or switch this off.
             </sl-alert>
             <div style="display:flex;gap:8px;">
-                <form method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                <form data-busy="short" method="post" asp-page-handler="SetDevicesOnMyNetwork">
                     <input type="hidden" name="enabled" value="true" />
                     <sl-button type="submit" variant="primary" size="small">Try again</sl-button>
                 </form>
-                <form method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                <form data-busy="short" method="post" asp-page-handler="SetDevicesOnMyNetwork">
                     <input type="hidden" name="enabled" value="false" />
                     <sl-button type="submit" variant="default" size="small">Switch off</sl-button>
                 </form>
@@ -120,7 +122,7 @@ else
         {
             <p style="margin:0 0 8px;"><sl-badge variant="warning">On</sl-badge>
                 Other devices on this network can reach this node.</p>
-            <form method="post" asp-page-handler="SetDevicesOnMyNetwork">
+            <form data-busy="short" method="post" asp-page-handler="SetDevicesOnMyNetwork">
                 <input type="hidden" name="enabled" value="false" />
                 <sl-button type="submit" variant="default" size="small">Switch off</sl-button>
             </form>
@@ -129,7 +131,7 @@ else
         {
             <p style="margin:0 0 8px;"><sl-badge variant="neutral">Off</sl-badge>
                 This node answers this computer only.</p>
-            <form method="post" asp-page-handler="SetDevicesOnMyNetwork">
+            <form data-busy="short" method="post" asp-page-handler="SetDevicesOnMyNetwork">
                 <input type="hidden" name="enabled" value="true" />
                 <sl-button type="submit" variant="primary" size="small">Switch on</sl-button>
             </form>
@@ -155,7 +157,7 @@ else
                     <p class="text-sm" style="margin:0 0 8px;"><strong>Windows Firewall will block other devices.</strong>
                         One rule, for this computer's local network only on port 5311, lets them in. Windows asks for
                         administrator permission; Bee Memory Bank never changes the firewall without asking.</p>
-                    <form method="post" asp-page-handler="DevicesFirewall">
+                    <form data-busy="short" method="post" asp-page-handler="DevicesFirewall">
                         <input type="hidden" name="action" value="add" />
                         <sl-button type="submit" size="small"><sl-icon slot="prefix" name="shield-check"></sl-icon> Allow in Windows Firewall&hellip;</sl-button>
                     </form>
@@ -168,7 +170,7 @@ else
                 <div style="margin-top:16px;">
                     <p class="text-muted text-sm" style="margin:0 0 8px;">The Windows Firewall rule for port 5311 is still in place. Nothing is listening now,
                         but you can remove it. This also removes the rule the Connect a device page uses; it asks again when needed.</p>
-                    <form method="post" asp-page-handler="DevicesFirewall">
+                    <form data-busy="short" method="post" asp-page-handler="DevicesFirewall">
                         <input type="hidden" name="action" value="remove" />
                         <sl-button type="submit" size="small"><sl-icon slot="prefix" name="shield-x"></sl-icon> Remove the Windows Firewall rule&hellip;</sl-button>
                     </form>
@@ -188,6 +190,40 @@ else
                 </p>
                 break;
         }
+    }
+</div>
+
+@* BMB-313: Invisible Mode lives here (superadmin only, like the page) - not in the header, where the switch of a node's whole network behaviour sat one
+   click from the sync status. While it is on, the sync icon of the header shows a badge. *@
+<h3 id="card-invisible-mode" style="margin-bottom:12px;"><sl-icon name="eye-slash"></sl-icon> Invisible Mode</h3>
+<div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+    @await Html.PartialAsync("~/Pages/Shared/Admin/_CardMessage.cshtml", new AdminCardMessage(Model, AdminCards.InvisibleMode))
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        When on, this node rejects every incoming sync call and makes none of its own: the other nodes cannot see it and it does not sync. Your own work on
+        this node goes on and is delivered when you turn it off. The sync icon in the header shows a badge while it is on.
+    </p>
+    @if (Model.IsInvisible is null)
+    {
+        <p class="text-muted text-sm">The node did not say whether Invisible Mode is on.</p>
+    }
+    else
+    {
+        <form method="post" asp-page-handler="SetInvisibleMode" id="invisible-mode-form" data-busy="short" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <sl-badge variant="@(Model.IsInvisible == true ? "danger" : "neutral")" pill id="invisible-mode-state">@(Model.IsInvisible == true ? "on" : "off")</sl-badge>
+            <input type="hidden" name="enabled" value="@(Model.IsInvisible == true ? "false" : "true")" />
+            @if (Model.IsInvisible == true)
+            {
+                <sl-button type="submit" variant="default" size="small"><sl-icon slot="prefix" name="eye"></sl-icon> Turn Invisible Mode off</sl-button>
+            }
+            else
+            {
+                <sl-button type="submit" variant="danger" size="small" class="btn-confirm-click"
+                           data-confirm="Turn Invisible Mode on? This node will reject incoming sync calls and stop its own until you turn it off.">
+                    <sl-icon slot="prefix" name="eye-slash"></sl-icon> Turn Invisible Mode on
+                </sl-button>
+            }
+            <span class="text-muted text-sm" data-busy-note hidden role="status">Changing Invisible Mode...</span>
+        </form>
     }
 </div>
 
@@ -217,8 +253,9 @@ else
 </div>
 
 <!-- Software Updates -->
-<h3 style="margin-bottom:12px;"><sl-icon name="arrow-up-circle"></sl-icon> Software Updates</h3>
+<h3 id="card-updates" style="margin-bottom:12px;"><sl-icon name="arrow-up-circle"></sl-icon> Software Updates</h3>
 <div class="card mt-md" style="margin-bottom:32px;max-width:640px;">
+    @await Html.PartialAsync("~/Pages/Shared/Admin/_CardMessage.cshtml", new AdminCardMessage(Model, AdminCards.Updates))
     <p style="margin:0 0 12px;">
         Current version: <strong>v@(Model.CurrentVersion ?? "unknown")</strong>
     </p>
@@ -290,7 +327,7 @@ else
             }
             else if (step == "UpdateAvailable")
             {
-                <form method="post" asp-page-handler="DownloadUpdate" style="display:inline;">
+                <form data-busy="long" data-busy-title="Downloading the update" method="post" asp-page-handler="DownloadUpdate" style="display:inline;">
                     <input type="hidden" name="manifestJson" value="@Model.CheckedManifestJson" />
                     <sl-button type="submit" variant="primary" size="small" id="btn-download-update">
                         <sl-icon slot="prefix" name="download"></sl-icon> Download update
@@ -299,7 +336,7 @@ else
             }
             else if (step == "ReadyToApply")
             {
-                <form method="post" asp-page-handler="ApplyUpdate" style="display:inline;"
+                <form data-busy="long" data-busy-title="Applying the update" method="post" asp-page-handler="ApplyUpdate" style="display:inline;"
                       class="form-confirm" data-confirm="Apply update to v@(availableVersion)?&#10;&#10;The server will fetch the new version, rebuild, and restart.&#10;&#10;Continue?">
                     <sl-button type="submit" variant="success" size="small" id="btn-apply-update">
                         <sl-icon slot="prefix" name="play-fill"></sl-icon> Apply update
@@ -308,7 +345,7 @@ else
             }
             else if (step == "Failed" || step == "Completed")
             {
-                <form method="post" asp-page-handler="ResetUpdate" style="display:inline;">
+                <form data-busy="short" method="post" asp-page-handler="ResetUpdate" style="display:inline;">
                     <sl-button type="submit" variant="warning" size="small" id="btn-reset-update">
                         <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Reset state
                     </sl-button>
@@ -320,9 +357,10 @@ else
 
 <!-- Trusted Nodes -->
 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-    <h3 style="margin:0;"><sl-icon name="people"></sl-icon> Trusted Nodes</h3>
+    <h3 id="card-trusted-nodes" style="margin:0;"><sl-icon name="people"></sl-icon> Trusted Nodes</h3>
     <span id="local-events-counter" class="text-muted text-sm"></span>
 </div>
+@await Html.PartialAsync("~/Pages/Shared/Admin/_CardMessage.cshtml", new AdminCardMessage(Model, AdminCards.TrustedNodes))
 
 @{ var passwordPeersToPromote = BeeMemoryBank.Web.Pages.PromotePasswordPeersModel.CandidatesOf(Model.Whitelist); }
 @if (passwordPeersToPromote.Count > 0)
@@ -363,7 +401,12 @@ else
                         </sl-tooltip>
                     </th>
                     <th>Added</th>
-                    <th>Last Sync</th>
+                    <th>
+                        Last contact
+                        <sl-tooltip content="The last time this node and that one made contact, either way (we -> it: this node called; it -> us: it called), whether or not changes moved. The last time changes were delivered is shown under it.">
+                            <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
+                        </sl-tooltip>
+                    </th>
                     <th style="text-align:right;">Actions</th>
                 </tr>
             </thead>
@@ -371,9 +414,9 @@ else
                 @foreach (var entry in Model.Whitelist)
                 {
                     var isSelf = Model.Identity != null && entry.NodeId == Model.Identity.NodeId;
-                    DateTime lastSync = DateTime.MinValue;
+                    NodeContactDto? contact = null;
                     if (!isSelf && Model.NodeSyncStatus != null)
-                        Model.NodeSyncStatus.TryGetValue(entry.NodeId, out lastSync);
+                        Model.NodeSyncStatus.TryGetValue(entry.NodeId, out contact);
                     <tr>
                         <td><strong>@entry.DisplayName</strong></td>
                         <td><code class="text-sm">@entry.NodeId.ToString()[..8]&hellip;</code></td>
@@ -404,7 +447,7 @@ else
                         <td>
                             @if (!isSelf)
                             {
-                                <form method="post" asp-page-handler="SetAutoAcceptRestore" style="display:inline;" id="autoaccept-form-@entry.NodeId">
+                                <form data-busy="short" method="post" asp-page-handler="SetAutoAcceptRestore" style="display:inline;" id="autoaccept-form-@entry.NodeId">
                                     <input type="hidden" name="nodeId" value="@entry.NodeId" />
                                     <input type="hidden" name="autoAccept" value="@((!entry.AutoAcceptRestore).ToString().ToLower())" id="autoaccept-value-@entry.NodeId" />
                                     <sl-switch
@@ -423,7 +466,7 @@ else
                         <td>
                             @if (!isSelf)
                             {
-                                <form method="post" asp-page-handler="SetAutoAcceptDekRotation" style="display:inline;" id="autoaccept-dek-form-@entry.NodeId">
+                                <form data-busy="short" method="post" asp-page-handler="SetAutoAcceptDekRotation" style="display:inline;" id="autoaccept-dek-form-@entry.NodeId">
                                     <input type="hidden" name="nodeId" value="@entry.NodeId" />
                                     <input type="hidden" name="autoAccept" value="@((!entry.AutoAcceptDekRotation).ToString().ToLower())" id="autoaccept-dek-value-@entry.NodeId" />
                                     <sl-switch
@@ -440,7 +483,41 @@ else
                             }
                         </td>
                         <td class="text-muted text-sm">@entry.CreatedAt.ToString("d")</td>
-                        <td class="text-muted text-sm">@(isSelf ? "\u2014" : AdminModel.RelativeTime(lastSync))</td>
+                        <td class="text-muted text-sm" data-contact-state="@(contact?.State ?? "unknown")">
+                            @if (isSelf)
+                            {
+                                <text>&mdash;</text>
+                            }
+                            else if (contact is { State: "not_answering", NotAnsweringSince: { } notSince })
+                            {
+                                <span style="color:var(--sl-color-danger-600);">Not answering since @notSince.ToLocalTime().ToString("g") (@AdminModel.RelativeTime(notSince))</span>
+                                <div>@contact.NotAnsweringReason</div>
+                                @if (contact.LastContactAt is { } lastAt)
+                                {
+                                    <div>Last contact @AdminModel.RelativeTime(lastAt) (@AdminModel.ContactDirectionWords(contact.Direction))</div>
+                                }
+                            }
+                            else if (contact is { LastContactAt: { } contactAt, Direction: not null })
+                            {
+                                <span>@AdminModel.RelativeTime(contactAt) (@AdminModel.ContactDirectionWords(contact.Direction))</span>
+                                @if (contact.State == "unknown")
+                                {
+                                    <div>Not checked since this node started; the next check will say.</div>
+                                }
+                                @if (contact.PushedAt is { } pushedAt)
+                                {
+                                    <div>changes delivered @AdminModel.RelativeTime(pushedAt)</div>
+                                }
+                            }
+                            else if (string.IsNullOrEmpty(entry.ApiAddress))
+                            {
+                                <span>It calls this node; no call since this node started@(contact?.PushedAt is { } p2 ? ", changes delivered " + AdminModel.RelativeTime(p2) : "")</span>
+                            }
+                            else
+                            {
+                                <span>No contact since this node started</span>
+                            }
+                        </td>
                         <td style="text-align:right;">
                             @if (!isSelf)
                             {
@@ -460,7 +537,7 @@ else
                                 @* A blind node can never be promoted (the Api refuses it too); demoting one stays possible. *@
                                 @if (entry.IsSuperadmin || !BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(entry.NodeId))
                                 {
-                                <form method="post" asp-page-handler="SetPeerSuperadmin" style="display:inline;">
+                                <form data-busy="short" method="post" asp-page-handler="SetPeerSuperadmin" style="display:inline;">
                                     <input type="hidden" name="nodeId" value="@entry.NodeId" />
                                     <input type="hidden" name="isSuperadmin" value="@((!entry.IsSuperadmin).ToString().ToLower())" />
                                     <sl-icon-button
@@ -472,7 +549,7 @@ else
                                     </sl-icon-button>
                                 </form>
                                 }
-                                <form method="post" asp-page-handler="RevokeNode" style="display:inline;">
+                                <form data-busy="short" method="post" asp-page-handler="RevokeNode" style="display:inline;">
                                     <input type="hidden" name="nodeId" value="@entry.NodeId" />
                                     <sl-icon-button name="trash" label="Revoke"
                                         class="btn-confirm-submit"
@@ -498,7 +575,7 @@ else
 
 <!-- Change Node URL Dialog -->
 <sl-dialog id="dlg-change-url" label="Change Node URL">
-    <form method="post" asp-page-handler="ChangeNodeAddress" class="sl-form">
+    <form data-busy="short" method="post" asp-page-handler="ChangeNodeAddress" class="sl-form">
         <input type="hidden" id="change-url-node-id" name="nodeId" />
         <p id="change-url-node-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
         <div style="margin-bottom:16px;">
@@ -516,7 +593,7 @@ else
 
 <!-- Let blind copies call this node (ADR 0007) -->
 <sl-dialog id="dlg-hub" label="Let blind copies call this node">
-    <form method="post" asp-page-handler="SetBlindCallable" class="sl-form">
+    <form data-busy="short" method="post" asp-page-handler="SetBlindCallable" class="sl-form">
         <input type="hidden" id="hub-node-id" name="nodeId" />
         <p id="hub-node-name" style="margin:0 0 12px;color:var(--text-secondary);"></p>
         <p class="text-muted text-sm" style="margin:0 0 16px;">
@@ -565,7 +642,7 @@ else
 
 <!-- Check for updates dialog -->
 <sl-dialog id="dlg-check-update" label="Check for Updates">
-    <form method="post" asp-page-handler="CheckUpdate">
+    <form data-busy="short" method="post" asp-page-handler="CheckUpdate">
         <p class="text-muted text-sm" style="margin-bottom:16px;">
             Checking for updates requires a signed manifest. Since no feed is configured, you can paste manifest JSON and its Base64 signature below, or leave them empty to perform a dummy check (which will fail and allow you to test the Reset action).
         </p>

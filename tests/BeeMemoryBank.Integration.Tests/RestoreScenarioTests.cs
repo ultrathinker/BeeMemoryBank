@@ -514,6 +514,9 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             "no anchor vouches for any of them, and at no point is one of them active or a superadmin");
         initializedAtTheCut.Should().BeFalse("the marker stays up until the restore is done: the operator is told to restore again");
 
+        // The engine's own re-entry is under test here, not the node's: the cut restore's seal intent is out of the picture (the next start of a node wipes what the
+        // cut wrote, the endpoint takes it back at once, and a second begin over a pending intent is refused on purpose - SealIntentHostTests).
+        BeeMemoryBank.AppPaths.SealIntent.Complete(target.DataPath);
         service.StepForTests = null;
         var result = await target.Services.GetRequiredService<BlindRestoreClient>().RestoreFromBackupAsync(folder, Who);
 

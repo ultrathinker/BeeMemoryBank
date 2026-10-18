@@ -2,12 +2,14 @@
 
 <!-- Agents -->
 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px;flex-wrap:wrap;">
-    <h3 style="margin:0;"><sl-icon name="robot"></sl-icon> Agents</h3>
+    <h3 id="card-agents" style="margin:0;"><sl-icon name="robot"></sl-icon> Agents</h3>
     <span class="text-muted text-sm" style="display:inline-flex;align-items:center;gap:6px;">
         <sl-icon name="info-circle"></sl-icon>
         To add a new agent, go to <a href="/Profile">Profile</a>.
     </span>
 </div>
+
+@await Html.PartialAsync("~/Pages/Shared/Admin/_CardMessage.cshtml", new AdminCardMessage(Model, AdminCards.Agents))
 
 @if (Model.Agents != null && Model.Agents.Count > 0)
 {
@@ -53,7 +55,7 @@
                         <td class="text-muted text-sm">@AdminModel.RelativeTime(agent.LastAccessedAt)</td>
                         <td class="text-muted text-sm">@(agent.RequestCount == 0 ? "—" : agent.RequestCount.ToString("N0"))</td>
                         <td style="text-align:right;">
-                            <form method="post" asp-page-handler="DeleteAgent" style="display:inline;">
+                            <form data-busy="short" method="post" asp-page-handler="DeleteAgent" style="display:inline;">
                                 <input type="hidden" name="agentId" value="@agent.Id" />
                                 <sl-icon-button name="trash" label="Delete"
                                     class="btn-confirm-submit"

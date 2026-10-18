@@ -281,4 +281,109 @@ public class OwnerOnlyFileTests : IDisposable
         OwnerOnlyFile.TryTighten(Path.Combine(_dir, "missing.bin"), out var problem).Should().BeFalse();
         problem.Should().BeNull();
     }
+
+    // BMB-304 fix3 (G4): a sealed join import could not put its finished staging copy over the extracted file on Windows. One helper replaces a staged file.
+
+    private (string From, string To) Staged(byte[] oldBytes, byte[] newBytes)
+    {
+        var to = Path.Combine(_dir, "staged.db");
+        var from = to + ".sealing";
+        File.WriteAllBytes(to, oldBytes);
+        File.WriteAllBytes(from, newBytes);
+        return (from, to);
+    }
+
+    [Fact]
+    public async Task MoveReplaceAsync_PutsTheFinishedFileUnderTheName_AndLeavesNothingBehind()
+    {
+        var (from, to) = Staged([1], [2, 3]);
+
+        await OwnerOnlyFile.MoveReplaceAsync(from, to);
+
+        File.ReadAllBytes(to).Should().Equal(2, 3);
+        File.Exists(from).Should().BeFalse();
+        Directory.GetFiles(_dir).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task MoveReplaceAsync_ReplacesADestinationThatIsReadOnly()
+    {
+        if (!OperatingSystem.IsWindows()) return;   // elsewhere a rename replaces a read-only file anyway
+        var (from, to) = Staged([1], [2, 3]);
+        File.SetAttributes(to, FileAttributes.ReadOnly);
+
+        await OwnerOnlyFile.MoveReplaceAsync(from, to);
+
+        File.ReadAllBytes(to).Should().Equal(2, 3);
+        (File.GetAttributes(to) & FileAttributes.ReadOnly).Should().Be(0, "the file now there is the finished one");
+    }
+
+    [Fact]
+    public async Task MoveReplaceAsync_WaitsForAProcessThatHasTheDestinationOpenForAMoment()
+    {
+        if (!OperatingSystem.IsWindows()) return;   // elsewhere a rename replaces an open file
+        var (from, to) = Staged([1], [2, 3]);
+        // As a scanner or an indexer holds a file it has just seen: open without sharing delete, released after a moment.
+        var holder = new FileStream(to, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var release = Task.Run(async () => { await Task.Delay(500); holder.Dispose(); });
+
+        await OwnerOnlyFile.MoveReplaceAsync(from, to);
+        await release;
+
+        File.ReadAllBytes(to).Should().Equal(2, 3);
+        File.Exists(from).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MoveReplaceAsync_ADestinationThatStaysOpen_IsReportedAndKeepsItsOldContentAndAttributes()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var (from, to) = Staged([1], [2, 3]);
+        File.SetAttributes(to, FileAttributes.ReadOnly | FileAttributes.Archive);
+        using var holder = new FileStream(to, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        var act = () => OwnerOnlyFile.MoveReplaceAsync(from, to, CancellationToken.None, attempts: 3, delay: TimeSpan.FromMilliseconds(20));
+
+        await act.Should().ThrowAsync<Exception>().Where(e => e is IOException || e is UnauthorizedAccessException);
+        holder.Dispose();
+        File.ReadAllBytes(to).Should().Equal(1);
+        File.GetAttributes(to).Should().HaveFlag(FileAttributes.ReadOnly, "the attribute that was lifted for the attempt is put back");
+        File.ReadAllBytes(from).Should().Equal(new byte[] { 2, 3 }, "the finished file is still there for the caller to discard");
+        File.SetAttributes(to, FileAttributes.Normal);
+    }
+
+    [Fact]
+    public async Task MoveReplaceAsync_ACancellationDuringTheWaitStopsIt()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var (from, to) = Staged([1], [2, 3]);
+        using var holder = new FileStream(to, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var act = () => OwnerOnlyFile.MoveReplaceAsync(from, to, cts.Token, attempts: 50, delay: TimeSpan.FromMilliseconds(50));
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        holder.Dispose();
+        File.ReadAllBytes(to).Should().Equal(1);
+    }
+
+    [Fact]
+    public async Task MoveReplaceAsync_AMissingSourceOrAFolderAtTheDestination_IsNotWaitedFor()
+    {
+        var to = Path.Combine(_dir, "staged.db");
+        File.WriteAllBytes(to, [1]);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var missing = () => OwnerOnlyFile.MoveReplaceAsync(Path.Combine(_dir, "nothing"), to);
+        await missing.Should().ThrowAsync<FileNotFoundException>();
+
+        var folder = Path.Combine(_dir, "folder");
+        Directory.CreateDirectory(folder);
+        File.WriteAllBytes(to + ".sealing", [2]);
+        var intoFolder = () => OwnerOnlyFile.MoveReplaceAsync(to + ".sealing", folder);
+        await intoFolder.Should().ThrowAsync<IOException>();
+
+        clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1));
+        File.ReadAllBytes(to).Should().Equal(1);
+    }
 }

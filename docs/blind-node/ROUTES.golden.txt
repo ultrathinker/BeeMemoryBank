@@ -41,6 +41,7 @@ POST /api/sync/blobs/get
 POST /api/sync/challenge
 POST /api/sync/events
 POST /api/sync/invisible
+POST /api/sync/nodes/{nodeId:guid}/check
 POST /api/sync/probe
 POST /api/sync/probe-relay
 POST /api/sync/report-position

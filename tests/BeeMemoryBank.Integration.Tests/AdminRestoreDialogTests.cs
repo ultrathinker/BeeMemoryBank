@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -21,7 +22,9 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
 
     private static readonly Regex Token = new("__RequestVerificationToken[^>]*value=\"([^\"]+)\"", RegexOptions.Compiled);
 
-    private readonly BmbWebApplicationFactory _api = new();
+    // A node is encrypted from its setup and a restore is refused by one that is not (BMB-306): the Api here is set up the way every node is.
+    private readonly SealedApiNode _node = SealedApiNode.PlainOver(Path.Combine(Path.GetTempPath(), "bmb_admin_restore_" + Guid.NewGuid().ToString("N")));
+    private BmbWebApplicationFactory _api => _node.Factory;
     private readonly BmbWebHostFactory _web = new();
     private HttpClient _apiClient = null!;
     private HttpClient _admin = null!;
@@ -29,8 +32,9 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _apiClient = _api.CreateClient();
-        await _api.InitializeNodeAsync(displayName: "WebNode", password: Password);
+        Directory.CreateDirectory(_node.Dir);
+        _apiClient = _node.Client();
+        (await _apiClient.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "WebNode", password = Password })).EnsureSuccessStatusCode();
         (await _apiClient.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
         var created = await _apiClient.PostAsync("/api/snapshots", null);
         created.EnsureSuccessStatusCode();
@@ -44,7 +48,7 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
     {
         _apiClient.Dispose();
         _admin.Dispose();
-        ((IDisposable)_api).Dispose();
+        _node.Dispose();
         ((IDisposable)_web).Dispose();
         return Task.CompletedTask;
     }
@@ -220,7 +224,8 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
             ["fileName"] = _snapshot, ["masterPassword"] = "wrong-password", ["createBackupFirst"] = "false", ["mode"] = "standalone"
         });
 
-        WebUtility.UrlDecode(resp.Headers.Location!.OriginalString).Should().Be("/Admin?err=Invalid master password");
+        // Back at the card of the button, which says why (BMB-303).
+        WebUtility.UrlDecode(resp.Headers.Location!.OriginalString).Should().Be("/Admin?err=Invalid master password&card=card-snapshots#card-snapshots");
     }
 
     // ── the whole network, from the same dialog ─────────────────────────────────────────────────
@@ -270,6 +275,9 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
 
     private async Task<Guid> NodeIdAsync()
     {
+        // A restore leaves the vault locked, and a locked encrypted node is not read: the password opens it first.
+        var session = _api.Services.GetRequiredService<SessionService>();
+        if (!session.IsUnlocked) (await session.UnlockAsync(Password)).Should().BeTrue();
         using var scope = _api.Services.CreateScope();
         return (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!.NodeId;
     }

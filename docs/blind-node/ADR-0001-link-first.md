@@ -14,8 +14,9 @@ The blind node was the full Api in a role. Three alternatives were weighed.
 3. **Link** the original source files into new projects: same code, same types, one definition.
 
 Three independent reviews of the first plan (copying) found what copying hides: the blind runtime closure is wide
-(`EventApplier` applies replicated rows and takes ~24 repositories), the migration runner **deletes the ledger rows
-of migrations it has no SQL for** (so a trimmed schema is dangerous, not just different), and the startup, CLI and
+(`EventApplier` applies replicated rows and takes ~24 repositories), the migration runner **refuses a database
+whose ledger it does not recognise** (before 2.6.2 it deleted the rows of migrations it had no SQL for; either way a trimmed schema is
+dangerous, not just different), and the startup, CLI and
 console contracts carry security behaviour that is easy to lose in a rewrite.
 
 ## Decision
@@ -27,7 +28,7 @@ repeat. Files a blind node must never contain are on an exclusion list; if the c
 and the host gets a replacement instead.
 
 The host's own composition root, pipeline and startup tasks are written out (not switched by a role at runtime), so
-the full node's registrations are absent rather than skipped. The full, byte-identical set of SQL migrations stays
+the full node's registrations are absent rather than skipped. The full, byte-identical set of SQL migrations (since 2.6.2 the one baseline) stays
 embedded.
 
 ## Consequences

@@ -68,10 +68,10 @@ else if (Model.RestoreProgress != null && Model.RestoreProgress.CurrentStep != "
 
         @if (Model.RestoreProgress.RequiresMasterPassword)
         {
-            <form method="post" asp-page-handler="ContinueWithoutBackup" style="margin-top:16px;">
+            <form data-busy="short" method="post" asp-page-handler="ContinueWithoutBackup" style="margin-top:16px;">
                 <input type="hidden" name="eventId" value="@Model.RestoreProgress.EventId" />
                 <p class="text-muted">Not enough disk space for a safety backup. Enter your master password to continue without a backup:</p>
-                <sl-input name="masterPassword" type="password" required password-toggle
+                <sl-input name="masterPassword" type="password" required password-toggle autocomplete="off"
                           label="Master password (override)" style="margin-bottom:12px;"></sl-input>
                 <sl-button type="submit" variant="warning" style="width:100%;">
                     Continue without backup
@@ -141,7 +141,7 @@ else
             </sl-alert>
         }
 
-        <form method="post" class="sl-form">
+        <form data-busy="short" method="post" class="sl-form">
             <div style="margin-bottom:16px;">
                 <sl-input name="username" label="Login" required autofocus></sl-input>
             </div>

@@ -44,8 +44,9 @@ dotnet publish server/BeeMemoryBank.Cli/ -c Release -o publish/cli
 # --password "..." still works, but sits in the process list and the shell history)
 bmb init --data /var/lib/beememorybank --name "MyNode"
 
-# Option B: Join an existing network (same: asked for, or --password-stdin)
+# Option B: Join an existing network (same: asked for, or --password-stdin). Only a node that has metadata encryption on can be joined.
 bmb join --remote https://bmb.example.com --name "MyNode" --data /var/lib/beememorybank
+# Either way the new node is encrypted from its first day (2.6.2): an encrypted database under the master password, locked until the first sign-in.
 
 # Run (two processes)
 BMB_DATA_PATH=/var/lib/beememorybank ASPNETCORE_URLS=http://localhost:5300 ./BeeMemoryBank.Api
@@ -108,7 +109,7 @@ libs/
 │
 ├── BeeMemoryBank.Storage/   — SQLite + Dapper
 │   ├── Sqlite/              — 25 repositories (incl. MediaRepository, FolderRepository, FolderBootstrapper, ArticleVersionRepository, FolderAclRepository, SyncPushPositionRepository, DekRotationStateRepository, AuditLogRepository) + MigrationRunner
-│   └── Migrations/          — `001_initial_schema.sql` (consolidated, 31 CREATE TABLE) + incremental `002`–`024` (roles, blob store, DEK-rotation resilience, whitelist versioning, sync quarantine, media content-addressing, …)
+│   └── Migrations/          — `040_baseline.sql`: the whole schema in one file (the final schema of the 2.6 series, numbered 40); new migrations start at `041`
 │
 └── BeeMemoryBank.Sync/      — Distributed synchronization
     ├── SyncScheduler, SyncTrigger, SyncClient, EventLogger, EventApplier, LamportClock,

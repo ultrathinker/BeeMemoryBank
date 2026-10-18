@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -209,6 +210,7 @@ public partial class ArticleDetailPage : ContentPage
         UpdateRelatedView();
     }
 
+    // busy-exempt: opens the related article, nothing is sent and nothing waits
     private async void OnRelatedArticleTapped(object? sender, TappedEventArgs e)
     {
         if (e.Parameter is Guid relatedId)
@@ -309,7 +311,8 @@ public partial class ArticleDetailPage : ContentPage
         var text = CommentEntry.Text?.Trim();
         if (string.IsNullOrEmpty(text)) return;
 
-        try
+        // The one busy helper (BMB-311): the button is off and spins; a failure is said in full in a dialog.
+        await BusyAction.RunAsync(sender as Button, async () =>
         {
             using var scope = _services.CreateScope();
             // CommentService encrypts with the article's key and logs the sync event. The repository's
@@ -318,11 +321,7 @@ public partial class ArticleDetailPage : ContentPage
 
             CommentEntry.Text = "";
             await LoadCommentsAsync(_parsedId, scope.ServiceProvider);
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 
     private async void OnDeleteCommentClicked(object? sender, EventArgs e)
@@ -333,17 +332,13 @@ public partial class ArticleDetailPage : ContentPage
         bool confirmed = await DisplayAlert("Delete Comment", "Delete this comment?", "Delete", "Cancel");
         if (!confirmed) return;
 
-        try
+        await BusyAction.RunAsync(btn, async () =>
         {
             using var scope = _services.CreateScope();
             await scope.ServiceProvider.GetRequiredService<CommentService>().DeleteAsync(comment.Id);
 
             await LoadCommentsAsync(_parsedId, scope.ServiceProvider);
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 
     private async void OnUnlockClicked(object? sender, EventArgs e)
@@ -354,6 +349,13 @@ public partial class ArticleDetailPage : ContentPage
 
         UnlockErrorLabel.IsVisible = false;
         var blob = _protectedBlob;
+        // The one busy helper (BMB-311): the button is off and spins through the key derivation; a failure other than a wrong password is
+        // said in full in the error line.
+        await BusyAction.RunAsync(sender as Button, () => UnlockAsync(blob, pass), new BusyOptions { ResultLabel = UnlockErrorLabel });
+    }
+
+    private async Task UnlockAsync(string blob, string pass)
+    {
         string plaintext;
         try
         {
@@ -408,6 +410,7 @@ public partial class ArticleDetailPage : ContentPage
         catch { /* the article itself is open; comments stay as loaded */ }
     }
 
+    // busy-exempt: opens the edit page, nothing is sent and nothing waits
     private async void OnEditClicked(object? sender, EventArgs e)
     {
         // Protected articles are now editable on mobile: the edit page unlocks (or reuses the handoff
@@ -441,25 +444,25 @@ public partial class ArticleDetailPage : ContentPage
             accept: "Remove", cancel: "Cancel", placeholder: "Password");
         if (string.IsNullOrEmpty(pass)) return;
 
-        try
+        // The one busy helper (BMB-311): the menu entry is off and says it is working; a failure is said in full in a dialog.
+        await BusyAction.RunAsync(sender as BindableObject, async () =>
         {
-            using var scope = _services.CreateScope();
-            var articleSvc = scope.ServiceProvider.GetRequiredService<ArticleService>();
-            await articleSvc.UnprotectAsync(_parsedId, pass);
-            // Comments were sealed under the passphrase as well; take that layer off them too.
-            await scope.ServiceProvider.GetRequiredService<CommentService>().ReprotectAsync(_parsedId, pass, null);
-            _services.GetService<Services.MobileUnlockHolder>()?.Clear();
-            _cts = new CancellationTokenSource();
-            await LoadAsync(_parsedId, _cts.Token); // reload as a now-plaintext article
-        }
-        catch (System.Security.Cryptography.CryptographicException)
-        {
-            await DisplayAlert("Wrong password", "The password is incorrect.", "OK");
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+            try
+            {
+                using var scope = _services.CreateScope();
+                var articleSvc = scope.ServiceProvider.GetRequiredService<ArticleService>();
+                await articleSvc.UnprotectAsync(_parsedId, pass);
+                // Comments were sealed under the passphrase as well; take that layer off them too.
+                await scope.ServiceProvider.GetRequiredService<CommentService>().ReprotectAsync(_parsedId, pass, null);
+                _services.GetService<Services.MobileUnlockHolder>()?.Clear();
+                _cts = new CancellationTokenSource();
+                await LoadAsync(_parsedId, _cts.Token); // reload as a now-plaintext article
+            }
+            catch (System.Security.Cryptography.CryptographicException)
+            {
+                await DisplayAlert("Wrong password", "The password is incorrect.", "OK");
+            }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 
     private async void OnDeleteClicked(object? sender, EventArgs e)
@@ -467,17 +470,13 @@ public partial class ArticleDetailPage : ContentPage
         bool confirmed = await DisplayAlert("Delete", "Delete this article?", "Delete", "Cancel");
         if (!confirmed) return;
 
-        try
+        await BusyAction.RunAsync(sender as BindableObject, async () =>
         {
             using var scope = _services.CreateScope();
             var articleSvc = scope.ServiceProvider.GetRequiredService<ArticleService>();
             await articleSvc.DeleteAsync(_parsedId);
             await Shell.Current.GoToAsync("..");
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 
     protected override void OnAppearing()
@@ -505,18 +504,29 @@ public partial class ArticleDetailPage : ContentPage
 
     private async void OnRefreshing(object? sender, EventArgs e)
     {
-        _cts?.Cancel();
-        _cts = new CancellationTokenSource();
-
-        var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
-        if (!syncNotify.HasPendingUpdates)
+        // Pulling the list down asks for a sync round: a request to the computer, not a read (BMB-311). The one busy helper refuses a second round while one runs;
+        // the spinner of the pull is the pull's own, so no pop-up; a failure to even ask is said in full.
+        try
         {
-            var syncStatus = _services.GetRequiredService<Services.SyncStatusService>();
-            await syncStatus.SyncNowAsync();
+            await BusyAction.RunAsync(PullRefresh, async () =>
+            {
+                _cts?.Cancel();
+                _cts = new CancellationTokenSource();
+
+                var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
+                if (!syncNotify.HasPendingUpdates)
+                {
+                    var syncStatus = _services.GetRequiredService<Services.SyncStatusService>();
+                    await syncStatus.SyncNowAsync();
+                }
+
+                await LoadAsync(_parsedId, _cts.Token, isInitial: false);
+                syncNotify.ClearPendingUpdates();
+            }, new BusyOptions { FailureTitle = "Sync" });
         }
-        
-        await LoadAsync(_parsedId, _cts.Token, isInitial: false);
-        syncNotify.ClearPendingUpdates();
-        PullRefresh.IsRefreshing = false;
+        finally
+        {
+            PullRefresh.IsRefreshing = false;
+        }
     }
 }

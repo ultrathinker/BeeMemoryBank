@@ -33,7 +33,7 @@ public class SyncWorker : Worker
         }
         catch (Exception ex)
         {
-            Services.SyncHeartbeat.RecordCycle(false, 0, "worker: " + ex.Message, "wm");
+            Services.SyncHeartbeat.RecordCycle(false, 0, "worker: " + BeeMemoryBank.Sync.PeerContactLog.Describe(ex), "wm");
             return RunAttemptCount < MaxRetries ? Result.InvokeRetry()! : Result.InvokeSuccess()!;
         }
     }
@@ -94,14 +94,16 @@ public class SyncWorker : Worker
         }
 
         int applied = 0;
-        string? err = null;
+        var failures = new List<PeerSyncFailure>();
         using var http = httpFactory.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(30);
         foreach (var node in nodes)
         {
             try { applied += await syncClient.SyncWithAsync(http, node.ApiAddress!, node.NodeId, CancellationToken.None); }
-            catch (Exception ex) { err = ex.Message; }
+            // Every peer that failed is named with its reason (a wrong address says "no sync server at this address"), not only the last one.
+            catch (Exception ex) { failures.Add(PeerSyncFailure.From(node, ex)); }
         }
+        var err = failures.Count == 0 ? null : string.Join("; ", failures);
         Services.SyncHeartbeat.RecordCycle(err == null, applied, err, "wm");
         return err != null;
     }

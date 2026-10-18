@@ -36,6 +36,7 @@ public static class BlindEndpoints
             BlindPairing pairing,
             SyncTokenStore store,
             IWhitelistRepository whitelist,
+            ILogger<BlindSeedService> logger,
             CancellationToken ct) =>
         {
             if (await ResolveAuthorityAsync(ctx, seedId, pairing, store, whitelist) is not { } authority)
@@ -62,7 +63,12 @@ public static class BlindEndpoints
             }
             catch (BlindSeedRejectedException ex)
             {
-                return Results.Json(new ErrorResponse(ex.Message), statusCode: 400);
+                // The sender is told too, but it is the operator of THIS node who looks in the log first. The reason is a CODE and the fixed sentence of that code
+                // (BlindSeedRefusals): nothing that was written about the failure underneath can leave this node. The log says the code and the TYPE of the
+                // cause, never its text; the exception object itself is not logged.
+                var reason = BlindSeedRefusals.Sentence(ex.Reason);
+                logger.LogWarning("Blind seed {SeedId} refused: {Code}: {Reason} (cause: {Cause})", seedId, ex.Reason, reason, ex.InnerException?.GetType().Name ?? "none");
+                return Results.Json(new ErrorResponse(reason), statusCode: 400);
             }
             catch (InsufficientStorageException ex)
             {

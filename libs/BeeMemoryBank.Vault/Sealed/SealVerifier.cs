@@ -107,7 +107,7 @@ public static class SealVerifier
                 throw new SealMigrationException(SealFailures.VerifyCounts, $"The encrypted copy of the {label} database does not have the tables of the original.");
             foreach (var table in sourceTables)
             {
-                var (inSource, inTarget) = (RowCount(source, table), RowCount(target, table));
+                var (inSource, inTarget) = (RowCount(source, table, label), RowCount(target, table, label));
                 if (inSource != inTarget)
                     throw new SealMigrationException(SealFailures.VerifyCounts,
                         $"The encrypted copy of the {label} database holds a different number of rows than the original (table {table}: {inSource} and {inTarget}).");
@@ -126,17 +126,25 @@ public static class SealVerifier
     private static List<string> Tables(SqliteConnection c) =>
         c.Query<string>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").ToList();
 
-    private static long RowCount(SqliteConnection c, string table)
+    /// <summary>
+    /// The rows of a table. A table that cannot be counted (a search index whose module is not loaded, a damaged one) fails the verification: it used to count -1 on
+    /// both sides, which compares equal, so a copy whose index nobody could read was marked as verified.
+    /// </summary>
+    internal static long RowCount(SqliteConnection c, string table, string label)
     {
         try { return c.ExecuteScalar<long>($"SELECT COUNT(*) FROM \"{table.Replace("\"", "\"\"")}\""); }
-        catch (SqliteException) { return -1; }   // a virtual table whose module is not loaded: -1 on both sides compares equal
+        catch (SqliteException ex)
+        {
+            throw new SealMigrationException(SealFailures.VerifyCounts,
+                $"The {label} database could not be checked: the table {table} could not be counted (SQLite result {ex.SqliteErrorCode}).");
+        }
     }
 
     // ---- 2. counts, the ledger and the log position -------------------------------------------------------------------------------------
 
     private static void Counts(SqliteConnection source, SqliteConnection target, string targetPath)
     {
-        string Ledger(SqliteConnection c) => Hash(c.Query<(long, string)>("SELECT version, filename FROM tbl_migration ORDER BY version, filename").Select(r => $"{r.Item1}|{r.Item2}"));
+        string Ledger(SqliteConnection c) => Hash(c.Query<(long, string)>("SELECT version, filename FROM tbl_migration ORDER BY version, filename", buffered: false).Select(r => $"{r.Item1}|{r.Item2}"));
         if (Ledger(source) != Ledger(target))
             throw new SealMigrationException(SealFailures.VerifyCounts, "The encrypted copy has a different migration history than the original.");
     }
@@ -154,8 +162,8 @@ public static class SealVerifier
     private static void Sentinel(SqliteConnection target, IDEK deks)
     {
         var sentinel = target.ExecuteScalar<byte[]?>("SELECT sentinel_value FROM tbl_node_identity LIMIT 1");
-        if (sentinel is null) return;   // a vault that never had one has nothing to check
-        if (!deks.Candidates.Any(dek => MasterKeyManager.VerifySentinel(sentinel, dek)))
+        if (MasterKeyManager.IsSentinelMissing(sentinel)) return;   // a vault that never had one (NULL or empty) has nothing to check
+        if (!deks.Candidates.Any(dek => MasterKeyManager.VerifySentinel(sentinel!, dek)))
             throw new SealMigrationException(SealFailures.VerifySentinel, "The master key of this node does not open the encrypted copy.");
     }
 
@@ -197,8 +205,9 @@ public static class SealVerifier
 
     private static Sample Tree(SqliteConnection source, SqliteConnection target)
     {
-        string Folders(SqliteConnection c) => Hash(c.Query<(string, string)>("SELECT id, path FROM tbl_folder ORDER BY id").Select(r => $"{r.Item1}|{r.Item2}"));
-        string Titles(SqliteConnection c) => Hash(c.Query<(string, string?)>("SELECT id, title FROM tbl_article ORDER BY id").Select(r => $"{r.Item1}|{r.Item2}"));
+        // Streamed (buffered: false): the hash is fed row by row, so a vault of a million notes is not held in memory as a list twice over (BMB-304).
+        string Folders(SqliteConnection c) => Hash(c.Query<(string, string)>("SELECT id, path FROM tbl_folder ORDER BY id", buffered: false).Select(r => $"{r.Item1}|{r.Item2}"));
+        string Titles(SqliteConnection c) => Hash(c.Query<(string, string?)>("SELECT id, title FROM tbl_article ORDER BY id", buffered: false).Select(r => $"{r.Item1}|{r.Item2}"));
         if (Folders(source) != Folders(target) || Titles(source) != Titles(target))
             throw new SealMigrationException(SealFailures.VerifyTree, "The folders or titles of the encrypted copy differ from the original.");
 
@@ -209,7 +218,7 @@ public static class SealVerifier
         return new Sample(titles, paths);
     }
 
-    private static void Search(SqliteConnection source, SqliteConnection target, IReadOnlyList<string> titles)
+    internal static void Search(SqliteConnection source, SqliteConnection target, IReadOnlyList<string> titles)
     {
         foreach (var title in titles.Take(5))
         {
@@ -217,16 +226,40 @@ public static class SealVerifier
                 .FirstOrDefault(w => w.Length >= 3 && w.All(char.IsLetterOrDigit));
             if (word is null) continue;
             var query = "\"" + word + "\"";
-            List<long>? Ids(SqliteConnection c)
-            {
-                try { return c.Query<long>("SELECT rowid FROM fts_article WHERE fts_article MATCH @q ORDER BY rowid", new { q = query }).ToList(); }
-                catch (SqliteException) { return null; }
-            }
-            var a = Ids(source);
-            var b = Ids(target);
-            if (a is null != b is null || (a is not null && !a.SequenceEqual(b!)))
-                throw new SealMigrationException(SealFailures.VerifyTree, "A search in the encrypted copy finds other articles than in the original.");
+            // Two readers side by side, row by row (buffered: false): a common word matches every note of a big vault, and a list per side would hold them all.
+            IEnumerable<long> Ids(SqliteConnection c) =>
+                c.Query<long>("SELECT rowid FROM fts_article WHERE fts_article MATCH @q ORDER BY rowid", new { q = query }, buffered: false);
+            if (!SameOrderedIds(Ids(source), Ids(target)))
+                throw new SealMigrationException(SealFailures.VerifyTree, "A search in the encrypted copy finds other articles than in the original, or could not be run on one of them.");
         }
+    }
+
+    /// <summary>
+    /// Whether two ordered streams of row ids are the same, read one row at a time from each and never held (BMB-304: the memory of this check does not
+    /// grow with the number of matches). A reader that fails is NOT the same as the other one (fail closed): the word is a quoted run of letters and digits, so a
+    /// query that cannot run means the index is missing or damaged, and two copies whose indexes nobody could read are not two copies that agree.
+    /// </summary>
+    internal static bool SameOrderedIds(IEnumerable<long> source, IEnumerable<long> target)
+    {
+        using var a = source.GetEnumerator();
+        using var b = target.GetEnumerator();
+        var failedA = false;
+        var failedB = false;
+        while (true)
+        {
+            var hasA = Step(a, ref failedA);
+            var hasB = Step(b, ref failedB);
+            if (failedA || failedB) return false;
+            if (hasA != hasB) return false;
+            if (!hasA) return true;
+            if (a.Current != b.Current) return false;
+        }
+    }
+
+    private static bool Step(IEnumerator<long> reader, ref bool failed)
+    {
+        try { return reader.MoveNext(); }
+        catch (SqliteException) { failed = true; return false; }
     }
 
     // ---- 6. raw bytes: no magic, no title ----------------------------------------------------------------------------------------------------

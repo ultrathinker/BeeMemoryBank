@@ -37,7 +37,14 @@ public static class AdminEndpoints
 
             var report = await conceptTagRepo.CheckAndRebuildEdgesAsync();
             return Results.Ok(report);
-        }).DisableAntiforgery();
+        }).DisableAntiforgery()
+            .SingleFlight("graph-rebuild", "The graph check");
+
+        // What long operations are running on this node, and since when (BMB-311): the lease of an operation has no time limit (a lease that expired while the
+        // work still ran would allow a second restore next to the first), so this is where a stuck one is seen.
+        group.MapGet("/operations", (LongOperationGate gate) =>
+            Results.Ok(gate.Running().Select(o => new { key = o.Key, what = o.What, since = DateTime.SpecifyKind(o.Since, DateTimeKind.Utc) })))
+            .RequireNonAgent();
 
         // ─── Software updates ──────────────────────────────────────────────────
         // Detection works for every install type. Applying the update is Docker-only

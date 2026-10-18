@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Controls;
@@ -81,16 +82,27 @@ public partial class TreePage : ContentPage
 
     private async void OnRefreshing(object? sender, EventArgs e)
     {
-        var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
-        if (!syncNotify.HasPendingUpdates)
+        // Pulling the list down asks for a sync round: a request to the computer, not a read (BMB-311). The one busy helper refuses a second round while one runs;
+        // the spinner of the pull is the pull's own, so no pop-up; a failure to even ask is said in full.
+        try
         {
-            var syncStatus = _services.GetRequiredService<Services.SyncStatusService>();
-            await syncStatus.SyncNowAsync();
+            await BusyAction.RunAsync(RefreshView, async () =>
+            {
+                var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
+                if (!syncNotify.HasPendingUpdates)
+                {
+                    var syncStatus = _services.GetRequiredService<Services.SyncStatusService>();
+                    await syncStatus.SyncNowAsync();
+                }
+
+                await LoadItemsAsync();
+                syncNotify.ClearPendingUpdates();
+            }, new BusyOptions { FailureTitle = "Sync" });
         }
-        
-        await LoadItemsAsync();
-        syncNotify.ClearPendingUpdates();
-        RefreshView.IsRefreshing = false;
+        finally
+        {
+            RefreshView.IsRefreshing = false;
+        }
     }
 
     private async Task LoadItemsAsync()
@@ -144,6 +156,7 @@ public partial class TreePage : ContentPage
         return "/" + path.Trim('/');
     }
 
+    // busy-exempt: opens the folder or article tapped (the screen has its own overlay while the page opens), nothing is sent
     private async void OnItemTapped(object? sender, TappedEventArgs e)
     {
         if (sender is not BindableObject bo) return;
@@ -184,7 +197,8 @@ public partial class TreePage : ContentPage
             accept: "Rename", cancel: "Cancel", initialValue: item.Name, maxLength: 100);
         if (string.IsNullOrWhiteSpace(newName) || newName.Trim() == item.Name) return;
 
-        try
+        // The one busy helper (BMB-311): a second long press cannot start a second rename; a failure is said in full in a dialog.
+        await BusyAction.RunAsync(null, async () =>
         {
             using var scope = _services.CreateScope();
             var folderRepo = scope.ServiceProvider.GetRequiredService<IFolderRepository>();
@@ -193,11 +207,7 @@ public partial class TreePage : ContentPage
             if (folder == null) return;
             await folderSvc.RenameAsync(folder.Id, newName.Trim());
             await LoadItemsAsync();
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 
     private async Task DeleteFolderAsync(TreeListItem item)
@@ -207,7 +217,7 @@ public partial class TreePage : ContentPage
             "Delete", "Cancel");
         if (!confirmed) return;
 
-        try
+        await BusyAction.RunAsync(null, async () =>
         {
             using var scope = _services.CreateScope();
             var folderRepo = scope.ServiceProvider.GetRequiredService<IFolderRepository>();
@@ -216,13 +226,10 @@ public partial class TreePage : ContentPage
             if (folder == null) return;
             await folderSvc.DeleteAsync(folder.Id);
             await LoadItemsAsync();
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 
+    // busy-exempt: opens the editor, nothing is sent and nothing waits
     private async void OnNewArticleClicked(object? sender, EventArgs e)
     {
         await Shell.Current.GoToAsync("articleEdit");
@@ -234,16 +241,12 @@ public partial class TreePage : ContentPage
             accept: "Create", cancel: "Cancel", maxLength: 100);
         if (string.IsNullOrWhiteSpace(name)) return;
 
-        try
+        await BusyAction.RunAsync(sender as BindableObject, async () =>
         {
             using var scope = _services.CreateScope();
             var folderSvc = scope.ServiceProvider.GetRequiredService<FolderService>();
             await folderSvc.CreateAsync("/" + name.Trim().Trim('/'));
             await LoadItemsAsync();
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Error" });
     }
 }

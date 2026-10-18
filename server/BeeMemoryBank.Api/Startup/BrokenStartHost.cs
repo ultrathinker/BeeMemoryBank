@@ -22,13 +22,19 @@ public static class BrokenStartHost
         [property: JsonPropertyName("files")] IReadOnlyList<string> Files,
         [property: JsonPropertyName("message")] string Message);
 
-    /// <summary>Takes over the builder <c>Program</c> already made (a test host has configured it) and runs the refusal. Returns the exit code.</summary>
-    public static int Run(WebApplicationBuilder builder, BrokenStart broken)
+    /// <summary>
+    /// Takes over the builder <c>Program</c> already made (a test host has configured it) and runs the refusal. Returns the exit code. The vault lease the start
+    /// took is the host's: it is held while the refusal is served and released with the host, so a start that follows the stop (once whatever was in the way is
+    /// gone) is not turned away by the lease of the one that refused.
+    /// </summary>
+    public static int Run(WebApplicationBuilder builder, BrokenStart broken, BeeMemoryBank.AppPaths.VaultLease lease)
     {
+        builder.Services.AddSingleton(_ => lease);   // a factory, so the host disposes it (an instance registration is never disposed)
         // The start message: on stderr for whoever runs the node by hand, and in the log for whoever reads it afterwards.
         Console.Error.WriteLine("[Error] " + broken.Message);
 
         var app = builder.Build();
+        _ = app.Services.GetRequiredService<BeeMemoryBank.AppPaths.VaultLease>();   // resolved once, or the host has nothing of it to dispose
         app.Services.GetRequiredService<ILogger<Program>>()
             .LogError("The node cannot start: {Reason} ({Files}). {Message}", broken.Reason, string.Join(", ", broken.Files), broken.Message);
 

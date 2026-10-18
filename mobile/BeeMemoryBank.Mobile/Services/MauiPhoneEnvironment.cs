@@ -22,4 +22,18 @@ public sealed class MauiPhoneEnvironment : IPhoneEnvironment
     }
 
     public bool IsCharging => Battery.Default.State is BatteryState.Charging or BatteryState.Full;
+
+    /// <summary>
+    /// The free space of the file system that holds the app's data folder. The generic answer (the drive of the path root) is the read-only system
+    /// partition on Android, which has none, so a phone with gigabytes free was told "not enough free space".
+    /// </summary>
+    public long? FreeBytes(string path)
+    {
+#if ANDROID
+        try { return new Android.OS.StatFs(path).AvailableBytes; }
+        catch (Exception ex) when (ex is Java.Lang.IllegalArgumentException or IOException or UnauthorizedAccessException) { return null; }
+#else
+        return null;
+#endif
+    }
 }

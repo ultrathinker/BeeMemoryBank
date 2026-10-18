@@ -7,6 +7,7 @@ using System.Text.Json;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync.Metadata;
 using BeeMemoryBank.TestSupport;
@@ -129,16 +130,19 @@ public class JoinAfterActivationTests : IAsyncLifetime
         }
         MetadataCanaries.ScanArchive(path, _vault.Canaries).Should().BeEmpty("no title, path or tag is visible anywhere in the archive");
 
-        // The joiner imported it, holds the notes, and starts activated with the key rows (opened at its first unlock).
+        // The joiner is encrypted when the join ends (BMB-306) and locked: its files are an encrypted database and a boot store, not the plain file the
+        // archive held. The imported key slot opens it.
+        VaultStoreFiles.DetectMode(joiner.DataPath).Should().Be(VaultStoreMode.Sealed, "a node that joined is encrypted under the password it was given");
+        joiner.Services.GetRequiredService<SessionService>().IsUnlocked.Should().BeFalse();
+        (await joiner.Services.GetRequiredService<SessionService>().UnlockAsync(StepANode.Password))
+            .Should().BeTrue("the imported key slot must be unlocked before authoring the immediate post-join event");
+
+        // It imported the archive, holds the notes, and is activated with the key rows.
         using var scope = joiner.Services.CreateScope();
         using var conn = scope.ServiceProvider.GetRequiredService<DbConnectionFactory>().CreateConnection();
         (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_article")).Should().Be(_vault.ArticleIds.Count);
         (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_metadata_key")).Should().Be(1);
         (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_metadata_activation")).Should().Be(1);
-
-        // The join endpoint leaves the node locked: unlock the imported key slot before the first authored event.
-        (await joiner.Services.GetRequiredService<SessionService>().UnlockAsync(StepANode.Password))
-            .Should().BeTrue("the imported key slot must be unlocked before authoring the immediate post-join event");
 
         // The imported activation must take effect before the join endpoint returns.  Waiting for
         // the policy's periodic database recheck here would leave this first authored title clear.
@@ -159,18 +163,27 @@ public class JoinAfterActivationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Control_before_activation_the_archive_is_plain_sqlite_and_holds_the_canaries()
+    public async Task Control_before_activation_a_new_node_does_not_join_and_a_plain_archive_holds_the_canaries()
     {
+        // A new node of 2.6.2 joins only a node on protocol 4 (BMB-306): a host that has not activated is refused before any archive is asked for.
         var (response, joiner, wire) = await JoinAsync();
         using var _ = joiner;
 
-        response.IsSuccessStatusCode.Should().BeTrue(await response.Content.ReadAsStringAsync());
-        var entries = Entries(wire.ArchiveBytes!);
-        Encoding.ASCII.GetString(entries["beememorybank.db"], 0, 15).Should().Be("SQLite format 3", "before activation the join is exactly 2.5.1");
-        entries["manifest.json"].Should().NotBeEmpty();
-        Encoding.UTF8.GetString(entries["manifest.json"]).Should().NotContain("dbCipher");
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("Cannot join: the other computer does not encrypt its metadata yet").And.Contain("protocol 3");
+        wire.ForJoinCalls.Should().Be(0, "the refusal comes before any archive is asked for");
+        using (var scope = joiner.Services.CreateScope())
+            (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsInitializedAsync()).Should().BeFalse("nothing was written");
+
+        // The control of the scanner: what the host's archive was before 2.6, its plain database packed, shows the canaries to it.
+        var copy = Path.Combine(_host.DataPath, "control.db");
+        using (var conn = _host.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync($"VACUUM INTO '{copy.Replace("'", "''")}'");
         var path = Path.Combine(_host.DataPath, "join-plain.tar.gz");
-        await File.WriteAllBytesAsync(path, wire.ArchiveBytes!);
+        await using (var file = File.Create(path))
+        await using (var gzip = new GZipStream(file, CompressionLevel.Fastest))
+        await using (var tar = new TarWriter(gzip))
+            await tar.WriteEntryAsync(copy, "beememorybank.db");
         MetadataCanaries.ScanArchive(path, _vault.Canaries).Should().NotBeEmpty("the scanner sees the canaries in the pre-activation artefact");
     }
 

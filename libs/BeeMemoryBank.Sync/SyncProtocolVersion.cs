@@ -32,6 +32,17 @@ public static class SyncProtocolVersion
 
     public static bool IsCompatiblePeer(int? peerProtocolVersion) => peerProtocolVersion >= MinPeer;
 
+    /// <summary>
+    /// A new node joins only a node that encrypts its metadata (protocol 4; BMB-306, the owner's rule: no workaround, no compatibility mode). The
+    /// sentence a joining entry point (the Setup page, <c>bmb join</c>, the phone apps) gives a host that declares less, or null when the host may be
+    /// joined. It does not say how old the host is; a host below <see cref="MinPeer"/> is refused by its own, older message first.
+    /// </summary>
+    public static string? JoinRefusal(int hostProtocol) =>
+        hostProtocol >= Metadata.EventClasses.SealedProtocol
+            ? null
+            : $"Cannot join: the other computer does not encrypt its metadata yet (it speaks protocol {hostProtocol}), and a new node joins only a node that does. " +
+              "Switch metadata encryption on there first (Admin page, \"Metadata encryption\"), then join again.";
+
     /// <summary>Event protocol versions this build can apply: 1-3 as before, and 4 on every node, activated or not.</summary>
     public static bool CanApply(int eventProtocolVersion) => eventProtocolVersion is 1 or 2 or 3 or 4;
 }

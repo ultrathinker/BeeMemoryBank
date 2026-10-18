@@ -37,7 +37,7 @@ public class SnapshotRestoreModeTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _client = _node.CreateClient();
-        await _node.InitializeNodeAsync(displayName: "ModeNode", password: Password);
+        await _node.InitializeEncryptedNodeAsync(displayName: "ModeNode", password: Password);
         await UnlockAsync();
 
         using var scope = _node.Services.CreateScope();
@@ -319,8 +319,16 @@ public class SnapshotRestoreModeTests : IAsyncLifetime
         client.PostAsync("/api/snapshots/restore-network",
             new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"));
 
+    /// <summary>A restore leaves the vault locked, and a locked encrypted node is not read: the password opens it first.</summary>
+    private async Task EnsureOpenAsync()
+    {
+        var session = _node.Services.GetRequiredService<SessionService>();
+        if (!session.IsUnlocked) (await session.UnlockAsync(Password)).Should().BeTrue();
+    }
+
     private async Task<NodeIdentity> IdentityAsync()
     {
+        await EnsureOpenAsync();
         using var scope = _node.Services.CreateScope();
         return (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
     }
@@ -360,6 +368,7 @@ public class SnapshotRestoreModeTests : IAsyncLifetime
 
     private async Task<List<AuditRow>> AuditAsync()
     {
+        await EnsureOpenAsync();
         using var conn = _node.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
         return (await conn.QueryAsync<AuditRow>("SELECT action AS Action, details AS Details FROM tbl_audit_log ORDER BY id")).ToList();
     }
@@ -383,8 +392,8 @@ public class SnapshotRestoreModeTests : IAsyncLifetime
                 }
             }
             await _node.Services.GetRequiredService<SnapshotService>().DecryptDbIfNeededAsync(extracted);
-            using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={extracted};Pooling=False");
-            conn.Open();
+            // An encrypted node opens the archive as a staging copy under its own page key.
+            using var conn = _node.Services.GetRequiredService<DbConnectionFactory>().OpenFile(extracted);
             return (await conn.QueryAsync<string>("SELECT details FROM tbl_audit_log WHERE action = @action", new { action })).ToList();
         }
         finally

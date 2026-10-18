@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -34,6 +35,8 @@ public class JoinPeerTlsEndpointTests : IAsyncLifetime
         _hostClient = _host.CreateClient();
         await _host.InitializeNodeAsync("PeerTlsHost", Password);
         (await _hostClient.PostAsJsonAsync("/api/session/unlock", new { Password })).EnsureSuccessStatusCode();
+        // A new node joins only a node on protocol 4 (BMB-306).
+        await StepANode.ActivateAsync(_host);
 
         using var scope = _host.Services.CreateScope();
         var whitelist = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
@@ -60,7 +63,8 @@ public class JoinPeerTlsEndpointTests : IAsyncLifetime
             nodeId = Guid.NewGuid(),
             displayName = "Joiner",
             ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
-            apiAddress = (string?)null
+            apiAddress = (string?)null,
+            protocolVersion = BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol   // an activated host takes only a 2.6 joiner
         });
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -93,6 +97,7 @@ public class JoinPeerTlsEndpointTests : IAsyncLifetime
             password = Password
         }, JsonOpts);
         resp.IsSuccessStatusCode.Should().BeTrue(await resp.Content.ReadAsStringAsync());
+        (await joiner.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue("the joined node is encrypted and locked (BMB-306)");
 
         using var scope = joiner.Services.CreateScope();
         var rows = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
@@ -130,7 +135,8 @@ public class JoinPeerTlsEndpointTests : IAsyncLifetime
             nodeId = Guid.NewGuid(),
             displayName = "Joiner",
             ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
-            apiAddress = (string?)null
+            apiAddress = (string?)null,
+            protocolVersion = BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol   // an activated host takes only a 2.6 joiner
         });
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -152,6 +158,7 @@ public class JoinPeerTlsEndpointTests : IAsyncLifetime
             password = Password
         }, JsonOpts);
         init.IsSuccessStatusCode.Should().BeTrue(await init.Content.ReadAsStringAsync());
+        (await joiner.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue("the joined node is encrypted and locked (BMB-306)");
 
         using var joinerScope = joiner.Services.CreateScope();
         var rows = joinerScope.ServiceProvider.GetRequiredService<IWhitelistRepository>();

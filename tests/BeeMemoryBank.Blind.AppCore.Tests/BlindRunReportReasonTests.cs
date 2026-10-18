@@ -10,13 +10,20 @@ namespace BeeMemoryBank.Blind.AppCore.Tests;
 public sealed class BlindRunReportReasonTests
 {
     [Fact]
-    public void TheInnerExceptionsWords_FollowTheOuterMessage()
+    public void AFailedCallIsToldByItsKind_ARefusedCertificateReadsOtherwiseThanAClosedPort_AndNoWordOfTheStackOrTheOtherSideIsShown()
     {
-        var error = new HttpRequestException("The SSL connection could not be established, see inner exception.",
+        var certificate = new HttpRequestException("The SSL connection could not be established, see inner exception. (https://192.168.1.5:5610)",
             new AuthenticationException("The remote certificate was rejected by the provided RemoteCertificateValidationCallback."));
+        var closedPort = new HttpRequestException("No connection could be made because the target machine actively refused it. (192.168.1.5:5610)",
+            new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused));
+        var answered = new HttpRequestException("Response status code does not indicate success: 502 (Pay at https://evil.example/?token=abc).", null,
+            System.Net.HttpStatusCode.BadGateway);
 
-        BlindRunReport.Reason(error).Should().Be(
-            "The SSL connection could not be established, see inner exception. (AuthenticationException: The remote certificate was rejected by the provided RemoteCertificateValidationCallback.)");
+        BlindRunReport.Reason(certificate).Should().Be("no answer: its certificate was not accepted");
+        BlindRunReport.Reason(closedPort).Should().Contain("connection refused");
+        BlindRunReport.Reason(answered).Should().Contain("502").And.NotContain("evil.example").And.NotContain("token");
+        BlindRunReport.Reason(certificate).Should().NotBe(BlindRunReport.Reason(closedPort));
+        BlindRunReport.Reason(certificate).Should().NotContain("192.168.1.5").And.NotContain("see inner exception");
     }
 
     [Fact]

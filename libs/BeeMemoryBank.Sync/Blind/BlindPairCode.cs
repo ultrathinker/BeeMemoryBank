@@ -58,6 +58,11 @@ public sealed record BlindPairCode(
             throw new FormatException("The pair code carries no HTTPS address.");
         if (string.IsNullOrEmpty(code.Secret) || string.IsNullOrEmpty(code.TlsSpki) || string.IsNullOrEmpty(code.PublicKeyB64))
             throw new FormatException("The pair code is incomplete.");
-        return code;
+        // The code is pasted text from anywhere: its address goes through the one policy for a peer's address before any request is built from it or any row
+        // keeps it (a user name or a query in it, a link-local or metadata target). The refusal does not quote it.
+        var canonical = PeerAddressPolicy.Canonicalize(code.Address);
+        if (!canonical.Ok)
+            throw new FormatException("The pair code carries an address that cannot be a device (" + canonical.Refusal!.TrimEnd('.') + ").");
+        return code with { Address = canonical.Address! };
     }
 }

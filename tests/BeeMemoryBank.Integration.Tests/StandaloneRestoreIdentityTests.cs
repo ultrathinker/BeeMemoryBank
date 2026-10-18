@@ -38,7 +38,7 @@ public class StandaloneRestoreIdentityTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _client = _node.CreateClient();
-        await _node.InitializeNodeAsync(displayName: "RestoredNode", password: Password);
+        await _node.InitializeEncryptedNodeAsync(displayName: "RestoredNode", password: Password);
         await UnlockAsync(_client);
 
         // A second node with its own vault: it only checks signatures, as a sync peer does.
@@ -204,34 +204,20 @@ public class StandaloneRestoreIdentityTests : IAsyncLifetime
         AssertCanSign(_node, await IdentityAsync(_node));
     }
 
-    [Fact]
-    public async Task APlainSnapshotOfAnotherVault_OpenedByTheSamePassword_HasItsKeySealedUnderThatVaultsKey()
-    {
-        // Not encrypted, so nothing ties it to this session's master DEK: its database is sealed under
-        // a DEK of its own, which only its key slots (and the password) can produce. The node comes
-        // back unlockable with that DEK, so that is the key the new identity has to be wrapped under.
-        var other = new BmbWebApplicationFactory();
-        _disposables.Add(other);
-        await other.InitializeNodeAsync(displayName: "OtherVault", password: Password);
-        var fileName = await PlainSnapshotAsync(other);
-        var myDek = _node.Services.GetRequiredService<SessionService>().GetMasterDek();
-
-        await RestoreStandaloneAsync(_client, fileName);
-        await UnlockAsync(_client);
-
-        _node.Services.GetRequiredService<SessionService>().GetMasterDek().Should().NotEqual(myDek,
-            "the restored database carries the other vault's key slots");
-        AssertCanSign(_node, await IdentityAsync(_node));
-    }
-
-    [Fact]
-    public async Task ASnapshotNoKnownPasswordOpens_IsRefused_AndLeavesTheNodeAsItWas()
+    // A snapshot whose database is not encrypted (a plain SQLite file in the archive) is refused whatever vault it came from and whatever password is
+    // given (BMB-306: no restore reads a copy in the open). These two tests were about what a restore of such a snapshot did with the keys - it did
+    // something, then; now it does nothing, and says so.
+    [Theory]
+    [InlineData(true)]    // made by a vault whose master password is this node's: it would have opened
+    [InlineData(false)]   // made by a vault no known password opens
+    public async Task APlainSnapshotIsRefused_WhateverVaultItCameFrom_AndLeavesTheNodeAsItWas(bool samePassword)
     {
         var other = new BmbWebApplicationFactory();
         _disposables.Add(other);
-        await other.InitializeNodeAsync(displayName: "OtherVault", password: "aDifferentVaultPassword");
+        await other.InitializeNodeAsync(displayName: "OtherVault", password: samePassword ? Password : "aDifferentVaultPassword");
         var fileName = await PlainSnapshotAsync(other);
         var before = await IdentityAsync(_node);
+        var myDek = _node.Services.GetRequiredService<SessionService>().GetMasterDek();
 
         var resp = await _client.PostAsJsonAsync("/api/snapshots/restore", new
         {
@@ -242,10 +228,11 @@ public class StandaloneRestoreIdentityTests : IAsyncLifetime
         });
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await resp.Content.ReadAsStringAsync()).Should().Contain("master password does not open its key slots");
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("This snapshot holds a database that is not encrypted").And.Contain("Nothing was changed");
         File.Exists(Path.Combine(_node.DataPath, "beememorybank.db.standalone-staging")).Should().BeFalse(
             "a half-prepared copy of the other database must not stay next to the live one");
         await UnlockAsync(_client);
+        _node.Services.GetRequiredService<SessionService>().GetMasterDek().Should().Equal(myDek, "this node's vault was not replaced");
         var after = await IdentityAsync(_node);
         after.NodeId.Should().Be(before.NodeId);
         after.Ed25519PrivateKey.Should().Equal(before.Ed25519PrivateKey);

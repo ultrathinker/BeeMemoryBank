@@ -41,6 +41,7 @@ public static class BlindPhoneEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
-        });
+        })
+            .SingleFlight("blind-phone-pair", "Pairing a blind phone");
     }
 }

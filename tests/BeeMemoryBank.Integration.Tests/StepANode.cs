@@ -62,13 +62,16 @@ public static class StepANode
     /// Activates the node the way spec 14 says a test may (the activation service is track 1's): one key row wrapped under the master DEK and
     /// one activation row, then the policy flipped. Returns the key id and the open metadata key.
     /// </summary>
-    public static async Task<(string KeyId, byte[] Mek)> ActivateAsync(BmbWebApplicationFactory node, int generation = 1)
+    public static Task<(string KeyId, byte[] Mek)> ActivateAsync(BmbWebApplicationFactory node, int generation = 1) => ActivateAsync(node.Services, generation);
+
+    /// <summary>The same for any host's services (a test that builds its own host): the node must be unlocked.</summary>
+    public static async Task<(string KeyId, byte[] Mek)> ActivateAsync(IServiceProvider services, int generation = 1)
     {
-        var dek = node.Services.GetRequiredService<SessionService>().GetMasterDek();
+        var dek = services.GetRequiredService<SessionService>().GetMasterDek();
         var (mek, row) = MetadataKeyCrypto.Create(generation, dek);
-        var self = (await node.Services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
+        var self = (await services.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
         var now = DateTime.UtcNow.ToString("o");
-        using var conn = node.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        using var conn = services.GetRequiredService<DbConnectionFactory>().CreateConnection();
         await conn.ExecuteAsync(
             @"INSERT INTO tbl_metadata_key (key_id, generation, dek_fingerprint, epoch_hint, wrapped, iv, author_node_id, created_at, lamport_ts, event_id)
               VALUES (@KeyId, @Generation, @Fp, 0, @Wrapped, @Iv, @Author, @Now, 1, @EventId)",
@@ -77,7 +80,7 @@ public static class StepANode
             @"INSERT OR IGNORE INTO tbl_metadata_activation (activation_id, key_id, generation, activated_at, author_node_id, event_id, lamport_ts, applied_at)
               VALUES (@Id, @KeyId, @Generation, @Now, @Author, @EventId, 1, @Now)",
             new { Id = Guid.NewGuid().ToString(), row.KeyId, row.Generation, Now = now, Author = self.NodeId.ToString(), EventId = Guid.NewGuid().ToString() });
-        node.Services.GetRequiredService<ISyncProtocolPolicy>().MarkActivated();
+        services.GetRequiredService<ISyncProtocolPolicy>().MarkActivated();
         return (row.KeyId, mek);
     }
 

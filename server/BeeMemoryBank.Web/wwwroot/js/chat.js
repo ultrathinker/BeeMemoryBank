@@ -422,23 +422,18 @@
                 defaultImageGenModelId: (document.getElementById('chat-dm-imagegen').value || '') || null
             };
             var saveBtn = document.getElementById('chat-dm-save');
-            saveBtn.loading = true;
-            fetch('/api-proxy/chat/settings/defaults', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            }).then(function (r) {
-                saveBtn.loading = false;
-                if (!r.ok) {
-                    document.getElementById('chat-dm-error').textContent = 'Save failed (' + r.status + ').';
-                    return;
-                }
-                defaultsDialog.hide();
-                loadModelLabel(); // re-fetch effective-text-model so the composer label reflects the new pin
-            }).catch(function () {
-                saveBtn.loading = false;
-                document.getElementById('chat-dm-error').textContent = 'Save failed — network error.';
-            });
+            // The one busy helper (BMB-311): the button spins; the reason of a refusal is written in the dialog's own error line.
+            document.getElementById('chat-dm-error').textContent = '';
+            bmbBusy.run(saveBtn, function () {
+                return bmbBusy.request('/api-proxy/chat/settings/defaults', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                }).then(function () {
+                    defaultsDialog.hide();
+                    loadModelLabel(); // re-fetch effective-text-model so the composer label reflects the new pin
+                });
+            }, { quiet: true, error: function (err) { document.getElementById('chat-dm-error').textContent = 'Save failed: ' + err.message; } });
         });
     }
 
@@ -496,7 +491,7 @@
             // marginLeft:14px keeps the icons clearly separated from the (ellipsized) title text.
             renameIcon.style.cssText = 'font-size:0.9rem;color:var(--text-secondary);cursor:pointer;flex-shrink:0;margin-left:14px;';
             renameIcon.title = 'Rename';
-            renameIcon.addEventListener('click', function (e) { e.stopPropagation(); renameConversation(c.id, c.title); });
+            renameIcon.addEventListener('click', function (e) { e.stopPropagation(); renameConversation(c.id, c.title, renameIcon); });
             item.appendChild(renameIcon);
 
             var deleteIcon = document.createElement('sl-icon');
@@ -505,7 +500,7 @@
             // no longer look stuck together.
             deleteIcon.style.cssText = 'font-size:0.9rem;color:var(--sl-color-danger-600);cursor:pointer;flex-shrink:0;margin-left:8px;';
             deleteIcon.title = 'Delete';
-            deleteIcon.addEventListener('click', function (e) { e.stopPropagation(); deleteConversation(c.id); });
+            deleteIcon.addEventListener('click', function (e) { e.stopPropagation(); deleteConversation(c.id, deleteIcon); });
             item.appendChild(deleteIcon);
 
             historyEl.appendChild(item);
@@ -568,29 +563,29 @@
         // Home mode: "New chat" abandons the pinned conversation (clears the pin, never
         // deletes the row — it stays listed on /AI). The NEXT send creates+pins a fresh one.
         if (homeWelcome) {
+            // bmb-busy-exempt: "New chat" empties the view at once; clearing the pin is a background housekeeping call whose failure shows nothing
             fetch('/api-proxy/chat/home-pinned', { method: 'DELETE' }).catch(function () {});
         }
     }
 
-    function renameConversation(id, currentTitle) {
+    function renameConversation(id, currentTitle, el) {
         var newName = window.prompt('Rename conversation', currentTitle || '');
         if (newName === null) return;
         newName = (newName || '').trim();
         if (!newName) return;
-        fetch('/api-proxy/chat/conversations/' + id, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: newName })
-        }).then(function (r) {
-            if (r.ok) loadHistory();
-        });
+        bmbBusy.run(el, function () {
+            return bmbBusy.request('/api-proxy/chat/conversations/' + id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: newName })
+            }).then(function () { loadHistory(); });
+        }, { quiet: true, scope: historyEl });
     }
 
-    function deleteConversation(id) {
+    function deleteConversation(id, el) {
         if (!window.confirm('Delete this conversation? This cannot be undone.')) return;
-        fetch('/api-proxy/chat/conversations/' + id, { method: 'DELETE' })
-            .then(function (r) {
-                if (!r.ok) return;
+        bmbBusy.run(el, function () {
+            return bmbBusy.request('/api-proxy/chat/conversations/' + id, { method: 'DELETE' }).then(function () {
                 if (currentConversationId === id) {
                     currentConversationId = null;
                     messagesEl.innerHTML = '';
@@ -598,6 +593,7 @@
                 }
                 loadHistory();
             });
+        }, { quiet: true, scope: historyEl });
     }
 
     // ── send (streaming) ─────────────────────────────────────────────────────
@@ -714,6 +710,7 @@
     }
 
     function streamTurn(url, bodyObj, turn) {
+        // bmb-busy-exempt: a streamed chat turn; the answer streams in place and the Stop button is its own control
         return fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
@@ -1118,7 +1115,7 @@
 
     function doSaveToBee() {
         if (!saveArticleId || !saveSourceBlob) return;
-        if (saveConfirm) { saveConfirm.loading = true; saveConfirm.disabled = true; }
+        // The one busy helper (BMB-311): the button spins through the three steps; the reason of a failure is written under the chosen note.
         // Three steps, all through existing ACL-checked proxies:
         //   1. GET the article (refuse protected targets BEFORE uploading anything);
         //   2. upload the image bytes (media row, FK'd to the article);
@@ -1127,7 +1124,8 @@
         // The GET happens here, inside the click, so the read-modify-write window is one
         // network hop — same order of magnitude as the server-side MCP append tool.
         var articleContent = null;
-        fetch('/api-proxy/article/' + saveArticleId, { headers: { 'Accept': 'application/json' } })
+        bmbBusy.run(saveConfirm, function () {
+          return fetch('/api-proxy/article/' + saveArticleId, { headers: { 'Accept': 'application/json' } })
             .then(function (r) {
                 if (!r.ok) throw new Error('could not load the selected note.');
                 return r.json();
@@ -1165,13 +1163,11 @@
             .then(function (r) {
                 if (!r.ok) throw new Error('the image was uploaded but could not be added to the note text.');
                 if (saveDialog) saveDialog.hide();
-            })
-            .catch(function (err) {
-                showSaveError((err && err.message) || 'the server rejected it (check folder access).');
-            })
-            .finally(function () {
-                if (saveConfirm) { saveConfirm.loading = false; saveConfirm.disabled = !saveArticleId; }
             });
+        }, {
+            quiet: true,
+            error: function (err) { showSaveError((err && err.message) || 'the server rejected it (check folder access).'); }
+        });
     }
 
     // ── wiring ───────────────────────────────────────────────────────────────
@@ -1321,6 +1317,7 @@
         if (homeCloseBtn) homeCloseBtn.addEventListener('click', function () {
             // "Close chat": un-pin ONLY. The conversation row + messages stay intact and
             // remain listed on /AI. Reverts this page to the default welcome view.
+            // bmb-busy-exempt: the view closes at once; clearing the pin is a background housekeeping call whose failure shows nothing
             fetch('/api-proxy/chat/home-pinned', { method: 'DELETE' }).catch(function () {});
             if (abortCtrl) { try { abortCtrl.abort(); } catch (e) {} }
             currentConversationId = null;

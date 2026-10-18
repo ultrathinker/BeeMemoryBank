@@ -3,8 +3,8 @@ using BeeMemoryBank.Storage.Sealed;
 namespace BeeMemoryBank.Storage.Tests.Sealed;
 
 /// <summary>
-/// The names of snapshot archives: one UTC second, and free in both folders a restore by name looks in (<c>snapshots/</c>, then
-/// <c>pre-encryption/</c>), so that a name never means two archives.
+/// The names of snapshot archives: one UTC second, and free in the folder a restore by name looks in (<c>snapshots/</c>) and in the output folder,
+/// so that a name never means two archives.
 /// </summary>
 public sealed class SnapshotFileNamesTests : IDisposable
 {
@@ -16,7 +16,6 @@ public sealed class SnapshotFileNamesTests : IDisposable
     public SnapshotFileNamesTests()
     {
         Directory.CreateDirectory(Path.Combine(_data, "snapshots"));
-        Directory.CreateDirectory(Path.Combine(_data, "pre-encryption"));
     }
 
     public void Dispose()
@@ -46,33 +45,41 @@ public sealed class SnapshotFileNamesTests : IDisposable
         finally { Thread.CurrentThread.CurrentCulture = culture; }
     }
 
-    [Theory]
-    [InlineData("snapshots")]
-    [InlineData("pre-encryption")]
-    public void A_name_taken_in_either_snapshot_folder_gets_a_counter(string takenIn)
+    [Fact]
+    public void A_name_taken_in_the_snapshot_folder_gets_a_counter()
     {
-        Plant(takenIn, Base);
+        Plant("snapshots", Base);
 
         SnapshotFileNames.Unique(_data, Snapshots, Second).Should().Be("bmb-snapshot-20261013-093015-2.tar.gz");
     }
 
     [Fact]
-    public void The_counter_skips_every_name_taken_in_any_of_the_folders()
+    public void A_name_in_the_old_way_back_folder_is_not_looked_at_any_more()
+    {
+        // 2.6.2 keeps no pre-encryption copy (BMB-306); a folder an earlier version left is not a place a restore by name looks in.
+        Directory.CreateDirectory(Path.Combine(_data, "pre-encryption"));
+        Plant("pre-encryption", Base);
+
+        SnapshotFileNames.Unique(_data, Snapshots, Second).Should().Be(Base);
+    }
+
+    [Fact]
+    public void The_counter_skips_every_name_taken_in_the_folders()
     {
         Plant("snapshots", Base);
-        Plant("pre-encryption", "bmb-snapshot-20261013-093015-2.tar.gz");
+        Plant("snapshots", "bmb-snapshot-20261013-093015-2.tar.gz");
         Plant("snapshots", "bmb-snapshot-20261013-093015-3.tar.gz");
 
         SnapshotFileNames.Unique(_data, Snapshots, Second).Should().Be("bmb-snapshot-20261013-093015-4.tar.gz");
     }
 
     [Fact]
-    public void A_name_taken_in_another_output_folder_counts_as_well_as_the_two_snapshot_folders()
+    public void A_name_taken_in_another_output_folder_counts_as_well_as_the_snapshot_folder()
     {
         var elsewhere = Path.Combine(_data, "elsewhere");
         Directory.CreateDirectory(elsewhere);
         File.WriteAllText(Path.Combine(elsewhere, Base), "x");
-        Plant("pre-encryption", "bmb-snapshot-20261013-093015-2.tar.gz");
+        Plant("snapshots", "bmb-snapshot-20261013-093015-2.tar.gz");
 
         SnapshotFileNames.Unique(_data, elsewhere, Second).Should().Be("bmb-snapshot-20261013-093015-3.tar.gz");
     }

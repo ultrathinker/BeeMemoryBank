@@ -59,9 +59,9 @@ public static class BlindNodeServices
         services.AddHttpClient();
         services.AddTransient<HttpClient>(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient());
         // Outbound calls to a caller-supplied URL must not follow redirects (probe-relay): a host that passes the
-        // check can otherwise 302 the request onto loopback.
+        // check can otherwise 302 the request onto loopback. The connect is checked too (a name that resolves to a metadata address is never dialled).
         services.AddHttpClient(SyncEndpoints.NoRedirectClientName)
-            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+            .ConfigurePrimaryHttpMessageHandler(() => BeeMemoryBank.Crypto.PeerHttp.NoRedirectHandler());
         services.AddHttpContextAccessor();
 
         // The key a blind node signs its packages with; it holds no master DEK and encrypts nothing.

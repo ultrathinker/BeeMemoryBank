@@ -35,8 +35,10 @@ public partial class SearchPage : ContentPage
         await RunAsync(token);
     }
 
+    // busy-exempt: a search reads the notes on this phone, nothing is sent
     private async void OnSearch(object? sender, EventArgs e) => await RunAsync(CancellationToken.None);
 
+    // busy-exempt: a search reads the notes on this phone, nothing is sent
     private async void OnInTextToggled(object? sender, ToggledEventArgs e) => await RunAsync(CancellationToken.None);
 
     private async Task RunAsync(CancellationToken token)
@@ -58,6 +60,7 @@ public partial class SearchPage : ContentPage
         }
     }
 
+    // busy-exempt: opens the note tapped, nothing is sent and nothing waits
     private async void OnItemTapped(object? sender, TappedEventArgs e)
     {
         if ((sender as BindableObject)?.BindingContext is not NoteListItem item) return;

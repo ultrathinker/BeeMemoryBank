@@ -88,7 +88,7 @@ public class BlindInlineApplyTests : IDisposable
     private sealed class FailingRestoreInitiator : IRestoreInitiator
     {
         public bool RequiresApproval => false;
-        public Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent) =>
+        public Task AcceptRestoreAsync(string eventId, RestoreNetworkEventPayload payload, SyncEvent restoreEvent, CancellationToken ct = default) =>
             throw new InvalidOperationException("flag write failed");
         public Task RetryPendingRestoresAsync() => Task.CompletedTask;
     }

@@ -37,6 +37,8 @@
     <InternalsVisibleTo Include="BeeMemoryBank.Storage.Tests" />
     <!-- BlobRepository.StoreOnAsync (the full-node ArticleVersionRepository stores a version body in the same transaction). -->
     <InternalsVisibleTo Include="BeeMemoryBank.Vault" />
+    <!-- MemoryBudget.Allocations: the integration tests of the restore paths assert how many whole images a restore takes (BMB-304). -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Integration.Tests" />
   </ItemGroup>
 
 </Project>

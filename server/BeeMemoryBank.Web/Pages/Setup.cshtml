@@ -85,10 +85,10 @@
             <a href="#" class="back-link" id="link-legacy-back">
                 <sl-icon name="arrow-left"></sl-icon> Back
             </a>
-            <form method="post" asp-page-handler="Migrate" class="tab-panel-form" style="margin-top:12px;">
+            <form data-busy="long" data-busy-title="Setting up this node" data-busy-text="Please wait. This takes a few seconds." method="post" asp-page-handler="Migrate" class="tab-panel-form" style="margin-top:12px;">
                 @Html.AntiForgeryToken()
                 <sl-input name="sourcePath" label="Profile folder" required autofocus
-                          placeholder="e.g. C:\bee\data" help-text="The folder on this computer that contains beememorybank.db. Its data is copied into this app."></sl-input>
+                          placeholder="e.g. C:\bee\data" help-text="A blind node's backup folder is forwarded to the restore wizard. A folder with an unencrypted database is not copied in."></sl-input>
                 <div class="form-actions" style="margin-top:4px;">
                     <sl-button type="submit" variant="primary" style="width:100%;">
                         <sl-icon slot="prefix" name="folder2-open"></sl-icon> Open profile
@@ -152,7 +152,7 @@
 
             <!-- Standalone form — visible when mode=standalone -->
             <div id="form-standalone" style="display:@(mode == "standalone" || currentStepNum == 2 && mode != "join" ? "block" : "none");">
-                <form method="post" asp-page-handler="Standalone" class="tab-panel-form" data-setup-form="standalone">
+                <form data-busy="long" data-busy-title="Creating your memory bank" data-busy-text="Please wait. This takes a few seconds." method="post" asp-page-handler="Standalone" class="tab-panel-form" data-setup-form="standalone">
                     @Html.AntiForgeryToken()
                     <sl-input name="adminUsername" label="Username" required
                               value="@SetupModel.SuggestedUsername" autocomplete="username"></sl-input>
@@ -173,7 +173,7 @@
 
             <!-- Join form — visible when mode=join -->
             <div id="form-join" style="display:@(mode == "join" ? "block" : "none");">
-                <form method="post" asp-page-handler="Join" class="tab-panel-form" data-setup-form="join">
+                <form data-busy="long" data-busy-title="Joining the network" data-busy-text="Please wait. Your notes are being copied from the other device; this may take up to a minute." method="post" asp-page-handler="Join" class="tab-panel-form" data-setup-form="join">
                     @Html.AntiForgeryToken()
                     <!-- The code another computer shows under Admin > Connect a device: its address, a one-time token and
                          the pin of its certificate. Pasted, it fills the address below and the join goes only to the computer
@@ -248,17 +248,7 @@
         </div>
     </div>
 
-    <!-- Loading dialog (shown while forms are submitting) -->
-    <sl-dialog id="setup-loader" label="Please wait" no-header style="--width: 360px;">
-        <div style="text-align:center;padding:24px 12px;">
-            <sl-spinner style="font-size:2.5rem;--track-width:4px;"></sl-spinner>
-            <h3 id="setup-loader-title" style="margin-top:16px;margin-bottom:4px;">Working…</h3>
-            <p id="setup-loader-msg" class="text-muted" style="margin:0;font-size:0.9rem;">
-                Please don't close this page.
-            </p>
-        </div>
-    </sl-dialog>
-
+    <script src="~/js/bmb-busy.js" asp-append-version="true"></script>
     <script src="~/js/pages/setup.js" asp-append-version="true"></script>
 </body>
 </html>

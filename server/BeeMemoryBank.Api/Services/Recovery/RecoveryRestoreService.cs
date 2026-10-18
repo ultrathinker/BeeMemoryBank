@@ -92,95 +92,25 @@ public partial class RecoveryRestoreService(
     private Task StepAsync(string name) => StepForTests?.Invoke(name) ?? Task.CompletedTask;
 
     /// <summary>
-    /// A blind package (BlindPackageBuilder). Read with the blind seed's own reader
-    /// (<see cref="SnapshotService.ExtractVerifiedAsync"/>: every file against the signed manifest), the
-    /// embedded signature checked against <paramref name="producerPublicKey"/>, and its signed
-    /// blind-manifest.json taken as the evidence: whitelist (superadmin flags, TLS pins) and positions.
+    /// A format-1 blind package holds the vault in the open (it was made before metadata encryption was switched on): no restore reads one, in any host a
+    /// person can start (BMB-306). This is the whole of that entry point in the product: a refusal. Nothing here is read, written or switched by
+    /// configuration or by a service registration. It is virtual only so that the test host of the recovery engine's own tests (the key chain, the
+    /// anchor and the clock are exercised on fixtures made before the switch) can put the old reader in a subclass that lives in the test assembly.
     /// </summary>
-    /// <param name="events">The signed events that came with the package (the blind node's restore route).</param>
-    public async Task<RestoreResult> RestoreFromPackageAsync(
+    public virtual Task<RestoreResult> RestoreFromPackageAsync(
         string packagePath, byte[] signature, byte[] producerPublicKey, RestoreIdentity who,
         RestoreBlindPeer? blind, IReadOnlyList<SyncEvent> events, CancellationToken ct = default,
         RestoreBoxPolicy boxes = RestoreBoxPolicy.Default)
-    {
-        // In the data folder and owner-only, not the OS temp folder: the extracted package holds the vault database in clear.
-        string dataPath;
-        using (var pathScope = scopes.CreateScope())
-            dataPath = pathScope.ServiceProvider.GetRequiredService<SnapshotService>().DataPath;
-        var dir = SnapshotStaging.NewDirectory(dataPath);
-        try
-        {
-            VerifiedSnapshot package;
-            BlindManifest manifest;
-            using (var scope = scopes.CreateScope())
-            {
-                try
-                {
-                    package = await scope.ServiceProvider.GetRequiredService<SnapshotService>().ExtractVerifiedAsync(packagePath, dir);
-                }
-                catch (InvalidOperationException ex)
-                {
-                    // A file that does not match its manifest hash, an unknown layout: not a package to restore from.
-                    throw new InvalidDataException($"Not a valid blind package: {ex.Message}", ex);
-                }
-                // Both signatures up front: the embedded one covers every file through the manifest, the sidecar
-                // the whole archive (what the join import checks again), so nothing is resolved from a package
-                // the import would refuse.
-                if (!package.IsSignedBy(producerPublicKey)
-                    || !Ed25519Signer.Verify(producerPublicKey,
-                        await SnapshotService.ComputeSignaturePayloadAsync(package.ManifestBytes, packagePath, ct), signature))
-                    throw new InvalidDataException("The package signature does not verify.");
-                var manifestPath = Path.Combine(package.Directory, BlindManifest.FileName);
-                if (!File.Exists(manifestPath))
-                    throw new InvalidDataException("Not a blind package: blind-manifest.json is missing.");
-                manifest = BlindManifest.Parse(await File.ReadAllBytesAsync(manifestPath, ct));
-            }
-            var producer = blind?.NodeId ?? manifest.ProducerNodeId;
-            if (manifest.ProducerNodeId != producer)
-                throw new InvalidDataException("The package was not built by the node it came from.");
-            // One row per node, and the producer's own row naming the key that signed the package.
-            if (manifest.Whitelist.GroupBy(p => p.NodeId).Any(g => g.Count() > 1))
-                throw new InvalidDataException("The package's manifest lists a node twice.");
-            var producerRow = manifest.Whitelist.SingleOrDefault(p => p.NodeId == producer);
-            if (producerRow == null || !ProducerKeyMatches(producerRow.PublicKeyB64, producerPublicKey))
-                throw new InvalidDataException("The package's manifest does not name its producer with the key that signed it.");
-
-            var evidence = new RestoreEvidence(RestoreEvidenceFromManifest.Of(manifest), events);
-            return await RestoreCoreAsync(package.DatabasePath, recoverySet: null, who, blind is null ? null : blind with { CpSeq = manifest.CpSequence },
-                evidence, async sp =>
-                {
-                    await sp.GetRequiredService<SnapshotService>().RestoreForJoinAsync(packagePath, signature, producerPublicKey);
-                    // Beyond the join snapshot: what lets the restored node refuse late events about
-                    // something deleted for good (plan 3.6).
-                    ImportTables(sp.GetRequiredService<DbConnectionFactory>(), package.DatabasePath, BlindPackageBuilder.ExtraTables);
-                }, ct, boxes);
-        }
-        finally
-        {
-            if (!SnapshotStaging.TryCleanupDirectory(dir))
-                throw new IOException("The clear recovery staging files could not be removed. The recovery restore requires repair and was not reported as successful.");
-        }
-    }
+        => Task.FromException<RestoreResult>(new RestoreRefusedException(RestoreRefusedException.OpenCopyMessage));
 
     /// <summary>
-    /// A database copy from a backup (plan 6.8), with the recovery set that lay next to it. No producer
-    /// signature here — the anchor is what vouches for the state. The whitelist, positions and signed
-    /// events come from the copy itself.
+    /// A database copy with no baseline holds the vault in the open: no restore reads one (BMB-306). A refusal, like <see cref="RestoreFromPackageAsync"/>;
+    /// what a backup of a node that encrypts its metadata holds is a baseline, read by <see cref="RestoreFromBaselineAsync"/>.
     /// </summary>
-    public async Task<RestoreResult> RestoreFromDatabaseAsync(
+    public virtual Task<RestoreResult> RestoreFromDatabaseAsync(
         string databasePath, RecoverySet? recoverySet, RestoreIdentity who, CancellationToken ct = default,
         RestoreBoxPolicy boxes = RestoreBoxPolicy.Default)
-    {
-        DbConnectionFactory vault;
-        using (var scope = scopes.CreateScope()) vault = scope.ServiceProvider.GetRequiredService<DbConnectionFactory>();
-        var evidence = await DatabaseRestoreEvidence.ReadAsync(databasePath, vault);
-        return await RestoreCoreAsync(databasePath, recoverySet, who, blind: null, evidence, sp =>
-        {
-            ImportTables(sp.GetRequiredService<DbConnectionFactory>(), databasePath,
-                [.. SnapshotTables.Replicated, .. BlindPackageBuilder.ExtraTables]);
-            return Task.CompletedTask;
-        }, ct, boxes);
-    }
+        => Task.FromException<RestoreResult>(new RestoreRefusedException(RestoreRefusedException.OpenCopyMessage));
 
     /// <summary>
     /// The keys, under <paramref name="boxes"/>: with <see cref="RestoreBoxPolicy.Default"/> a set whose boxes
@@ -212,7 +142,7 @@ public partial class RecoveryRestoreService(
         return keys;
     }
 
-    private async Task<RestoreResult> RestoreCoreAsync(
+    internal async Task<RestoreResult> RestoreCoreAsync(
         string databaseForKeys, RecoverySet? recoverySet, RestoreIdentity who, RestoreBlindPeer? blind,
         RestoreEvidence evidence, Func<IServiceProvider, Task> import, CancellationToken ct,
         RestoreBoxPolicy boxes, BaselineRestoreRun? baseline = null, IReadOnlyDictionary<Guid, long>? pullPositions = null)
@@ -228,6 +158,12 @@ public partial class RecoveryRestoreService(
             if (await sp.GetRequiredService<InitializationService>().IsInitializedAsync())
                 throw new InvalidOperationException("This node is already initialized; restore needs a fresh node.");
 
+            // A restore ends encrypted or not at all, and the marker that makes a cut restore safe is written before the first write: a host composed without
+            // the sealing services (no marker, nothing to encrypt with) refuses here, before any key is recovered or anything is written (BMB-306 fix round 2).
+            if (sp.GetService<BeeMemoryBank.Vault.Sealed.ISealIntents>() is not { } intents
+                || sp.GetService<BeeMemoryBank.Vault.Sealed.FreshNodeSealing>() is null)
+                throw new RestoreRefusedException(RestoreRefusedException.CannotEncryptMessage);
+
             // 1. Keys first, from the copy, before anything is written here.
             var target = sp.GetRequiredService<DbConnectionFactory>();
             if (recoverySet == null)
@@ -236,6 +172,10 @@ public partial class RecoveryRestoreService(
                 recoverySet = await RecoverySetBuilder.BuildAsync(source);
             }
             using var keys = await ResolveKeysAsync(recoverySet, who.Password, boxes, ct);
+            // The keys open: from here this restore puts the vault in the open (the baseline's decrypted staging copy, then the target's rows) until the
+            // endpoint encrypts the node. The seal intent is on disk before the first of those, so a cut, a failed cleanup or a kill anywhere in between is
+            // a restore the next start wipes (SealIntent), never a node that starts plain. FreshNodeSealing ends it; the endpoint takes a failure back.
+            intents.Begin(BeeMemoryBank.AppPaths.SealIntent.KindRestore);
             // A restore from a baseline reads its database only now: the baseline opens with a metadata key, and only the keys the
             // password just recovered open that (docs/design/step-a-spec.md 12 steps 3 and 4). Still nothing is written here.
             if (baseline is not null) databaseForKeys = await baseline.OpenDatabaseAsync(keys, ct, target);
@@ -570,7 +510,7 @@ public partial class RecoveryRestoreService(
         }
     }
 
-    private static bool ProducerKeyMatches(string? rowKeyB64, byte[] producerPublicKey)
+    internal static bool ProducerKeyMatches(string? rowKeyB64, byte[] producerPublicKey)
     {
         try { return rowKeyB64 != null && Convert.FromBase64String(rowKeyB64).AsSpan().SequenceEqual(producerPublicKey); }
         catch (FormatException) { return false; }
@@ -615,7 +555,7 @@ public partial class RecoveryRestoreService(
             await WhitelistRepository.InsertAsync(conn, tx, new WhitelistEntry
             {
                 NodeId = peer.NodeId, DisplayName = peer.DisplayName, Ed25519PublicKey = peer.PublicKey,
-                ApiAddress = isBlindSource ? blind!.ApiAddress.TrimEnd('/') : peer.ApiAddress,
+                ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(isBlindSource ? blind!.ApiAddress : peer.ApiAddress),
                 // The blind node we came from: the pin the user typed. Everyone else: the pin the manifest carries.
                 TlsSpki = BlindTrust.PinOf(tlsTrust, tlsSpki),
                 TlsTrust = BlindTrust.Effective(tlsTrust, tlsSpki),
@@ -699,7 +639,7 @@ public partial class RecoveryRestoreService(
     }
 
     // The join path's import, from a plain database file: the given tables, by column name.
-    private static void ImportTables(DbConnectionFactory connFactory, string databasePath, IEnumerable<string> tables)
+    internal static void ImportTables(DbConnectionFactory connFactory, string databasePath, IEnumerable<string> tables)
     {
         using var conn = (SqliteConnection)connFactory.CreateConnection();
         using (var off = conn.CreateCommand()) { off.CommandText = "PRAGMA foreign_keys = OFF"; off.ExecuteNonQuery(); }

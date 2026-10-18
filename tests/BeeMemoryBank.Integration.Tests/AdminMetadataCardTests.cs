@@ -10,7 +10,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// <summary>
 /// Admin → Metadata encryption (docs/design/step-a-spec.md 5.3, 5.4), through the real Web host in front of a real Api:
 /// the card explains the switch and asks for a fresh backup first; the switch is offered only after every device was
-/// asked; it is refused without the backup box; and once on, the card says it cannot be switched off.
+/// asked; it is refused without the backup box; and once on, the card is one status line (AdminCardsTests has the three states of the node).
 /// </summary>
 public sealed class AdminMetadataCardTests : IAsyncLifetime
 {
@@ -58,7 +58,7 @@ public sealed class AdminMetadataCardTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task TheSwitch_IsRefusedWithoutTheBackupBox_AndOnceOnTheCardSaysItStaysOn()
+    public async Task TheSwitch_IsRefusedWithoutTheBackupBox_AndOnceOnTheCardIsOneStatusLine()
     {
         var refused = await PostAdminAsync("ActivateMetadata", new() { ["masterPassword"] = Password });
         refused.StatusCode.Should().Be(HttpStatusCode.Redirect);
@@ -71,8 +71,10 @@ public sealed class AdminMetadataCardTests : IAsyncLifetime
         WebUtility.UrlDecode(done.Headers.Location!.ToString()).Should().Contain("Metadata encryption is on");
 
         var html = WebUtility.HtmlDecode(await AdminPageAsync());
-        html.Should().Contain("This cannot be switched off.");
+        html.Should().Contain("id=\"metadata-status\"").And.Contain("since");
+        html.Should().NotContain("This cannot be switched off.", "a finished switch is one status line, not a lecture");
         html.Should().NotContain("Switch metadata encryption on");
+        html.Should().NotContain("Ask every device now");
     }
 
     [Fact]

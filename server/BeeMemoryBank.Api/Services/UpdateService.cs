@@ -236,7 +236,8 @@ public sealed class UpdateService
             }
             catch (JsonException ex)
             {
-                SetFailed($"Manifest JSON is malformed: {ex.Message}");
+                _logger.LogWarning(ex, "The releases manifest is not valid JSON ({Type})", ex.GetType().Name);
+                SetFailed("Manifest JSON is malformed.");
                 return false;
             }
 
@@ -260,7 +261,7 @@ public sealed class UpdateService
         }
         catch (Exception ex) when (ex is not (InvalidOperationException or OperationCanceledException))
         {
-            SetFailed($"Check failed: {ex.Message}");
+            SetFailed($"Check failed: {BeeMemoryBank.Sync.PeerContactLog.Describe(ex)}");
             throw;
         }
         finally
@@ -300,7 +301,7 @@ public sealed class UpdateService
             }
             catch (Exception ex)
             {
-                SetFailed($"Artifact download failed: {ex.Message}");
+                SetFailed($"Artifact download failed: {BeeMemoryBank.Sync.PeerContactLog.Describe(ex)}");
                 return;
             }
 
@@ -395,7 +396,8 @@ public sealed class UpdateService
             }
             catch (Exception ex)
             {
-                SetFailed($"Pre-update backup failed: {ex.Message}");
+                _logger.LogError(ex, "The pre-update backup failed");
+                SetFailed($"Pre-update backup failed: {BeeMemoryBank.Sync.PeerContactLog.Describe(ex)}");
                 return;
             }
 
@@ -492,7 +494,8 @@ public sealed class UpdateService
             }
             catch (Exception ex)
             {
-                SetFailed($"Apply failed: {ex.Message}");
+                _logger.LogError(ex, "Applying the update failed");
+                SetFailed($"Apply failed: {BeeMemoryBank.Sync.PeerContactLog.Describe(ex)}");
             }
         }
         finally

@@ -13,16 +13,16 @@ public sealed class SpkiPinGuardHandler(SpkiPinRegistry pins, HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         if (pins.IsPinned(request) && request.RequestUri?.Scheme != Uri.UriSchemeHttps)
-            throw new HttpRequestException($"Refusing plain {request.RequestUri?.Scheme} to a pinned peer: {request.RequestUri}");
+            throw new HttpRequestException($"Refusing plain {request.RequestUri?.Scheme} to a pinned peer.");   // no URL: this text reaches logs and screens
 
         var response = await base.SendAsync(request, ct);
         var status = (int)response.StatusCode;
         if (status is >= 300 and < 400)
         {
-            var target = response.Headers.Location;
             response.Dispose();
+            // Neither the address asked nor the one it was sent on to is named: both may carry what must not reach a log or a dialog (a token in a query).
             throw new HttpRequestException(
-                $"Sync request to {request.RequestUri} was redirected ({status}) to {target}; redirects are not followed.",
+                $"Sync request was redirected ({status}); redirects are not followed.",
                 inner: null, statusCode: (HttpStatusCode)status);
         }
         return response;

@@ -89,6 +89,16 @@ public static class MiscProxyEndpoints
             if (rule!.RequiredRole != null && !ctx.User.IsInRole(rule.RequiredRole))
                 return Results.Json(new { error = "Forbidden — superadmin only" }, statusCode: 403);
 
+            // A side-effect POST of a script: proof that it comes from a page of this site (the token the page was rendered with, in the header).
+            if (entry!.Flags.HasFlag(ProxyRouteFlags.RequireAntiforgery) && !HttpMethods.IsGet(ctx.Request.Method) && !HttpMethods.IsHead(ctx.Request.Method))
+            {
+                try { await ctx.RequestServices.GetRequiredService<Microsoft.AspNetCore.Antiforgery.IAntiforgery>().ValidateRequestAsync(ctx); }
+                catch (Microsoft.AspNetCore.Antiforgery.AntiforgeryValidationException)
+                {
+                    return Results.Json(new { error = "The request could not be verified. Reload the page and try again." }, statusCode: 400);
+                }
+            }
+
             var upstreamPathAndQuery = ProxyRouteTable.BuildUpstreamPath(path, matchedPrefix!, entry!)
                                        + ctx.Request.QueryString.Value;
 

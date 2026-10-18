@@ -37,7 +37,7 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
         Step = step ?? "";
     }
 
-    public async Task<IActionResult> OnPostMigrateAsync(string sourcePath)
+    public IActionResult OnPostMigrate(string sourcePath)
     {
         if (string.IsNullOrWhiteSpace(sourcePath))
         {
@@ -52,47 +52,13 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
                 HttpContext.RequestServices.GetServices<BeeMemoryBank.Web.Services.IBackupFileRecognizer>()))
             return RedirectToPage("/Setup", new { step = "restore", backup = sourcePath });
 
-        var candidate = LegacyMigrationService.ValidatePath(sourcePath);
-        if (candidate == null || !candidate.IsValid)
-        {
-            ErrorMessage = "The specified directory is not a valid legacy BeeMemoryBank data directory.";
-            Step = "legacy";
-            return Page();
-        }
-
-        // Guard: a running Api has the destination db open, and overwriting the file then is a
-        // silent no-op — Api's connection pool keeps serving the old state. Nothing may hold the
-        // db while copying, and this page cannot stop the Api, so refuse and ask the user to
-        // restart first (Api's first boot then opens the copied file, not a fresh empty one).
-        var apiReachable = await api.GetInitStatusAsync();
-        if (apiReachable != null)
-        {
-            ErrorMessage =
-                "Migration cannot proceed while the app is fully running: the Api process " +
-                "already has the destination database open, so copying the file now would " +
-                "have no effect on the live process. " +
-                "Please fully close BeeMemoryBank (including the tray icon / desktop app), " +
-                "then reopen it and perform the migration immediately — before Api's own " +
-                "auto-created empty database has any account data in it.";
-            Step = "legacy";
-            return Page();
-        }
-
-        try
-        {
-            var destPath = Environment.GetEnvironmentVariable("BMB_DATA_PATH")
-                ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
-
-            await LegacyMigrationService.CopyLegacyDataAsync(sourcePath, destPath);
-
-            return RedirectToPage("/Setup", new { step = "done", mode = "standalone" });
-        }
-        catch (Exception ex)
-        {
-            ErrorMessage = $"Failed to copy database: {ex.Message}";
-            Step = "legacy";
-            return Page();
-        }
+        // A profile folder with a database in the open is no longer copied in (BMB-306): a restore never produces an unencrypted node.
+        ErrorMessage =
+            "A folder with an unencrypted database is not copied into this app: a restore never produces an unencrypted node. " +
+            "Open the folder as a profile (tray icon, Profiles, Add existing profile) and encrypt that node (Admin, Database encryption), " +
+            "or set this node up first and restore a snapshot of the old one into it.";
+        Step = "legacy";
+        return Page();
     }
 
     public async Task<IActionResult> OnPostStandaloneAsync(

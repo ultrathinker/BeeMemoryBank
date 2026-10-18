@@ -28,9 +28,12 @@ public sealed class RemoteSentinelVerifier(SessionService sessionService, ILogge
             if (!resp.IsSuccessStatusCode) return; // server without sentinel — skip check
 
             var dto = await resp.Content.ReadFromJsonAsync<SentinelDto>(JsonOpts, ct);
-            if (dto?.SentinelB64 == null) return;
+            // No sentinel, or an empty one, is the same "the server has none" (the one predicate): nothing to compare, and an empty text is not decoded into an empty
+            // sentinel that every key would then "mismatch".
+            if (string.IsNullOrEmpty(dto?.SentinelB64)) return;
 
-            var remoteSentinel = Convert.FromBase64String(dto.SentinelB64);
+            var remoteSentinel = Convert.FromBase64String(dto!.SentinelB64!);
+            if (BeeMemoryBank.Core.Services.NodeSentinel.IsMissing(remoteSentinel)) return;
             var localDek = sessionService.GetMasterDek();
             try
             {

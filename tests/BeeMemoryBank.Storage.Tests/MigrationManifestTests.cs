@@ -6,8 +6,9 @@ namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
 /// The embedded migrations as the ledger sees them: logical names and bytes, pinned in docs/migrations.golden.txt.
-/// MigrationRunner deletes a ledger row whose resource name no longer matches, so a rename, a lost resource or a changed byte
-/// (for example when code moves between assemblies in the vault split, BMB-99) must fail here, not on a live node's volume.
+/// Since 2.6.2 there is one, the baseline (BMB-314). The ledger row of a database carries its resource name, and the runner
+/// refuses a ledger it does not recognise, so a rename, a lost resource or a changed byte (for example when code moves between
+/// assemblies, BMB-99) must fail here, not on a live node's volume.
 /// Regenerate after an INTENDED new migration with BMB_UPDATE_GOLDEN=1.
 /// </summary>
 public class MigrationManifestTests
@@ -36,7 +37,7 @@ public class MigrationManifestTests
                 return n + " " + Convert.ToHexString(SHA256.HashData(ms.ToArray())).ToLowerInvariant();
             })
             .ToList();
-        lines.Count.Should().BeGreaterThan(30, "the baseline has 33 migrations");
+        lines.Should().HaveCount(1, "the baseline is the only migration of the public tree");
         var actual = string.Join("\n", lines) + "\n";
 
         var path = Path.Combine(RepoRoot(), "docs", "migrations.golden.txt");
@@ -46,6 +47,6 @@ public class MigrationManifestTests
             return;
         }
         actual.Should().Be(File.ReadAllText(path).Replace("\r\n", "\n"),
-            "the migration resource names and bytes are part of the on-disk contract (see MigrationRunner's ghost hunter)");
+            "the migration resource names and bytes are part of the on-disk contract (the ledger row names the baseline; see MigrationRunner)");
     }
 }

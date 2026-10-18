@@ -176,6 +176,7 @@
 
         if (item.type === 'folder') {
             try {
+                // bmb-busy-exempt: a read (a POST only because of its body); the dialog shows its own spinner while the preview loads
                 const r = await fetch('/api-proxy/hard-delete/folder/preview', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -210,34 +211,21 @@
 
     if (btnFinalDelete) {
         btnFinalDelete.addEventListener('click', async () => {
-            btnFinalDelete.loading = true;
-            try {
-                const url = currentItem.type === 'folder'
-                    ? '/api-proxy/hard-delete/folder'
-                    : `/api-proxy/hard-delete/article/${currentItem.id}`;
-                const method = 'POST';
-                const body = currentItem.type === 'folder' ? JSON.stringify({ path: currentItem.path }) : null;
-
-                const r = await fetch(url, {
-                    method: method,
+            const url = currentItem.type === 'folder'
+                ? '/api-proxy/hard-delete/folder'
+                : `/api-proxy/hard-delete/article/${currentItem.id}`;
+            const body = currentItem.type === 'folder' ? JSON.stringify({ path: currentItem.path }) : null;
+            // A long operation (BMB-311): a folder is deleted with everything in it; the pop-up covers the page, a refusal is written in the dialog.
+            await bmbBusy.run(btnFinalDelete, async function () {
+                const res = (await bmbBusy.request(url, {
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: body
-                });
-
-                if (r.ok) {
-                    const res = await r.json();
-                    toast('success', `Hard delete successful. Deleted ${res.deletedArticles} articles, ${res.deletedFolders} folders, ${res.deletedMedia} media files.`);
-                    dlgDelete?.hide();
-                    loadList();
-                } else {
-                    const d = await r.json();
-                    toast('danger', d.error || 'Failed to hard delete');
-                }
-            } catch (e) {
-                toast('danger', 'Network error');
-            } finally {
-                btnFinalDelete.loading = false;
-            }
+                })).body || {};
+                toast('success', `Hard delete successful. Deleted ${res.deletedArticles} articles, ${res.deletedFolders} folders, ${res.deletedMedia} media files.`);
+                dlgDelete?.hide();
+                loadList();
+            }, { long: true, title: 'Deleting for good', text: 'Please wait. Do not close this page.', quiet: true });
         });
     }
 
@@ -263,33 +251,23 @@
     if (btnRestoreConfirm) {
         btnRestoreConfirm.addEventListener('click', async () => {
             if (!restoreItem) return;
-            btnRestoreConfirm.loading = true;
-            try {
-                const url = restoreItem.type === 'folder'
-                    ? `/api-proxy/hard-delete/restore/folder/${restoreItem.id}`
-                    : `/api-proxy/hard-delete/restore/article/${restoreItem.id}`;
-                const r = await fetch(url, { method: 'POST' });
-                if (r.ok) {
-                    const data = await r.json();
-                    const name = restoreItem.type === 'folder'
-                        ? (data.newFolderPath || `[RESTORED] ${restoreItem.title}`)
-                        : (data.newTitle || `[RESTORED] ${restoreItem.title}`);
-                    const extra = restoreItem.type === 'folder' && data.restoredSubfolderCount > 0
-                        ? ` (+ ${data.restoredSubfolderCount} subfolder${data.restoredSubfolderCount === 1 ? '' : 's'})`
-                        : '';
-                    toast('success', `Restored: ${name}${extra}`);
-                    dlgRestore?.hide();
-                    loadList();
-                } else {
-                    let err = 'Restore failed';
-                    try { const d = await r.json(); err = d.error || err; } catch {}
-                    toast('danger', err);
-                }
-            } catch (e) {
-                toast('danger', 'Network error');
-            } finally {
-                btnRestoreConfirm.loading = false;
-            }
+            const item = restoreItem;
+            const url = item.type === 'folder'
+                ? `/api-proxy/hard-delete/restore/folder/${item.id}`
+                : `/api-proxy/hard-delete/restore/article/${item.id}`;
+            // A long operation (BMB-311): a folder comes back with everything in it; a refusal is written in the dialog, next to the button.
+            await bmbBusy.run(btnRestoreConfirm, async function () {
+                const data = (await bmbBusy.request(url, { method: 'POST' })).body || {};
+                const name = item.type === 'folder'
+                    ? (data.newFolderPath || `[RESTORED] ${item.title}`)
+                    : (data.newTitle || `[RESTORED] ${item.title}`);
+                const extra = item.type === 'folder' && data.restoredSubfolderCount > 0
+                    ? ` (+ ${data.restoredSubfolderCount} subfolder${data.restoredSubfolderCount === 1 ? '' : 's'})`
+                    : '';
+                toast('success', `Restored: ${name}${extra}`);
+                dlgRestore?.hide();
+                loadList();
+            }, { long: true, title: 'Restoring', text: 'Please wait. Do not close this page.', quiet: true });
         });
     }
 

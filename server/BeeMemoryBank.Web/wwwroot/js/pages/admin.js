@@ -172,22 +172,33 @@
         document.getElementById('dlg-edit-chat-model').show();
     }
 
-    function toggleChatKey(keyId, enabled) {
-        fetch('/api-proxy/chat/keys/' + keyId, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: enabled })
-        }).catch(function () { loadKeys(); });
+    // Every button below sends through bmbBusy (BMB-311): it is off and spins until the answer comes, and a refusal is said in full next to it.
+    function toggleChatKey(keyId, enabled, el) {
+        bmbBusy.run(el, function () {
+            return bmbBusy.request('/api-proxy/chat/keys/' + keyId, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: enabled })
+            });
+        }, {
+            quiet: true,
+            scope: keysBody,
+            error: function (err) { loadKeys(); bmbBusy.showResult(keysBody, false, err.message); }
+        });
     }
 
-    function deleteChatKey(id) {
+    function deleteChatKey(id, el) {
         if (!confirm('Delete this API key?')) return;
-        fetch('/api-proxy/chat/keys/' + id, { method: 'DELETE' }).then(function () { loadKeys(); });
+        bmbBusy.run(el, function () {
+            return bmbBusy.request('/api-proxy/chat/keys/' + id, { method: 'DELETE' }).then(function () { loadKeys(); });
+        }, { quiet: true, scope: keysBody });
     }
 
-    function deleteChatModel(id) {
+    function deleteChatModel(id, el) {
         if (!confirm('Delete this model?')) return;
-        fetch('/api-proxy/chat/models/' + id, { method: 'DELETE' }).then(function () { loadModels(); });
+        bmbBusy.run(el, function () {
+            return bmbBusy.request('/api-proxy/chat/models/' + id, { method: 'DELETE' }).then(function () { loadModels(); });
+        }, { quiet: true, scope: modelsBody });
     }
 
     var btnAddChatKey = document.getElementById('btn-add-chat-key');
@@ -204,24 +215,24 @@
             var key = document.getElementById('chat-key-value').value.trim();
             var priority = parseInt(document.getElementById('chat-key-priority').value || '0', 10) || 0;
             if (!label || !key) return;
-            fetch('/api-proxy/chat/keys', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ label: label, apiKey: key, priority: priority })
-            })
-                .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
-                .then(function (res) {
+            // The dialog stays open when the node refuses: the reason is written in it, next to the button.
+            bmbBusy.run(btnSaveChatKey, function () {
+                return bmbBusy.request('/api-proxy/chat/keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label: label, apiKey: key, priority: priority })
+                }).then(function (res) {
                     document.getElementById('dlg-add-chat-key').hide();
                     document.getElementById('chat-key-label').value = '';
                     document.getElementById('chat-key-value').value = '';
                     document.getElementById('chat-key-priority').value = '0';
                     loadKeys();
-                    if (res.ok && res.body && res.body.apiKey) {
+                    // The secret is shown once, so it is shown in a prompt the person has to close, not in a line that fades.
+                    if (res.body && res.body.apiKey) {
                         alert('Key created. Copy it now — it will not be shown again:\n\n' + res.body.apiKey);
-                    } else if (!res.ok) {
-                        alert((res.body && res.body.error) ? res.body.error : 'Failed to save key (is the vault unlocked?).');
                     }
                 });
+            }, { quiet: true });
         });
     }
 
@@ -249,20 +260,19 @@
                 return;
             }
             if (!modelId || !label) return;
-            fetch('/api-proxy/chat/models', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    modelId: modelId,
-                    label: label,
-                    isText: isText,
-                    isVision: isVision,
-                    isImageGen: isImageGen,
-                    contextWindow: (isNaN(cw) || cw <= 0) ? null : cw
-                })
-            })
-                .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
-                .then(function (res) {
+            bmbBusy.run(btnSaveChatModel, function () {
+                return bmbBusy.request('/api-proxy/chat/models', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        modelId: modelId,
+                        label: label,
+                        isText: isText,
+                        isVision: isVision,
+                        isImageGen: isImageGen,
+                        contextWindow: (isNaN(cw) || cw <= 0) ? null : cw
+                    })
+                }).then(function () {
                     document.getElementById('dlg-add-chat-model').hide();
                     document.getElementById('chat-model-id').value = '';
                     document.getElementById('chat-model-label').value = '';
@@ -270,12 +280,9 @@
                     document.getElementById('chat-model-vision').checked = false;
                     document.getElementById('chat-model-imagegen').checked = false;
                     document.getElementById('chat-model-context').value = '';
-                    if (res.ok) {
-                        loadModels();
-                    } else {
-                        alert((res.body && res.body.error) ? res.body.error : 'Failed to save model.');
-                    }
+                    loadModels();
                 });
+            }, { quiet: true });
         });
     }
 
@@ -287,20 +294,22 @@
             var isVision = document.getElementById('edit-chat-model-vision').checked;
             var isImageGen = document.getElementById('edit-chat-model-imagegen').checked;
             var editCw = parseInt(document.getElementById('edit-chat-model-context').value, 10);
-            fetch('/api-proxy/chat/models/' + editingModelId, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    isText: isText,
-                    isVision: isVision,
-                    isImageGen: isImageGen,
-                    contextWindow: (isNaN(editCw) || editCw <= 0) ? null : editCw
-                })
-            }).then(function (r) {
-                document.getElementById('dlg-edit-chat-model').hide();
-                editingModelId = null;
-                if (r.ok) loadModels();
-            });
+            bmbBusy.run(btnSaveEditChatModel, function () {
+                return bmbBusy.request('/api-proxy/chat/models/' + editingModelId, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        isText: isText,
+                        isVision: isVision,
+                        isImageGen: isImageGen,
+                        contextWindow: (isNaN(editCw) || editCw <= 0) ? null : editCw
+                    })
+                }).then(function () {
+                    document.getElementById('dlg-edit-chat-model').hide();
+                    editingModelId = null;
+                    loadModels();
+                });
+            }, { quiet: true });
         });
     }
 
@@ -343,15 +352,17 @@
         var textEl = document.getElementById('default-text-model');
         var visionEl = document.getElementById('default-vision-model');
         var imgEl = document.getElementById('default-imagegen-model');
-        fetch('/api-proxy/chat/settings/defaults', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                defaultTextModelId: (textEl ? textEl.value : '') || null,
-                defaultVisionModelId: (visionEl ? visionEl.value : '') || null,
-                defaultImageGenModelId: (imgEl ? imgEl.value : '') || null
-            })
-        }).catch(function () {});
+        bmbBusy.run(null, function () {
+            return bmbBusy.request('/api-proxy/chat/settings/defaults', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    defaultTextModelId: (textEl ? textEl.value : '') || null,
+                    defaultVisionModelId: (visionEl ? visionEl.value : '') || null,
+                    defaultImageGenModelId: (imgEl ? imgEl.value : '') || null
+                })
+            });
+        }, { quiet: true, scope: textEl });
     }
 
     ['default-text-model', 'default-vision-model', 'default-imagegen-model'].forEach(function (id) {
@@ -370,11 +381,16 @@
     if (chatEnabledToggle) {
         chatEnabledToggle.addEventListener('sl-change', function () {
             var enabled = chatEnabledToggle.checked;
-            fetch('/api-proxy/chat/settings/chat-enabled', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: enabled })
-            }).catch(function () { chatEnabledToggle.checked = !enabled; });
+            bmbBusy.run(chatEnabledToggle, function () {
+                return bmbBusy.request('/api-proxy/chat/settings/chat-enabled', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: enabled })
+                });
+            }, {
+                quiet: true,
+                error: function (err) { chatEnabledToggle.checked = !enabled; bmbBusy.showResult(chatEnabledToggle, false, err.message); }
+            });
         });
     }
 
@@ -383,19 +399,15 @@
     if (issueRecoveryBtn) {
         issueRecoveryBtn.addEventListener('click', function () {
             if (!confirm('Issue a new recovery key?\n\nIt will be shown once and cannot be retrieved afterwards. Existing passwords keep working.')) return;
-            issueRecoveryBtn.loading = true;
-            fetch('/api-proxy/keys/add-recovery', { method: 'POST', headers: { 'Accept': 'application/json' } })
-                .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
-                .then(function (res) {
-                    if (res.ok && res.body && res.body.recoveryKey) {
+            // A key change (BMB-311): the button is off and spins; a refusal is written next to it, in full.
+            bmbBusy.run(issueRecoveryBtn, function () {
+                return bmbBusy.request('/api-proxy/keys/add-recovery', { method: 'POST', headers: { 'Accept': 'application/json' } })
+                    .then(function (res) {
+                        if (!(res.body && res.body.recoveryKey)) throw new Error('The node did not return a recovery key (is the vault unlocked?).');
                         document.getElementById('recovery-key-value').value = res.body.recoveryKey;
                         document.getElementById('recovery-key-dialog').show();
-                    } else {
-                        alert((res.body && res.body.error) ? res.body.error : 'Failed to issue a recovery key (is the vault unlocked?).');
-                    }
-                })
-                .catch(function () { alert('Failed to issue a recovery key.'); })
-                .finally(function () { issueRecoveryBtn.loading = false; });
+                    });
+            }, { quiet: true });
         });
 
         var recoveryCopyBtn = document.getElementById('recovery-key-copy');
@@ -429,13 +441,16 @@
     if (embeddingsToggle) {
         embeddingsToggle.addEventListener('sl-change', function () {
             var enabled = embeddingsToggle.checked;
-            fetch('/api-proxy/admin/search/embeddings-enabled', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled: enabled })
-            }).then(function (r) {
-                if (!r.ok) embeddingsToggle.checked = !enabled;
-            }).catch(function () { embeddingsToggle.checked = !enabled; });
+            bmbBusy.run(embeddingsToggle, function () {
+                return bmbBusy.request('/api-proxy/admin/search/embeddings-enabled', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: enabled })
+                });
+            }, {
+                quiet: true,
+                error: function (err) { embeddingsToggle.checked = !enabled; bmbBusy.showResult(embeddingsToggle, false, err.message); }
+            });
         });
     }
 
@@ -443,20 +458,11 @@
     var embeddingsBackfillStatus = document.getElementById('embeddings-backfill-status');
     if (embeddingsBackfillBtn) {
         embeddingsBackfillBtn.addEventListener('click', function () {
-            embeddingsBackfillBtn.loading = true;
             if (embeddingsBackfillStatus) embeddingsBackfillStatus.textContent = '';
-            fetch('/api-proxy/admin/search/embeddings/backfill', { method: 'POST' })
-                .then(function (r) {
-                    if (embeddingsBackfillStatus) {
-                        embeddingsBackfillStatus.textContent = r.ok
-                            ? 'Started — check server logs or the metrics below in a bit.'
-                            : 'Failed to start backfill.';
-                    }
-                })
-                .catch(function () {
-                    if (embeddingsBackfillStatus) embeddingsBackfillStatus.textContent = 'Failed to start backfill.';
-                })
-                .finally(function () { embeddingsBackfillBtn.loading = false; });
+            // The node answers at once and works on in the background; a second press while it works is refused (409) and the reason is said here.
+            bmbBusy.run(embeddingsBackfillBtn, function () {
+                return bmbBusy.request('/api-proxy/admin/search/embeddings/backfill', { method: 'POST' });
+            }, { success: 'Started — check the server logs or the metrics below in a bit.' });
         });
     }
 
@@ -483,25 +489,18 @@
                 alert('Session duration must be between 1 and 720 hours.');
                 return;
             }
-            sessionSaveBtn.loading = true;
-            fetch('/api-proxy/session/settings', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ expireHours: hours, slidingExpiration: sessionSlidingToggle.checked })
-            })
-                .then(function (r) {
-                    sessionSaveBtn.loading = false;
-                    if (r.ok && sessionSavedMsg) {
+            bmbBusy.run(sessionSaveBtn, function () {
+                return bmbBusy.request('/api-proxy/session/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expireHours: hours, slidingExpiration: sessionSlidingToggle.checked })
+                }).then(function () {
+                    if (sessionSavedMsg) {
                         sessionSavedMsg.style.display = 'inline';
                         setTimeout(function () { sessionSavedMsg.style.display = 'none'; }, 3000);
-                    } else if (!r.ok) {
-                        alert('Failed to save session settings.');
                     }
-                })
-                .catch(function () {
-                    sessionSaveBtn.loading = false;
-                    alert('Failed to save session settings.');
                 });
+            }, { quiet: true });
         });
     }
 
@@ -531,40 +530,29 @@
             })
             .catch(function () {});
     }
-    function saveBranding(name) {
+    function saveBranding(name, btn) {
         if (brandSavedMsg) brandSavedMsg.style.display = 'none';
-        if (brandSaveBtn) brandSaveBtn.loading = true;
-        fetch('/api-proxy/branding', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name })
-        })
-            .then(function (r) {
-                if (brandSaveBtn) brandSaveBtn.loading = false;
-                if (!r.ok) {
-                    return r.json().catch(function () { return {}; }).then(function (e) {
-                        alert(e.error || 'Failed to save the product name.');
-                    });
+        bmbBusy.run(btn, function () {
+            return bmbBusy.request('/api-proxy/branding', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name })
+            }).then(function (res) {
+                var data = res.body || {};
+                if (brandInput) brandInput.value = data.isCustom ? data.name : '';
+                renderBrandPreview();
+                var headerSpan = document.querySelector('.app-logo-name');
+                if (headerSpan && data.name) headerSpan.textContent = data.name;
+                if (brandSavedMsg) {
+                    brandSavedMsg.style.display = 'inline';
+                    setTimeout(function () { brandSavedMsg.style.display = 'none'; }, 3000);
                 }
-                return r.json().then(function (data) {
-                    if (brandInput) brandInput.value = data.isCustom ? data.name : '';
-                    renderBrandPreview();
-                    var headerSpan = document.querySelector('.app-logo-name');
-                    if (headerSpan) headerSpan.textContent = data.name;
-                    if (brandSavedMsg) {
-                        brandSavedMsg.style.display = 'inline';
-                        setTimeout(function () { brandSavedMsg.style.display = 'none'; }, 3000);
-                    }
-                });
-            })
-            .catch(function () {
-                if (brandSaveBtn) brandSaveBtn.loading = false;
-                alert('Failed to save the product name.');
             });
+        }, { quiet: true });
     }
     if (brandInput) brandInput.addEventListener('sl-input', renderBrandPreview);
-    if (brandSaveBtn) brandSaveBtn.addEventListener('click', function () { saveBranding((brandInput.value || '').trim()); });
-    if (brandResetBtn) brandResetBtn.addEventListener('click', function () { if (brandInput) brandInput.value = ''; saveBranding(''); });
+    if (brandSaveBtn) brandSaveBtn.addEventListener('click', function () { saveBranding((brandInput.value || '').trim(), brandSaveBtn); });
+    if (brandResetBtn) brandResetBtn.addEventListener('click', function () { if (brandInput) brandInput.value = ''; saveBranding('', brandResetBtn); });
 
     // Snapshots: Upload dropzone and progress
     var dropZone = document.getElementById('snapshot-upload-zone');
@@ -594,39 +582,47 @@
         if (prog) prog.style.display = 'block';
         if (status) status.textContent = 'Uploading ' + file.name + '...';
 
-        var xhr = new XMLHttpRequest();
-        xhr.upload.addEventListener('progress', function (e) {
-            if (e.lengthComputable && bar) {
-                bar.value = (e.loaded / e.total) * 100;
+        // A long operation (BMB-311): the pop-up says how far the upload is; a failure is written in the upload area, in full.
+        bmbBusy.run(document.getElementById('btn-pick-file'), function () {
+            return new Promise(function (resolve, reject) {
+                var xhr = new XMLHttpRequest();
+                xhr.upload.addEventListener('progress', function (e) {
+                    if (!e.lengthComputable) return;
+                    var pct = Math.round((e.loaded / e.total) * 100);
+                    if (bar) bar.value = pct;
+                    bmbBusy.setModalMessage('Uploading ' + file.name + ': ' + pct + '%. Do not close this page.');
+                });
+                xhr.onload = function () {
+                    if (xhr.status === 200) {
+                        if (status) status.textContent = 'Uploaded successfully';
+                        resolve();
+                        return;
+                    }
+                    var said = '';
+                    try { said = (JSON.parse(xhr.responseText) || {}).error || ''; } catch (parseError) { said = ''; }
+                    reject(new Error(said || ('Upload failed: ' + (xhr.statusText || xhr.status) + '.')));
+                };
+                xhr.onerror = function () { reject(new Error('The node did not answer. Check that it is running and try again.')); };
+                xhr.open('POST', '/Admin?handler=UploadSnapshot');
+                var tokenInput = document.querySelector('input[name="__RequestVerificationToken"]');
+                if (tokenInput) {
+                    xhr.setRequestHeader('RequestVerificationToken', tokenInput.value);
+                }
+                xhr.send(fd);
+            }).then(function () {
+                setTimeout(function () { location.reload(); }, 1500);
+            });
+        }, {
+            long: true,
+            title: 'Uploading the snapshot',
+            text: 'Uploading ' + file.name + '. Do not close this page.',
+            quiet: true,
+            scope: dropZone,
+            error: function (err) {
+                if (status) status.textContent = 'Upload failed.';
+                bmbBusy.showResult(dropZone, false, err.message);
             }
         });
-        xhr.onload = function () {
-            if (xhr.status === 200) {
-                if (status) status.textContent = 'Uploaded successfully';
-                setTimeout(function () { location.reload(); }, 1500);
-            } else {
-                if (status) status.textContent = 'Upload failed: ' + xhr.statusText;
-            }
-        };
-        xhr.open('POST', '/Admin?handler=UploadSnapshot');
-        var tokenInput = document.querySelector('input[name="__RequestVerificationToken"]');
-        if (tokenInput) {
-            xhr.setRequestHeader('RequestVerificationToken', tokenInput.value);
-        }
-        xhr.send(fd);
-    }
-
-    function showProgress(label, detail) {
-        var lbl = document.getElementById('snapshot-progress-label');
-        var det = document.getElementById('snapshot-progress-detail');
-        var dlg = document.getElementById('dlg-snapshot-progress');
-        if (lbl) lbl.textContent = label;
-        if (det) det.textContent = detail || '';
-        if (dlg) dlg.show();
-    }
-    function hideProgress() {
-        var dlg = document.getElementById('dlg-snapshot-progress');
-        if (dlg) dlg.hide();
     }
 
     // Restore snapshot: the choice between "this node only" and "the whole network"
@@ -667,86 +663,58 @@
             if (mode === 'network') {
                 if (!confirm('Restore the whole network from this snapshot?\n\nEvery node that accepts it will replace its articles, folders, tags and media with the snapshot content.')) return;
 
-                restoreBtn.loading = true;
-                var networkDlg = document.getElementById('dlg-restore-snapshot');
-                if (networkDlg) networkDlg.hide();
-                showProgress('Initiating network restore…', 'Please wait.');
-
                 var fd = new FormData();
                 fd.append('fileName', fileName);
                 fd.append('masterPassword', password);
-                fetch('/Admin?handler=InitiateNetworkRestore', {
-                    method: 'POST',
-                    headers: {
-                        'RequestVerificationToken': token
-                    },
-                    body: fd
-                })
-                .then(function (r) {
-                    return r.json().catch(function () { return {}; }).then(function (j) {
-                        if (r.ok && j && j.eventId) return j;
-                        throw new Error((j && j.error) || 'Failed to initiate network restore');
+                // A long operation (BMB-311): the pop-up covers the page; when the node refuses, the dialog is still here and says why next to the button.
+                bmbBusy.run(restoreBtn, function () {
+                    return bmbBusy.request('/Admin?handler=InitiateNetworkRestore', {
+                        method: 'POST',
+                        headers: { 'RequestVerificationToken': token },
+                        body: fd
+                    }).then(function (res) {
+                        if (!(res.body && res.body.eventId)) throw new Error('The node did not start the network restore.');
+                        var networkDlg = document.getElementById('dlg-restore-snapshot');
+                        if (networkDlg) networkDlg.hide();
+                        window.location.href = '/Login?restore=true';
                     });
-                })
-                .then(function () {
-                    window.location.href = '/Login?restore=true';
-                })
-                .catch(function (e) {
-                    hideProgress();
-                    alert(e && e.message ? e.message : 'Failed to initiate network restore');
-                })
-                .finally(function () { restoreBtn.loading = false; });
+                }, { quiet: true, long: true, title: 'Starting the network restore', text: 'Please wait. Do not close this page.' });
                 return;
             }
 
             if (!confirm('Restore this node only?\n\nIt becomes a new node: new identity, and it forgets its trusted nodes, blind copies and sync history. Your other devices must be joined to it again.')) return;
 
-            restoreBtn.loading = true;
-
-            var restoreDlg = document.getElementById('dlg-restore-snapshot');
-            if (restoreDlg) restoreDlg.hide();
-
-            var label = 'Restoring snapshot…';
             var detail = createBackup
-                ? 'Creating safety backup first, then restoring…'
-                : 'Restoring snapshot without backup…';
-            showProgress(label, detail);
+                ? 'Creating a safety backup first, then restoring. Do not close this page.'
+                : 'Restoring the snapshot without a backup. Do not close this page.';
 
-            fetch('/Admin?handler=RestoreSnapshot', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'RequestVerificationToken': token
-                },
-                body: 'fileName=' + encodeURIComponent(fileName) +
-                      '&masterPassword=' + encodeURIComponent(password) +
-                      '&createBackupFirst=' + (createBackup ? 'true' : 'false') +
-                      '&mode=' + encodeURIComponent(mode)
-            })
-            .then(function (r) {
-                if (r.redirected) {
-                    // The page answers with a redirect: to the sign-in page, which says what happened, or back here with the error
-                    window.location.href = r.url;
-                } else if (r.ok) {
-                    window.location.href = '/Login?restored=standalone';
-                } else {
-                    hideProgress();
-                    alert('Restore failed');
-                }
-            })
-            .catch(function () {
-                hideProgress();
-                alert('Network error');
-            })
-            .finally(function () { restoreBtn.loading = false; });
+            // A long operation (BMB-311): the pop-up covers the page; when the node refuses, the dialog is still here and says why next to the button.
+            bmbBusy.run(restoreBtn, function () {
+                return bmbBusy.request('/Admin?handler=RestoreSnapshot', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'RequestVerificationToken': token
+                    },
+                    body: 'fileName=' + encodeURIComponent(fileName) +
+                          '&masterPassword=' + encodeURIComponent(password) +
+                          '&createBackupFirst=' + (createBackup ? 'true' : 'false') +
+                          '&mode=' + encodeURIComponent(mode)
+                }).then(function (res) {
+                    var restoreDlg = document.getElementById('dlg-restore-snapshot');
+                    if (restoreDlg) restoreDlg.hide();
+                    if (res.response.redirected) {
+                        // The page answers with a redirect: to the sign-in page, which says what happened, or back here with the error
+                        window.location.href = res.response.url;
+                    } else {
+                        window.location.href = '/Login?restored=standalone';
+                    }
+                });
+            }, { quiet: true, long: true, title: 'Restoring the snapshot', text: detail });
         });
     }
 
     // Delegated listeners (registered per page run, aborted by spaCleanup via pageSignal)
-    // Block snapshot-progress dialog from being dismissed mid-operation
-    document.addEventListener('sl-request-close', function (e) {
-        if (e.target && e.target.id === 'dlg-snapshot-progress') e.preventDefault();
-    }, pageCaptureOpts);
 
     // Confirm before executing destructive admin actions (.btn-confirm-click) in capture phase
     document.addEventListener('click', function (e) {
@@ -775,27 +743,10 @@
         // Create snapshot button
         var createBtn = e.target.closest('#btn-create-snapshot');
         if (createBtn) {
-            if (createBtn.hasAttribute('data-busy')) return;
-            createBtn.setAttribute('data-busy', '');
-            createBtn.loading = true;
-            showProgress('Creating snapshot\u2026', 'This may take a while for large databases.');
-            fetch('/api-proxy/snapshots', { method: 'POST' })
-                .then(function (r) {
-                    if (r.ok) {
-                        window.location.reload();
-                    } else {
-                        hideProgress();
-                        alert('Failed to create snapshot');
-                    }
-                })
-                .catch(function () {
-                    hideProgress();
-                    alert('Network error');
-                })
-                .finally(function () {
-                    createBtn.loading = false;
-                    createBtn.removeAttribute('data-busy');
-                });
+            // A long operation (BMB-311): a second press is refused by the page and by the node (409); a refusal is written next to the button.
+            bmbBusy.run(createBtn, function () {
+                return bmbBusy.request('/api-proxy/snapshots', { method: 'POST' }).then(function () { window.location.reload(); });
+            }, { quiet: true, long: true, title: 'Creating the snapshot', text: 'This may take a while for large databases. Do not close this page.' });
             return;
         }
 
@@ -883,7 +834,7 @@
                 return;
             }
             var form = superadminBtn.closest('form');
-            if (form) form.submit();
+            if (form) bmbBusy.submit(form);
             return;
         }
 
@@ -898,7 +849,7 @@
                 return;
             }
             var cform = confirmBtn.closest('form');
-            if (cform) cform.submit();
+            if (cform) bmbBusy.submit(cform);
             return;
         }
 
@@ -916,7 +867,7 @@
         // Delete chat key
         var delKeyBtn = e.target.closest('.btn-delete-chat-key');
         if (delKeyBtn) {
-            deleteChatKey(delKeyBtn.dataset.keyId);
+            deleteChatKey(delKeyBtn.dataset.keyId, delKeyBtn);
             return;
         }
 
@@ -930,7 +881,7 @@
         // Delete chat model
         var delModelBtn = e.target.closest('.btn-delete-chat-model');
         if (delModelBtn) {
-            deleteChatModel(delModelBtn.dataset.modelId);
+            deleteChatModel(delModelBtn.dataset.modelId, delModelBtn);
             return;
         }
 
@@ -974,16 +925,7 @@
         }
     }, pageOpts);
 
-    // Delegated form submission confirmation
-    document.addEventListener('submit', function (e) {
-        var form = e.target.closest('form.form-confirm');
-        if (form) {
-            var confirmMsg = form.dataset.confirm;
-            if (confirmMsg && !confirm(confirmMsg)) {
-                e.preventDefault();
-            }
-        }
-    }, pageOpts);
+    // The question of a form that asks first is asked by site.js, on every page.
 
     // Which explanation and fields the "Let blind copies call this node" dialog shows for the mode chosen.
     function setHubMode(mode) {
@@ -1031,7 +973,7 @@
             var form = document.getElementById("autoaccept-form-" + nodeId);
             if (valInput && form) {
                 valInput.value = newVal ? "true" : "false";
-                form.submit();
+                bmbBusy.submit(form);
             }
             return;
         }
@@ -1061,7 +1003,7 @@
             var dekForm = document.getElementById("autoaccept-dek-form-" + dekNodeId);
             if (dekValInput && dekForm) {
                 dekValInput.value = dekNewVal ? "true" : "false";
-                dekForm.submit();
+                bmbBusy.submit(dekForm);
             }
             return;
         }
@@ -1070,7 +1012,7 @@
         var chatKeySwitch = e.target.closest('.switch-chat-key');
         if (chatKeySwitch) {
             var kId = chatKeySwitch.dataset.keyId;
-            toggleChatKey(kId, chatKeySwitch.checked);
+            toggleChatKey(kId, chatKeySwitch.checked, chatKeySwitch);
             return;
         }
     }, pageOpts);

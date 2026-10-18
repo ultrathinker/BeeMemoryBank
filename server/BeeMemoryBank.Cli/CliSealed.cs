@@ -89,6 +89,44 @@ public static class CliSealed
         return services;
     }
 
+    /// <summary>
+    /// The pieces that encrypt a node while it is being set up (<c>bmb init</c>, BMB-306): the boot store, a gate over the vault file that is still plain, and
+    /// "Encrypt this node" with a host that has nothing to add (the command line has no chat database, no relay and no sync loop here).
+    /// <see cref="FreshNodeSealing"/> runs them after the vault is written.
+    /// </summary>
+    public static IServiceCollection AddFreshSealCli(this IServiceCollection services, string dataPath)
+    {
+        services.AddBootStore(dataPath);
+        services.AddSealedUnlockMaterial();
+        services.AddSingleton(sp =>
+        {
+            var gate = new VaultGate(
+                sp.GetRequiredService<BootStore>(),
+                sp.GetRequiredService<IDatabaseKeyService>(),
+                () => [VaultFile(sp, dataPath)],
+                () => [],
+                () => null,
+                () => sp.GetService<IUnlockMaterialMirror>(),
+                sp.GetService<ILogger<VaultGate>>(),
+                VaultStoreMode.Plain);
+            gate.PlainLeftovers = () => SealSwapResolver.Leftovers(dataPath).Count == 0 ? [] : sp.GetRequiredService<SealMigrationService>().ClearLeftovers();
+            return gate;
+        });
+        services.AddSingleton<IVaultGate>(sp => sp.GetRequiredService<VaultGate>());
+        services.AddSingleton<IVaultKeySource>(sp => sp.GetRequiredService<VaultGate>());
+        services.AddSingleton<ISealedVaultKeys>(sp => sp.GetRequiredService<VaultGate>());
+        services.AddSingleton<ISealedUnlockDiagnostics>(sp => sp.GetRequiredService<VaultGate>());
+        services.AddSingleton<ISealMigrationHost, CliSealMigrationHost>();
+        services.AddSingleton(sp => new SealMigrationService(dataPath, sp.GetRequiredService<VaultGate>(), sp.GetRequiredService<SessionService>(),
+            sp.GetRequiredService<IDatabaseKeyService>(), sp.GetRequiredService<BootStore>(), sp.GetRequiredService<IUnlockMaterialMirror>(),
+            sp.GetRequiredService<ISealMigrationHost>(), () => [VaultFile(sp, dataPath)], sp.GetRequiredService<MaintenanceModeService>(),
+            scheduler: null, sp.GetRequiredService<IServiceScopeFactory>(), sp.GetService<ILogger<SealMigrationService>>()));
+        services.AddScoped<FreshNodeSealing>();
+        // The seal intent of the setup and the join this process runs (see SealedVaultServices).
+        services.AddSingleton<ISealIntents>(sp => new SealIntents(dataPath, () => SealIntents.HoldsNoNode(sp.GetRequiredService<DbConnectionFactory>())));
+        return services;
+    }
+
     private static SealedFile VaultFile(IServiceProvider sp, string dataPath)
     {
         var vault = sp.GetRequiredService<DbConnectionFactory>();

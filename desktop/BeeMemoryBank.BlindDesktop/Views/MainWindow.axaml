@@ -7,6 +7,7 @@
         Width="600" Height="780" MinWidth="460" MinHeight="480"
         WindowStartupLocation="CenterScreen">
 
+  <Grid>
   <ScrollViewer HorizontalScrollBarVisibility="Disabled">
     <StackPanel Margin="20" Spacing="10">
 
@@ -121,4 +122,14 @@
 
     </StackPanel>
   </ScrollViewer>
+
+  <!-- A long operation is running (BMB-311): this pop-up covers the whole window, so nothing under it can be clicked a second time. -->
+  <Border IsVisible="{Binding IsBusy}" Background="#E6000000">
+    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" Width="380" Margin="20">
+      <TextBlock Text="{Binding BusyTitle}" FontSize="18" FontWeight="SemiBold" Foreground="White" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding BusyText}" Foreground="#D1D5DB" TextWrapping="Wrap" />
+      <ProgressBar IsIndeterminate="True" />
+    </StackPanel>
+  </Border>
+  </Grid>
 </Window>

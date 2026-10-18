@@ -37,25 +37,18 @@
         return null;
     }
 
-    async function postJson(url, body, method) {
-        var resp = await fetch(url, {
-            method: method || 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        if (resp.ok) return { ok: true };
-        var msg = 'Request failed (HTTP ' + resp.status + ')';
-        try {
-            var text = await resp.text();
-            if (text) {
-                try {
-                    var data = JSON.parse(text);
-                    if (data && data.error) msg = data.error;
-                    else msg += ': ' + text.slice(0, 300);
-                } catch (e) { msg += ': ' + text.slice(0, 300); }
-            }
-        } catch (e) {}
-        return { ok: false, error: msg };
+    // The one busy helper (BMB-311): the button spins while the node answers and the reason of a refusal comes back in full.
+    // Resolves { ok, error }; the dialog that asked writes the error next to the button.
+    async function postJson(url, body, method, btn) {
+        var outcome = { ok: false, error: 'This is already in progress.' };
+        outcome.ok = await bmbBusy.run(btn || null, function () {
+            return bmbBusy.request(url, {
+                method: method || 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        }, { quiet: true, error: function (err) { outcome.error = err.message; } });
+        return outcome;
     }
 
     function openAddUser() {
@@ -81,9 +74,7 @@
         if (pwdErr) { showDlgError('add-user-error', pwdErr); return; }
 
         var btn = document.getElementById('btn-add-user-submit');
-        if (btn) btn.loading = true;
-        var result = await postJson('/api-proxy/users', { username: username, displayName: displayName, password: password, role: role });
-        if (btn) btn.loading = false;
+        var result = await postJson('/api-proxy/users', { username: username, displayName: displayName, password: password, role: role }, 'POST', btn);
         if (result.ok) {
             window.location = '?msg=' + encodeURIComponent("User '" + username + "' created");
         } else {
@@ -108,9 +99,7 @@
         if (pwdErr) { showDlgError('change-password-error', pwdErr); return; }
 
         var btn = document.getElementById('btn-change-password-submit');
-        if (btn) btn.loading = true;
-        var result = await postJson('/api-proxy/users/' + id + '/change-password', { newPassword: newPassword });
-        if (btn) btn.loading = false;
+        var result = await postJson('/api-proxy/users/' + id + '/change-password', { newPassword: newPassword }, 'POST', btn);
         if (result.ok) {
             window.location = '?msg=' + encodeURIComponent('Password changed');
         } else {
@@ -212,9 +201,7 @@
         if (!displayName) { showDlgError('edit-user-error', 'Display Name is required.'); return; }
 
         var btn = document.getElementById('btn-edit-user-submit');
-        if (btn) btn.loading = true;
-        var result = await postJson('/api-proxy/users/' + id, { displayName: displayName, role: role, chatAccess: chatAccess }, 'PUT');
-        if (btn) btn.loading = false;
+        var result = await postJson('/api-proxy/users/' + id, { displayName: displayName, role: role, chatAccess: chatAccess }, 'PUT', btn);
         if (result.ok) {
             window.location = '?msg=' + encodeURIComponent('User updated');
         } else {
@@ -264,7 +251,7 @@
         btn.addEventListener('click', function () {
             if (confirm('Delete user ' + btn.dataset.name + '?')) {
                 var formId = btn.getAttribute('data-form-id');
-                document.getElementById(formId)?.submit();
+                bmbBusy.submit(document.getElementById(formId));
             }
         });
     });

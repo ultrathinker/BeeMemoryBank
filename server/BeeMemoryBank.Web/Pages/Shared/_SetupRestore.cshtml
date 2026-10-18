@@ -17,13 +17,13 @@
         <sl-tab slot="nav" panel="restore-backup" active="@(Model.RestoreBackupPath != null)">From a backup</sl-tab>
 
         <sl-tab-panel name="restore-blind">
-            <form method="post" asp-page-handler="RestoreBlind" class="tab-panel-form">
+            <form data-busy="long" data-busy-title="Restoring from the blind node" method="post" asp-page-handler="RestoreBlind" class="tab-panel-form">
                 @Html.AntiForgeryToken()
                 <sl-input name="code" label="Restore code" required placeholder="BMBRESTORE1.…"
                           help-text="From the blind node's console. It names the blind node and its keys: a node answering with any other key is refused."></sl-input>
                 <sl-input name="address" label="Blind node address (optional)" placeholder="https://192.0.2.10:5610"
                           help-text="Only if the address in the code does not reach the blind node from here."></sl-input>
-                <sl-input name="password" type="password" label="Master password" required password-toggle></sl-input>
+                <sl-input name="password" type="password" label="Master password" required password-toggle autocomplete="off"></sl-input>
                 <sl-input name="adminUsername" label="Your login name" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedUsername"></sl-input>
                 <sl-input name="displayName" label="Name of this computer" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedNodeName"></sl-input>
                 <div class="form-actions"><sl-button type="submit" variant="primary">Restore</sl-button></div>
@@ -31,7 +31,7 @@
         </sl-tab-panel>
 
         <sl-tab-panel name="restore-backup">
-            <form method="post" asp-page-handler="RestoreBackup" class="tab-panel-form">
+            <form data-busy="long" data-busy-title="Restoring from the backup" method="post" asp-page-handler="RestoreBackup" class="tab-panel-form">
                 @Html.AntiForgeryToken()
                 <sl-input name="backupPath" label="Backup folder, restic repository or backup file" required value="@Model.RestoreBackupPath"
                           help-text="A folder or restic repository needs its recovery set (*.recovery-set.json) next to it; a phone backup file carries its own. The blind node does not need to be running."></sl-input>
@@ -42,7 +42,7 @@
                         <sl-icon slot="prefix" name="phone"></sl-icon> Choose a phone backup file…
                     </sl-button>
                 </div>
-                <sl-input name="password" type="password" label="Master password" required password-toggle></sl-input>
+                <sl-input name="password" type="password" label="Master password" required password-toggle autocomplete="off"></sl-input>
                 <sl-input name="adminUsername" label="Your login name" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedUsername"></sl-input>
                 <sl-input name="displayName" label="Name of this computer" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedNodeName"></sl-input>
                 <div class="form-actions"><sl-button type="submit" variant="primary">Restore</sl-button></div>
@@ -63,7 +63,7 @@
         <meta http-equiv="refresh" content="2" />
         <div class="done-icon"><sl-spinner style="font-size:2.5rem;"></sl-spinner></div>
         <p style="text-align:center;">Restoring… opening the recovery boxes can take a minute.</p>
-        <form method="post" asp-page-handler="RestoreCancel" class="done-actions">
+        <form data-busy="short" method="post" asp-page-handler="RestoreCancel" class="done-actions">
             <sl-button type="submit">Cancel</sl-button>
         </form>
     }
@@ -84,15 +84,15 @@
             seconds per box and can be cancelled. Going on without it restores the data, but it stays unconfirmed.
         </sl-alert>
         <div class="done-actions">
-            <form method="post" asp-page-handler="RestoreContinue">
+            <form data-busy="short" method="post" asp-page-handler="RestoreContinue">
                 <input type="hidden" name="boxes" value="all" />
                 <sl-button type="submit" variant="primary">Try every box without a limit</sl-button>
             </form>
-            <form method="post" asp-page-handler="RestoreContinue">
+            <form data-busy="short" method="post" asp-page-handler="RestoreContinue">
                 <input type="hidden" name="boxes" value="skip" />
                 <sl-button type="submit">Restore without them (unconfirmed)</sl-button>
             </form>
-            <form method="post" asp-page-handler="RestoreCancel">
+            <form data-busy="short" method="post" asp-page-handler="RestoreCancel">
                 <sl-button type="submit">Cancel</sl-button>
             </form>
         </div>
@@ -184,7 +184,7 @@
             {
                 <sl-alert variant="danger" open>@confirmError</sl-alert>
             }
-            <form method="post" asp-page-handler="RestoreConfirmPeers" class="tab-panel-form" id="confirm-restored-peers">
+            <form data-busy="short" method="post" asp-page-handler="RestoreConfirmPeers" class="tab-panel-form" id="confirm-restored-peers">
                 @foreach (var peer in unvouched)
                 {
                     <label style="display:block;">
@@ -192,7 +192,7 @@
                         @peer.Name @(peer.WasSuperadmin ? "(was superadmin — confirming does not restore that)" : "")
                     </label>
                 }
-                <sl-input name="password" type="password" label="Master password" required password-toggle></sl-input>
+                <sl-input name="password" type="password" label="Master password" required password-toggle autocomplete="off"></sl-input>
                 <div class="form-actions"><sl-button type="submit">Confirm the selected devices</sl-button></div>
             </form>
         }

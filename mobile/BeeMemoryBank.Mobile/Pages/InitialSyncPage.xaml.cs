@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Sync;
@@ -96,7 +97,7 @@ public partial class InitialSyncPage : ContentPage
         {
             Spinner.IsRunning = false;
             Spinner.IsVisible = false;
-            ErrorLabel.Text = $"Sync failed: {ex.Message}";
+            ErrorLabel.Text = $"Sync failed: {BeeMemoryBank.Sync.PeerContactLog.Describe(ex)}";
             ErrorLabel.IsVisible = true;
             RetryButton.IsVisible = true;
             CounterLabel.Text = $"{_eventsApplied} events downloaded before error";
@@ -119,7 +120,9 @@ public partial class InitialSyncPage : ContentPage
     private async void OnRetryClicked(object? sender, EventArgs e)
     {
         if (_running) return;
-        await RunAsync();
+        // The one busy helper (BMB-311): the button is off and spins; this page is itself the pop-up of the long download (spinner, counter,
+        // error line), so no second one is put over it.
+        await BusyAction.RunAsync(sender as Button, RunAsync);
     }
 
     private async void OnCancelClicked(object? sender, EventArgs e)
@@ -131,7 +134,13 @@ public partial class InitialSyncPage : ContentPage
         if (!confirmed) return;
 
         _cts?.Cancel();
-        await WipeAndResetAsync();
+        // A long operation (BMB-311): the one busy helper puts up the pop-up until the app restarts; a failure is said in full.
+        await BusyAction.RunAsync(sender as Button, WipeAndResetAsync, new BusyOptions
+        {
+            Long = true,
+            Title = "Deleting this node",
+            Message = "Please wait. The data downloaded so far is being removed and the app restarts by itself.",
+        });
     }
 
     private async Task WipeAndResetAsync()

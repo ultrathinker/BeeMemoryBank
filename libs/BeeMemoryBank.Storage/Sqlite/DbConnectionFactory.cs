@@ -265,13 +265,26 @@ public class DbConnectionFactory : IDbConnectionFactory, ISealableConnections, I
     /// <see cref="VaultSealedException"/> when closed, <see cref="VaultKeyMismatchException"/> when the key does not open the file.
     /// The caller disposes it.
     /// </summary>
-    public SqliteConnection OpenFile(string path, bool readOnly = false)
+    public SqliteConnection OpenFile(string path, bool readOnly = false) => OpenFileCore(path, readOnly, immutable: false);
+
+    /// <summary>
+    /// A read-only connection to <paramref name="path"/> that does nothing but read: no initialization (no PRAGMA: not the journal mode, which is
+    /// a write to the header of a rollback-journal file), and, when <paramref name="immutable"/>, no lock, no WAL or shared-memory file, so
+    /// the directory is not touched at all. Immutable is right only for a file nothing is writing and that has no WAL or hot journal with
+    /// content (the engine does not read those); the caller checks that. Keyed with this factory's page key when sealed. The caller disposes it.
+    /// </summary>
+    public SqliteConnection OpenProbe(string path, bool immutable) => OpenFileCore(path, readOnly: true, immutable);
+
+    private SqliteConnection OpenFileCore(string path, bool readOnly, bool immutable)
     {
         if (!IsKeyed)
         {
+            string dataSource;
+            try { dataSource = immutable ? "file://" + SqlCipherScheme.ToUriPath(path) + "?immutable=1" : path; }
+            catch (NotSupportedException) { dataSource = path; } // a network share has no URI form here: it is read the ordinary way
             var plain = new SqliteConnection(new SqliteConnectionStringBuilder
             {
-                DataSource = path,
+                DataSource = dataSource,
                 Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
                 Pooling = false,
             }.ToString());
@@ -295,7 +308,7 @@ public class DbConnectionFactory : IDbConnectionFactory, ISealableConnections, I
         {
             ThrowIfClosed();
             key = _keys!.GetPageKey(_purpose);
-            connection = SealedSqlite.OpenKeyed(path, key, readOnly);
+            connection = SealedSqlite.OpenKeyed(path, key, readOnly, immutable: immutable);
             if (counted)
             {
                 var released = 0;

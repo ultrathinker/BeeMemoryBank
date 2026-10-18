@@ -83,6 +83,8 @@
          Blind.AppCore only. -->
     <Compile Include="..\..\desktop\BeeMemoryBank.BlindDesktop\Scheduling\BlindTimerScheduler.cs" Link="Shared\BlindTimerScheduler.cs" />
     <Compile Include="..\..\desktop\BeeMemoryBank.BlindDesktop.MacOS\Storage\MacOsBlindStateStore.cs" Link="Shared\MacOsBlindStateStore.cs" />
+    <!-- The one busy helper of the MAUI apps (BMB-311), shared as source with the other three. -->
+    <Compile Include="..\BeeMemoryBank.Mobile\Services\BusyAction.cs" Link="Shared\BusyAction.cs" />
   </ItemGroup>
 
   <ItemGroup>

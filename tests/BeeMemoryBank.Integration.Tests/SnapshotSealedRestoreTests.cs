@@ -145,9 +145,6 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         writer.WriteEntry(new PaxTarEntry(TarEntryType.RegularFile, entryName) { DataStream = new MemoryStream(bytes) });
     }
 
-    private static SnapshotAdditions WithEnvelope(byte[] envelope) =>
-        new([], _ => { }, new Dictionary<string, byte[]> { [SnapshotKeyEnvelope.EntryName] = envelope });
-
     // ------------------------------------------------------------ same vault
 
     [Fact]
@@ -224,6 +221,35 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*unlock material*");
         DisplayName(node.Factory).Should().Be(Changed);
         StagingIsEmpty(node.Dir).Should().BeTrue();
+    }
+
+    /// <summary>BMB-304: a node that cannot hold the snapshot's database in memory says which limit would do, before it replaces anything.</summary>
+    [Fact]
+    public async Task A_node_with_less_memory_than_the_snapshots_database_needs_refuses_the_restore_naming_the_limit_and_the_live_vault_is_untouched()
+    {
+        using var node = await SealedNode.CreateAsync(template);
+        var info = await node.Snapshots.CreateAsync(filterSecrets: false, sign: false);
+        SetDisplayName(node.Factory, Changed);
+        var hooks = new RecordingHooks();
+        node.Snapshots.SealedHooks = hooks;
+        // The test's ceiling is half the database: the fixture really is larger than it (the refusal is the database's, not only the slack's).
+        var dbSize = new FileInfo(Path.Combine(node.Dir, "beememorybank.db")).Length;
+        node.Snapshots.FreeMemoryOverride = dbSize / 2;
+        (dbSize / 2).Should().BeLessThan(dbSize);
+
+        var act = async () => await node.Snapshots.RestoreAsync(info.FileName);
+
+        var ex = (await act.Should().ThrowAsync<NotEnoughMemoryException>()).Which;
+        ex.Message.Should().Contain("Opening the database of a snapshot needs about").And.Contain("MB free")
+            .And.Contain($"to at least {ex.RecommendedLimitBytes / (1024 * 1024)} MB").And.Contain("Nothing was changed");
+        hooks.Calls.Should().BeEmpty("the boot store is not told anything before the memory is known to be there");
+        DisplayName(node.Factory).Should().Be(Changed, "the live vault is untouched");
+        StagingIsEmpty(node.Dir).Should().BeTrue();
+
+        // The ceiling lifted, the same snapshot restores.
+        node.Snapshots.FreeMemoryOverride = null;
+        await node.Snapshots.RestoreAsync(info.FileName);
+        DisplayName(node.Factory).Should().NotBe(Changed);
     }
 
     [Fact]
@@ -309,6 +335,57 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         watch.CanaryHits.Should().BeEmpty();
         StagingIsEmpty(node.Dir).Should().BeTrue();
         Count(node.Factory, "SELECT COUNT(*) FROM tbl_article").Should().Be(articles, "importing a node's own rows changes nothing");
+    }
+
+    /// <summary>The database entry of a snapshot archive, written beside the staging folder the way a restore extracts it (the container of a sealed node).</summary>
+    private static async Task<string> ExtractContainerAsync(string snapshotPath, string folder)
+    {
+        Directory.CreateDirectory(folder);
+        var extracted = Path.Combine(folder, "beememorybank.db");
+        await using var file = File.OpenRead(snapshotPath);
+        await using var gz = new GZipStream(file, CompressionMode.Decompress);
+        using var tar = new TarReader(gz);
+        while (await tar.GetNextEntryAsync() is { } entry)
+        {
+            if (!entry.Name.EndsWith("beememorybank.db", StringComparison.OrdinalIgnoreCase)) continue;
+            await using var output = File.Create(extracted);
+            await entry.DataStream!.CopyToAsync(output);
+            return extracted;
+        }
+        throw new InvalidOperationException("The snapshot has no database entry.");
+    }
+
+    /// <summary>
+    /// BMB-304 fix3 (G4): a join import of a sealed node's snapshot could not put its finished staging copy over the extracted container on Windows (the
+    /// move answered "access denied"): a destination with the read-only attribute, or one that a scanner has open for a moment, is replaced all the same.
+    /// </summary>
+    [Theory]
+    [InlineData("read-only")]
+    [InlineData("open without sharing delete for a moment")]
+    public async Task The_sealed_staging_copy_replaces_an_extracted_container_that_is_read_only_or_briefly_open(string state)
+    {
+        if (!OperatingSystem.IsWindows()) return;   // elsewhere a rename replaces both
+        using var node = await SealedNode.CreateAsync(template);
+        var info = await node.Snapshots.CreateAsync(filterSecrets: false, sign: false);
+        var articles = Count(node.Factory, "SELECT COUNT(*) FROM tbl_article");
+        var folder = Path.Combine(SnapshotStaging.DirIn(node.Dir), "g4-" + Guid.NewGuid().ToString("N"));
+        var extracted = await ExtractContainerAsync(node.Snapshots.GetSnapshotPath(info.FileName), folder);
+        FileStream? holder = null;
+        Task? release = null;
+        if (state == "read-only") File.SetAttributes(extracted, FileAttributes.ReadOnly);
+        else
+        {
+            holder = new FileStream(extracted, FileMode.Open, FileAccess.Read, FileShare.Read);
+            release = Task.Run(async () => { await Task.Delay(400); holder.Dispose(); });
+        }
+
+        await node.Snapshots.DecryptDbIfNeededAsync(extracted);
+        if (release is not null) await release;
+
+        using (var conn = node.Factory.OpenFile(extracted))
+            conn.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_article").Should().Be(articles, "the file now under that name is the sealed copy of the snapshot's database");
+        File.Exists(extracted + ".sealing").Should().BeFalse();
+        SqliteConnection.ClearAllPools();
     }
 
     [Fact]
@@ -449,28 +526,6 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
     }
 
     [Fact]
-    public async Task A_server_auto_unlock_slot_in_a_snapshot_does_not_arrive_on_a_plain_node_either()
-    {
-        var (root, dir, factory, _, snapshots) = await SealedNode.CreatePlainAsync(template);
-        try
-        {
-            var others = Count(factory, "SELECT COUNT(*) FROM tbl_key_slot");
-            InsertServerSlot(factory);
-            var info = await snapshots.CreateAsync(filterSecrets: false, sign: false);
-
-            await snapshots.RestoreAsync(info.FileName, standaloneMode: true, masterPassword: SealedNodeTemplate.Password);
-
-            Count(factory, $"SELECT COUNT(*) FROM tbl_key_slot WHERE slot_type = '{ServerSlot}'").Should().Be(0);
-            Count(factory, "SELECT COUNT(*) FROM tbl_key_slot").Should().Be(others);
-            dir.Should().NotBeNull();
-        }
-        finally
-        {
-            DropPlainNode(root, factory);
-        }
-    }
-
-    [Fact]
     public async Task A_network_restore_imports_no_key_slot_and_leaves_the_slot_this_server_enabled_alone()
     {
         using var node = await SealedNode.CreateAsync(template);
@@ -488,221 +543,6 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
     }
 
     // ------------------------------------------------------------ the key envelope (10.7)
-
-    [Fact]
-    public async Task The_envelope_carries_exactly_the_slots_a_password_or_the_recovery_key_opens_and_nothing_else()
-    {
-        using var node = await SealedNode.CreateAsync(template);
-        var ownerId = Count(node.Factory, "SELECT id FROM tbl_user LIMIT 1");
-        using (var c = node.Factory.CreateConnection())
-        {
-            foreach (var type in new[] { "os_auto_unlock", "server_auto_unlock", "recovery" })
-                c.Execute(@"INSERT INTO tbl_key_slot (slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, created_at)
-                            VALUES (@type, randomblob(48), randomblob(12), randomblob(16), 65536, 3, 4, '2026-01-01')", new { type });
-            var readerSlot = c.ExecuteScalar<long>(@"INSERT INTO tbl_key_slot (slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, created_at)
-                            VALUES ('user', randomblob(48), randomblob(12), randomblob(16), 65536, 3, 4, '2026-01-01'); SELECT last_insert_rowid();");
-            c.Execute(@"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, is_active, created_at)
-                        VALUES ('reader-user', 'Reader Person', 'x', 'user', @slot, 1, '2026-01-01')", new { slot = readerSlot });
-            c.Execute(@"INSERT INTO tbl_agent (name, key_prefix, key_hash, encrypted_dek, dek_iv, kdf_version, salt, status, created_at, owner_user_id)
-                        VALUES ('agent-secret-name', 'bee_x', 'agent-key-hash', randomblob(48), randomblob(12), 1, randomblob(16), 'A', '2026-01-01', @owner)", new { owner = ownerId });
-        }
-        var superadminSlots = Count(node.Factory,
-            "SELECT COUNT(*) FROM tbl_key_slot s WHERE s.slot_type = 'user' AND EXISTS (SELECT 1 FROM tbl_user u WHERE u.key_slot_id = s.slot_id AND u.is_active = 1 AND u.role = 'superadmin')");
-
-        byte[]? envelope;
-        using (var c = node.Factory.CreateConnection()) envelope = SnapshotKeyEnvelope.Build(c);
-
-        envelope.Should().NotBeNull();
-        using var doc = JsonDocument.Parse(envelope!);
-        var root = doc.RootElement;
-        root.GetProperty("v").GetInt32().Should().Be(1);
-        root.GetProperty("created_at").GetString().Should().NotBeNullOrEmpty();
-        root.GetProperty("sentinel").GetString().Should().NotBeNullOrEmpty();
-        var types = root.GetProperty("slots").EnumerateArray().Select(s => s.GetProperty("type").GetString()).ToList();
-        types.Should().BeEquivalentTo(Enumerable.Repeat("user", (int)superadminSlots).Append("recovery"),
-            "user slots of active superadmins and the recovery slot; not the reader's, the OS slot, the server slot or an agent");
-        foreach (var slot in root.GetProperty("slots").EnumerateArray())
-            slot.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(
-                ["type", "wrapped", "iv", "salt", "argon_memory", "argon_iterations", "argon_parallelism"], "no slot id, no user id, no name");
-        var text = Encoding.UTF8.GetString(envelope!);
-        text.Should().NotContain("admin").And.NotContain("reader-user").And.NotContain("Reader Person").And.NotContain("agent-secret-name").And.NotContain("agent-key-hash");
-        MetadataCanaries.Scan(envelope!, template.Canaries, "envelope").Should().BeEmpty();
-
-        // The owner's password opens it to the master DEK of the day; a wrong one, another version and damage open nothing.
-        var dek = SnapshotKeyEnvelope.TryOpen(envelope!, SealedNodeTemplate.Password);
-        dek.Should().Equal(node.CopyDek());
-        SnapshotKeyEnvelope.TryOpen(envelope!, "not the password").Should().BeNull();
-        SnapshotKeyEnvelope.TryOpen(envelope!, "").Should().BeNull();
-        SnapshotKeyEnvelope.TryOpen("{\"v\":2,\"slots\":[]}"u8, SealedNodeTemplate.Password).Should().BeNull();
-        SnapshotKeyEnvelope.TryOpen("not json"u8, SealedNodeTemplate.Password).Should().BeNull();
-        // A changed wrapped key opens nothing: change the third character of every wrapped value.
-        var damaged = (byte[])envelope!.Clone();
-        var damagedText = Encoding.UTF8.GetString(damaged);
-        for (var at = damagedText.IndexOf("\"wrapped\":", StringComparison.Ordinal); at >= 0; at = damagedText.IndexOf("\"wrapped\":", at + 1, StringComparison.Ordinal))
-        {
-            var pos = at + 14;
-            damaged[pos] = (byte)(damaged[pos] == 'A' ? 'B' : 'A');
-        }
-        SnapshotKeyEnvelope.TryOpen(damaged, SealedNodeTemplate.Password).Should().BeNull();
-    }
-
-    [Fact]
-    public async Task The_pre_encryption_snapshot_carries_the_envelope_in_its_manifest_and_a_flipped_byte_stops_the_restore()
-    {
-        var (root, dir, factory, session, snapshots) = await SealedNode.CreatePlainAsync(template);
-        try
-        {
-            byte[] envelope;
-            using (var c = factory.CreateConnection()) envelope = SnapshotKeyEnvelope.Build(c)!;
-            var outputDir = Path.Combine(dir, "pre-encryption");
-            var info = await snapshots.CreateAsync(filterSecrets: false, sign: false, encryptDb: true, additions: WithEnvelope(envelope),
-                outputDirectory: outputDir, wipeStaging: true);
-            var archive = Path.Combine(outputDir, info.FileName);
-
-            using (var file = File.OpenRead(archive))
-            using (var gzip = new GZipStream(file, CompressionMode.Decompress))
-            using (var tar = new TarReader(gzip))
-            {
-                var names = new List<string>();
-                JsonElement manifest = default;
-                while (tar.GetNextEntry() is { } entry)
-                {
-                    names.Add(entry.Name);
-                    if (entry.Name == "manifest.json")
-                    {
-                        using var m = new MemoryStream();
-                        entry.DataStream!.CopyTo(m);
-                        manifest = JsonSerializer.Deserialize<JsonElement>(m.ToArray());
-                    }
-                }
-                names.Should().Contain(SnapshotKeyEnvelope.EntryName);
-                manifest.GetProperty("files").TryGetProperty(SnapshotKeyEnvelope.EntryName, out _).Should().BeTrue("listed with its SHA-256 like every other entry");
-            }
-            MetadataCanaries.ScanArchive(archive, template.Canaries).Should().BeEmpty("the envelope holds no canary");
-
-            // A flipped byte in the envelope: the manifest check refuses, nothing is replaced.
-            var tampered = Path.Combine(dir, "snapshots", "bmb-snapshot-tampered.tar.gz");
-            Directory.CreateDirectory(Path.GetDirectoryName(tampered)!);
-            RewriteArchive(archive, tampered, SnapshotKeyEnvelope.EntryName, bytes => { bytes[bytes.Length / 2] ^= 0x01; return bytes; });
-            SetDisplayName(factory, Changed);
-
-            var act = async () => await snapshots.RestoreAsync("bmb-snapshot-tampered.tar.gz", standaloneMode: true, masterPassword: SealedNodeTemplate.Password);
-
-            await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*SHA256 mismatch*");
-            DisplayName(factory).Should().Be(Changed);
-            session.IsUnlocked.Should().BeTrue();
-        }
-        finally
-        {
-            DropPlainNode(root, factory);
-        }
-    }
-
-    [Fact]
-    public async Task The_way_back_snapshot_restores_onto_a_node_set_up_again_with_the_old_password_through_its_envelope_found_in_pre_encryption()
-    {
-        var (rootA, dirA, factoryA, _, snapshotsA) = await SealedNode.CreatePlainAsync(template);
-        var (rootB, dirB, factoryB, _, snapshotsB) = await NewPlainNodeAsync(SealedNodeTemplate.Password);
-        try
-        {
-            byte[] envelope;
-            using (var c = factoryA.CreateConnection()) envelope = SnapshotKeyEnvelope.Build(c)!;
-            var articlesA = Count(factoryA, "SELECT COUNT(*) FROM tbl_article");
-            var info = await snapshotsA.CreateAsync(filterSecrets: false, sign: false, encryptDb: true, additions: WithEnvelope(envelope),
-                outputDirectory: Path.Combine(dirA, "pre-encryption"), wipeStaging: true);
-            Directory.CreateDirectory(Path.Combine(dirB, "pre-encryption"));
-            File.Copy(Path.Combine(dirA, "pre-encryption", info.FileName), Path.Combine(dirB, "pre-encryption", info.FileName));
-            Count(factoryB, "SELECT COUNT(*) FROM tbl_article").Should().Be(0, "the node set up again is empty");
-
-            // Another password refuses before anything is replaced; the right one opens it through the envelope.
-            var wrong = async () => await snapshotsB.RestoreAsync(info.FileName, standaloneMode: true, masterPassword: "not the old password");
-            await wrong.Should().ThrowAsync<InvalidOperationException>().WithMessage("*different vault*");
-            Count(factoryB, "SELECT COUNT(*) FROM tbl_article").Should().Be(0);
-            var withoutPassword = async () => await snapshotsB.RestoreAsync(info.FileName, standaloneMode: true);
-            await withoutPassword.Should().ThrowAsync<InvalidOperationException>();
-            Count(factoryB, "SELECT COUNT(*) FROM tbl_article").Should().Be(0);
-
-            var outcome = await snapshotsB.RestoreAsync(info.FileName, standaloneMode: true, masterPassword: SealedNodeTemplate.Password);
-
-            outcome.Standalone.Should().BeTrue();
-            Count(factoryB, "SELECT COUNT(*) FROM tbl_article").Should().Be(articlesA, "the snapshot's database replaced the empty vault");
-            using var c2 = factoryB.CreateConnection();
-            c2.ExecuteScalar<string>("SELECT node_id FROM tbl_node_identity").Should().Be(outcome.NewNodeId.ToString());
-        }
-        finally
-        {
-            DropPlainNode(rootA, factoryA);
-            DropPlainNode(rootB, factoryB);
-        }
-    }
-
-    [Fact]
-    public async Task A_snapshot_without_an_envelope_made_by_another_vault_is_refused_by_a_plain_node_before_anything_is_replaced()
-    {
-        var (rootA, _, factoryA, _, snapshotsA) = await SealedNode.CreatePlainAsync(template);
-        var (rootB, dirB, factoryB, _, snapshotsB) = await NewPlainNodeAsync(SealedNodeTemplate.Password);
-        try
-        {
-            var info = await snapshotsA.CreateAsync(filterSecrets: false, sign: false);
-            Directory.CreateDirectory(snapshotsB.SnapshotsDir);
-            File.Copy(snapshotsA.GetSnapshotPath(info.FileName), Path.Combine(snapshotsB.SnapshotsDir, info.FileName));
-
-            var act = async () => await snapshotsB.RestoreAsync(info.FileName, standaloneMode: true, masterPassword: SealedNodeTemplate.Password);
-
-            await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*different vault*");
-            Count(factoryB, "SELECT COUNT(*) FROM tbl_article").Should().Be(0);
-            dirB.Should().NotBeNull();
-        }
-        finally
-        {
-            DropPlainNode(rootA, factoryA);
-            DropPlainNode(rootB, factoryB);
-        }
-    }
-
-    [Fact]
-    public async Task The_way_back_snapshot_restores_onto_an_encrypted_node_whose_master_key_changed_through_the_envelope()
-    {
-        var (rootA, dirA, factoryA, _, snapshotsA) = await SealedNode.CreatePlainAsync(template);
-        using var node = await SealedNode.CreateAsync(template);
-        try
-        {
-            byte[] envelope;
-            using (var c = factoryA.CreateConnection()) envelope = SnapshotKeyEnvelope.Build(c)!;
-            var info = await snapshotsA.CreateAsync(filterSecrets: false, sign: false, encryptDb: true, additions: WithEnvelope(envelope),
-                outputDirectory: Path.Combine(dirA, "pre-encryption"), wipeStaging: true);
-            Directory.CreateDirectory(node.Snapshots.PreEncryptionDir);
-            File.Copy(Path.Combine(dirA, "pre-encryption", info.FileName), Path.Combine(node.Snapshots.PreEncryptionDir, info.FileName));
-            var original = DisplayName(node.Factory);
-            SetDisplayName(node.Factory, Changed);
-            // The DEK was rotated since: the session holds another key than the snapshot's.
-            node.Session.SwapMasterDek(RandomNumberGenerator.GetBytes(32));
-            var hooks = new RecordingHooks();
-            node.Snapshots.SealedHooks = hooks;
-            var staging = SnapshotStaging.DirIn(node.Dir);
-            Directory.CreateDirectory(staging);
-            using var watch = new PlainFileWatch([staging], template.Canaries);
-
-            var wrong = async () => await node.Snapshots.RestoreAsync(info.FileName, standaloneMode: true, masterPassword: "not the old password");
-            await wrong.Should().ThrowAsync<InvalidOperationException>().WithMessage("*different vault*");
-            DisplayName(node.Factory).Should().Be(Changed);
-            hooks.Calls.Should().BeEmpty();
-
-            var outcome = await node.Snapshots.RestoreAsync(info.FileName, standaloneMode: true, masterPassword: SealedNodeTemplate.Password);
-            watch.Stop();
-
-            outcome.Standalone.Should().BeTrue();
-            DisplayName(node.Factory).Should().Be(original, "the snapshot's database is the node's now, found in pre-encryption/");
-            hooks.Calls.Should().Equal("before", "after");
-            watch.Plain.Should().BeEmpty();
-            watch.CanaryHits.Should().BeEmpty();
-            VaultStoreFiles.HasSqliteMagic(Path.Combine(node.Dir, "beememorybank.db")).Should().BeFalse();
-        }
-        finally
-        {
-            DropPlainNode(rootA, factoryA);
-        }
-    }
 
     // ------------------------------------------------------------ review round 1, H3: the live file is replaced behind the barrier
 
@@ -738,22 +578,16 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
     }
 
     [Theory]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    public async Task A_restore_replaces_the_live_database_only_behind_the_quiesce_barrier_and_waits_for_a_connection_in_use(bool sealedNode, bool standalone)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_restore_replaces_the_live_database_only_behind_the_quiesce_barrier_and_waits_for_a_connection_in_use(bool standalone)
     {
-        SealedNode? sealedOne = null;
-        (string Root, string Dir, DbConnectionFactory Factory, SessionService Session, SnapshotService Snapshots)? plainOne = null;
-        var password = sealedNode ? SealedNodeTemplate.Password : "restore-barrier-pw";
-        if (sealedNode) sealedOne = await SealedNode.CreateAsync(template);
-        else plainOne = await NewPlainNodeAsync(password);
-        var factory = sealedOne?.Factory ?? plainOne!.Value.Factory;
-        var snapshots = sealedOne?.Snapshots ?? plainOne!.Value.Snapshots;
-        var dir = sealedOne?.Dir ?? plainOne!.Value.Dir;
-        if (sealedOne is not null) snapshots.SealedHooks = new RecordingHooks();
-        try
+        var password = SealedNodeTemplate.Password;
+        using var sealedOne = await SealedNode.CreateAsync(template);
+        var factory = sealedOne.Factory;
+        var snapshots = sealedOne.Snapshots;
+        var dir = sealedOne.Dir;
+        snapshots.SealedHooks = new RecordingHooks();
         {
             var info = await snapshots.CreateAsync(filterSecrets: false, sign: false);
             var original = DisplayName(factory);
@@ -769,11 +603,6 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
             DisplayName(factory).Should().Be(original, "the restore went through once the connection was returned");
             factory.IsQuiescing.Should().BeFalse("the barrier is released when the swap is done");
         }
-        finally
-        {
-            sealedOne?.Dispose();
-            if (plainOne is { } p) DropPlainNode(p.Root, p.Factory);
-        }
     }
 
     [Theory]
@@ -781,9 +610,10 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
     [InlineData(true)]
     public async Task A_restore_that_cannot_drain_the_live_connections_changes_nothing_says_so_and_a_later_restore_goes_through(bool standalone)
     {
-        var password = "restore-barrier-pw";
-        var (root, dir, factory, _, snapshots) = await NewPlainNodeAsync(password);
-        try
+        var password = SealedNodeTemplate.Password;
+        using var sealedOne = await SealedNode.CreateAsync(template);
+        var (dir, factory, snapshots) = (sealedOne.Dir, sealedOne.Factory, sealedOne.Snapshots);
+        snapshots.SealedHooks = new RecordingHooks();
         {
             var info = await snapshots.CreateAsync(filterSecrets: false, sign: false);
             var original = DisplayName(factory);
@@ -802,10 +632,6 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
             snapshots.LiveSwapDrainTimeout = TimeSpan.FromSeconds(30);
             await snapshots.RestoreAsync(info.FileName, standaloneMode: standalone, masterPassword: password);
             DisplayName(factory).Should().Be(original);
-        }
-        finally
-        {
-            DropPlainNode(root, factory);
         }
     }
 

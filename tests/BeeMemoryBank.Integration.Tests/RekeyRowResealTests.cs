@@ -438,6 +438,21 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
         (await new RowResealStep().VerifyAsync(ctx)).Should().Contain(p => p.Table == RowResealStep.Body && p.Problem.Contains("old key"));
     }
 
+    /// <summary>BMB-307 fix2 (M2): the checks of the re-keyed copy and of the old material read "no sentinel" with the one predicate: NULL and an empty BLOB are both a problem, never a value to verify.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACopyWithNoSentinel_NullOrEmpty_IsAProblemOfTheKeyMaterialCheckAndOfTheD1Check(bool empty)
+    {
+        var ctx = await CopyAsync();
+        await ctx.Main.ExecuteAsync(empty ? "UPDATE tbl_node_identity SET sentinel_value = X''" : "UPDATE tbl_node_identity SET sentinel_value = NULL");
+
+        (await new KeyMaterialStep().VerifyAsync(ctx)).Should().Contain(p => p.Table == "tbl_node_identity" && p.RowKey == "sentinel_value");
+        using var live = (SqliteConnection)Db.CreateConnection();
+        var old = await RekeyD1Check.GatherAsync(live, null, ctx.Keys);
+        (await RekeyD1Check.CheckRowsAsync(ctx, old)).Should().Contain(p => p.Table == "tbl_node_identity" && p.RowKey == "sentinel_value");
+    }
+
     /// <summary>§8.3: every table the migrations create has a fate, and every listed table exists.</summary>
     [Fact]
     public async Task EveryTableOfTheVault_IsClassified()

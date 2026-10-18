@@ -198,8 +198,43 @@ public class SessionService(
             var migration = scope.ServiceProvider.GetRequiredService<LegacyPasswordSlotMigrationService>();
             LastMigrationResult = await migration.MigrateIfNeededAsync();
         }
+        await HealMissingSentinelAsync();
         TriggerPostUnlockCatchUp(completing);
         return true;
+    }
+
+    /// <summary>
+    /// A vault older than the sentinel has none (<c>tbl_node_identity.sentinel_value</c> is NULL; see <c>InitializationService.IsInitializedAsync</c>),
+    /// and the checks that name the master key through it (the key envelope of a snapshot, the verification of an encrypted copy) then have nothing
+    /// to work with. It is made here, once, and only from an OPEN session that a password has just opened: the slot's AES-GCM tag has proved that
+    /// password and key belong together, and the database is open. Never from a door without a password (an agent key, OS auto-unlock) and never
+    /// from <see cref="VerifyMasterPasswordAsync"/>, which opens nothing; those leave the vault as it is and the next password unlock heals it.
+    /// A failure is logged and does not fail the unlock: the vault is as usable as it was.
+    /// </summary>
+    private async Task HealMissingSentinelAsync()
+    {
+        if (scopeFactory == null || !IsUnlocked) return;
+        byte[]? dek = null;
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var identity = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
+            if (!MasterKeyManager.IsSentinelMissing(await identity.GetSentinelAsync())) return;
+            if (await identity.GetAsync() is null) return;   // no identity row yet: nothing to store it in
+            dek = GetMasterDek();
+            var sentinel = MasterKeyManager.ComputeSentinel(dek);
+            if (!MasterKeyManager.VerifySentinel(sentinel, dek)) return;
+            if (await identity.StoreSentinelIfMissingAsync(sentinel))
+                logger?.LogInformation("The vault had no sentinel (it is older than the check); one was made from the key of this unlock.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "The missing sentinel of this vault could not be made at unlock ({Type}); the unlock goes on.", ex.GetType().Name);
+        }
+        finally
+        {
+            if (dek != null) CryptographicOperations.ZeroMemory(dek);
+        }
     }
 
     /// <summary>
@@ -320,19 +355,19 @@ public class SessionService(
                     var nodeIdentityRepo = sentinelScope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
                     var sentinel = await nodeIdentityRepo.GetSentinelAsync();
 
-                    if (sentinel != null)
+                    if (!MasterKeyManager.IsSentinelMissing(sentinel))
                     {
                         // VerifySentinel decrypts the stored sentinel using the candidate DEK —
                         // ComputeSentinel can't be byte-compared because it generates a fresh random
                         // IV every call.
-                        sentinelMatch = MasterKeyManager.VerifySentinel(sentinel, currentCandidate);
+                        sentinelMatch = MasterKeyManager.VerifySentinel(sentinel!, currentCandidate);
 
                         if (!sentinelMatch)
                         {
                             var rewrapService = sentinelScope.ServiceProvider.GetService<ILazySlotRewrapService>();
                             if (rewrapService != null)
                             {
-                                var result = await rewrapService.TryRewrapAsync(slot, kek, currentCandidate, sentinel);
+                                var result = await rewrapService.TryRewrapAsync(slot, kek, currentCandidate, sentinel!);
                                 if (result.Success && result.RewrappedDek != null)
                                 {
                                     Array.Clear(currentCandidate, 0, currentCandidate.Length);
@@ -630,7 +665,7 @@ public class SessionService(
         if (scopeFactory == null) return true;
         using var scope = scopeFactory.CreateScope();
         var sentinel = await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetSentinelAsync();
-        return sentinel == null || MasterKeyManager.VerifySentinel(sentinel, masterDek);
+        return MasterKeyManager.IsSentinelMissing(sentinel) || MasterKeyManager.VerifySentinel(sentinel!, masterDek);
     }
 
     /// <summary>Spec 4.4 step 6 for a door that came with a DEK: a slot still in the database that may unlock, or an agent that may.</summary>

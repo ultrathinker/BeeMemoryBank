@@ -34,6 +34,15 @@ public static class Program
         try
         {
             var (resolution, lease) = BeeMemoryBank.AppPaths.VaultStartup.Enter(Path.GetFullPath(dataDirectory));
+            // A setup, join or restore that was cut off (or is pending in another process) and could not be settled is refused HERE, before the Api child is
+            // started: the child joins this process's lease, and what the operation left in the open must not be served by it (BMB-306 fix round 2). The other
+            // refusals of the vault gate are left to the Api, which stays up only to say why.
+            if (resolution.Intent?.Refusal is { } refusal)
+            {
+                lease.Dispose();
+                Console.Error.WriteLine($"[Error] {refusal.Message}");
+                return null;
+            }
             s_vaultLease = lease;
             return resolution.DataDir;
         }

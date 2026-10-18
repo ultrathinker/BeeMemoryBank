@@ -63,15 +63,17 @@ public sealed partial class BlindSeedService
         }
         catch (InvalidDataException ex)
         {
-            throw new BlindSeedRejectedException($"Not a valid format-2 package: {ex.Message}");
+            // The reader's own sentence (a package file name, a hash, a count) is not passed on: the sender is told the fixed sentence of the code, the exception
+            // travels as the inner one and its type is what the log names.
+            throw new BlindSeedRejectedException(BlindSeedRefusal.PackageV2Invalid, ex);
         }
         var manifest = package.Manifest;
         if (manifest.SeedId != upload.SeedId)
-            throw new BlindSeedRejectedException("The package was built for another seed.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.WrongSeed);
         if (manifest.ProducerNodeId != servingNode)
-            throw new BlindSeedRejectedException("The package was not built by the node that is seeding.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.NotBuiltBySeedingNode);
         if (upload.Authority is BlindSeedAuthority.PairingSecret && manifest.Kind != BlindPackageKinds.Full)
-            throw new BlindSeedRejectedException("A first seed needs a full package.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.FirstSeedNeedsFullPackage);
         await CheckSchemaV2Async(package.Directory, sp);
 
         using (await EventWriteGate.Instance.QuiesceAsync(ct))
@@ -83,8 +85,7 @@ public sealed partial class BlindSeedService
             {
                 // The baseline files switch and the first adoption rebuilds the database: no backup may read them meanwhile.
                 using var exclusive = await jobs.TryBeginExclusiveAsync(_cutoverDrainWait)
-                    ?? throw new BlindSeedRejectedException(
-                        $"A blind backup job (or a wipe) was still running after {_cutoverDrainWait.TotalSeconds:0} s; nothing was changed. Send the seed again when it finishes.");
+                    ?? throw new BlindSeedRejectedException(BlindSeedRefusal.DrainTimeout);
                 // Order matters (review round): everything that can be refused is decided before this node's live tables change,
                 // and the serving node's position - the record "everything up to here is stored" - moves last. The blobs come
                 // first because the baseline's adoption needs them here; they are content-addressed and checked against
@@ -100,7 +101,7 @@ public sealed partial class BlindSeedService
                     }
                     catch (Exception ex) when (ex is InvalidOperationException or SqliteException)
                     {
-                        throw new BlindSeedRejectedException($"The package's control database cannot be imported here: {ex.Message}");
+                        throw new BlindSeedRejectedException(BlindSeedRefusal.ControlDatabaseInvalid, ex);
                     }
                     if (upload.Authority is BlindSeedAuthority.PairingSecret)
                         await PreflightGrantTimeAsync(package, sp.GetRequiredService<IDbConnectionFactory>());
@@ -119,11 +120,14 @@ public sealed partial class BlindSeedService
                     // The baseline is current, but the purge of the earlier readable content did not finish; the next adoption
                     // (this baseline again is enough) and the log trimmer finish it, and the status says so until then.
                     logger.LogError(ex, "Blind seed {SeedId}: the baseline was adopted but the purge of the earlier content did not finish", manifest.SeedId);
-                    throw new BlindSeedRejectedException(
-                        "The baseline is adopted, but removing the earlier readable content from this node's database did not finish. Send the seed again.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.BaselineCleanupIncomplete, ex);
                 }
                 if (adopted.Outcome == AdoptOutcome.Refused)
-                    throw new BlindSeedRejectedException($"The baseline was refused: {adopted.Reason}");
+                {
+                    // The check that refused it is this node's own sentence (BaselineStore): for the operator's log, not for the sender.
+                    logger.LogInformation("Blind seed {SeedId}: the baseline was refused: {Reason}", manifest.SeedId, adopted.Reason);
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.BaselineRefused);
+                }
 
                 if (manifest.Kind == BlindPackageKinds.Full)
                 {
@@ -158,16 +162,16 @@ public sealed partial class BlindSeedService
             case BlindSeedAuthority.SuperadminPeer peer:
                 var row = await whitelist.GetByNodeIdAsync(peer.NodeId);
                 if (row is not { IsSuperadmin: true })
-                    throw new BlindSeedRejectedException("Only a superadmin peer may reseed this node.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.NotSuperadminPeer);
                 return (peer.NodeId, row.Ed25519PublicKey);
             case BlindSeedAuthority.PairingSecret seeder:
                 if (BlindNodeId.IsBlind(seeder.SeederNodeId))
-                    throw new BlindSeedRejectedException("A blind node cannot seed a blind node: pair it from a full node.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.BlindCannotSeed);
                 if (self.NodeId == seeder.SeederNodeId)
-                    throw new BlindSeedRejectedException("This node cannot seed itself.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.CannotSeedItself);
                 return (seeder.SeederNodeId, Convert.FromBase64String(seeder.SeederKeyB64));
             default:
-                throw new BlindSeedRejectedException("Unknown seed authority.");
+                throw new BlindSeedRejectedException(BlindSeedRefusal.UnknownAuthority);
         }
     }
 
@@ -210,7 +214,7 @@ public sealed partial class BlindSeedService
         using var conn = services.GetRequiredService<IDbConnectionFactory>().CreateConnection();
         var local = await conn.ExecuteScalarAsync<int>("SELECT COALESCE(MAX(version), 0) FROM tbl_migration");
         if (version > local)
-            throw new BlindSeedRejectedException($"The package has schema {version}; this node is on {local}. Update this node first.");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.SchemaMismatch);
     }
 
     /// <summary>
@@ -232,7 +236,7 @@ public sealed partial class BlindSeedService
                 NodeId = peer.NodeId,
                 DisplayName = peer.DisplayName,
                 Ed25519PublicKey = Convert.FromBase64String(peer.PublicKeyB64),
-                ApiAddress = peer.ApiAddress,
+                ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(peer.ApiAddress),
                 IsSuperadmin = peer.IsSuperadmin && !BlindNodeId.IsBlind(peer.NodeId),
                 TlsSpki = BlindTrust.PinOf(peer.TlsTrust, peer.TlsSpki),
                 TlsTrust = BlindTrust.Effective(peer.TlsTrust, peer.TlsSpki),
@@ -272,7 +276,7 @@ public sealed partial class BlindSeedService
         }
         catch (InvalidDataException ex)
         {
-            throw new BlindSeedRejectedException($"Not a valid format-2 package: {ex.Message}");
+            throw new BlindSeedRejectedException(BlindSeedRefusal.PackageV2Invalid, ex);
         }
         var held = await MaxLamportHeldAsync(live, afterPurge: true);
         GrantTime(Math.Max(Math.Max(held, controlMax), package.Manifest.Whitelist.Max(p => p.LamportTs)), package.Manifest.Standing);
@@ -287,7 +291,7 @@ public sealed partial class BlindSeedService
         {
             var data = await File.ReadAllBytesAsync(file);
             if (!BlobHash.Matches(Path.GetFileName(file), data))
-                throw new BlindSeedRejectedException($"Blob {Path.GetFileName(file)} does not match its name.");
+                throw new BlindSeedRejectedException(BlindSeedRefusal.BlobMismatch);
             await repo.StoreAsync(data);
         }
     }
@@ -356,14 +360,14 @@ public sealed partial class BlindSeedService
                 }
                 catch (Exception ex) when (SyncFailureClassifier.Classify(ex) == SyncFailureKind.Permanent)
                 {
+                    // The quarantine list is shown on a screen: the kind of failure, never the exception's own text.
                     await quarantine.RecordFailureAsync(evt.EventId, evt.EventType, evt.NodeId,
-                        "Blind format-2 seed: " + ex.Message, SyncFailureKind.Permanent);
+                        $"Blind format-2 seed: {ex.GetType().Name}", SyncFailureKind.Permanent);
                     logger.LogWarning(ex, "Blind seed: delta {EventId} ({Type}) can never apply; quarantined", evt.EventId, evt.EventType);
                 }
                 catch (Exception ex)
                 {
-                    throw new BlindSeedRejectedException(
-                        $"Delta {evt.EventId} ({evt.EventType}) could not be stored yet ({ex.Message}); the baseline is adopted. Send the seed again.");
+                    throw new BlindSeedRejectedException(BlindSeedRefusal.DeltaNotStored, ex);
                 }
             }
             return true;

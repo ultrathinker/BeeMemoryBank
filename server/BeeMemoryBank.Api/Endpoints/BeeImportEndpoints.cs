@@ -42,6 +42,7 @@ public static class BeeImportEndpoints
         }).DisableAntiforgery()
           .WithMetadata(new RequestSizeLimitAttribute(500L * 1024 * 1024))
           .RequireInternalKey()
-          .WithTags("Import");
+          .WithTags("Import")
+            .SingleFlight("import", "An import");
     }
 }

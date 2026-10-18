@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -70,6 +71,13 @@ public partial class ArticleEditPage : ContentPage
 
         EditUnlockErrorLabel.IsVisible = false;
         var blob = _protectedBlobForEdit;
+        // The one busy helper (BMB-311): the button is off and spins through the key derivation; a failure other than a wrong password is
+        // said in full in the error line.
+        await BusyAction.RunAsync(sender as Button, () => EditUnlockAsync(blob, pass), new BusyOptions { ResultLabel = EditUnlockErrorLabel });
+    }
+
+    private async Task EditUnlockAsync(string blob, string pass)
+    {
         string pt;
         try
         {
@@ -191,6 +199,12 @@ public partial class ArticleEditPage : ContentPage
         var content = ContentEditor.Text ?? "";
 
         ErrorLabel.IsVisible = false;
+        // The one busy helper (BMB-311): the button (or the toolbar entry) is off and spins until the article is saved and the page is left.
+        await BusyAction.RunAsync(sender as BindableObject, () => SaveAsync(title, path, conceptTags, content));
+    }
+
+    private async Task SaveAsync(string title, string path, List<string> conceptTags, string content)
+    {
         LoadingIndicator.IsRunning = true;
         LoadingIndicator.IsVisible = true;
 
@@ -276,14 +290,24 @@ public partial class ArticleEditPage : ContentPage
         var action = await DisplayActionSheet("Add Image", "Cancel", null, "Photo Library", "Take Photo");
         if (action == "Cancel" || action == null) return;
 
+        FileResult? photo;
         try
         {
-            FileResult? photo = action == "Take Photo"
+            photo = action == "Take Photo"
                 ? await MediaPicker.Default.CapturePhotoAsync()
                 : await MediaPicker.Default.PickPhotoAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowError(GetErrorMessage(ex));
+            return;
+        }
+        if (photo == null) return;
 
-            if (photo == null) return;
-
+        // The one busy helper (BMB-311): the button is off and spins while the picture is read, encrypted and stored; a failure is said in
+        // full in the error line.
+        await BusyAction.RunAsync(sender as Button, async () =>
+        {
             using var stream = await photo.OpenReadAsync();
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms);
@@ -311,13 +335,10 @@ public partial class ArticleEditPage : ContentPage
             var cursorPos = ContentEditor.CursorPosition;
             var text = ContentEditor.Text ?? "";
             ContentEditor.Text = text.Insert(cursorPos, "\n" + markdown + "\n");
-        }
-        catch (Exception ex)
-        {
-            ShowError(GetErrorMessage(ex));
-        }
+        }, new BusyOptions { Result = (ok, text) => { if (!ok) ShowError(text); } });
     }
 
+    // busy-exempt: opens the folder picker, nothing is sent and nothing waits
     private async void OnChooseFolderClicked(object? sender, EventArgs e)
     {
         await Shell.Current.GoToAsync("folderPicker");

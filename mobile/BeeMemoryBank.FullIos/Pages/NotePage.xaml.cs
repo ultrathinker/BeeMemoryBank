@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.FullIos.Services;
 
 namespace BeeMemoryBank.FullIos.Pages;
@@ -93,18 +94,22 @@ public partial class NotePage : ContentPage
     {
         if (_note is null) return;
         var passphrase = PassphraseEntry.Text ?? "";
-        // The field is emptied whatever opening ends in (SecretFields): opened, refused, or an exception.
-        var text = await SecretFields.RunAsync(() => Task.Run(() => NotesService.OpenProtected(_note.Body, passphrase)), () => PassphraseEntry.Text = "");
-        if (text is null)
+        // The one busy helper (BMB-311): the button is off and spins through the key derivation; a failure is written under the field.
+        await BusyAction.RunAsync(sender as Button, async () =>
         {
-            PassphraseError.Text = "That is not this note's passphrase.";
-            PassphraseError.IsVisible = true;
-            return;
-        }
-        PassphraseError.IsVisible = false;
-        _passphrase = passphrase;
-        _openedText = text;
-        ShowText(text);
+            // The field is emptied whatever opening ends in (SecretFields): opened, refused, or an exception.
+            var text = await SecretFields.RunAsync(() => Task.Run(() => NotesService.OpenProtected(_note.Body, passphrase)), () => PassphraseEntry.Text = "");
+            if (text is null)
+            {
+                PassphraseError.Text = "That is not this note's passphrase.";
+                PassphraseError.IsVisible = true;
+                return;
+            }
+            PassphraseError.IsVisible = false;
+            _passphrase = passphrase;
+            _openedText = text;
+            ShowText(text);
+        }, new BusyOptions { ResultLabel = PassphraseError });
     }
 
     private async void OnNavigating(object? sender, WebNavigatingEventArgs e)
@@ -122,6 +127,7 @@ public partial class NotePage : ContentPage
     private static bool IsThePageItself(Uri uri) =>
         uri.Scheme == "about" || (uri.IsFile && uri.AbsolutePath.TrimEnd('/').EndsWith(".app", StringComparison.Ordinal));
 
+    // busy-exempt: opens the editor, nothing is sent and nothing waits
     private async void OnEdit(object? sender, EventArgs e)
     {
         if (_note is null || _openedText is null) return;
@@ -133,14 +139,11 @@ public partial class NotePage : ContentPage
         if (_note is null) return;
         if (!await DisplayAlertAsync("Move to trash", $"Move \"{_note.Title}\" to the trash? It can be restored from there, also on your other devices.", "Move to trash", "Cancel"))
             return;
-        try
+        // The one busy helper (BMB-311): the entry is off until the note is in the trash; a failure is said in full.
+        await BusyAction.RunAsync(sender as BindableObject, async () =>
         {
             await _notes.DeleteAsync(_note.Id);
             await Navigation.PopAsync();
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlertAsync("Move to trash", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "Move to trash" });
     }
 }

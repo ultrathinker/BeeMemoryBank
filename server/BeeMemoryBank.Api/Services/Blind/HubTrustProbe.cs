@@ -7,6 +7,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync;
 
 namespace BeeMemoryBank.Api.Services;
 
@@ -50,13 +51,15 @@ public sealed record HubProbeNetwork(Func<IPAddress, bool> IsAllowed, Func<strin
 /// </summary>
 public sealed class HubTrustProbe(TlsTrustAnchors anchors, HubProbeNetwork? network = null)
 {
-    private readonly HubProbeNetwork _network = network ?? HubProbeNetwork.Production;
+    private readonly PeerNetwork _network = ToPeerNetwork(network ?? HubProbeNetwork.Production);
     private const int MaxIdentityBytes = 64 * 1024;
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private sealed record Identity(Guid NodeId, string? Ed25519PublicKeyB64);
+
+    private static PeerNetwork ToPeerNetwork(HubProbeNetwork network) => new(network.IsAllowed, network.Resolve);
 
     public async Task<HubProbeResult> ProbeAsync(string origin, string trust, string? expectedPin, CancellationToken ct)
     {
@@ -71,7 +74,7 @@ public sealed class HubTrustProbe(TlsTrustAnchors anchors, HubProbeNetwork? netw
             AllowAutoRedirect = false,
             UseProxy = false,
             ConnectTimeout = Timeout,
-            ConnectCallback = ConnectCheckedAsync,
+            ConnectCallback = (context, token) => PeerSocketConnector.ConnectAsync(context, _network, token),
             SslOptions = new SslClientAuthenticationOptions
             {
                 RemoteCertificateValidationCallback = (_, certificate, chain, sslErrors) =>
@@ -100,7 +103,7 @@ public sealed class HubTrustProbe(TlsTrustAnchors anchors, HubProbeNetwork? netw
                 throw new HubProbeException($"{authority} did not answer the identity request as a Bee Memory Bank node does. Is this a Bee Memory Bank node, and is /api/sync/ forwarded to it?");
             identity = await response.Content.ReadFromJsonAsync<Identity>(Json, ct);
         }
-        catch (HttpRequestException ex) when (Find<AddressRefusedException>(ex) is not null)
+        catch (HttpRequestException ex) when (PeerSocketConnector.IsRefusal(ex))
         {
             throw new HubProbeException(
                 $"{authority} is at an address that can never be a hub (this machine itself, a link-local or cloud-metadata address, " +
@@ -126,32 +129,6 @@ public sealed class HubTrustProbe(TlsTrustAnchors anchors, HubProbeNetwork? netw
         if (identity is null || identity.NodeId == Guid.Empty || string.IsNullOrEmpty(identity.Ed25519PublicKeyB64))
             throw new HubProbeException($"{authority} did not answer with a node identity.");
         return new HubProbeResult(identity.NodeId, identity.Ed25519PublicKeyB64, presented, publiclyTrusted);
-    }
-
-    private sealed class AddressRefusedException : Exception;
-
-    /// <summary>
-    /// Opens the socket for the handler: resolves the host itself, refuses if ANY address it resolves to is not a possible hub,
-    /// connects only to the addresses it has just checked, and checks the address it ended up connected to.
-    /// </summary>
-    private async ValueTask<Stream> ConnectCheckedAsync(SocketsHttpConnectionContext context, CancellationToken ct)
-    {
-        var host = context.DnsEndPoint.Host.Trim('[', ']');
-        var addresses = IPAddress.TryParse(host, out var literal) ? [literal] : await _network.Resolve(host, ct);
-        if (addresses.Length == 0 || addresses.Any(a => !_network.IsAllowed(a))) throw new AddressRefusedException();
-
-        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-        try
-        {
-            await socket.ConnectAsync(addresses, context.DnsEndPoint.Port, ct);
-            if (socket.RemoteEndPoint is not IPEndPoint remote || !_network.IsAllowed(remote.Address)) throw new AddressRefusedException();
-            return new NetworkStream(socket, ownsSocket: true);
-        }
-        catch
-        {
-            socket.Dispose();
-            throw;
-        }
     }
 
     private static T? Find<T>(Exception? ex) where T : Exception

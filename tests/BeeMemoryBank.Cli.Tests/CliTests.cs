@@ -20,30 +20,7 @@ public class CliTests : IDisposable
     }
 
     // ───────────────────── init ─────────────────────
-
-    [Fact]
-    public async Task Init_CreatesDatabase_AndNodeIdentity()
-    {
-        var result = await InitCommand.HandleAsync(_tempDir, NodeName, Password);
-        result.Should().Be(0);
-
-        // Verify via service provider
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
-        using var scope = services.CreateScope();
-        var initSvc = scope.ServiceProvider.GetRequiredService<InitializationService>();
-        (await initSvc.IsInitializedAsync()).Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task Init_AlreadyInitialized_Returns1()
-    {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
-
-        var sw = new StringWriter();
-        var result = await InitCommand.HandleAsync(_tempDir, NodeName, Password, sw);
-        result.Should().Be(1);
-        sw.ToString().Should().Contain("already initialized");
-    }
+    // (bmb init sets a node up encrypted since 2.6.2: InitSealedTests. The tests below use PlainNode, the folder of a node of the first months.)
 
     // ───────────────────── status ─────────────────────
 
@@ -61,7 +38,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Status_AfterInit_ShowsNodeName()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
 
         var sw = new StringWriter();
         var result = await StatusCommand.HandleAsync(_tempDir, sw);
@@ -75,7 +52,7 @@ public class CliTests : IDisposable
     {
         // What the running node's scheduler records when a full peer answers its pull with 410 (BMB-81); bmb status is
         // another process and reads it from the database.
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
         await using (var services = await CliServiceProvider.CreateAsync(_tempDir))
             services.GetRequiredService<BeeMemoryBank.Sync.SnapshotRequiredState>()
                 .Set(new BeeMemoryBank.Sync.SnapshotRequiredException("https://host.example", 8, 14, "410"));
@@ -92,7 +69,7 @@ public class CliTests : IDisposable
     public async Task Status_ShowsChangesThatWaitToBeApplied()
     {
         // Step A (docs/design/step-a-spec.md 6.9): a sealed row the running node holds while it is locked.
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
         await using (var services = await CliServiceProvider.CreateAsync(_tempDir))
         {
             using var scope = services.CreateScope();
@@ -118,7 +95,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Status_SaysNothingAboutHeldChanges_WhenNoneWait()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
 
         var sw = new StringWriter();
         await StatusCommand.HandleAsync(_tempDir, sw);
@@ -131,7 +108,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Unlock_CorrectPassword_Returns0()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
 
         var sw = new StringWriter();
         var result = await UnlockCommand.HandleAsync(_tempDir, Password, sw);
@@ -142,7 +119,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Unlock_WrongPassword_Returns1()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
 
         var sw = new StringWriter();
         var result = await UnlockCommand.HandleAsync(_tempDir, "wrong_password", sw);
@@ -155,7 +132,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Article_CreateAndList_ViaCliRoundtrip()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
 
         // Create
         var createOut = new StringWriter();
@@ -179,7 +156,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Article_Create_WrongPassword_Returns1()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
 
         var sw = new StringWriter();
         var result = await ArticleCommand.HandleCreateAsync(
@@ -196,7 +173,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Article_Get_ReturnsMetadata()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
         var createOut = new StringWriter();
         await ArticleCommand.HandleCreateAsync(_tempDir, "Article for Get", "/Dev", "body", Password, createOut);
 
@@ -215,7 +192,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Article_GetContent_DecryptsBody()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
         var createOut = new StringWriter();
         await ArticleCommand.HandleCreateAsync(_tempDir, "Encrypted Article", "/Sec", "Secret text", Password, createOut);
 
@@ -231,7 +208,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Article_List_FilterByPath()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
         await ArticleCommand.HandleCreateAsync(_tempDir, "Work Article", "/Work", "w", Password);
         await ArticleCommand.HandleCreateAsync(_tempDir, "Personal Article", "/Personal", "p", Password);
 
@@ -245,7 +222,7 @@ public class CliTests : IDisposable
     [Fact]
     public async Task Article_Delete_RemovesFromList()
     {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
         var createOut = new StringWriter();
         await ArticleCommand.HandleCreateAsync(_tempDir, "To Delete", "/Trash", "x", Password, createOut);
 
@@ -263,6 +240,21 @@ public class CliTests : IDisposable
     // ───────────────────── snapshot ─────────────────────
 
     [Fact]
+    public async Task Snapshot_Create_OnANodeInTheOpen_IsRefused_AndMakesNoFile()
+    {
+        // A snapshot made here would hold the database in the open, and no restore takes one (BMB-306).
+        await PlainNode.InitAsync(_tempDir, NodeName, Password);
+
+        var sw = new StringWriter();
+        var result = await SnapshotCommand.HandleCreateAsync(_tempDir, sw);
+
+        result.Should().Be(1);
+        sw.ToString().Should().Contain("not encrypted").And.Contain("Admin").And.NotContain("Snapshot created");
+        var folder = Path.Combine(_tempDir, "snapshots");
+        (!Directory.Exists(folder) || !Directory.EnumerateFiles(folder).Any()).Should().BeTrue("no archive was written");
+    }
+
+    [Fact]
     public async Task Snapshot_Create_NoDatabase_Returns1()
     {
         Directory.CreateDirectory(_tempDir);
@@ -272,127 +264,4 @@ public class CliTests : IDisposable
         sw.ToString().Should().Contain("database not found");
     }
 
-    [Fact]
-    public async Task Snapshot_Create_ContainsAllArticles()
-    {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
-        await ArticleCommand.HandleCreateAsync(_tempDir, "Article for Snapshot", "/Snap", "content", Password);
-
-        var sw = new StringWriter();
-        var result = await SnapshotCommand.HandleCreateAsync(_tempDir, sw);
-        result.Should().Be(0);
-
-        var output = sw.ToString();
-        output.Should().Contain("Snapshot created");
-        output.Should().Contain(NodeName);
-
-        // Verify file exists
-        var snapshotLine = output.Split('\n').FirstOrDefault(l => l.Contains(".tar.gz"));
-        snapshotLine.Should().NotBeNull();
-        var snapshotPath = snapshotLine!.Replace("Snapshot created:", "").Trim();
-        File.Exists(snapshotPath).Should().BeTrue();
-
-        // Delete snapshot after test
-        File.Delete(snapshotPath);
-    }
-
-    [Fact]
-    public async Task Snapshot_Create_TakesANameFreeInBothSnapshotFolders_AndOverwritesNothing()
-    {
-        // A restore by name looks in snapshots/ and then in pre-encryption/, so the command must not give a snapshot the name of one in either folder
-        // (the way-back snapshot of an encrypted node lives in pre-encryption/), and must not truncate a file that already has its name.
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
-        var second = new DateTime(2026, 10, 13, 9, 30, 15, DateTimeKind.Utc);
-        var wayBack = Path.Combine(_tempDir, "pre-encryption", "bmb-snapshot-20261013-093015.tar.gz");
-        Directory.CreateDirectory(Path.GetDirectoryName(wayBack)!);
-        File.WriteAllText(wayBack, "the way-back");
-
-        var first = new StringWriter();
-        var second2 = new StringWriter();
-        (await SnapshotCommand.HandleCreateAsync(_tempDir, first, nameClock: () => second)).Should().Be(0, first.ToString());
-        (await SnapshotCommand.HandleCreateAsync(_tempDir, second2, nameClock: () => second)).Should().Be(0, second2.ToString());
-
-        first.ToString().Should().Contain("bmb-snapshot-20261013-093015-2.tar.gz");
-        second2.ToString().Should().Contain("bmb-snapshot-20261013-093015-3.tar.gz");
-        Directory.GetFiles(Path.Combine(_tempDir, "snapshots"), "bmb-snapshot-*.tar.gz").Select(Path.GetFileName)
-            .Should().BeEquivalentTo("bmb-snapshot-20261013-093015-2.tar.gz", "bmb-snapshot-20261013-093015-3.tar.gz");
-        File.ReadAllText(wayBack).Should().Be("the way-back", "a file of that name in the other folder is left as it is");
-    }
-
-    [Fact]
-    public async Task Snapshot_RestoreOnFreshNode_AllDataAvailable()
-    {
-        // Create a node with an article
-        var sourceDir = Path.Combine(Path.GetTempPath(), "bmb_snap_src_" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            await InitCommand.HandleAsync(sourceDir, "SnapshotNode", Password);
-            await ArticleCommand.HandleCreateAsync(sourceDir, "Restored Article", "/Snap", "body", Password);
-
-            var sw = new StringWriter();
-            await SnapshotCommand.HandleCreateAsync(sourceDir, sw);
-            var output = sw.ToString();
-            var snapshotLine = output.Split('\n').FirstOrDefault(l => l.Contains(".tar.gz"));
-            var snapshotPath = snapshotLine!.Replace("Snapshot created:", "").Trim();
-
-            try
-            {
-                // Restore into _tempDir
-                var restoreSw = new StringWriter();
-                var restoreResult = await SnapshotCommand.HandleRestoreAsync(_tempDir, snapshotPath, restoreSw);
-                restoreResult.Should().Be(0);
-                restoreSw.ToString().Should().Contain("Snapshot restored");
-
-                // Verify article is accessible
-                var listSw = new StringWriter();
-                var listResult = await ArticleCommand.HandleListAsync(_tempDir, null, listSw);
-                listResult.Should().Be(0);
-                listSw.ToString().Should().Contain("Restored Article");
-            }
-            finally
-            {
-                if (File.Exists(snapshotPath)) File.Delete(snapshotPath);
-            }
-        }
-        finally
-        {
-            if (Directory.Exists(sourceDir)) Directory.Delete(sourceDir, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task Snapshot_Manifest_HashesMatch()
-    {
-        await InitCommand.HandleAsync(_tempDir, NodeName, Password);
-
-        var sw = new StringWriter();
-        var result = await SnapshotCommand.HandleCreateAsync(_tempDir, sw);
-        result.Should().Be(0);
-
-        var output = sw.ToString();
-        // SHA256 is printed in output
-        output.Should().Contain("SHA256(db):");
-
-        var snapshotLine = output.Split('\n').FirstOrDefault(l => l.Contains(".tar.gz"));
-        var snapshotPath = snapshotLine!.Replace("Snapshot created:", "").Trim();
-        try
-        {
-            // Restore should succeed (validates hash internally)
-            var restoreDir = Path.Combine(Path.GetTempPath(), "bmb_hash_" + Guid.NewGuid().ToString("N"));
-            try
-            {
-                var restoreSw = new StringWriter();
-                var restoreResult = await SnapshotCommand.HandleRestoreAsync(restoreDir, snapshotPath, restoreSw);
-                restoreResult.Should().Be(0);
-            }
-            finally
-            {
-                if (Directory.Exists(restoreDir)) Directory.Delete(restoreDir, recursive: true);
-            }
-        }
-        finally
-        {
-            if (File.Exists(snapshotPath)) File.Delete(snapshotPath);
-        }
-    }
 }

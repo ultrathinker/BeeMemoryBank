@@ -5,23 +5,18 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
-/// Tests for migration 005 (FTS5 metadata index; renumbered from 004 during
-/// integration to avoid a collision with a sibling work package's migration).
+/// Tests for the FTS5 metadata index (migration 005 of the old chain; its objects are part of the baseline now).
 /// Verifies, at the SQL layer:
 ///   - trigger sync on INSERT/UPDATE/DELETE for fts_article / fts_folder / fts_tag,
 ///     including a raw-SQL write path that bypasses every service (the path
 ///     RemoteEventApplier ultimately takes during sync);
-///   - backfill correctness on a pre-populated DB (upgrade simulation);
-///   - migration idempotency (re-apply after a ghost-hunter-style reset);
+///   (the rebuild of a missing index from its table is covered by Squash/AdoptionTests);
 ///   - basic MATCH queries returning expected rows with bm25() ranking.
 /// Query-side wiring (ArticleRepository/FolderRepository/SearchService) is a
 /// separate WP and deliberately not exercised here.
 /// </summary>
 public class Fts5MetadataIndexTests
 {
-    private const string Migration005Resource =
-        "BeeMemoryBank.Storage.Migrations.005_fts5_metadata_index.sql";
-
     private static DbConnectionFactory NewFactory(string label) =>
         DbConnectionFactory.CreateInMemory($"bmb_fts5_{label}_{Guid.NewGuid():N}");
 
@@ -282,126 +277,7 @@ public class Fts5MetadataIndexTests
             .Should().Be(0);
     }
 
-    // ---- Backfill: upgrade of a populated node ------------------------------
-
-    [Fact]
-    public async Task Backfill_OnUpgrade_PopulatesIndexFromExistingRows()
-    {
-        using var factory = NewFactory("backfill");
-        // First pass: pretend migration 005 is already applied so the runner only
-        // applies 001..003 — this gives us a genuine pre-005 schema to populate.
-        await PreCreateMigrationTable(factory);
-        await MigrateAsync(factory);
-
-        using (var conn = factory.CreateConnection())
-        {
-            // Sanity: FTS tables must NOT exist yet (we're at schema v3).
-            // Sanity: FTS tables must NOT exist yet (we're at schema v3, pre-005).
-            AssertFtsAbsent(conn, "fts_article");
-            AssertFtsAbsent(conn, "fts_folder");
-            AssertFtsAbsent(conn, "fts_tag");
-
-            var now = IsoNow();
-            // Populate base tables directly. No triggers exist, so FTS is untouched.
-            await conn.ExecuteAsync(
-                "INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at) " +
-                "VALUES ('a1', 'Postgres runbook', '/Work/Runbooks/Postgres', 'A', @now, @now)", new { now });
-            await conn.ExecuteAsync(
-                "INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at) " +
-                "VALUES ('a2', 'Redis cache notes', '/Work/Runbooks/Redis', 'A', @now, @now)", new { now });
-            await conn.ExecuteAsync(
-                "INSERT INTO tbl_folder (id, path, name, parent_path, status, created_at, updated_at) " +
-                "VALUES ('f1', '/Work/Runbooks', 'Runbooks', '/Work', 'A', @now, @now)", new { now });
-            await conn.ExecuteAsync(
-                "INSERT INTO tbl_concept_tag (name) VALUES ('database')");
-            await conn.ExecuteAsync(
-                "INSERT INTO tbl_concept_tag (name) VALUES ('caching')");
-        }
-
-        // Now drop the v5 marker so the runner applies 005 (the upgrade).
-        using (var conn = factory.CreateConnection())
-        {
-            await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 5");
-        }
-        await MigrateAsync(factory);
-
-        using (var conn = factory.CreateConnection())
-        {
-            // All pre-existing rows must be present in the index after backfill.
-            (await RowCountAsync(conn, "SELECT COUNT(*) FROM fts_article WHERE fts_article MATCH 'runbook'"))
-                .Should().Be(1);
-            (await RowCountAsync(conn, "SELECT COUNT(*) FROM fts_article WHERE fts_article MATCH 'redis'"))
-                .Should().Be(1);
-            (await RowCountAsync(conn, "SELECT COUNT(*) FROM fts_folder WHERE fts_folder MATCH 'runbooks'"))
-                .Should().Be(1);
-            (await RowCountAsync(conn, "SELECT COUNT(*) FROM fts_tag WHERE fts_tag MATCH 'database'"))
-                .Should().Be(1);
-            (await RowCountAsync(conn, "SELECT COUNT(*) FROM fts_tag WHERE fts_tag MATCH 'caching'"))
-                .Should().Be(1);
-
-            // Triggers added by 005 are live for future writes.
-            var now = IsoNow();
-            await conn.ExecuteAsync(
-                "INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at) " +
-                "VALUES ('a3', 'Mongo runbook', '/Work/Runbooks/Mongo', 'A', @now, @now)", new { now });
-            (await RowCountAsync(conn, "SELECT COUNT(*) FROM fts_article WHERE fts_article MATCH 'mongo'"))
-                .Should().Be(1, "post-upgrade trigger must index new writes");
-        }
-    }
-
-    // ---- Idempotency: re-applying 005 does not error or duplicate -----------
-
-    [Fact]
-    public async Task Migration_Reapply_IsIdempotent()
-    {
-        using var factory = NewFactory("idem");
-        await MigrateAsync(factory);
-        using var conn = factory.CreateConnection();
-
-        var now = IsoNow();
-        await conn.ExecuteAsync(
-            "INSERT INTO tbl_article (id, title, tree_path, status, created_at, updated_at) " +
-            "VALUES ('x', 'idempotency runbook', '/Work', 'A', @now, @now)", new { now });
-
-        // Simulate a ghost-hunter reset: drop the v5 marker so the runner re-runs 005.
-        await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version = 5");
-        await MigrateAsync(factory); // must not throw, must not duplicate.
-
-        using var conn2 = factory.CreateConnection();
-        // CREATE VIRTUAL TABLE / CREATE TRIGGER hit "already exists" (skipped by
-        // MigrationRunner's idempotency); 'rebuild' reindexes from the base table.
-        (await RowCountAsync(conn2, "SELECT COUNT(*) FROM fts_article WHERE fts_article MATCH 'idempotency'"))
-            .Should().Be(1);
-        // No duplicate index entries (rebuild discards-then-rebuilds, never appends).
-        var baseRowid = await conn2.QuerySingleAsync<long>("SELECT rowid FROM tbl_article WHERE id = 'x'");
-        (await RowCountAsync(conn2, "SELECT COUNT(*) FROM fts_article WHERE rowid = @r", new { r = baseRowid }))
-            .Should().Be(1);
-    }
-
     // ---- Helpers ------------------------------------------------------------
-
-    /// <summary>
-    /// Creates tbl_migration and marks 005 as already applied (correct resource
-    /// name) so the first MigrationRunner pass applies only 001..003 — giving the
-    /// backfill test a real pre-005 schema.
-    /// </summary>
-    private static async Task PreCreateMigrationTable(DbConnectionFactory factory)
-    {
-        using var conn = factory.CreateConnection();
-        await conn.ExecuteAsync(@"
-            CREATE TABLE IF NOT EXISTS tbl_migration (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                version    INTEGER NOT NULL UNIQUE,
-                filename   TEXT NOT NULL,
-                applied_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )");
-        var now = IsoNow();
-        await conn.ExecuteAsync(
-            "INSERT INTO tbl_migration (version, filename, applied_at, updated_at) " +
-            "VALUES (5, @fn, @now, @now)",
-            new { fn = Migration005Resource, now });
-    }
 
     private static async Task<int> RowCountAsync(IDbConnection conn, string sql, object? param = null)
         => await conn.QuerySingleAsync<int>(sql, param);

@@ -411,7 +411,11 @@ public static class RekeyRunner
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('sqlite_stat1', 'sqlite_stat4')"))
             .Where(t => !fates.ContainsKey(t)).ToList();
         if (unlisted.Count > 0)
-            throw new InvalidOperationException($"{file} has tables no re-key step accounts for: {string.Join(", ", unlisted)}.");
+            throw new InvalidOperationException(
+                $"{file} has tables no re-key step accounts for: {string.Join(", ", unlisted)}. " +
+                "A table this version's schema does not have (left by an older version, an add-on, or made by hand: the start of a 2.6.x database " +
+                "tolerates it and leaves it alone) is not carried over blindly, because the re-key cannot tell whether it holds anything sealed under " +
+                "the old key. Export what you need from it, drop it from the vault, and run the re-key again, or ask for help with this message.");
     }
 
     private static async Task<IReadOnlyList<RekeyProblem>> IntegrityAsync(SqliteConnection conn, string file)
@@ -441,7 +445,8 @@ public static class RekeyRunner
     private static async Task<(int SlotId, RekeyKeys Keys)?> OpenOwnerAsync(SqliteConnection live, string password)
     {
         var sentinel = await live.ExecuteScalarAsync<byte[]?>("SELECT sentinel_value FROM tbl_node_identity LIMIT 1");
-        if (sentinel == null) return null;
+        // NULL and empty are the same "no sentinel" (the one predicate, NodeSentinel): nothing proves which key a password opens, so there is no owner to take it from.
+        if (BeeMemoryBank.Core.Services.NodeSentinel.IsMissing(sentinel)) return null;
         var slots = await live.QueryAsync<(long SlotId, string Type, byte[] Wrapped, byte[] Iv, byte[]? Salt, long? Mem, long? It, long? Par)>(
             @"SELECT s.slot_id, s.slot_type, s.encrypted_master_dek, s.iv, s.salt, s.argon_memory, s.argon_iterations, s.argon_parallelism
               FROM tbl_key_slot s

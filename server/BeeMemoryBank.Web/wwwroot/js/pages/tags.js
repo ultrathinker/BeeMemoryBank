@@ -156,19 +156,17 @@
             var newName = (document.getElementById('rename-new-name') || {}).value || '';
             newName = newName.trim();
             if (!newName || newName === renameCurrent) { if (dlgRename) dlgRename.hide(); return; }
-            btn.loading = true;
-            fetch('/api-proxy/concept-tags/' + encodeURIComponent(renameCurrent), {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ newName: newName })
-            }).then(function (r) {
-                if (r.ok || r.status === 204) {
+            // The one busy helper (BMB-311): the button spins; a refusal is written in the dialog, next to it.
+            bmbBusy.run(btn, function () {
+                return bmbBusy.request('/api-proxy/concept-tags/' + encodeURIComponent(renameCurrent), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ newName: newName })
+                }).then(function () {
                     if (dlgRename) dlgRename.hide();
                     loadConcept();
-                } else {
-                    r.json().then(function (d) { alert(d.error || 'Rename failed'); }).catch(function () { alert('Rename failed'); });
-                }
-            }).finally(function () { btn.loading = false; });
+                });
+            }, { quiet: true });
         });
     }
 
@@ -179,19 +177,16 @@
             var target = (document.getElementById('merge-target') || {}).value || '';
             target = target.trim();
             if (!target) return;
-            btn.loading = true;
-            fetch('/api-proxy/concept-tags/merge', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ source: mergeSource, target: target })
-            }).then(function (r) {
-                if (r.ok || r.status === 204) {
+            bmbBusy.run(btn, function () {
+                return bmbBusy.request('/api-proxy/concept-tags/merge', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source: mergeSource, target: target })
+                }).then(function () {
                     if (dlgMerge) dlgMerge.hide();
                     loadConcept();
-                } else {
-                    r.json().then(function (d) { alert(d.error || 'Merge failed'); }).catch(function () { alert('Merge failed'); });
-                }
-            }).finally(function () { btn.loading = false; });
+                });
+            }, { quiet: true });
         });
     }
 
@@ -199,16 +194,12 @@
     if (btnDeleteConfirm) {
         btnDeleteConfirm.addEventListener('click', function () {
             var btn = this;
-            btn.loading = true;
-            fetch('/api-proxy/concept-tags/' + encodeURIComponent(deleteName), { method: 'DELETE' })
-                .then(function (r) {
-                    if (r.ok || r.status === 204) {
-                        if (dlgDelete) dlgDelete.hide();
-                        loadConcept();
-                    } else {
-                        r.json().then(function (d) { alert(d.error || 'Delete failed'); }).catch(function () { alert('Delete failed'); });
-                    }
-                }).finally(function () { btn.loading = false; });
+            bmbBusy.run(btn, function () {
+                return bmbBusy.request('/api-proxy/concept-tags/' + encodeURIComponent(deleteName), { method: 'DELETE' }).then(function () {
+                    if (dlgDelete) dlgDelete.hide();
+                    loadConcept();
+                });
+            }, { quiet: true });
         });
     }
 })();

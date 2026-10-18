@@ -178,7 +178,9 @@ Implementation: `SyncClient` uses `GetAllEventSequenceNumbers()` instead of filt
 
 ## Invisible Mode
 
-A node can enable Invisible Mode to hide itself from sync partners. When invisible, the node still pulls updates from its partners but does not appear in their sync status or delivery reports.
+A node can enable Invisible Mode to hide itself from sync partners. When invisible, the node rejects every incoming sync call (503) and its own sync loop makes none, so its partners see it as not answering.
+
+Since 2.6.2 the switch is in **Admin > Invisible Mode** (superadmin only), no longer in the sync status of the header; while it is on, the sync icon of the header carries a badge and the status says so with a link to that card. `GET`/`POST /api/sync/invisible` are unchanged.
 
 Controlled by `InvisibleModeService` (`libs/BeeMemoryBank.Core/Services/InvisibleModeService.cs`). Use cases include:
 - **Maintenance:** operate without triggering sync alerts on partner nodes
@@ -214,11 +216,37 @@ Authorization: via InternalKeyValidator (BMB_INTERNAL_KEY)
       "lastPushedSeq": 12345,
       "totalLocalEvents": 12348,
       "isSynced": false,             // lastPushedSeq >= totalLocalEvents
-      "lastContactAt": "2026-04-09T12:30:00Z"
+      "lastContactAt": "2026-04-09T12:30:00Z",       // the last successful CONTACT, either way (2.6.2; it used to be the last push of events)
+      "lastContactDirection": "outbound",            // "outbound" = we -> it (this node called) | "inbound" = it -> us (it called this node)
+      "lastPushAt": "2026-04-09T09:12:00Z",          // the last time events were delivered to it
+      "lastOutboundAt": "...", "lastInboundAt": "...",
+      "canBeCalled": true,           // it has an address: this node calls it; without one it calls this node
+      "state": "answering",          // answering | not_answering | calls_us | unknown ("not checked since this node started")
+      "online": true,                // contact within the window below, and not failing
+      "notAnsweringSince": null, "notAnsweringReason": null
     }
   ]
 }
 ```
+
+**Contact is not events.** A contact is a completed session: this node's loop called the peer and the session ended well (`PeerContactLog`, "we -> it", with the pull position a finished pull leaves on disk as the trace that survives a restart), or the peer authenticated to this node or called it with a token ("it -> us", with the peer's last authentication on its whitelist row as the trace). The last push of events is its own field, because on a quiet network it grows old while the peers talk every minute. A node this one calls whose calls fail is **not answering** since the first failure of the streak, with the reason ("no answer: connection refused", "it answered 403: its door is closed to this node") - unless something was heard from it since, in which case it is alive and calls in. A node without an address is never asked; it **calls this node**, and the status shows when it last did. 
+
+**What is remembered, and for how long.** The contact memory is per process and is not saved: after a restart a node this one calls is **unknown** (the status shows what the disk remembers as the last contact, and says "not checked since this node started") until the next cycle or the next check has called it; it is never shown as "answering" on the strength of a position on disk. What was learned by calling a peer belongs to the address it was called at: when a peer is given another address (here, or by a replicated whitelist update), is revoked, or is replaced, the pause for an unreachable peer, the closed-door window, the failure reason and the streak are dropped, the sync loop is signalled, and the new address is called in the next cycle (`IPeerStateResetter`, called by the writers of the whitelist; the loop also notices by itself at the start of every cycle and of every check). The log keeps only peers on the whitelist and none that nobody has touched for 30 days.
+
+**Online** means contact within `2.5 x` the cadence the contact is expected at, and at least two minutes: this node's own sync interval (`BMB_SYNC_INTERVAL_SECONDS`, 60 s by default: 2.5 minutes) for a node it calls; the longer of that and five minutes for a node that calls in, a phone (12.5 minutes by default). A recorded time more than two minutes ahead of this clock is not believed (a peer's clock, a clock set back); a smaller lead is taken as "now".
+
+**The reason is a closed set.** The sentence shown for a failure is chosen from a fixed list (no answer, refused, timed out, a certificate that does not match, a closed door `401/403`, another node answering at the address, an answer that cannot be read as a sync answer, a connection that broke, no sync server at the address, a peer that is behind this node's compaction (or the other way round), and one generic "the call failed (the details are in this node's log)"). The text of an exception - an address, a path, a header, a parser's message - never becomes part of it; the node's log has the type of the failure, not its text.
+
+```
+POST /api/sync/nodes/{nodeId}/check        (superadmin, internal key, never an agent)
+{ "outcome": "answered" | "not_answering" | "calls_us" | "busy" | "invisible" | "unknown_node", "reason": "...", "applied": 0, "node": { ...the row above... } }
+```
+
+A double-click on a node of the sync status (the header dropdown and the "Sync Delivery Status" dialog), or the **Check now** button in its row (a real button: focus, Enter, Space, a tap), shows a spinner on the row and calls this: for a node with an address this node runs one session with it now (the loop's lock, the same session a cycle runs) and the row says "Alive - synced just now" or "Not answering" with the reason; for a node without an address nothing is asked and the row says it calls this node, with the time of its last call. `404` for a node that is not on the whitelist (or this node), `409` while Invisible Mode is on or a cycle is running. One check of one node runs at a time (a second request for it is answered `busy` at once, not queued behind the first), a node is checked at most once every five seconds, and a check waits at most 20 seconds for the loop's lock. The call makes this node call out, so the Web proxy accepts it only from a page of the site: the request must carry the page's anti-forgery token in the `RequestVerificationToken` header (and the cookie it pairs with), otherwise it answers `400` and nothing is forwarded.
+
+`GET /api/whitelist/sync-status` (the Trusted Nodes "Last contact" column) answers from the same facts: `lastContactAt` is the last contact, with `direction`, `pushedAt`, `state`, `notAnsweringSince`, `notAnsweringReason`. `updatedAt` keeps the meaning it always had for a client of an earlier version - the later of the last pull from the node and the last push to it, `0001-01-01` when there is neither (a node that only calls in).
+
+The same projection tells the blind nodes' contact: `GET /api/blind-nodes` carries `contact` for every node, the Blind nodes page shows its direction, the last delivery and "not checked since this node started", the host status of a blind node (`bmb blind status`, `/api/blind/status`) lists the additive fields `contact_at`, `contact_direction`, `last_push_at`, `last_outbound_at`, `last_inbound_at`, `state`, `online`, `not_answering_since`, `not_answering_reason` per peer (`last_contact` keeps its delivery meaning), and a blind node this PC cannot call for six hours is a `not_answering` banner on the Blind nodes page (a banner only; the desktop's notifications stay the `silent` and stale-baseline kinds'). This PC's own my-standing call to a blind node is outbound contact; the protocol column it also stamps is never read as the node calling in.
 
 Protected by `InternalKeyValidator` — only accessible from the Web proxy (same server). Used by the sync status UI widget and post-save toast.
 
@@ -272,6 +300,20 @@ also sends `tls_spki: ""` — the older node then drops the stale pin instead of
 node that does not know the mode never lists the row for pairing. `public-ca` never keeps a pin, and a mode a build does not know
 is kept on the row as written, with no pin: the row is not callable there and is never read as `pin` (only an event with no `tls_trust`
 at all is read the old way, as a plain pin). Like every whitelist change it needs a superadmin originator and loses to a newer version of the row.
+
+**A peer that is closed to a blind node is left alone (2.6.2).** The sync loop of a blind node (`BMB_ROLE=blind`) dials every whitelisted peer that
+has an address, once a minute - in the usual setup the full node calls the blind node and these calls add nothing, but a blind node paired from a hub
+(ADR 0007: a full node it can call, because nobody can call the blind node) has to make them. A full node that does not let the blind node's address in
+(a reverse proxy with an allow-list answers 403) used to draw a warning a minute for ever. Now a blind node that gets 401 or 403 from a peer logs one
+line for the episode ("... is closed to this blind node; asking again every 01:00:00"), asks again once an hour, logs one more line when the peer
+answers again, and keeps everything else as it was. A full node's loop is unchanged: it warns every cycle, as before.
+
+An *episode* is one continuous refusal by one peer at one address. It ends, with the one "no longer answers 401/403" line, when the peer gives any answer
+that is not a refusal - a good session, another status (a 404, a 502 of its proxy), a failure of its data - and a refusal after that is a new episode with
+its own line. It also ends, with no line, when what was learned is forgotten: the peer is revoked or deleted, or it is given another address (the refusal
+came from the old one; the new address is asked in the next cycle, not after the hour). A peer that does not answer at all does not end it - nothing is
+known about its door - so a gap with no answer between two refusals is still one episode. The memory is the size of the whitelist: `ReconcilePeers` drops
+the episodes of nodes that are no longer on it, and "this refusal opens the episode" is decided under one lock, so concurrent sessions write one line.
 
 **Important:** `article_update` sends the full ciphertext (not a diff). This is simpler and safer — diffs on encrypted data are meaningless.
 
@@ -664,6 +706,100 @@ that it does.
   that has not pulled the activation yet: it must be able to, or the switch would deadlock). A 2.5 node gets 426 at
   authenticate and, on its side, never pulls from a node declaring 4: the two are cut off both ways, as intended.
 
+### The full Android app
+
+The full Android app (2.6.x) syncs through the same `SyncClient` as every node, so it needs nothing of its own for encrypted metadata: it declares protocol 3 until
+it has applied the activation and 4 after, always with `metadata-envelope-v1`, and sends its version (the repo `VERSION`, as `AssemblyInformationalVersion`) at
+authenticate and in `report-position`. The node shows it on the readiness report of the Metadata card (Admin) next to what the phone last declared. After the
+activation the phone opens sealed events with the keys of its unlock, and keeps what it cannot open yet while it is locked, like any full node (see "Held events"
+below). `AndroidFullAppWiringTests` keeps the app wired to the shared composition (`AddSync()`), since the app itself cannot be built by a test project.
+
+### An address with no sync server
+
+A peer's address can answer and still have no sync server behind it: a router or a web server answers 404 (or 405, 410, a redirect) for `/api/sync/identity`,
+or answers 200 with a web page or the JSON of another service. `SyncAddress.ReadIdentityAsync` (used by `SyncClient` and by the screens that check an
+address) says so with `NoSyncServerException`: "No sync server at this address: it answered 404 Not Found. Check the address of this device." The text never
+names the address (it may carry a user name or a token; the screen that asked knows which address it asked about). A shut door (401, 403), a server in trouble
+(502, 504, the maintenance 503), a captive portal (511), a host that does not answer in time and no connection at all keep their own words: those are servers or
+absent peers, not wrong addresses.
+
+- A redirect is "no sync server", not "no answer": the pinned handler every sync client is built on (`SpkiPinGuardHandler`) never follows one and says so with a
+  3xx `HttpRequestException`, which the identity read turns into the same finding as a 3xx answered to a plain client (and its text names neither address).
+- The identity page is read as a bounded stream: the headers first (a declared length over 64 KB ends it), then at most 64 KB within ten seconds. An endless or a
+  trickling body costs neither memory nor a hung screen; a body that is too big is "no sync server", one that does not arrive in time is "no answer".
+- The scheduler's cycle result carries each peer that was not served (`SyncCycleResult.PeerFailures`, each with the peer's name and a reason without
+  addresses or keys); `Problem` is the cycle's own error or those reasons joined, and is null only when every peer with an address was reached. A wrong address
+  is paused like an absent peer (one warning per streak, growing pauses), and the cycles in which it is left alone still report it.
+- **A peer that is too old is a failure, not "nothing to do".** A peer on a protocol this node no longer syncs with (below 3, or - once this node has applied the
+  metadata activation - 3 without the `metadata-envelope-v1` capability) used to end the session quietly: the phone's heartbeat said "ok (applied 0)" and the
+  contact log "answered". It now throws `PeerIncompatibleException` ("it runs an older version (protocol 3) than this device syncs with: upgrade it"), which reaches
+  `PeerFailures`, the contact log and the check of a peer like any other failure, is paused with a growing pause (one warning per streak) and is asked again at
+  once when the peer is changed or checked.
+- The contact log (BMB-313) shows the same sentence as the reason a node "is not answering": "no sync server at this address: it answered 404 Not Found".
+- The Android app's background status reads "error: Laptop: no sync server at this address: it answered 404 Not Found" where it used to read "ok (applied 0)";
+  Sync now on the Status page says the same in its pop-up.
+
+### Changing a peer's address
+
+There is one writer of a peer's address: `PeerAddressService` (`libs/BeeMemoryBank.Sync`), called by "Change node address" on the Trusted nodes page
+(`PUT /api/whitelist/{nodeId}/address`) and by "Edit URL" on the phone's Status page. The generic `PUT /api/whitelist/{nodeId}` no longer takes `apiAddress`
+(it answers 400 and points at `/address`; renaming still works). The route is superadmin, **not an agent** (an agent owned by a superadmin is a superadmin, and
+used to be able to move a peer), and needs the master password; the phone is its owner's own app and asks nothing more. In this order:
+
+1. The peer exists, is active and is not this node.
+2. **The policy** (`PeerAddressPolicy`) accepts the address and makes it canonical (lower-case scheme and host, default port and trailing slash dropped, `https://`
+   added when no scheme was typed). Nothing is sent anywhere before this. Refused, with a fixed sentence that does not quote what was typed: another scheme than
+   http or https, a user name or password in the address, a `?` or `#` part, an empty host, an unspecified address (`0.0.0.0`, `::`), a link-local address
+   (`169.254.0.0/16`, `fe80::/10`, which is where the cloud metadata services live) and the names of those services - the same addresses written as numbers
+   included. **Loopback and private LAN addresses are accepted**: nodes live on LANs, and the tests of a setup use loopback.
+3. The same canonical address as the row has is a **no-op**: nothing is probed, published, audited or reset.
+4. No other active peer has it.
+5. The address is probed with a client that follows no redirect (the pinned handler, named `bmb-address-probe`), and a sync server must answer there with this
+   node id **and the public key on record** (compared in constant time; the key never changes through an address change). Another id, another key, no sync
+   server and no answer at all are refused with their own sentence. The phone may save an address that does not answer after its owner confirmed it; the first
+   session that reaches it checks who answers.
+6. The `whitelist_update` event is logged first and the row written with the version it minted; the loop is told (`IPeerStateResetter.PeerChanged`: the failure
+   streak, the pause, the closed window and the contact record of the old address are forgotten and a cycle is signalled) and the other nodes are told by the
+   event. An address change that arrives from another node does the same when it is applied.
+7. One audit line (`peer_address_changed`) says who, which peer, and the old and new address as 12-character fingerprints of `host:port` - never the address.
+
+The sync client also compares the key a peer states against the key on record on every session (`PeerKeyMismatchException`), not only the node id: the id is a
+claim, the key is what the network knows the node by.
+
+**Every other place that writes an address uses the same rule.** A running node writes a peer's row in exactly three methods of `PeerAddressService`, which share the
+steps above (the policy first - a refused address writes and announces nothing; the key on record never changes; the event is logged first with the address the row stores
+and the row carries its version; a repeat that changes nothing writes nothing; the loop is told when the place or the pairing moved; a moved place or pairing is audited
+with fingerprints): `ChangeAsync` (a person changes the address, probed), `ApplyProofAsync` (an existing peer proved itself some other way: a re-join with the master
+password, the hub pairing whose probe read the key, a blind node paired again from its code) and `AdmitAsync` (a new row: a join, a blind node added). A replicated
+`whitelist_add` / `whitelist_update` is applied in two named methods of the event applier with the same policy, the last-writer-wins version rule, the key never replaced
+and the loop's reset. The remaining writers build rows from an authoritative source that carries its own versions - the host's answer to a join, a restore or a seed's
+manifest, a backup, the phone's replica - and take the address through `PeerAddressPolicy.ForStorage` (the canonical form, or nothing). A join or a pair code with a
+refused address is a 400 before any request is built from it or any row is written. `PeerAddressWritersInventoryTests` names the METHOD of every assignment of an
+address in the production sources, with the reason it may (`docs/design/peer-address-writers.golden.txt` lists the files): a new writer fails it until it is reviewed
+against these rules.
+
+**Dialling a name.** A literal address is judged when it is typed; a **name** (`https://169.254.169.254.nip.io`) passes that and then resolves to whatever its DNS
+says. So every HTTP client that dials a peer or the other computer of a join - the sync client, the address probe, the restore client, the join client of a typed
+address, the one pinned by a join code, and the named no-redirect client that a join without a code and the probe relay use - connects through `PeerSocketConnector`
+(in the Crypto assembly, so that the phones' join code path has it too; `PeerHttp.NoRedirectHandler`, `SpkiPin.CreatePinnedHandler` and `JoinHttp.CreateClient` are the
+factories): it resolves the host
+itself, refuses if **any** answer is an address a node may not call (unspecified, link-local, the cloud metadata addresses, multicast), connects only to the addresses
+it has just checked, and checks the address it ended up connected to, so a name that resolves differently the second time cannot move a connection. No system proxy is
+used (a proxy would resolve and connect for this node, and the check would judge the proxy). Loopback and private LAN addresses are allowed. The hub probe uses the
+same connector with its stricter rule (it also refuses loopback). `PeerHttpArchitectureTests` fails for a handler that is built without the connector unless the place is
+listed with the reason it never dials a peer (the chat's image fetch, an S3 backup target, the OpenRouter client, the node's own front on loopback).
+
+**What a failure says.** A screen, an API answer, a status or a Warning says what *kind* of failure it was and never the words of the other side or of the stack:
+`PeerContactLog.Describe` for a failed call (no answer, refused, timed out, a certificate that was not accepted, a closed door, an answer that cannot be read) and
+`FailureText.Say` for everything else (a failure this code threw to be read says its own sentence; the rest is told as a kind). An answer's reason phrase and body are
+never read for a message (a join door's refusal is told by its status), a pair code and a join code are checked by the address policy before use, and a blind node
+refuses a seed with a typed code whose sentence is fixed (`BlindSeedRefusal`). A warning about an unreachable peer says the kind of failure and the exception's type,
+the node's LAN status, the blind job detail and the web pages' error lines use `FailureText.Say`, and the phone apps' generic busy helper shows
+`FailureText.Story`: the whole text of a failure of local work (a disk, a database, a file), and only the kind of failure for HTTP, socket, TLS, JSON, timeout and the
+typed peer refusals, told apart by the type of the exception. `NetworkFailureTextArchitectureTests` reads the networking projects and fails for an exception's message
+inside a log call, in a status member, or in the text a person reads, unless the place is listed with the reason it is local work. `ExceptionTextSitesInventoryTests` (`docs/design/exception-text-sites.golden.txt`) lists every file that
+uses an exception's message and fails when a new one appears, and nothing may read a `ReasonPhrase`.
+
 ### Sending and receiving sealed events
 
 - After the switch `EventLogger` seals every content event with the newest metadata key this node can open and writes
@@ -744,7 +880,8 @@ An operator guide. The switch is **one way**: there is no off switch.
    anything blocks it: a device that is not ready, this node being locked, a device that does not see this node as a
    superadmin, a DEK rotation in progress, changes held on this node, or the switch already being on. A device you no
    longer use: revoke it, it then no longer counts.
-3. **Take a fresh backup of this node and keep it offline.** It holds your titles in clear, and it is the only way back.
+3. **Take a fresh backup of this node and keep it offline if you want one.** It holds your titles in clear. There is no way back from the node:
+   the switch cannot be undone, and the node never restores a backup that is not encrypted (2.6.2).
 4. **Switch it on**: on the Admin card tick "I took a fresh backup", enter the master password and confirm; or
    `bmb sync activate --yes` (it asks for the master password, or reads it with `--password-stdin`). The API is
    `POST /api/sync/activation` `{ "password": ... }`: superadmin, never an agent; the password is checked, the vault is

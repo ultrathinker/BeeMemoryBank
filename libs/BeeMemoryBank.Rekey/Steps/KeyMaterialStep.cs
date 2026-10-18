@@ -193,7 +193,7 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
         var id = await db.QuerySingleAsync<(string NodeId, byte[] Pk, byte[]? Iv, long V, byte[] Pub, byte[]? Sentinel)>(
             @"SELECT node_id, ed25519_private_key, ed25519_private_key_iv, ed25519_private_key_v, ed25519_public_key, sentinel_value
               FROM tbl_node_identity LIMIT 1");
-        if (id.Sentinel == null || !MasterKeyManager.VerifySentinel(id.Sentinel, dc))
+        if (BeeMemoryBank.Core.Services.NodeSentinel.IsMissing(id.Sentinel) || !MasterKeyManager.VerifySentinel(id.Sentinel!, dc))
             problems.Add(new("tbl_node_identity", "sentinel_value", "the sentinel does not name D_c"));
         if (id.V != 1)
             problems.Add(new("tbl_node_identity", "ed25519_private_key", $"the identity seed is at v={id.V}, not sealed under D_c"));

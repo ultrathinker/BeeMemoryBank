@@ -52,15 +52,11 @@ public static class VaultEndpoints
         [property: JsonPropertyName("last_refusal")] string? LastRefusal,
         [property: JsonPropertyName("migration")] MigrationStatus? Migration);
 
-    public sealed record SealRequest(
-        [property: JsonPropertyName("password")] string? Password,
-        [property: JsonPropertyName("accept_no_snapshot")] bool AcceptNoSnapshot = false);
+    public sealed record SealRequest([property: JsonPropertyName("password")] string? Password);
 
     public sealed record ErasePlainCopiesRequest(
         [property: JsonPropertyName("password")] string? Password,
         [property: JsonPropertyName("paths")] string[]? Paths);
-
-    public sealed record PasswordRequest([property: JsonPropertyName("password")] string? Password);
 
     public static void MapVaultEndpoints(this WebApplication app)
     {
@@ -80,9 +76,9 @@ public static class VaultEndpoints
         // everything that changes or erases something.
         var owner = app.MapGroup("/api/vault").WithTags("Vault").RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 
-        owner.MapGet("/seal/preflight", async (HttpContext ctx, SealMigrationService seal, [FromQuery(Name = "accept_no_snapshot")] bool? acceptNoSnapshot) =>
+        owner.MapGet("/seal/preflight", async (HttpContext ctx, SealMigrationService seal) =>
         {
-            var result = await seal.PreflightAsync(new SealOptions(CallerIsSuperadmin: true, AcceptNoSnapshot: acceptNoSnapshot ?? false), ctx.RequestAborted);
+            var result = await seal.PreflightAsync(new SealOptions(CallerIsSuperadmin: true), ctx.RequestAborted);
             return Results.Json(new
             {
                 can_start = result.CanStart,
@@ -99,7 +95,7 @@ public static class VaultEndpoints
                 return Results.Json(new ErrorResponse("Invalid master password"), statusCode: StatusCodes.Status401Unauthorized);
             try
             {
-                await seal.StartAsync(req.Password, new SealOptions(CallerIsSuperadmin: true, AcceptNoSnapshot: req.AcceptNoSnapshot), ctx.RequestAborted);
+                await seal.StartAsync(req.Password, new SealOptions(CallerIsSuperadmin: true), ctx.RequestAborted);
             }
             catch (UnauthorizedAccessException)
             {
@@ -138,39 +134,6 @@ public static class VaultEndpoints
             });
         });
 
-        // The way-back snapshot (spec 10.7): found by name here, never listed with the snapshots.
-        owner.MapGet("/pre-encryption", (HttpContext ctx) =>
-        {
-            var snapshot = PreEncryptionFiles(ctx.RequestServices).OrderByDescending(f => f.CreationTimeUtc).FirstOrDefault();
-            return Results.Json(snapshot is null
-                ? new { exists = false, name = (string?)null, bytes = 0L, created_at = (DateTime?)null }
-                : new { exists = true, name = (string?)snapshot.Name, bytes = snapshot.Length, created_at = (DateTime?)snapshot.CreationTimeUtc });
-        });
-
-        owner.MapDelete("/pre-encryption", async ([FromBody] PasswordRequest req, HttpContext ctx, SessionService session) =>
-        {
-            if (string.IsNullOrEmpty(req.Password) || !await session.VerifyMasterPasswordAsync(req.Password))
-                return Results.Json(new ErrorResponse("Invalid master password"), statusCode: StatusCodes.Status401Unauthorized);
-
-            var removed = 0;
-            foreach (var file in PreEncryptionFiles(ctx.RequestServices))
-            {
-                try
-                {
-                    file.Delete();
-                    var sig = new FileInfo(file.FullName + ".sig");
-                    if (sig.Exists) sig.Delete();
-                    removed++;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    return Results.Json(new ErrorResponse("The way-back snapshot could not be deleted: " + ex.Message, "io"), statusCode: StatusCodes.Status409Conflict);
-                }
-            }
-            if (removed > 0)
-                await AuditAsync(ctx.RequestServices, "pre_encryption_deleted", "The pre-encryption snapshot was deleted.");
-            return Results.Json(new { deleted = removed > 0 });
-        });
     }
 
     private static object CopyBody(PlainCopyFinding c) => new
@@ -182,13 +145,6 @@ public static class VaultEndpoints
         detail = c.Detail,
         can_be_erased = PlainCopyKinds.CanBeErased(c.Kind),
     };
-
-    /// <summary>The snapshots in <c>pre-encryption/</c> and nothing else: an unrelated file in the folder is not the product's to delete.</summary>
-    private static IEnumerable<FileInfo> PreEncryptionFiles(IServiceProvider services)
-    {
-        var dir = new DirectoryInfo(services.GetRequiredService<SnapshotService>().PreEncryptionDir);
-        return dir.Exists ? dir.EnumerateFiles("bmb-snapshot-*.tar.gz").ToList() : [];
-    }
 
     private static async Task AuditAsync(IServiceProvider services, string action, string detail)
     {
@@ -209,7 +165,6 @@ public static class VaultEndpoints
         step = p.Step,
         error_code = p.ErrorCode,
         error = p.Error,
-        snapshot = p.Snapshot is null ? null : new { name = p.Snapshot.RelativeName, bytes = p.Snapshot.Bytes, created_at = p.Snapshot.CreatedUtc },
         plain_copies_found = p.PlainCopiesFound,
     };
 

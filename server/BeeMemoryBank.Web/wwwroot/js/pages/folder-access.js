@@ -179,14 +179,6 @@ window.folderAccess = (function () {
         return null;
     }
 
-    async function errorTextOf(resp, fallback) {
-        try {
-            var data = await resp.json();
-            if (data && data.error) return data.error;
-        } catch (e) { }
-        return fallback;
-    }
-
     async function add() {
         hideDlgError('restriction-error');
         var searchInput = getSearchInput();
@@ -198,35 +190,26 @@ window.folderAccess = (function () {
         }
 
         var folderId = selectedFolderId;
-        if (!folderId) {
-            if (addBtn) addBtn.loading = true;
-            var match = await resolveFolderByPath(typed);
-            if (addBtn) addBtn.loading = false;
-            if (!match) {
-                showDlgError('restriction-error', "Folder '" + typed + "' not found.");
-                return;
+        // The one busy helper (BMB-311): the button spins through the lookup and the save; the reason of a refusal is written in the dialog's error line.
+        await bmbBusy.run(addBtn, async function () {
+            if (!folderId) {
+                var match = await resolveFolderByPath(typed);
+                if (!match) throw new Error("Folder '" + typed + "' not found.");
+                folderId = match.id;
             }
-            folderId = match.id;
-        }
-
-        if (addBtn) addBtn.loading = true;
-        var effect = (document.getElementById('restriction-effect') || {}).value || 'deny';
-        var isReadOnly = effect === 'allow' && (document.getElementById('restriction-readonly') || {}).checked;
-        var resp = await fetch(basePath(), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folderId: folderId, effect: effect, isReadOnly: isReadOnly })
-        });
-        if (addBtn) addBtn.loading = false;
-        if (resp.ok) {
+            var effect = (document.getElementById('restriction-effect') || {}).value || 'deny';
+            var isReadOnly = effect === 'allow' && (document.getElementById('restriction-readonly') || {}).checked;
+            await bmbBusy.request(basePath(), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folderId: folderId, effect: effect, isReadOnly: isReadOnly })
+            });
             selectedFolderId = null;
             if (searchInput) searchInput.value = '';
             var dropdown = getDropdown();
             if (dropdown) dropdown.style.display = 'none';
             load();
-        } else {
-            showDlgError('restriction-error', await errorTextOf(resp, 'Failed to add rule'));
-        }
+        }, { quiet: true, error: function (err) { showDlgError('restriction-error', err.message); } });
     }
 
     function initListeners() {
@@ -283,20 +266,20 @@ window.folderAccess = (function () {
             list.addEventListener('click', async function (e) {
                 var removeBtn = e.target.closest('.acl-remove');
                 if (removeBtn) {
-                    var resp = await fetch(basePath() + '/' + removeBtn.dataset.folder, { method: 'DELETE' });
-                    if (resp.ok) load();
-                    else showDlgError('restriction-error', await errorTextOf(resp, 'Failed to remove rule'));
+                    await bmbBusy.run(removeBtn, function () {
+                        return bmbBusy.request(basePath() + '/' + removeBtn.dataset.folder, { method: 'DELETE' }).then(function () { load(); });
+                    }, { quiet: true, error: function (err) { showDlgError('restriction-error', err.message); } });
                     return;
                 }
                 var roBtn = e.target.closest('.acl-toggle-ro');
                 if (roBtn) {
-                    var r2 = await fetch(basePath() + '/' + roBtn.dataset.folder, {
-                        method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ isReadOnly: roBtn.dataset.ro === 'true' })
-                    });
-                    if (r2.ok) load();
-                    else showDlgError('restriction-error', await errorTextOf(r2, 'Failed to toggle read-only'));
+                    await bmbBusy.run(roBtn, function () {
+                        return bmbBusy.request(basePath() + '/' + roBtn.dataset.folder, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ isReadOnly: roBtn.dataset.ro === 'true' })
+                        }).then(function () { load(); });
+                    }, { quiet: true, error: function (err) { showDlgError('restriction-error', err.message); } });
                 }
             });
         }

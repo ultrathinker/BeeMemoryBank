@@ -192,7 +192,7 @@ public class PhoneJoinTests
             h => FakeJoinHost.WithField(h.JoinResponseJson(TestVault.Password), section, field, "***not base64***"));
         using var _s = server; await using var _t = test;
 
-        error.Message.Should().Contain("The join could not be completed").And.Contain("Base-64")
+        error.Message.Should().Contain("The join could not be completed").And.Contain("cannot read or verify").And.NotContain("Base-64")
             .And.Contain("no longer lists this phone ('My phone')").And.NotContain(TestVault.Password);
         server.Paths.Should().Equal("/api/join", "/api/join/abort");
     }
@@ -204,7 +204,7 @@ public class PhoneJoinTests
             h => FakeJoinHost.WithField(h.JoinResponseJson(TestVault.Password), "remoteNode", "ed25519PublicKeyB64", "***not base64***"));
         using var _s = server; await using var _t = test;
 
-        error.Message.Should().Contain("Base-64").And.Contain("no longer lists this phone ('My phone')");
+        error.Message.Should().Contain("cannot read or verify").And.NotContain("Base-64").And.Contain("no longer lists this phone ('My phone')");
         server.Paths.Count(p => p == "/api/join/abort").Should().Be(1);
         using var scope = test.Services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync()).Should().BeNull("a retry starts clean");

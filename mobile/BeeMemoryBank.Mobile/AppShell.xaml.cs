@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,11 +60,15 @@ public partial class AppShell : Shell
     {
         FlyoutIsPresented = false;
 
-        var session = IPlatformApplication.Current!.Services
-            .GetRequiredService<SessionService>();
-        session.Lock();
+        // The one busy helper (BMB-311): the button is off and spins until the lock page is shown.
+        await BusyAction.RunAsync(sender as Button, async () =>
+        {
+            var session = IPlatformApplication.Current!.Services
+                .GetRequiredService<SessionService>();
+            session.Lock();
 
-        App.StopSyncService();
-        await GoToAsync("//unlock");
+            App.StopSyncService();
+            await GoToAsync("//unlock");
+        });
     }
 }

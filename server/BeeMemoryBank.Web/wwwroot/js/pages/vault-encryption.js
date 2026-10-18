@@ -15,7 +15,6 @@
     var steps = {
         preflight: 'Checking the node',
         checkpoint: 'Folding the databases into their files',
-        snapshot: 'Making the way-back snapshot',
         'encrypt-vault': 'Encrypting the vault',
         'encrypt-chat': 'Encrypting the chat history',
         'boot-store': 'Writing the boot store',
@@ -38,10 +37,10 @@
             .then(function (p) {
                 if (!p) { setTimeout(poll, 3000); return; }
                 if (p.phase === 'running') { show(p); setTimeout(poll, 1000); return; }
-                if (p.phase === 'done') { show(p); setTimeout(function () { location.href = location.pathname + '?msg=' + encodeURIComponent('This node\'s database is encrypted.'); }, 1200); return; }
+                if (p.phase === 'done') { show(p); setTimeout(function () { location.href = location.pathname + '?card=card-database-encryption&msg=' + encodeURIComponent('This node\'s database is encrypted.') + '#card-database-encryption'; }, 1200); return; }
                 if (p.phase === 'failed') {
                     var msg = (p.step === 'locked' ? 'Encrypted, but kept locked (' : 'Not encrypted (') + p.error_code + '): ' + (p.error || '');
-                    location.href = location.pathname + '?err=' + encodeURIComponent(msg);
+                    location.href = location.pathname + '?card=card-database-encryption&err=' + encodeURIComponent(msg) + '#card-database-encryption';
                     return;
                 }
                 // idle: the node is not encrypting (yet, or any more): nothing to follow
@@ -53,7 +52,9 @@
 
     var form = document.getElementById('seal-form');
     if (form) {
-        form.addEventListener('submit', function () {
+        form.addEventListener('submit', function (e) {
+            // The question of the form (site.js, in the capture phase) has been asked already: a declined one prevented the send, and nothing is starting.
+            if (e.defaultPrevented) return;
             // The page is posted and reloaded; the reload (running) starts the polling.
             if (panel) panel.style.display = '';
             if (text) text.textContent = 'Starting...';
@@ -76,6 +77,6 @@
 
         // Exact and case-sensitive; the server checks it again.
         phrase.addEventListener('sl-input', function () { enable.disabled = phrase.value !== data.phrase; });
-        enable.addEventListener('click', function () { if (phrase.value === data.phrase) formEl.submit(); });
+        enable.addEventListener('click', function () { if (phrase.value === data.phrase) bmbBusy.submit(formEl); });
     }
 })();

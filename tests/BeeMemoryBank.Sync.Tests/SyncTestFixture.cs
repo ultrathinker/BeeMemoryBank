@@ -44,6 +44,9 @@ public abstract class SyncTestFixture : IAsyncLifetime
     public List<BeeMemoryBank.Sync.Metadata.IMetadataActivationObserver> ActivationObservers { get; } = [];
     public BeeMemoryBank.Vault.Metadata.MetadataKeyRing KeyRing { get; private set; } = null!;
     public RecordingBaselineScheduler BaselineScheduler { get; } = new();
+
+    /// <summary>The sync loop as the applier sees it (BMB-313, BMB-307): which peers a replicated whitelist event told it to forget.</summary>
+    public RecordingPeerState PeerState { get; } = new();
     protected const string Password = "syncTestPassword";
 
     public virtual async Task InitializeAsync()
@@ -106,7 +109,7 @@ public abstract class SyncTestFixture : IAsyncLifetime
             replayShieldRepo, restoreEventStateRepo, CreateRestoreInitiator(),
             dekRotationStateRepo, new NullDekRotationApplier(), folderAccess, Factory, new BlobRepository(Factory),
             CreateApplierLogger(),
-            ProtocolPolicy, Drain, ActivationObservers, CreateEnvelopeOpener(), BaselineScheduler);
+            ProtocolPolicy, Drain, ActivationObservers, CreateEnvelopeOpener(), BaselineScheduler, PeerState);
     }
 
     /// <summary>
@@ -152,6 +155,12 @@ public abstract class SyncTestFixture : IAsyncLifetime
         return await EventApplier.ApplyAsync(evt);
     }
 
+    public sealed class RecordingPeerState : BeeMemoryBank.Sync.IPeerStateResetter
+    {
+        public List<Guid> Changed { get; } = [];
+        public void PeerChanged(Guid nodeId) { lock (Changed) Changed.Add(nodeId); }
+    }
+
     public sealed class RecordingBaselineScheduler : BeeMemoryBank.Sync.Metadata.IBaselineScheduler
     {
         public List<string> Reasons { get; } = [];
@@ -166,7 +175,7 @@ public abstract class SyncTestFixture : IAsyncLifetime
 
     private sealed class NullRestoreInitiator : BeeMemoryBank.Sync.IRestoreInitiator
     {
-        public Task AcceptRestoreAsync(string eventId, BeeMemoryBank.Sync.RestoreNetworkEventPayload payload, BeeMemoryBank.Core.Models.SyncEvent restoreEvent)
+        public Task AcceptRestoreAsync(string eventId, BeeMemoryBank.Sync.RestoreNetworkEventPayload payload, BeeMemoryBank.Core.Models.SyncEvent restoreEvent, CancellationToken ct = default)
             => Task.CompletedTask;
         public Task RetryPendingRestoresAsync() => Task.CompletedTask;
     }

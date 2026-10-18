@@ -42,6 +42,7 @@ public class StrongBoxServiceTests
 
         public Task CreateAsync(NodeIdentity identity) => throw new NotSupportedException();
         public Task StoreSentinelAsync(byte[] sentinelValue) => throw new NotSupportedException();
+        public Task<bool> StoreSentinelIfMissingAsync(byte[] sentinelValue) => throw new NotSupportedException();
         public Task<byte[]?> GetSentinelAsync() => throw new NotSupportedException();
         public Task MarkInitialSyncCompletedAsync() => throw new NotSupportedException();
         public Task UpgradePrivateKeyToV1Async(Guid nodeId, byte[] wrappedPrivateKey, byte[] iv) => throw new NotSupportedException();

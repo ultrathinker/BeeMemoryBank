@@ -1,6 +1,7 @@
 using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Vault.Sealed;
 using Dapper;
@@ -51,53 +52,27 @@ public partial class SnapshotService
     /// </summary>
     public ISealedRestoreHooks? SealedHooks { get; set; }
 
-    /// <summary>Where the pre-encryption snapshot lives (docs/design/step-b-spec.md 10.7): not listed, not pruned, found by name here.</summary>
-    public string PreEncryptionDir => Path.Combine(_dataPath, VaultStoreFiles.PreEncryptionDir);
     /// <summary>
-    /// The snapshot file a restore name means, or null when there is none. A plain name is looked up in <c>snapshots/</c> first, then in
-    /// <c>pre-encryption/</c> (the restore of the way-back snapshot, spec 10.7); a name that is in both folders is refused, because the restore cannot
-    /// tell which of the two is meant and must not open the wrong one. <c>pre-encryption/&lt;name&gt;</c> and <c>snapshots/&lt;name&gt;</c> name the
-    /// folder and are looked up there only: the way out of that refusal without touching a file. The message carries file and folder names only.
+    /// A restore never produces an unencrypted node (BMB-306, the owner's rule): whatever its kind - this node only, the whole network, a blind copy,
+    /// a backup folder - it lands in a node whose database is encrypted, or it is refused. The Admin page, the API and the command line all end here
+    /// (<see cref="RestoreAsync"/> and the network restore ask it first, and the restore route asks it before it looks at a password, so that a refused
+    /// restore has done nothing yet). There is no flag that turns this off.
     /// </summary>
-    private string? FindRestorableSnapshot(string requestedName)
+    public void RequireEncryptedNodeForRestore()
     {
-        var safeName = Path.GetFileName(requestedName);
-        var inSnapshots = Path.Combine(SnapshotsDir, safeName);
-        var inPreEncryption = Path.Combine(PreEncryptionDir, safeName);
-
-        var asked = requestedName.Replace('\\', '/');
-        if (string.Equals(asked, $"{VaultStoreFiles.PreEncryptionDir}/{safeName}", StringComparison.OrdinalIgnoreCase))
-            return File.Exists(inPreEncryption) ? inPreEncryption : null;
-        if (string.Equals(asked, $"{SnapshotFileNames.SnapshotsDir}/{safeName}", StringComparison.OrdinalIgnoreCase))
-            return File.Exists(inSnapshots) ? inSnapshots : null;
-
-        if (File.Exists(inSnapshots) && File.Exists(inPreEncryption))
-            throw new InvalidOperationException(
-                $"Two snapshots are named {safeName}: one in snapshots/ and one in pre-encryption/, and the restore cannot tell which one is meant. " +
-                "Nothing was changed. Rename or delete the ordinary snapshot with this name in snapshots/ (it is listed on the Snapshots page) and try again, " +
-                $"or name the folder: {VaultStoreFiles.PreEncryptionDir}/{safeName} or {SnapshotFileNames.SnapshotsDir}/{safeName}.");
-        if (File.Exists(inSnapshots)) return inSnapshots;
-        return File.Exists(inPreEncryption) ? inPreEncryption : null;
+        if (!IsEncryptedNode) throw new RestoreRefusedException(RestoreRefusedException.PlainNodeMessage);
     }
 
-    /// <summary>
-    /// Throws <see cref="InvalidOperationException"/> when <paramref name="fileName"/> is in both snapshot folders and no folder is named (see
-    /// <see cref="FindRestorableSnapshot"/>). The restore route asks this first, so that a refused restore has done nothing yet: no audit entry of a
-    /// started restore, no safety backup, no session lock. A name that does not exist or is not a snapshot name is left to the restore itself.
-    /// <see cref="RestoreAsync"/> checks again, so the refusal does not depend on the caller.
-    /// </summary>
-    public void RequireUnambiguousRestoreName(string? fileName)
-    {
-        if (!string.IsNullOrEmpty(fileName)) _ = FindRestorableSnapshot(fileName);
-    }
+    /// <summary>True when this node's database is encrypted: the only kind of node a restore may land in.</summary>
+    public bool IsEncryptedNode => _connFactory.IsSealed;
 
     /// <summary>
-    /// An encrypted node takes no plain database from an archive (docs/design/step-b-spec.md 8.1): extracting it would write a plain image of a
-    /// vault to the disk. Checked before anything is extracted, by the first bytes of every regular entry.
+    /// A restore takes no plain database from an archive (docs/design/step-b-spec.md 8.1; before 2.6.2 only an encrypted node refused it): extracting
+    /// it would write a plain image of a vault to the disk, and a snapshot made without encryption is a backup in the open. Checked before anything is
+    /// extracted, by the first bytes of every regular entry.
     /// </summary>
-    private async Task RequireNoPlainDatabaseOnSealedNodeAsync(string archivePath)
+    private async Task RequireNoPlainDatabaseAsync(string archivePath)
     {
-        if (!_connFactory.IsSealed) return;
         await using var file = File.OpenRead(archivePath);
         await using var gzip = new GZipStream(file, CompressionMode.Decompress);
         using var tar = new TarReader(gzip);
@@ -109,12 +84,12 @@ public partial class SnapshotService
             var read = await entry.DataStream.ReadAtLeastAsync(head, head.Length, throwOnEndOfStream: false);
             var prefix = head.AsSpan(0, read);
             if (read >= 16 && prefix[..16].SequenceEqual("SQLite format 3\0"u8))
-                throw new InvalidOperationException(
-                    "This snapshot holds a database that is not encrypted, and this node's database is encrypted: it will not take a plain database from a file. " +
-                    "Restore the snapshot on a node that is not encrypted, then encrypt that node. Nothing was changed.");
+                throw new RestoreRefusedException(
+                    "This snapshot holds a database that is not encrypted. A restore does not take a database in the open from a file: " +
+                    "use a snapshot that this node, or one in its network, made with encryption. Nothing was changed.");
             if (LooksLikeNestedArchive(prefix))
                 throw new InvalidOperationException(
-                    $"This snapshot contains a nested archive in member '{entry.Name}', which cannot be verified on an encrypted node. Nothing was changed.");
+                    $"This snapshot contains a nested archive in member '{entry.Name}', which cannot be verified. Nothing was changed.");
 
             // The prefix only identifies the member. Consume every regular member completely so a
             // corrupt tail cannot be discovered by the extractor after it has already written files.
@@ -141,10 +116,9 @@ public partial class SnapshotService
     /// <summary>
     /// Opens the BMBDB container <paramref name="containerPath"/> in memory and leaves a sealed staging copy under the same name (docs/design/step-b-spec.md
     /// 8.4): the plain image goes through <see cref="PlainImageImporter"/> into a file encrypted with this node's page key, never to the disk as it is. The
-    /// session's master DEK is tried first; when it does not open the container and the archive holds a key envelope (spec 10.7), the DEK of the
-    /// envelope's slots under <paramref name="masterPassword"/> is. Every DEK and the image are cleared.
+    /// session's master DEK opens the container; the DEK and the image are cleared.
     /// </summary>
-    private async Task DecryptToSealedStagingAsync(string containerPath, string? masterPassword)
+    private async Task DecryptToSealedStagingAsync(string containerPath, CancellationToken ct = default)
     {
         if (_keys is null)
             throw new InvalidOperationException("Snapshot database is encrypted but the session is locked. Unlock the vault before restoring.");
@@ -158,74 +132,52 @@ public partial class SnapshotService
             throw new InvalidOperationException("Snapshot database is encrypted but the session is locked. Unlock the vault before restoring.");
         }
 
-        byte[]? image = null;
-        byte[]? envelopeDek = null;
+        DecryptedImage? image = null;
         byte[]? pageKey = null;
         var sealing = containerPath + ".sealing";
         try
         {
             try
             {
+                // Opened in place: the container is read into one buffer and decrypted there (BMB-304), after the memory it needs has been asked for.
                 await using var stream = new FileStream(containerPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
-                image = await Bmbdb2Container.DecryptAsync(stream, blobLength, sessionDek);
+                image = await Bmbdb2Container.OpenAsync(stream, blobLength, sessionDek, ct, FreeMemoryOverride);
             }
             catch (CryptographicException ex)
             {
-                var envelopePath = Path.Combine(Path.GetDirectoryName(containerPath)!, SnapshotKeyEnvelope.EntryName);
-                if (masterPassword is not null && File.Exists(envelopePath))
-                    envelopeDek = SnapshotKeyEnvelope.TryOpen(await File.ReadAllBytesAsync(envelopePath), masterPassword);
-                if (envelopeDek is null)
-                    throw new InvalidOperationException(
-                        "This snapshot was made by a different vault (another master key) and cannot be opened here. Nothing was changed.", ex);
-                await using var stream = new FileStream(containerPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
-                try { image = await Bmbdb2Container.DecryptAsync(stream, blobLength, envelopeDek); }
-                catch (CryptographicException inner)
-                {
-                    throw new InvalidOperationException(
-                        "This snapshot was made by a different vault (another master key) and cannot be opened here. Nothing was changed.", inner);
-                }
+                throw new InvalidOperationException(
+                    "This snapshot was made by a different vault (another master key) and cannot be opened here. Nothing was changed.", ex);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
+            {
+                // A cut-off or malformed container (the text of the parser is not the answer).
+                throw new SnapshotContainerException(ex);
             }
 
             pageKey = _connFactory.CopyPageKey()!;
-            await PlainImageImporter.ToSealedFileAsync(new MemoryStream(image, writable: false), image.Length, sealing, pageKey, PlainImageImporter.DefaultMemoryCap());
-            // In place, like every other container write of this service: a rename over the old name fails while anything has the old file open.
-            await using (var source = new FileStream(sealing, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
-            await using (var target = new FileStream(containerPath, FileMode.Create, FileAccess.Write, FileShare.Read, 81920, useAsync: true))
-                await source.CopyToAsync(target);
+            // The image is imported where it lies: a legacy image (BMBDB1 from a 2.5 node, no page reserve) is deserialized in place, so the restore holds
+            // one whole image, not the container's buffer and a native copy of it (BMB-304 fix round).
+            try
+            {
+                await PlainImageImporter.ToSealedFileAsync(image, sealing, pageKey, PlainImageImporter.DefaultMemoryCap(), ct);
+            }
+            catch (InvalidDataException ex)
+            {
+                // The container authenticated, so the key is the right one and the bytes are what the maker wrote: an image that is not a SQLite database (or not one this
+                // node can import) is a damaged snapshot, said with the same sentence as every other one (the parser's text is not the answer).
+                throw new SnapshotContainerException(ex);
+            }
+            // The finished sealed copy takes the container's name in one rename: a cancellation or a failure before it leaves the container as it was, and a half-copied
+            // staging file (the old copy-over-in-place, which ignored the token) can no longer be left under that name.
+            ct.ThrowIfCancellationRequested();
+            await OwnerOnlyFile.MoveReplaceAsync(sealing, containerPath, ct);
         }
         finally
         {
             CryptographicOperations.ZeroMemory(sessionDek);
-            if (envelopeDek is not null) CryptographicOperations.ZeroMemory(envelopeDek);
-            if (image is not null) CryptographicOperations.ZeroMemory(image);
+            image?.Dispose();
             if (pageKey is not null) CryptographicOperations.ZeroMemory(pageKey);
             if (File.Exists(sealing)) File.Delete(sealing);
-        }
-    }
-
-    /// <summary>
-    /// A plain node restoring a snapshot its own key does not open (the vault was reset and set up again, or its DEK rotated): the envelope of the
-    /// pre-encryption snapshot (spec 10.7) opens it under the password the restore was confirmed with. Returns false when this archive has no
-    /// envelope or the password opens none of its slots; the caller then reports the foreign-vault refusal.
-    /// </summary>
-    private async Task<bool> TryDecryptWithEnvelopeAsync(string containerPath, string? masterPassword)
-    {
-        var envelopePath = Path.Combine(Path.GetDirectoryName(containerPath)!, SnapshotKeyEnvelope.EntryName);
-        if (masterPassword is null || !File.Exists(envelopePath)) return false;
-        var dek = SnapshotKeyEnvelope.TryOpen(await File.ReadAllBytesAsync(envelopePath), masterPassword);
-        if (dek is null) return false;
-        try
-        {
-            await DecryptDbFileAsync(containerPath, dek);
-            return true;
-        }
-        catch (CryptographicException)
-        {
-            return false;
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(dek);
         }
     }
 

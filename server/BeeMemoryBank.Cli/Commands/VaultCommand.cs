@@ -35,14 +35,11 @@ public static class VaultCommand
         status.SetHandler(async data => Environment.Exit(await StatusAsync(data)), dataOption);
         vault.AddCommand(status);
 
-        var acceptNoSnapshot = new Option<bool>("--accept-no-snapshot",
-            "I keep my own offline backup of this node; encrypting cannot be undone from the node itself (only for a database too large for the way-back snapshot)");
         var yes = new Option<bool>("--yes", "Confirm \"Encrypt this node\". Without it the command only shows what the preflight says.");
         var seal = new Command("seal", "Encrypt this node's database (calls the running node)");
         seal.AddOption(passwordStdinOption);
-        seal.AddOption(acceptNoSnapshot);
         seal.AddOption(yes);
-        seal.SetHandler(async (data, noSnapshot, confirmed) => Environment.Exit(await SealAsync(data, noSnapshot, confirmed)), dataOption, acceptNoSnapshot, yes);
+        seal.SetHandler(async (data, confirmed) => Environment.Exit(await SealAsync(data, confirmed)), dataOption, yes);
         vault.AddCommand(seal);
 
         var verify = new Command("verify", "Check the sealed database, the chat database and the boot store with the master password; leaves the database closed");
@@ -121,13 +118,6 @@ public static class VaultCommand
             await output.WriteLineAsync("State:     closed (no node answers on this computer)");
         }
 
-        // The way back (spec 10.7): the encrypted pre-encryption snapshot, named so that the rollback of docs/sealed-database.md can find it. The folder
-        // is read from the disk; a snapshot's name is not a secret from the person who can run this command on the node's own folder.
-        var wayBack = Path.Combine(dataPath, VaultStoreFiles.PreEncryptionDir);
-        if (Directory.Exists(wayBack))
-            foreach (var file in new DirectoryInfo(wayBack).EnumerateFiles().Where(f => !f.Name.EndsWith(".sig", StringComparison.Ordinal)).OrderBy(f => f.Name, StringComparer.Ordinal))
-                await output.WriteLineAsync($"Way back:  {VaultStoreFiles.PreEncryptionDir}/{file.Name} ({file.Length / 1024} KiB, {file.LastWriteTimeUtc:yyyy-MM-dd HH:mm} UTC) - an encrypted snapshot of this node before the encryption");
-
         if (boot.Exists)
         {
             var inbox = await new RelayInbox(boot.Connections).GetSummaryAsync();
@@ -170,13 +160,13 @@ public static class VaultCommand
 
     // ---------------------------------------------------------------- seal
 
-    public static async Task<int> SealAsync(string dataPath, bool acceptNoSnapshot, bool yes, TextWriter? output = null, TimeSpan? pollEvery = null)
+    public static async Task<int> SealAsync(string dataPath, bool yes, TextWriter? output = null, TimeSpan? pollEvery = null)
     {
         output ??= Console.Out;
         try
         {
             using var http = NodeApi.CreateClient(dataPath, TimeSpan.FromMinutes(5));
-            var preflight = await http.GetFromJsonAsync<JsonElement>("/api/vault/seal/preflight" + (acceptNoSnapshot ? "?accept_no_snapshot=true" : ""));
+            var preflight = await http.GetFromJsonAsync<JsonElement>("/api/vault/seal/preflight");
             foreach (var w in preflight.GetProperty("warnings").EnumerateArray())
                 await output.WriteLineAsync("Note: " + w.GetProperty("message").GetString());
             if (!preflight.GetProperty("can_start").GetBoolean())
@@ -191,14 +181,14 @@ public static class VaultCommand
             if (!yes)
             {
                 await output.WriteLineAsync(
-                    "This encrypts the database of this node. It takes a snapshot first (the way back), keeps the node out of service while it runs, " +
-                    "and cannot be undone from the node itself. Run again with --yes to start.");
+                    "This encrypts the database of this node. It keeps the node out of service while it runs, and it cannot be undone from the node itself: " +
+                    "no copy of the unencrypted database is kept. Keep your own backup if you may want to go back. Run again with --yes to start.");
                 return 1;
             }
 
             var password = CliSealed.ResolvePassword();
             if (password is null) return 1;
-            using var started = await http.PostAsJsonAsync("/api/vault/seal", new { password, accept_no_snapshot = acceptNoSnapshot });
+            using var started = await http.PostAsJsonAsync("/api/vault/seal", new { password });
             if (started.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
                 await output.WriteLineAsync("Error: wrong master password.");
@@ -231,9 +221,6 @@ public static class VaultCommand
                 if (phase == "done")
                 {
                     await output.WriteLineAsync("This node's database is encrypted.");
-                    if (progress.TryGetProperty("snapshot", out var snapshot) && snapshot.ValueKind == JsonValueKind.Object)
-                        await output.WriteLineAsync($"The way back: {snapshot.GetProperty("name").GetString()}. It opens with the master password or recovery key you have today, " +
-                                                    "even if you change them later. Keep it until you are sure the node works, then delete it.");
                     return 0;
                 }
             }

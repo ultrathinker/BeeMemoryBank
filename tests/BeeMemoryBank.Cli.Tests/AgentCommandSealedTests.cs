@@ -30,7 +30,7 @@ public sealed class AgentCommandSealedTests : IDisposable
 
     private async Task<(UnlockMaterialMirror Mirror, BootStore Boot, BootDoorStore Doors, FakeGate Gate)> OpenMirrorAsync(bool sealedNode = true)
     {
-        (await InitCommand.HandleAsync(_dir, "admin", Password)).Should().Be(0);
+        (await PlainNode.InitAsync(_dir, "admin", Password)).Should().Be(0);
         var vault = new DbConnectionFactory(_dir);
         var boot = new BootStore(Path.Combine(_dir, "beememorybank.boot.db"));
         await boot.EnsureCreatedAsync();
@@ -96,7 +96,7 @@ public sealed class AgentCommandSealedTests : IDisposable
     [Fact]
     public async Task WithoutAMirrorTheCommandIsTheOneItAlwaysWas()
     {
-        (await InitCommand.HandleAsync(_dir, "admin", Password)).Should().Be(0);
+        (await PlainNode.InitAsync(_dir, "admin", Password)).Should().Be(0);
         var output = new StringWriter();
 
         (await AgentCommand.HandleCreateAsync(_dir, "plain-agent", null, 0, Password, output)).Should().Be(0);

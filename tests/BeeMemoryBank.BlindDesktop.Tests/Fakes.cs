@@ -122,8 +122,9 @@ internal sealed class FakeApp : IBlindAppController
     public static BlindAppStatus StatusOf(bool paired = true, bool loaded = true, string? activeJob = null,
         double? progress = null, IReadOnlyList<BlindAppBackup>? backups = null, BlindBackupSchedule schedule = BlindBackupSchedule.Weekly,
         bool awaiting = false, bool keyLost = false, string? startError = null, string name = "Test PC",
-        IReadOnlyList<BlindPhoneLog.Entry>? log = null, string? keyStoreUnavailable = null, BlindAppFailure? lastFailure = null) =>
-        new(Guid.Parse("11111111-2222-3333-4444-555555555555"), name, paired, loaded, null, null, schedule, keyLost, activeJob, progress,
+        IReadOnlyList<BlindPhoneLog.Entry>? log = null, string? keyStoreUnavailable = null, BlindAppFailure? lastFailure = null,
+        DateTimeOffset? lastSyncAt = null, DateTimeOffset? lastBackupAt = null) =>
+        new(Guid.Parse("11111111-2222-3333-4444-555555555555"), name, paired, loaded, lastSyncAt, lastBackupAt, schedule, keyLost, activeJob, progress,
             backups ?? [], log ?? [], paired ? "https://127.0.0.1:5610" : null, awaiting, startError,
             keyStoreUnavailable, lastFailure);
 

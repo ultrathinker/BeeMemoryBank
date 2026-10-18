@@ -1,60 +1,27 @@
-// Shared non-closable "please wait" modal for every export AND import action in the app
-// (Export All / Export Folder / Export Article / Import from Obsidian / Bee-Import).
-window.bmbShowBusyModal = function (title, message) {
-    var modal = document.getElementById('bmb-busy-modal');
-    if (!modal) {
-        modal = document.createElement('sl-dialog');
-        modal.id = 'bmb-busy-modal';
-        modal.className = 'bmb-busy-modal';
-        modal.setAttribute('no-header', '');
-        modal.innerHTML =
-            '<div class="bmb-busy-body">' +
-            '  <sl-spinner class="bmb-busy-spinner"></sl-spinner>' +
-            '  <div class="bmb-busy-text">' +
-            '    <div class="bmb-busy-title" id="bmb-busy-title"></div>' +
-            '    <div class="bmb-busy-msg" id="bmb-busy-msg"></div>' +
-            '  </div>' +
-            '</div>';
-        document.body.appendChild(modal);
-        modal.addEventListener('sl-request-close', function (e) {
-            e.preventDefault();
-        });
-    }
-    document.getElementById('bmb-busy-title').textContent = title || 'Working…';
-    document.getElementById('bmb-busy-msg').textContent = message || 'Please wait, this may take a moment.';
-    modal.show();
-};
+// The shared non-closable "please wait" modal (bmbShowBusyModal / bmbHideBusyModal) and every button that sends something live in bmb-busy.js (BMB-311).
 
-window.bmbHideBusyModal = function () {
-    var modal = document.getElementById('bmb-busy-modal');
-    if (modal) modal.hide();
-};
-
-window.bmbDownload = async function (payload) {
-    window.bmbShowBusyModal('Preparing archive…', "This can take a while for large exports — please don't close this window.");
-    try {
-        var r = await fetch('/api-proxy/downloads/prepare', {
+// Prepares an archive (Export All / Export Folder / Export Article) and hands it to the browser; resolves true when it did.
+window.bmbDownload = function (payload, btn) {
+    return bmbBusy.run(btn || null, function () {
+        return bmbBusy.request('/api-proxy/downloads/prepare', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
+        }).then(function (res) {
+            var data = res.body || {};
+            var a = document.createElement('a');
+            a.href = '/api-proxy/downloads/' + encodeURIComponent(data.token);
+            a.download = data.fileName;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
         });
-        if (!r.ok) {
-            var err = 'Download failed';
-            try { var j = await r.json(); err = j.error || err; } catch (_) {}
-            throw new Error(err);
-        }
-        var data = await r.json();
-        window.bmbHideBusyModal();
-        var a = document.createElement('a');
-        a.href = '/api-proxy/downloads/' + encodeURIComponent(data.token);
-        a.download = data.fileName;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-    } catch (e) {
-        window.bmbHideBusyModal();
-        alert(e.message || 'Download failed');
-    }
+    }, {
+        long: true,
+        title: 'Preparing archive\u2026',
+        text: "This can take a while for large exports \u2014 please don't close this window.",
+        quiet: true
+    });
 };
 
 window.openDownloadDialog = function (payload) {
@@ -294,3 +261,29 @@ function maskSecrets() {
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', maskSecrets);
 else maskSecrets();
+
+// ---- A form that asks first (form.form-confirm data-confirm="...") -----------------------------------------------------------------------
+// Asked here, for every page: the encryption page has no script of the Admin page, and its "Encrypt this node" and "Erase these copies" went out without
+// the question their forms carry.
+document.addEventListener('submit', function (e) {
+    var form = e.target && e.target.closest ? e.target.closest('form.form-confirm') : null;
+    if (!form) return;
+    var msg = form.dataset.confirm;
+    if (msg && !confirm(msg)) e.preventDefault();
+}, true);
+
+// ---- A form that sends something slow (<form data-busy>) is looked after by bmb-busy.js, and by nothing else ---------------------------------------
+// There used to be a second copy of that here (BMB-303): it took over the function that marks a form busy, added a second submit listener and let the form go after
+// two minutes while the node was still working. One state owner now: wwwroot/js/bmb-busy.js, loaded before this file by the layout.
+
+// ---- The page opens at the card of the button that was pressed (a fragment: /Admin#card-metadata) ---------------------------------------
+window.bmbScrollToHash = function () {
+    var id = '';
+    try { id = decodeURIComponent((location.hash || '').slice(1)); } catch (err) { return false; }
+    var el = id ? document.getElementById(id) : null;
+    if (!el) return false;
+    el.scrollIntoView({ block: 'start' });
+    return true;
+};
+// Shoelace upgrades its elements after the first layout: look once more when the page is complete.
+window.addEventListener('load', function () { setTimeout(window.bmbScrollToHash, 50); });

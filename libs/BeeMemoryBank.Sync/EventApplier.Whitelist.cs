@@ -72,7 +72,7 @@ public partial class EventApplier
             if (existing.Status == "R")
             {
                 existing.DisplayName = p.DisplayName;
-                existing.ApiAddress = p.ApiAddress;
+                existing.ApiAddress = AddressFromEvent(p.NodeId, p.ApiAddress);
                 existing.CanGenerateEmbeddings = p.CanGenerateEmbeddings;
                 existing.IsSuperadmin = p.IsSuperadmin && !BlindNodeId.IsBlind(p.NodeId);
                 ApplyTlsTrust(existing, p.TlsTrust, p.TlsSpki, isAdd: true);
@@ -81,6 +81,8 @@ public partial class EventApplier
                 existing.LamportTs = incoming.LamportTs;
                 existing.SourceNodeId = incoming.SourceNodeId;
                 await whitelistRepoWrite.UpdateAsync(existing);
+                // The peer is back at the place the event names: what this node remembered of it (from before it was revoked) does not count.
+                peerState?.PeerChanged(p.NodeId);
             }
             return;
         }
@@ -91,7 +93,7 @@ public partial class EventApplier
             NodeId = p.NodeId,
             DisplayName = p.DisplayName,
             Ed25519PublicKey = Convert.FromBase64String(p.PublicKeyB64),
-            ApiAddress = p.ApiAddress,
+            ApiAddress = AddressFromEvent(p.NodeId, p.ApiAddress),
             CanGenerateEmbeddings = p.CanGenerateEmbeddings,
             // A blind node is never a superadmin, whatever the event says (plan 3.2, BMB-42): it holds no
             // DEK, and a peer that marked it so — by mistake or on purpose — must not hand it authority here.
@@ -147,6 +149,20 @@ public partial class EventApplier
         else if (isAdd || row.TlsTrust == BlindTrust.Pin) row.TlsTrust = null;
     }
 
+    /// <summary>
+    /// The address a replicated whitelist event may put on a row: the one policy's canonical form (<see cref="PeerAddressPolicy.ForStorage"/>), or none. An event is a
+    /// message from another node, signed but not vouched for as to WHERE it tells this node to connect: an address with a user name, a query, or a link-local or
+    /// metadata target is not stored, the row keeps what it had (or has none), and the warning names the peer, never the address.
+    /// </summary>
+    private string? AddressFromEvent(Guid nodeId, string? incoming)
+    {
+        if (string.IsNullOrWhiteSpace(incoming)) return null;
+        var stored = PeerAddressPolicy.ForStorage(incoming);
+        if (stored is null)
+            logger.LogWarning("A whitelist event for {NodeId} carried an address the address policy refuses; it was not stored (the peer keeps the address it had, or has none).", nodeId);
+        return stored;
+    }
+
     private async Task ApplyWhitelistRevokeAsync(SyncEvent evt)
     {
         var p = Deserialize<WhitelistRevokePayload>(evt.Payload);
@@ -172,6 +188,7 @@ public partial class EventApplier
         }
 
         await whitelistRepoWrite.RevokeAsync(p.NodeId, incoming);
+        peerState?.PeerChanged(p.NodeId);
     }
 
     private async Task ApplyWhitelistUpdateAsync(SyncEvent evt)
@@ -197,7 +214,9 @@ public partial class EventApplier
             return;
         }
 
-        if (p.ApiAddress != null) existing.ApiAddress = p.ApiAddress;
+        var addressBefore = PeerContactLog.EndpointKey(existing.ApiAddress);
+        if (AddressFromEvent(p.NodeId, p.ApiAddress) is { } moved) existing.ApiAddress = moved;
+        var addressMoved = PeerContactLog.EndpointKey(existing.ApiAddress) != addressBefore;
         if (p.DisplayName != null) existing.DisplayName = p.DisplayName;
         ApplyTlsTrust(existing, p.TlsTrust, p.TlsSpki, isAdd: false);
 
@@ -237,6 +256,8 @@ public partial class EventApplier
         existing.SourceNodeId = incoming.SourceNodeId;
 
         await whitelistRepoWrite.UpdateAsync(existing);
+        // Another address is another place: what was learned by calling the old one does not count for it, and the new one is tried at once.
+        if (addressMoved) peerState?.PeerChanged(p.NodeId);
     }
 
     private async Task ApplyMasterPasswordChangedAsync(SyncEvent evt)

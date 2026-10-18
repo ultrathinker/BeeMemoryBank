@@ -68,26 +68,27 @@
             }
         }
 
-        btn.addEventListener('click', async function () {
+        btn.addEventListener('click', function () {
             var target = (input.value || '').trim() || '/';
-            try {
-                var lookupResp = await fetch('/api-proxy/folders/search?q=' + encodeURIComponent(currentPath) + '&limit=20');
-                var lookup = await lookupResp.json();
+            // A long operation (BMB-311): a big folder takes a while; the pop-up covers the page and a refusal is written in the dialog.
+            bmbBusy.run(btn, async function () {
+                var lookup = (await bmbBusy.request('/api-proxy/folders/search?q=' + encodeURIComponent(currentPath) + '&limit=20')).body || {};
                 var match = (lookup.folders || []).find(function (f) { return f.path === currentPath; });
-                if (!match) { showCopyErr('Could not locate source folder'); return; }
-                var resp = await fetch('/api-proxy/folder/' + match.id + '/copy', {
+                if (!match) throw new Error('Could not locate source folder');
+                await bmbBusy.request('/api-proxy/folder/' + match.id + '/copy', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ targetParentPath: target })
                 });
-                if (resp.ok) {
-                    dlg.hide();
-                    window.location.href = '/Folder?path=' + encodeURIComponent(target);
-                } else {
-                    var data = {}; try { data = await resp.json(); } catch (_) {}
-                    showCopyErr(data.error || ('Copy failed (HTTP ' + resp.status + ')'));
-                }
-            } catch (e) { showCopyErr(String(e)); }
+                dlg.hide();
+                window.location.href = '/Folder?path=' + encodeURIComponent(target);
+            }, {
+                long: true,
+                title: 'Copying the folder',
+                text: 'Please wait. A big folder takes a while. Do not close this page.',
+                quiet: true,
+                error: function (err) { showCopyErr(err.message); }
+            });
         });
     })();
 
@@ -145,15 +146,13 @@
             var folderName = currentPath.replace(/\/$/, '').split('/').pop();
             var newPath = newParentPath.replace(/\/$/, '') + '/' + folderName;
             if (newPath === currentPath) { alert('Already in that folder'); return; }
-            moveBtn.loading = true;
-            fetch('/api-proxy/folders/move?path=' + encodeURIComponent(currentPath), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ newParentPath: newParentPath })
-            }).then(function (r) {
-                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
-                else r.json().then(function (d) { alert(d.error || 'Move failed'); }).catch(function () { alert('Move failed'); });
-            }).catch(function () { alert('Error'); }).finally(function () { moveBtn.loading = false; });
+            bmbBusy.run(moveBtn, function () {
+                return bmbBusy.request('/api-proxy/folders/move?path=' + encodeURIComponent(currentPath), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ newParentPath: newParentPath })
+                }).then(function () { window.location.href = '/Folder?path=' + encodeURIComponent(newPath); });
+            }, { quiet: true });
         });
     }
 
@@ -165,15 +164,13 @@
             var parentPath = currentPath.substring(0, currentPath.replace(/\/$/, '').lastIndexOf('/'));
             var newPath = parentPath + '/' + newName;
             if (newPath === currentPath) return;
-            renameBtn.loading = true;
-            fetch('/api-proxy/folders?path=' + encodeURIComponent(currentPath), {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ newPath: newPath })
-            }).then(function (r) {
-                if (r.ok) window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
-                else r.json().then(function (d) { alert(d.error || 'Rename failed'); }).catch(function () { alert('Rename failed'); });
-            }).catch(function () { alert('Error'); }).finally(function () { renameBtn.loading = false; });
+            bmbBusy.run(renameBtn, function () {
+                return bmbBusy.request('/api-proxy/folders?path=' + encodeURIComponent(currentPath), {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ newPath: newPath })
+                }).then(function () { window.location.href = '/Folder?path=' + encodeURIComponent(newPath); });
+            }, { quiet: true });
         });
     }
 
@@ -195,7 +192,7 @@
         }
         if (addSubDlg) addSubDlg.addEventListener('sl-show', clearAddSubError);
 
-        addSubBtn.addEventListener('click', async function () {
+        addSubBtn.addEventListener('click', function () {
             clearAddSubError();
             var nameInput = document.getElementById('add-subfolder-name');
             var name = (nameInput.value || '').trim();
@@ -203,41 +200,28 @@
                 showAddSubError('Folder name is required.');
                 return;
             }
-            addSubBtn.loading = true;
             var basePath = addSubfolderSelector ? addSubfolderSelector.getEffectivePath() : currentPath;
             var newPath = basePath.replace(/\/$/, '') + '/' + name;
-            try {
-                var r = await fetch('/api-proxy/folders', {
+            bmbBusy.run(addSubBtn, function () {
+                return bmbBusy.request('/api-proxy/folders', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ path: newPath })
-                });
-                if (r.ok) {
+                }).then(function () {
                     addSubDlg.hide();
                     window.location.href = '/Folder?path=' + encodeURIComponent(newPath);
-                    return;
-                }
-                var d = null;
-                try { d = await r.json(); } catch (_) {}
-                showAddSubError((d && d.error) || 'Failed to create folder');
-            } catch (_) {
-                showAddSubError('Network error. Please try again.');
-            } finally {
-                addSubBtn.loading = false;
-            }
+                });
+            }, { quiet: true, error: function (err) { showAddSubError(err.message); } });
         });
     }
 
     var deleteBtn = document.getElementById('btn-confirm-delete-folder');
     if (deleteBtn) {
         deleteBtn.addEventListener('click', function () {
-            deleteBtn.loading = true;
-            fetch('/api-proxy/folders?path=' + encodeURIComponent(currentPath), {
-                method: 'DELETE'
-            }).then(function (r) {
-                if (r.ok) window.location.href = '/Tree';
-                else r.json().then(function (d) { alert(d.error || 'Delete failed'); }).catch(function () { alert('Delete failed'); });
-            }).catch(function () { alert('Error'); }).finally(function () { deleteBtn.loading = false; });
+            bmbBusy.run(deleteBtn, function () {
+                return bmbBusy.request('/api-proxy/folders?path=' + encodeURIComponent(currentPath), { method: 'DELETE' })
+                    .then(function () { window.location.href = '/Tree'; });
+            }, { quiet: true });
         });
     }
 

@@ -30,6 +30,9 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
     /// </summary>
     public const string InternalKeyForTests = TestInternalKey;
 
+    /// <summary>A request with this header reaches its handler with <c>RequestAborted</c> already cancelled: the client has gone away.</summary>
+    public const string ClientGoneHeader = "X-Test-Client-Gone";
+
     private readonly string _tempDir;
 
     /// <summary>A node over a fresh, empty data folder.</summary>
@@ -108,6 +111,9 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
             app.Use(async (ctx, nextMiddleware) =>
             {
                 ctx.Connection.RemoteIpAddress ??= System.Net.IPAddress.Loopback;
+                // A request that says its client is gone (a test of a long write that must stop when the client disconnects): the handler runs with the abort token
+                // already cancelled, which is what the server hands it when the connection drops. The transport of the test stays up, so the exception comes back whole.
+                if (ctx.Request.Headers.ContainsKey(ClientGoneHeader)) ctx.RequestAborted = new CancellationToken(canceled: true);
                 await nextMiddleware();
             });
             next(app);
@@ -138,6 +144,25 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
         using var scope = Services.CreateScope();
         var initService = scope.ServiceProvider.GetRequiredService<InitializationService>();
         await initService.InitializeAsync("admin", displayName, password);
+        // A fixture node is a plain node on purpose (the tests of the plain paths); the setup's seal intent would have the next start of this folder wipe it.
+        scope.ServiceProvider.GetService<BeeMemoryBank.Vault.Sealed.ISealIntents>()?.Complete();
+    }
+
+    /// <summary>
+    /// Sets the node up the way every node is set up since 2.6.2 (BMB-306): an encrypted database and metadata encryption on, as <c>POST /api/init/standalone</c>
+    /// leaves it - and then unlocks it with the password. For the tests of restores, which only an encrypted node takes.
+    /// </summary>
+    public async Task InitializeEncryptedNodeAsync(string displayName = "TestNode", string password = "testPassword")
+    {
+        // What the endpoint does (InitializationService, then FreshNodeSealing), without the password policy of its request: the old tests of restores
+        // use short passwords, and the endpoint itself is covered by FreshNodeSealedSetupTests.
+        using (var scope = Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<InitializationService>().InitializeAsync("admin", displayName, password);
+            await scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Vault.Sealed.FreshNodeSealing>().SealAsync(password, activateMetadata: true);
+        }
+        if (!await Services.GetRequiredService<SessionService>().UnlockAsync(password))
+            throw new InvalidOperationException("The password of the setup does not open the node it just made.");
     }
 
     /// <summary>
@@ -159,7 +184,9 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
             nodeId,
             displayName,
             ed25519PublicKeyB64 = Convert.ToBase64String(publicKey),
-            apiAddress = (string?)null
+            apiAddress = (string?)null,
+            // A 2.6 joiner says so: a host that has switched metadata encryption on takes no other (and one that has not takes it as well).
+            protocolVersion = BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol
         }, opts);
         joinResp.EnsureSuccessStatusCode();
 

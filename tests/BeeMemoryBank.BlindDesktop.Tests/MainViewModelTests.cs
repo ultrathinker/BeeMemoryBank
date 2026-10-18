@@ -484,8 +484,11 @@ public sealed class MainViewModelTests
 
         await rig.Shown(FakeApp.StatusOf(paired: true, loaded: true));
         vm.SyncNowCommand.Execute(null);
-        vm.BackupNowCommand.Execute(null);
         rig.Work.Syncs.Should().Be(1);
+        // BMB-311: a long operation is running, so no second one can be started until the first has ended.
+        vm.BackupNowCommand.CanExecute(null).Should().BeFalse();
+        rig.Work.Report("Sync finished.");
+        vm.BackupNowCommand.Execute(null);
         rig.Work.Backups.Should().Be(1);
         vm.Notice.Should().Be("Backup asked for.");
     }

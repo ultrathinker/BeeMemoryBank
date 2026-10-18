@@ -226,22 +226,20 @@
             var nameInput = document.getElementById('add-folder-sidebar-name');
             var name = (nameInput.value || '').trim();
             if (!name) return;
-            createFolderBtn.loading = true;
             var basePath = addFolderPathSelector ? addFolderPathSelector.getEffectivePath() : '/';
             var path = basePath.replace(/\/$/, '') + '/' + name;
-            fetch('/api-proxy/folders', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path: path })
-            }).then(function (r) {
-                if (r.ok) {
+            // The one busy helper (BMB-311): the button spins; a refusal is written in the dialog, next to it.
+            bmbBusy.run(createFolderBtn, function () {
+                return bmbBusy.request('/api-proxy/folders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: path })
+                }).then(function () {
                     if (addFolderDlg) addFolderDlg.hide();
                     nameInput.value = '';
                     window.location.href = '/Folder?path=' + encodeURIComponent(path);
-                } else {
-                    r.json().then(function (d) { alert(d.error || 'Failed to create folder'); }).catch(function () { alert('Failed to create folder'); });
-                }
-            }).catch(function () { alert('Error'); }).finally(function () { createFolderBtn.loading = false; });
+                });
+            }, { quiet: true });
         });
     }
 

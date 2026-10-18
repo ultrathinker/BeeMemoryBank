@@ -152,7 +152,7 @@ public static class BlindRestoreEndpoints
             {
                 entry.DisplayName = string.IsNullOrWhiteSpace(req.DisplayName) ? "Restored device" : req.DisplayName.Trim();
                 entry.Ed25519PublicKey = publicKey;
-                entry.ApiAddress = req.ApiAddress;
+                entry.ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(req.ApiAddress);   // the one policy for a peer's address: canonical or not stored
                 entry.Status = "A";
                 entry.DeletedAt = null;
                 entry.IsSuperadmin = true;

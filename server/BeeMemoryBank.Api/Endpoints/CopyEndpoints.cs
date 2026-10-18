@@ -41,7 +41,8 @@ public static class CopyEndpoints
 
             try
             {
-                var newId = await copy.CopyArticleAsync(id, req.TargetFolderPath);
+                using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
+                var newId = await copy.CopyArticleAsync(id, req.TargetFolderPath, stop.Token);
                 return Results.Ok(new { newArticleId = newId, targetFolderPath = req.TargetFolderPath });
             }
             catch (KeyNotFoundException ex)
@@ -90,7 +91,8 @@ public static class CopyEndpoints
 
             try
             {
-                var newId = await copy.CopyFolderAsync(id, req.TargetParentPath);
+                using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
+                var newId = await copy.CopyFolderAsync(id, req.TargetParentPath, stop.Token);
                 return Results.Ok(new { newFolderId = newId, targetParentPath = req.TargetParentPath });
             }
             catch (KeyNotFoundException ex)
@@ -109,6 +111,8 @@ public static class CopyEndpoints
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
-        }).RequireInternalKey().WithTags("Copy");
+        }).RequireInternalKey().WithTags("Copy")
+            // A tree is copied once at a time: a repeat of the request would copy it a second time (BMB-311 fix round).
+            .SingleFlight("copy-folder:{id}", "Copying this folder");
     }
 }

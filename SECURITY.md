@@ -213,8 +213,8 @@ design (outer event ids, node ids, Lamport times, sizes and timing; the payloads
 display names; the exact list is `docs/design/protocol4-clear-fields.golden.txt`); copies made before the switch
 (backups, snapshots, an old blind copy's database), which the operator guide asks you to retire.
 
-Design points worth knowing: the switch is one way (no deactivation event; the way back is restoring the backup taken
-before it, losing later changes); a 2.5 node is refused (426) once a node has switched, and a 2.6 node that has not
+Design points worth knowing: the switch is one way (no deactivation event, and no way back from the node: a backup taken
+before it holds the titles in clear, and no restore of the product takes an unencrypted database); a 2.5 node is refused (426) once a node has switched, and a 2.6 node that has not
 pulled the switch yet is still accepted only because it shows the capability; the switch re-asks the master password
 and is refused for agents and while anything blocks it; a locked full node holds sealed events (it cannot open them)
 and serves them onward unchanged, and applies them at unlock in log order with the originator's authority as it was
@@ -232,8 +232,8 @@ encrypts anything by itself. The operator guide is [docs/sealed-database.md](doc
 What it protects against: a stolen disk, a copied data folder, a backup of it, or a cloud snapshot of the volume. The vault and chat
 databases are encrypted page by page (SQLCipher 4 format, SQLite3 Multiple Ciphers) under keys derived from a per-node database key that
 only the master key can unwrap; no table name, title, path, tag, user, agent or chat title is readable in any file the node writes. A locked
-node holds no key in memory. The migration verifies the encrypted copy against the original before it swaps, makes an encrypted
-way-back snapshot first, overwrites and deletes the plain files it replaced, and refuses to start while another plain copy of the vault
+node holds no key in memory. The migration verifies the encrypted copy against the original before it swaps, keeps no copy of the
+plain database (there is no way back from the node), overwrites and deletes the plain files it replaced, and refuses to start while another plain copy of the vault
 lies anywhere in the data folder (found by content, not by name). A node whose folder holds a plain companion beside the encrypted pair
 refuses to start and says why. While locked, a node keeps relaying its peers' sealed events from a small plain *boot store* (wrapped keys,
 the peer list, opaque events); it applies them at the next unlock.

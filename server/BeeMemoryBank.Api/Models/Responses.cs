@@ -262,7 +262,10 @@ public enum RestoreFlowStep
     Finalizing,
     Completed,
     Failed,
-    NeedsAdminDecision
+    NeedsAdminDecision,
+
+    /// <summary>Stopped before the apply because the node was stopping: nothing was replaced (a terminal state, like <see cref="Failed"/>).</summary>
+    Cancelled
 }
 
 public record RestoreProgressResponse(

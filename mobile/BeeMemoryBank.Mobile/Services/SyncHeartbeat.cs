@@ -41,5 +41,5 @@ public static class SyncHeartbeat
     private static DateTime? Parse(string s) =>
         DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.RoundtripKind, out var d) ? d : null;
 
-    private static string Trim(string? s) => string.IsNullOrEmpty(s) ? "?" : (s.Length > 120 ? s[..120] : s);
+    private static string Trim(string? s) => string.IsNullOrEmpty(s) ? "?" : (s.Length > 200 ? s[..200] : s);
 }

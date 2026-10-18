@@ -60,14 +60,14 @@ window.bmbAttachDropZone = function (zone, pickerInput, onFiles) {
     }
 };
 
-window.bmbDownloadChoice = function (withImages) {
+window.bmbDownloadChoice = function (withImages, btn) {
     var dlg = document.getElementById('dlg-download-choice');
     if (!dlg) return;
     var payload = JSON.parse(dlg.dataset.payload || '{}');
     payload.withImages = withImages;
-    dlg.hide();
+    // The dialog stays until the archive is made: a refusal is written in it, next to the button that was pressed (BMB-311).
     if (window.bmbDownload) {
-        window.bmbDownload(payload);
+        window.bmbDownload(payload, btn).then(function (ok) { if (ok) dlg.hide(); });
     }
 };
 
@@ -87,7 +87,7 @@ window.bmbDownloadChoice = function (withImages) {
                 var btn = e.target.closest('[data-download-choice]');
                 if (!btn) return;
                 var withImages = btn.getAttribute('data-download-choice') === 'true';
-                window.bmbDownloadChoice(withImages);
+                window.bmbDownloadChoice(withImages, btn);
             });
         }
     }

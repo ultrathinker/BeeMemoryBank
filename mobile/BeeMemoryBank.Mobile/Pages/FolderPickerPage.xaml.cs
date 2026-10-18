@@ -188,6 +188,7 @@ public partial class FolderPickerPage : ContentPage
         RebuildVisibleList(SearchBar.Text);
     }
 
+    // busy-exempt: adds a folder to the list on this screen only (the folder itself is created when the article is saved), nothing is sent
     private async void OnNewFolderClicked(object? sender, EventArgs e)
     {
         var name = await this.ShowInputPopupAsync("New Folder", "Folder name:",
@@ -251,6 +252,7 @@ public partial class FolderPickerPage : ContentPage
         RebuildVisibleList(e.NewTextValue);
     }
 
+    // busy-exempt: hands the folder picked back to the editor, nothing is sent and nothing waits
     private async void OnSelectClicked(object? sender, EventArgs e)
     {
         if (_selectedPath != null)

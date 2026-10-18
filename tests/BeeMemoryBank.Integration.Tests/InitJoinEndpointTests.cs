@@ -1,6 +1,8 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Storage.Sealed;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -28,6 +30,8 @@ public class InitJoinEndpointTests : IAsyncLifetime
         await _nodeA.InitializeNodeAsync("NodeA", MasterPassword);
         _clientA = _nodeA.CreateClient();
         await UnlockAsync(_clientA, MasterPassword);
+        // A new node joins only a node on protocol 4 (BMB-306).
+        await StepANode.ActivateAsync(_nodeA);
     }
 
     public Task DisposeAsync()
@@ -71,6 +75,10 @@ public class InitJoinEndpointTests : IAsyncLifetime
             nodeAIdentity.Should().NotBeNull();
             nodeAId = nodeAIdentity!.NodeId;
         }
+
+        // A node that joined is encrypted under the password it was given and locked (BMB-306): the files say so, and the password opens it.
+        VaultStoreFiles.DetectMode(nodeB.DataPath).Should().Be(VaultStoreMode.Sealed);
+        (await nodeB.Services.GetRequiredService<SessionService>().UnlockAsync(MasterPassword)).Should().BeTrue();
 
         using (var scopeB = nodeB.Services.CreateScope())
         {
@@ -160,7 +168,7 @@ public class InitJoinEndpointTests : IAsyncLifetime
             NodeId = identity.NodeId,
             ChallengeB64 = challengeData.Challenge,
             SignatureB64 = Convert.ToBase64String(signature),
-            ProtocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
+            ProtocolVersion = BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol   // the joined node is on protocol 4, as its host is
         });
         authResp.EnsureSuccessStatusCode();
         var authData = await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts)

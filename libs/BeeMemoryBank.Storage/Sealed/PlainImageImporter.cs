@@ -76,7 +76,8 @@ public static class PlainImageImporter
 
     private static async Task DeserializeAndVacuumAsync(byte[] head, Stream image, long length, string target, byte[] pageKey, CancellationToken ct)
     {
-        var memory = Marshal.AllocHGlobal(checked((nint)length));
+        // The one place besides the container codec that holds a whole image: asked for under the process limit first, and refused in words when it cannot be had.
+        var memory = MemoryBudget.AllocateNative(length, "Loading an older database image into the encrypted database");
         try
         {
             // Read the image straight into native memory in blocks: the managed heap never holds more than one block of it.
@@ -99,30 +100,7 @@ public static class PlainImageImporter
             }
             Array.Clear(block);
 
-            // An image cannot be in WAL mode (spec Appendix C): bytes 18 and 19 say rollback journal.
-            Marshal.WriteByte(memory, 18, 1);
-            Marshal.WriteByte(memory, 19, 1);
-
-            using var connection = new SqliteConnection("Data Source=:memory:");
-            connection.Open();
-            var rc = raw.sqlite3_deserialize(connection.Handle, "main", memory, length, length, DeserializeReadOnly);
-            if (rc != raw.SQLITE_OK) throw new InvalidDataException($"The image could not be loaded (SQLite result {rc}).");
-            try
-            {
-                using var vacuum = connection.CreateCommand();
-                vacuum.CommandText = "VACUUM INTO " + SqlCipherScheme.VacuumIntoTarget(target, pageKey);
-                vacuum.ExecuteNonQuery();
-            }
-            catch (SqliteException ex) when (ex.SqliteErrorCode is 26 or 11) // not a database / malformed
-            {
-                TryDelete(target);
-                throw new InvalidDataException("The image is not a SQLite database.");
-            }
-            catch
-            {
-                TryDelete(target);
-                throw;
-            }
+            VacuumDeserialized(memory, length, target, pageKey);
         }
         finally
         {
@@ -132,6 +110,83 @@ public static class PlainImageImporter
                 Marshal.Copy(zeros, 0, memory + (nint)offset, (int)Math.Min(zeros.Length, length - offset));
             Marshal.FreeHGlobal(memory);
         }
+    }
+
+    /// <summary>
+    /// <c>sqlite3_deserialize</c> of the image at <paramref name="memory"/> (read only, not freed by SQLite) and <c>VACUUM INTO</c> the keyed target. The memory is
+    /// the caller's and must stay where it is until this returns. On any failure the target is not left behind.
+    /// </summary>
+    private static void VacuumDeserialized(nint memory, long length, string target, byte[] pageKey)
+    {
+        // An image cannot be in WAL mode (spec Appendix C): bytes 18 and 19 say rollback journal.
+        Marshal.WriteByte(memory, 18, 1);
+        Marshal.WriteByte(memory, 19, 1);
+
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        var rc = raw.sqlite3_deserialize(connection.Handle, "main", memory, length, length, DeserializeReadOnly);
+        if (rc != raw.SQLITE_OK) throw new InvalidDataException($"The image could not be loaded (SQLite result {rc}).");
+        try
+        {
+            using var vacuum = connection.CreateCommand();
+            vacuum.CommandText = "VACUUM INTO " + SqlCipherScheme.VacuumIntoTarget(target, pageKey);
+            vacuum.ExecuteNonQuery();
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode is 26 or 11) // not a database / malformed
+        {
+            TryDelete(target);
+            throw new InvalidDataException("The image is not a SQLite database.");
+        }
+        catch
+        {
+            TryDelete(target);
+            throw;
+        }
+    }
+
+    private static (ushort PageSize, byte Reserved) ParseHeader(ArraySegment<byte> image)
+    {
+        if (image.Count < HeaderSize) throw new InvalidDataException("The image is too short to be a SQLite database.");
+        var head = image.AsSpan(0, HeaderSize);
+        if (!head[..16].SequenceEqual(SqlCipherPageFormat.SqliteMagic))
+            throw new InvalidDataException("The image is not a SQLite database.");
+        return (BinaryPrimitives.ReadUInt16BigEndian(head.Slice(16, 2)), head[20]);
+    }
+
+    /// <summary>
+    /// The same as <see cref="ToSealedFileAsync(Stream, long, string, byte[], long, CancellationToken)"/> for an image that already lies in memory: a
+    /// container opened in place (<see cref="Bmbdb2Container.OpenAsync"/>). An older image with no page reserve is deserialized WHERE IT LIES (the buffer is
+    /// pinned, SQLite reads it and never frees it), so the restore of a legacy BMBDB1 snapshot holds ONE whole image, not a managed one and a native copy
+    /// of it. The caller clears the buffer (disposing the image does).
+    /// </summary>
+    public static async Task<SealedImportMethod> ToSealedFileAsync(
+        DecryptedImage image, string target, byte[] pageKey, long memoryCap, CancellationToken ct = default)
+    {
+        var segment = image.Segment;
+        var length = segment.Count;
+        var (pageSize, reserved) = ParseHeader(segment);
+        if (pageSize == SqlCipherPageFormat.PageSize && reserved >= SealedFileWriter.MinReservedBytes && length % SqlCipherPageFormat.PageSize == 0)
+        {
+            await using var stream = image.OpenRead();
+            await SealedFileWriter.WriteAsync(stream, length, target, pageKey, ct).ConfigureAwait(false);
+            return SealedImportMethod.Streamed;
+        }
+
+        if (pageSize != SqlCipherPageFormat.PageSize)
+            throw new InvalidDataException($"The image uses {(pageSize == 1 ? 65536 : pageSize)}-byte pages; only 4096-byte pages can be imported into an encrypted database.");
+        if (length > memoryCap) throw new SealedImportTooLargeException();
+
+        ct.ThrowIfCancellationRequested();
+        var handle = GCHandle.Alloc(segment.Array!, GCHandleType.Pinned);
+        try
+        {
+            VacuumDeserialized(handle.AddrOfPinnedObject() + segment.Offset, length, target, pageKey);
+        }
+        finally
+        {
+            handle.Free();
+        }
+        return SealedImportMethod.Deserialized;
     }
 
     private static void TryDelete(string path)

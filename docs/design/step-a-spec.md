@@ -450,7 +450,9 @@ Response:
 Blocker codes: `peer_not_ready` (one per active row that is not `ready`; revoked rows do not count),
 `vault_locked`, `not_superadmin`, `rotation_pending` (a `tbl_dek_rotation_state` row Proposed or Committing),
 `events_held` (6.8), `already_activated`. CLI: `bmb sync readiness`. Admin page: a "Metadata encryption" card
-with the table, the blockers in words, and the action of 5.4.
+with the table, the blockers in words, and the action of 5.4. The answer of "Ask every device now" sits next to its
+button and stays on the card for ten minutes, a refused switch leaves the form, and once the switch is on the card is
+one status line ("On since ...").
 
 ### 5.4 Activation
 

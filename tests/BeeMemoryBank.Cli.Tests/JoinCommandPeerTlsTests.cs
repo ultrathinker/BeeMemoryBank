@@ -12,6 +12,7 @@ namespace BeeMemoryBank.Cli.Tests;
 /// The peers <c>bmb join</c> inherits from the host's whitelist keep the way the host dials them: a peer in <c>pin</c> mode
 /// stays pinned, so this node checks it by its key and not through the public CAs a self-signed peer never passes.
 /// </summary>
+[Collection("CliSealedStatics")]
 public class JoinCommandPeerTlsTests : IDisposable
 {
     private const string Password = "cliJoinPeerTlsPassword";
@@ -21,6 +22,7 @@ public class JoinCommandPeerTlsTests : IDisposable
 
     public void Dispose()
     {
+        JoinedNode.Reset();
         if (Directory.Exists(_tempDir))
             try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
@@ -53,7 +55,7 @@ public class JoinCommandPeerTlsTests : IDisposable
         try { await serve; } catch (HttpListenerException) when (rc != 0) { }
         rc.Should().Be(0, output.ToString());
 
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         var rows = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
         var b = (await rows.GetByNodeIdAsync(pinned))!;

@@ -1,0 +1,20 @@
+@model BeeMemoryBank.Web.Pages.AdminCardMessage
+@* BMB-303: the result of an action shows in the card of its button, not only at the top of a long page. The handler names the card (AdminCards);
+   the page itself shows the message at the top only when no card claims it. *@
+@if (Model.Page.MessageIsFor(Model.Card))
+{
+    @if (!string.IsNullOrEmpty(Model.Page.SuccessMessage))
+    {
+        <sl-alert variant="success" open closable class="card-message" role="status" style="margin-bottom:12px;">
+            <sl-icon slot="icon" name="check-circle"></sl-icon>
+            @Model.Page.SuccessMessage
+        </sl-alert>
+    }
+    @if (!string.IsNullOrEmpty(Model.Page.ErrorMessage))
+    {
+        <sl-alert variant="danger" open closable class="card-message" role="alert" style="margin-bottom:12px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            @Model.Page.ErrorMessage
+        </sl-alert>
+    }
+}

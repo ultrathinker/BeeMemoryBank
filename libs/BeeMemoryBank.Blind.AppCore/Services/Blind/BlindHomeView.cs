@@ -54,7 +54,8 @@ public sealed record BlindHomeView(
                 : "No identity. Wipe and set the phone up again.",
             CanConnect: pairingCode is not null,
             CanRePair: pairingCode is null && status.IsPaired && !keyStoreDown,
-            CanSyncNow: status.IsPaired && status.InitialLoadDone,
+            // Off while a job runs: a second round asked for next to the first is refused by the loop anyway, and a button that stays on says that it can be used.
+            CanSyncNow: status.IsPaired && status.InitialLoadDone && status.ActiveJob is null,
             CanBackupNow: status.IsPaired && !status.BackupKeyLost && !keyStoreDown && !backupRunning && status.ActiveJob is null,
             BackupNowText: backupRunning || status.ActiveJob is not null ? "Backup is running…" : "Back up now",
             CanSaveTo: status.Backups.Count > 0,

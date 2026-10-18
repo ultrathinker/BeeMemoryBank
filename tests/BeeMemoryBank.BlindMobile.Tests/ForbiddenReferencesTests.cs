@@ -420,7 +420,9 @@ public class ForbiddenReferencesTests
                 // the page shows the shared controller's status (BlindHomeView) and asks it, like the desktop hosts do
                 "IBlindAppController" or "BlindAppStatus" or "BlindAppBackup" or "BlindAppOptions" or "BlindHomeView" or "BlindPaths" or
                 // the store line of the screen (docs/design/step-a-spec.md 10.2): what the copy holds, in the host-facing shape
-                "BlindStoreStats" or "BlindStoreInfo"
+                "BlindStoreStats" or "BlindStoreInfo" or
+                // how the screen knows that the job it started has ended, from the state and not from a clock (BMB-311 fix round)
+                "BlindJobWait" or "BlindJobAsk" or "BlindJobOutcome" or "BlindJobPhase"
                 || typeNs.Equals("BeeMemoryBank.Core.Services.BlindPhone", StringComparison.Ordinal) && typeName is
                 "BlindPhoneState" or "BlindPhoneLog" or "BlindPhoneLog.Entry" or "BlindHeavyWork" or
                 "BlindBackupSchedule" or "BlindPhoneBackupRunner" or

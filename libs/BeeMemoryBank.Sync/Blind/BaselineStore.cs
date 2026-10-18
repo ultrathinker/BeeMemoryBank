@@ -112,7 +112,7 @@ public sealed partial class BaselineStore(
         }
         catch (Exception ex) when (ex is InvalidDataException or System.Text.Json.JsonException)
         {
-            return Refused($"its manifest cannot be read ({ex.Message})");
+            return Refused($"its manifest cannot be read ({ex.GetType().Name})");
         }
         if (!m.ToBytes().AsSpan().SequenceEqual(files.Manifest.ToBytes()))
             return Refused("the manifest bytes are not the manifest given");

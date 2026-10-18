@@ -3,6 +3,7 @@ using BeeMemoryBank.Core.Interfaces;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -10,10 +11,16 @@ namespace BeeMemoryBank.Integration.Tests;
 /// An Api node for the blind-node recovery tests: a chosen machine kind and free memory (which strong
 /// box preset it builds), and optionally the blind role.
 /// </summary>
-/// <remarks><paramref name="superadmin"/>: this node's standing in the network (its peers' my-standing).</remarks>
+/// <remarks>
+/// <paramref name="superadmin"/>: this node's standing in the network (its peers' my-standing). <paramref name="allowOpenCopies"/>: BMB-306 - no restore
+/// reads a copy that holds the vault in the open, in any host a person can start. The recovery engine's own tests (key chain, anchors, clocks) run on
+/// fixtures made before metadata encryption was switched on, so this test host replaces the product's restore service and the end of its restore with the
+/// subclasses of this assembly (<see cref="OpenCopyRecoveryRestoreService"/>, <see cref="OpenCopyFreshNodeSealing"/>); the tests of the rule itself pass
+/// false and see what a product host does.
+/// </remarks>
 public sealed class RecoveryTestFactory(
     RecoveryHostKind kind = RecoveryHostKind.Pc, long availableBytes = 1_900L << 20, bool blind = false, bool superadmin = true,
-    Action<IServiceCollection>? services = null)
+    Action<IServiceCollection>? services = null, bool allowOpenCopies = true)
     : BmbWebApplicationFactory
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -29,6 +36,13 @@ public sealed class RecoveryTestFactory(
         {
 #if !BLIND_NODE_HOST // the blind host has no recovery host (the strong box is built by a node that holds the master key)
             s.AddSingleton<IRecoveryHost>(new FixedHost(kind, availableBytes));
+            if (allowOpenCopies)
+            {
+                // The reader of open copies and the end of a restore that leaves the node open live in this assembly only (OpenCopyRecoveryRestoreService);
+                // the product's own services refuse open copies and always encrypt what they restore.
+                s.Replace(ServiceDescriptor.Singleton<RecoveryRestoreService>(sp => ActivatorUtilities.CreateInstance<OpenCopyRecoveryRestoreService>(sp)));
+                s.Replace(ServiceDescriptor.Scoped<BeeMemoryBank.Vault.Sealed.FreshNodeSealing>(sp => ActivatorUtilities.CreateInstance<OpenCopyFreshNodeSealing>(sp)));
+            }
 #endif
             s.AddSingleton<IOwnStandingProvider>(new FixedStanding(superadmin));
             if (blind) s.AddSingleton<INodeRole>(new EnvironmentNodeRole("blind"));

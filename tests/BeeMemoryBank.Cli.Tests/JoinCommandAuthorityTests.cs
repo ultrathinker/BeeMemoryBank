@@ -17,6 +17,7 @@ namespace BeeMemoryBank.Cli.Tests;
 /// local HTTP listener answering <c>/api/join</c> the way the real endpoint does, and then the challenge, the
 /// authentication and the for-join snapshot of the join (<see cref="FakeJoinHost"/>).
 /// </summary>
+[Collection("CliSealedStatics")]
 public class JoinCommandAuthorityTests : IDisposable
 {
     private const string Password = "cliJoinAuthorityPassword";
@@ -26,6 +27,7 @@ public class JoinCommandAuthorityTests : IDisposable
 
     public void Dispose()
     {
+        JoinedNode.Reset();
         if (Directory.Exists(_tempDir))
             try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
@@ -49,7 +51,7 @@ public class JoinCommandAuthorityTests : IDisposable
         await serve;
         rc.Should().Be(0, output.ToString());
 
-        await using var services = await CliServiceProvider.CreateAsync(_tempDir);
+        await using var services = await JoinedNode.OpenAsync(_tempDir, Password);
         using var scope = services.CreateScope();
         var rows = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
         (await rows.GetByNodeIdAsync(hostId))!.IsSuperadmin.Should().BeTrue("the host proved the master password");
@@ -61,7 +63,7 @@ public class JoinCommandAuthorityTests : IDisposable
 
     private static string JoinResponseJson(FakeJoinHost host, params (Guid NodeId, bool IsSuperadmin)[] peers)
     {
-        var dek = MasterKeyManager.GenerateMasterDek();
+        var dek = host.Dek;
         var salt = KeyDerivation.GenerateSalt();
         var (encDek, iv) = MasterKeyManager.WrapMasterDek(dek, KeyDerivation.DeriveKek(Password, salt));
         string Key() => Convert.ToBase64String(Ed25519Signer.GenerateKeyPair().publicKey);
@@ -71,7 +73,7 @@ public class JoinCommandAuthorityTests : IDisposable
             remoteNode = new
             {
                 nodeId = host.HostId, displayName = "Host", ed25519PublicKeyB64 = host.PublicKeyB64,
-                protocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current
+                protocolVersion = BeeMemoryBank.Sync.Metadata.EventClasses.SealedProtocol
             },
             keySlot = new
             {

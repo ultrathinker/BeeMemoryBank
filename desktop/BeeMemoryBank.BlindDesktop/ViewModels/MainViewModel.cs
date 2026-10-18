@@ -31,6 +31,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly IBlindAutostart _autostart;
     private readonly Func<string, byte[]> _qr;
     private readonly Action<Action> _post;
+    private readonly TimeProvider _time;
     private int _refreshPending;
     private readonly Action<string, Exception>? _problem;
     private bool _applying;
@@ -74,6 +75,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _wipePanelOpen;
     private string _wipeTyped = "";
     private bool _wipeBusy;
+    private bool _busy;
+    private string _busyTitle = "";
+    private string _busyText = "";
+    private bool _busyByJob;
+    private BlindJobAsk? _busyAsk;
+    private string _busyBaseText = "";
+    private BlindAppStatus? _lastStatus;
     private bool _isPaired;
     private IReadOnlyList<BackupRow> _backups = [];
 
@@ -82,10 +90,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <param name="problem">Where a failed command or refresh is written besides the notice on the screen (the error log); tests pass nothing.</param>
     /// <param name="statusArea">What the platform calls the place of the app's icon in the window's own words: "tray" or "menu bar".</param>
     /// <param name="store">What the copy holds (docs/design/step-a-spec.md 10.2), asked now and then off the UI thread for the store line; none means the line stays "unknown".</param>
+    /// <param name="time">The clock of the pop-up's waiting for a job (the system clock; a test moves its own).</param>
     public MainViewModel(IBlindAppController app, IBlindWorkRequests work, IBlindAutostart autostart,
         Func<string, byte[]> qr, Action<Action>? post = null, Action<string, Exception>? problem = null, string statusArea = "tray",
-        Func<CancellationToken, Task<BlindStoreInfo?>>? store = null)
+        Func<CancellationToken, Task<BlindStoreInfo?>>? store = null, TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _storeSource = store;
         StatusArea = statusArea;
         _problem = problem;
@@ -97,16 +107,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         // Every command runs on the UI thread: a failure becomes a notice, it never escapes into the UI loop.
         Action<Exception> failed = CommandFailed;
-        ConnectCommand = new RelayCommand(Connect, () => _canConnect, failed);
-        SyncNowCommand = new RelayCommand(SyncNow, () => _canSyncNow, failed);
-        BackupNowCommand = new RelayCommand(BackupNow, () => _canBackupNow, failed);
-        RePairCommand = new RelayCommand(RePair, () => _canRePair, failed);
+        // While a long operation runs (IsBusy) no command can be started a second time: the pop-up covers the window and the commands are off.
+        ConnectCommand = new RelayCommand(Connect, () => _canConnect && !_busy, failed);
+        SyncNowCommand = new RelayCommand(SyncNow, () => _canSyncNow && !_busy, failed);
+        BackupNowCommand = new RelayCommand(BackupNow, () => _canBackupNow && !_busy, failed);
+        RePairCommand = new RelayCommand(RePair, () => _canRePair && !_busy, failed);
+        // busy-exempt: copies the code to the clipboard, nothing is sent and nothing waits
         CopyPairingCodeCommand = new RelayCommand(() => { if (_pairingCodeText is { } code) CopyRequested?.Invoke(code); },
             () => _pairingCodeText is not null, failed);
+        // busy-exempt: only opens the confirmation panel, nothing is sent and nothing waits
         OpenWipeCommand = new RelayCommand(() => { WipeTyped = ""; WipePanelOpen = true; }, onError: failed);
         CancelWipeCommand = new RelayCommand(() => { WipePanelOpen = false; WipeTyped = ""; }, () => !_wipeBusy, failed);
+        // busy-exempt: leaving the app is the person's own way out and starts nothing
         QuitCommand = new RelayCommand(() => QuitRequested?.Invoke(), onError: failed);
         ConfirmWipeCommand = new RelayCommand(() => _ = WipeAsync(), CanConfirmWipe, failed);
+        _all = new[] { ConnectCommand, SyncNowCommand, BackupNowCommand, RePairCommand, ConfirmWipeCommand, CancelWipeCommand }.Cast<RelayCommand>().ToArray();
 
         _app.Changed += RequestRefresh;
         _work.UserJobReported += OnUserJobReported;
@@ -240,6 +255,81 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public bool WipeBusy { get => _wipeBusy; private set => Set(ref _wipeBusy, value); }
 
+    /// <summary>
+    /// A long operation (connect with its first load, sync, backup, save, wipe) is running (BMB-311): the window shows a "please wait"
+    /// pop-up over everything, and no command can be started a second time until it ends.
+    /// </summary>
+    public bool IsBusy { get => _busy; private set => Set(ref _busy, value); }
+
+    /// <summary>The pop-up's headline.</summary>
+    public string BusyTitle { get => _busyTitle; private set => Set(ref _busyTitle, value); }
+
+    /// <summary>The pop-up's line: what is being waited for, then the running job's own progress.</summary>
+    public string BusyText { get => _busyText; private set => Set(ref _busyText, value); }
+
+    private RelayCommand[] _all = [];
+
+    // ask: the pop-up ends with the job the user asked the scheduler for, judged by the state of the app (BlindJobWait, the model of the phones); with none its
+    // owner ends it.
+    private void BeginBusy(string title, string text, BlindJobAsk? ask = null)
+    {
+        BusyTitle = title;
+        BusyText = text;
+        _busyBaseText = text;
+        _busyByJob = ask is not null;
+        _busyAsk = ask;
+        IsBusy = true;
+        foreach (var command in _all) command.RaiseCanExecuteChanged();
+    }
+
+    private void EndBusy()
+    {
+        if (!_busy) return;
+        IsBusy = false;
+        foreach (var command in _all) command.RaiseCanExecuteChanged();
+        foreach (var row in _backups) (row.SaveCommand as RelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>Starts the long operation <paramref name="ask"/> asks for; when asking itself fails the pop-up does not stay up.</summary>
+    private void AskFor(string title, string text, string kind, Action ask)
+    {
+        // The marks the job will leave are noted now, from the last status that was shown (the UI thread does not read the database).
+        BeginBusy(title, text, new BlindJobAsk(kind, _time.GetUtcNow(), _lastStatus?.LastSyncAt, _lastStatus?.LastBackupAt));
+        try { ask(); }
+        catch
+        {
+            EndBusy();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The pop-up follows the job the user asked for by the STATE of the app, the one model of the phones (<see cref="BlindJobWait.Judge"/>): it ends when the job's
+    /// own mark appears (the first load is done, the time of the last sync or backup moved) or its failure is recorded, and never by a clock while the job runs
+    /// (BMB-311 fix round) or while it is queued behind another one: a job that is asked for and has not started holds the lock, the pop-up and the commands, for the
+    /// queue's grace (two minutes). Only a job that never started and left no mark for longer than that is reported as such. Another job that runs meanwhile (a
+    /// scheduled backup) is NOT the job asked for: it is said to run first, and does not end the wait.
+    /// </summary>
+    private void UpdateBusyFrom(BlindAppStatus status)
+    {
+        if (!_busy || !_busyByJob || _busyAsk is not { } ask) return;
+        var now = _time.GetUtcNow();
+        var outcome = BlindJobWait.Judge(ask, status, running: false, now);
+        switch (outcome.Phase)
+        {
+            case BlindJobPhase.Running:
+                var progress = status.JobProgress is { } p ? $"{status.ActiveJob}: {p:P0}" : status.ActiveJob!;
+                BusyText = now - ask.At > BlindJobWait.StillRunningAfter ? $"{progress} - {BlindJobWait.StillRunningText}" : progress;
+                return;
+            case BlindJobPhase.Queued:
+                BusyText = status.ActiveJob is { } first ? $"{first} is running first; this job starts after it. {_busyBaseText}" : _busyBaseText;
+                return;
+            default:   // Finished, Failed, Unreported
+                if (outcome.Message is { } said) Notice = said;
+                EndBusy();
+                return;
+        }
+    }
     /// <summary>Reads the status again (off the UI thread) and shows it.</summary>
     public async Task RefreshAsync()
     {
@@ -301,6 +391,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             SyncText = $"Last sync: {When(status.LastSyncAt)}";
             BackupText = $"Last backup: {When(status.LastBackupAt)}";
 
+            _lastStatus = status;
+            UpdateBusyFrom(status);
             JobVisible = status.ActiveJob is not null;
             JobText = status.ActiveJob is null ? ""
                 : status.JobProgress is { } p ? $"{status.ActiveJob}: {p:P0}" : status.ActiveJob;
@@ -309,7 +401,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             ScheduleIndex = Math.Max(0, Array.IndexOf(Schedules, status.Schedule));
 
             Backups = status.Backups.Select(b => new BackupRow(b.Name, b.Size,
-                new RelayCommand(() => _ = SaveBackupAsync(b.Name), onError: CommandFailed))).ToList();
+                new RelayCommand(() => _ = SaveBackupAsync(b.Name), () => !_busy, CommandFailed))).ToList();
             LogText = string.Join("\n", status.RecentLog.Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.Message}"));
 
             KeyLostText = status.BackupKeyLost
@@ -325,8 +417,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
             ApplyPairing(status);
 
-            CanSyncNow = status.IsPaired && status.InitialLoadDone;
-            CanBackupNow = status.IsPaired && !status.BackupKeyLost;
+            // A job that runs (a scheduled backup, the one the user asked for) holds the commands that start another: the same rule as the phones' buttons.
+            CanSyncNow = status.IsPaired && status.InitialLoadDone && status.ActiveJob is null;
+            CanBackupNow = status.IsPaired && !status.BackupKeyLost && status.ActiveJob is null;
             ((RelayCommand)CancelWipeCommand).RaiseCanExecuteChanged();
             ((RelayCommand)ConfirmWipeCommand).RaiseCanExecuteChanged();
 
@@ -407,7 +500,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             CallCodeInput = "";
             Notice = "Paired. The first load starts now.";
-            _work.RequestHeavy();
+            // A long operation (BMB-311): the first copy of the data is loaded; the pop-up stays until that job is over.
+            AskFor("Connecting", "Please wait. The first copy of the data is being loaded; this can take a while. You can close the window: the job goes on.", BlindJobWait.FirstLoad, _work.RequestHeavy);
         }
         _ = RefreshAsync();
     }
@@ -428,18 +522,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void SyncNow()
     {
-        _work.RequestSync();
+        AskFor("Syncing", "Please wait while this computer syncs. You can close the window: the job goes on.", BlindJobWait.Sync, _work.RequestSync);
         Notice = "Sync asked for.";
     }
 
     private void BackupNow()
     {
-        _work.RequestBackup();
+        AskFor("Backing up", "Please wait while the backup is made. You can close the window: the job goes on.", BlindJobWait.Backup, _work.RequestBackup);
         Notice = "Backup asked for.";
     }
 
     private async Task SaveBackupAsync(string name)
     {
+        // A long operation (BMB-311): the pop-up stays until the file is saved (or the place was not chosen).
+        BeginBusy("Saving the backup", "Please wait while the backup is copied to the place you chose.");
         try
         {
             var bytes = await _app.ExportBackupAsync(name);
@@ -453,6 +549,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             Notice = $"Could not save the backup: {ex.Message}";
         }
+        finally
+        {
+            EndBusy();
+        }
         await RefreshAsync();
     }
 
@@ -463,6 +563,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (!CanConfirmWipe()) return;
         WipeBusy = true;
+        BeginBusy("Disconnecting and wiping", "Please wait. A running sync or backup is stopped first, then this copy, its keys and its backups are deleted.");
         ((RelayCommand)ConfirmWipeCommand).RaiseCanExecuteChanged();
         ((RelayCommand)CancelWipeCommand).RaiseCanExecuteChanged();
         try
@@ -482,6 +583,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         finally
         {
             WipeBusy = false;
+            EndBusy();
             ((RelayCommand)ConfirmWipeCommand).RaiseCanExecuteChanged();
             ((RelayCommand)CancelWipeCommand).RaiseCanExecuteChanged();
         }
@@ -497,7 +599,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         });
     }
 
-    private void OnUserJobReported(string sentence) => _post(() => Notice = sentence);
+    private void OnUserJobReported(string sentence) => _post(() =>
+    {
+        Notice = sentence;
+        if (_busyByJob) EndBusy();
+    });
 
     private static bool IsFatal(Exception ex) =>
         ex is OutOfMemoryException or AccessViolationException or StackOverflowException or ThreadAbortException;

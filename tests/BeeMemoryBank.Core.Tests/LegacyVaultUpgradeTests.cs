@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
@@ -223,6 +224,195 @@ public class LegacyVaultUpgradeTests : IAsyncDisposable
         (await session.UnlockAsync(Password)).Should().BeTrue(
             "the vault opens with the password it was made with; the sentinel is not a gate");
         session.IsUnlocked.Should().BeTrue();
+    }
+
+    private static async Task<byte[]?> SentinelAsync(DbConnectionFactory factory)
+    {
+        using var conn = factory.CreateConnection();
+        return await conn.ExecuteScalarAsync<byte[]?>("SELECT sentinel_value FROM tbl_node_identity LIMIT 1");
+    }
+
+    /// <summary>
+    /// BMB-308: the comments of <c>InitializationService</c> say a vault without a sentinel is unlocked and then healed, and nothing healed it, so an
+    /// owner's node of the first months could neither carry a key envelope nor verify an encrypted copy. The password unlock now makes the sentinel,
+    /// from the key it has just opened the vault with, and that key passes the check.
+    /// </summary>
+    [Fact]
+    public async Task AVaultWithANullSentinel_GetsOneAtAPasswordUnlock()
+    {
+        var (factory, _, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        using (var conn = factory.CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
+
+        (await session.UnlockAsync(Password)).Should().BeTrue();
+
+        var sentinel = await SentinelAsync(factory);
+        sentinel.Should().NotBeNullOrEmpty("the unlock healed the vault that the old setup left without one");
+        var dek = session.GetMasterDek();
+        MasterKeyManager.VerifySentinel(sentinel!, dek).Should().BeTrue("the sentinel names the key that opened the vault");
+    }
+
+    /// <summary>"Only from an open session, never from a guess": a wrong password opens nothing and writes nothing.</summary>
+    [Fact]
+    public async Task AWrongPassword_MakesNoSentinel()
+    {
+        var (factory, _, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        using (var conn = factory.CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
+
+        (await session.UnlockAsync("not-the-password-1")).Should().BeFalse();
+
+        session.IsUnlocked.Should().BeFalse();
+        (await SentinelAsync(factory)).Should().BeNull("nothing was open, so nothing was proved");
+    }
+
+    /// <summary>Checking a password opens no session; it is not a door the sentinel may be made from.</summary>
+    [Fact]
+    public async Task VerifyingAPassword_MakesNoSentinel()
+    {
+        var (factory, _, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        using (var conn = factory.CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
+
+        (await session.VerifyMasterPasswordAsync(Password)).Should().BeTrue();
+
+        session.IsUnlocked.Should().BeFalse();
+        (await SentinelAsync(factory)).Should().BeNull();
+    }
+
+    /// <summary>A door without a password (an agent key, OS auto-unlock) installs the key it was given; it does not vouch for it.</summary>
+    [Fact]
+    public async Task ADoorWithoutAPassword_MakesNoSentinel()
+    {
+        var (factory, _, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        (await session.UnlockAsync(Password)).Should().BeTrue();
+        var dek = session.GetMasterDek();
+        session.Lock();
+        using (var conn = factory.CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = NULL");
+
+        (await session.TryUnlockWithDekAsync(dek, door: null)).Should().BeTrue();
+
+        session.IsUnlocked.Should().BeTrue();
+        (await SentinelAsync(factory)).Should().BeNull("the next password unlock heals it");
+    }
+
+    // ---- BMB-312/308 fix round: an EMPTY sentinel (X'') is a missing sentinel, exactly like NULL, at every door ----------------------------------------
+
+    /// <summary>The two shapes of "no sentinel": NULL (a vault older than the check) and an empty BLOB (a partly migrated row, the owner's own node).</summary>
+    private static async Task MakeSentinelMissingAsync(DbConnectionFactory factory, bool empty)
+    {
+        using var conn = factory.CreateConnection();
+        await conn.ExecuteAsync(empty ? "UPDATE tbl_node_identity SET sentinel_value = X''" : "UPDATE tbl_node_identity SET sentinel_value = NULL");
+        (await conn.ExecuteScalarAsync<int?>("SELECT length(sentinel_value) FROM tbl_node_identity")).Should().Be(empty ? 0 : null, "the fixture really has the shape it names");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AVaultWithAMissingSentinel_OfEitherShape_OpensWithItsPassword_AndIsHealed(bool empty)
+    {
+        var (factory, _, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        await MakeSentinelMissingAsync(factory, empty);
+
+        (await session.UnlockAsync(Password)).Should().BeTrue("the password is right; a missing sentinel has nothing to disagree with");
+
+        session.IsUnlocked.Should().BeTrue();
+        var sentinel = await SentinelAsync(factory);
+        sentinel.Should().NotBeNullOrEmpty("the unlock healed the shape it found, empty as well as NULL");
+        MasterKeyManager.VerifySentinel(sentinel!, session.GetMasterDek()).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AWrongPassword_IsRefused_AndMakesNoSentinel_ForEitherShape(bool empty)
+    {
+        var (factory, _, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        await MakeSentinelMissingAsync(factory, empty);
+
+        (await session.UnlockAsync("not-the-password-1")).Should().BeFalse();
+
+        session.IsUnlocked.Should().BeFalse();
+        (await SentinelAsync(factory)).Should().BeNullOrEmpty("a wrong password proves nothing, so nothing is written");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ADoorWithoutAPassword_OpensAVaultWithAMissingSentinel_OfEitherShape_AndMakesNone(bool empty)
+    {
+        var (factory, _, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        (await session.UnlockAsync(Password)).Should().BeTrue();
+        var dek = session.GetMasterDek();
+        session.Lock();
+        await MakeSentinelMissingAsync(factory, empty);
+
+        (await session.TryUnlockWithDekAsync(dek, door: null)).Should().BeTrue("there is no sentinel to refuse the key; this is how a NULL one always behaved");
+
+        session.IsUnlocked.Should().BeTrue();
+        (await SentinelAsync(factory)).Should().BeNullOrEmpty("a door without a password does not vouch for the key; the next password unlock heals");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ASentinelThatNamesAnotherKey_IsStillRefused_AndNotHealed(bool viaDoor)
+    {
+        var (factory, _, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        (await session.UnlockAsync(Password)).Should().BeTrue();
+        var dek = session.GetMasterDek();
+        session.Lock();
+        var foreign = MasterKeyManager.ComputeSentinel(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+        using (var conn = factory.CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_node_identity SET sentinel_value = @foreign", new { foreign });
+
+        var opened = viaDoor ? await session.TryUnlockWithDekAsync(dek, door: null) : await session.UnlockAsync(Password);
+
+        opened.Should().BeFalse("a sentinel that is there and names another key is the one case that must still refuse");
+        session.IsUnlocked.Should().BeFalse();
+        (await SentinelAsync(factory)).Should().Equal(foreign, "and a present sentinel is never replaced");
+    }
+
+    [Fact]
+    public void TheOnePredicate_CallsNullAndEmptyMissing_AndNothingElse()
+    {
+        MasterKeyManager.IsSentinelMissing(null).Should().BeTrue();
+        MasterKeyManager.IsSentinelMissing([]).Should().BeTrue();
+        MasterKeyManager.IsSentinelMissing([0]).Should().BeFalse("a value that is there is verified, never skipped");
+        MasterKeyManager.IsSentinelMissing(MasterKeyManager.ComputeSentinel(new byte[32])).Should().BeFalse();
+    }
+
+    /// <summary>The conditional store is one statement: of several healers that raced, exactly one stored its sentinel, and nobody replaced it.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OfManyConcurrentHealers_ExactlyOneStoresTheSentinel_AndNobodyOverwritesIt(bool empty)
+    {
+        var (factory, _, _) = await BuildLegacyVaultAsync(keepUsers: true);
+        await MakeSentinelMissingAsync(factory, empty);
+        var repo = new NodeIdentityRepository(factory);
+        var candidates = Enumerable.Range(0, 8).Select(_ => MasterKeyManager.ComputeSentinel(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))).ToList();
+
+        var results = await Task.WhenAll(candidates.Select(c => Task.Run(() => repo.StoreSentinelIfMissingAsync(c))));
+
+        results.Count(r => r).Should().Be(1, "the check and the write are one statement");
+        var stored = (await SentinelAsync(factory))!;
+        candidates.Count(c => c.SequenceEqual(stored)).Should().Be(1);
+        (await repo.StoreSentinelIfMissingAsync(candidates[0].Concat(new byte[] { 1 }).ToArray())).Should().BeFalse("a sentinel that is there is not replaced by a later healer");
+        (await SentinelAsync(factory)).Should().Equal(stored);
+    }
+
+    [Fact]
+    public async Task ASentinelThatIsThere_IsNotRewritten()
+    {
+        var (factory, _, session) = await BuildLegacyVaultAsync(keepUsers: true);
+        var before = await SentinelAsync(factory);
+        before.Should().NotBeNullOrEmpty();
+
+        (await session.UnlockAsync(Password)).Should().BeTrue();
+
+        (await SentinelAsync(factory)).Should().Equal(before, "a sentinel is never replaced by an unlock (a fresh one has a new random IV)");
     }
 
     /// <summary>

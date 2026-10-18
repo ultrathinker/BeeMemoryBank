@@ -49,6 +49,7 @@ public partial class CreateStorageDialog : Window
         Close(dialogResult: false);
     }
 
+    // busy-exempt: opens the system folder picker, nothing is sent and nothing waits on the node
     private async void OnBrowseClick(object? sender, RoutedEventArgs e)
     {
         var path = await FolderPicker.PickAsync(this, "Choose an empty folder for the new profile");
@@ -87,35 +88,32 @@ public partial class CreateStorageDialog : Window
             }
         }
 
-        CreateButton.IsEnabled = false;
         CancelButton.IsEnabled = false;
         try
         {
-            // AddProfile is synchronous (atomic file write under a lock) but wrapped in a
-            // Task.Run so any disk IO does not freeze the dialog and any thrown exception
-            // (duplicate dataPath, IO error) is surfaced inline rather than via the
-            // unhandled-exception handler.
-            var created = await Task.Run(() =>
-                _profiles.AddProfile(validation.Name!, validation.ExplicitDataPath));
+            // The one busy helper (BMB-311) disables the button, shows its loader and puts a failure in the error line below it.
+            await BusyAction.RunAsync(this, CreateButton, async () =>
+            {
+                try
+                {
+                    // AddProfile is synchronous (atomic file write under a lock) but wrapped in a
+                    // Task.Run so any disk IO does not freeze the dialog and any thrown exception
+                    // (duplicate dataPath, IO error) is surfaced inline rather than via the
+                    // unhandled-exception handler.
+                    var created = await Task.Run(() =>
+                        _profiles.AddProfile(validation.Name!, validation.ExplicitDataPath));
 
-            CreatedProfile = created;
-            Close(dialogResult: true);
-        }
-        catch (ArgumentException aex)
-        {
-            ShowError(aex.Message);
-        }
-        catch (InvalidOperationException ioex)
-        {
-            ShowError(ioex.Message);
-        }
-        catch (Exception ex)
-        {
-            ShowError($"Could not create the profile: {ex.Message}");
+                    CreatedProfile = created;
+                    Close(dialogResult: true);
+                }
+                catch (Exception ex) when (ex is not ArgumentException and not InvalidOperationException)
+                {
+                    throw new InvalidOperationException($"Could not create the profile: {ex.Message}", ex);
+                }
+            }, new BusyOptions { Result = (ok, text) => { if (!ok) ShowError(text); } });
         }
         finally
         {
-            CreateButton.IsEnabled = true;
             CancelButton.IsEnabled = true;
         }
     }

@@ -34,12 +34,15 @@ public sealed class Format2TestNode : IDisposable
 
     public string DbPath => Path.Combine(DataPath, "beememorybank.db");
 
-    public static async Task<Format2TestNode> CreateAsync(Guid? nodeId = null, string name = "node")
+    /// <param name="sealedVault">The node's database is a SEALED (encrypted) file under a random page key, as a full node after "Encrypt this node".</param>
+    public static async Task<Format2TestNode> CreateAsync(Guid? nodeId = null, string name = "node", bool sealedVault = false)
     {
         DapperConfig.Configure();
         var dir = Path.Combine(Path.GetTempPath(), "bmb_f2_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
-        var factory = new DbConnectionFactory(Path.Combine(dir, "beememorybank.db"));
+        var factory = sealedVault
+            ? DbConnectionFactory.CreateSealedForTests("f2sealed")
+            : new DbConnectionFactory(Path.Combine(dir, "beememorybank.db"));
         await new MigrationRunner(factory).RunMigrationsAsync();
         var (pub, priv) = Ed25519Signer.GenerateKeyPair();
         var identity = new NodeIdentity

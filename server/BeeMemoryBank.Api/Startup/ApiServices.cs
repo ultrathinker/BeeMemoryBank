@@ -63,6 +63,8 @@ builder.Services.AddRecoveryApi();
 builder.Services.AddSingleton<SyncTokenStore>();
 // Per-node, not per-process: see SyncChallengeRateLimiter.
 builder.Services.AddSingleton<BeeMemoryBank.Api.Endpoints.SyncEndpoints.SyncChallengeRateLimiter>();
+// The leases of the long operations (BMB-311): per node as well, so two nodes hosted by one process never refuse each other.
+builder.Services.AddSingleton<BeeMemoryBank.Api.Helpers.LongOperationGate>();
 // The "forgot your password" endpoint's attempt buckets and pending announcement. A blind node has no
 // users, no session endpoints and nobody to reset, so it does not carry it.
 if (!role.IsBlind)
@@ -136,10 +138,11 @@ builder.Services.AddTransient<HttpClient>(sp =>
 // Named client for outbound requests to a caller-supplied URL, where the ONLY thing standing
 // between us and an internal address is a check on the host we were given. The default handler
 // follows redirects, so a host that passes that check can 302 the request onto loopback or a
-// metadata endpoint and the check is bypassed. Used by /api/sync/probe-relay; mirrors the same
-// hardening on OpenRouterClient (below) and ChatEndpoints' ImageFetchClient.
+// metadata endpoint and the check is bypassed. Used by /api/sync/probe-relay and by a join by a typed address; mirrors the same
+// hardening on OpenRouterClient (below) and ChatEndpoints' ImageFetchClient. It also opens its sockets through the checked connect (a NAME that
+// resolves to a link-local or cloud-metadata address is never dialled) and uses no proxy: PeerHttp.NoRedirectHandler.
 builder.Services.AddHttpClient(BeeMemoryBank.Api.Endpoints.SyncEndpoints.NoRedirectClientName)
-    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(() => BeeMemoryBank.Crypto.PeerHttp.NoRedirectHandler());
 builder.Services.AddHttpContextAccessor();
 
 // Route CallerScope through HttpContext.Items so it survives child DI scopes.
@@ -234,7 +237,10 @@ BlindRoleServices.AddMediaStorage(builder.Services, dataPath);
 // so it can never collide with BeeMemoryBank.Storage.DbConnectionFactory. NOT registered via
 // AddStorage; schema created by ChatDbInitializer (not MigrationRunner / Storage/Migrations).
 // See docs/ai-chat-implementation-plan.md §1 ("Chat DB").
-builder.Services.AddSingleton(new ChatDbConnectionFactory(dataPath));
+// Built on first use, never at registration: its constructor opens a keep-alive connection to chat.db, and AddSealedVault replaces this registration with
+// a keyed factory. An instance made here would be left behind by that, still holding the file open - on Windows no rename of chat.db (the swap of
+// "Encrypt this node", the setup that ends with it) can pass until a garbage collection happens to finalize that orphan.
+builder.Services.AddSingleton(_ => new ChatDbConnectionFactory(dataPath));
 // The node chat key every chat.db ciphertext is sealed under (itself wrapped under the master DEK
 // in tbl_node_data_key, which DEK rotation carries forward). Singleton: it caches the unwrapped key while
 // the vault is unlocked and wipes it on SessionService.Locked.

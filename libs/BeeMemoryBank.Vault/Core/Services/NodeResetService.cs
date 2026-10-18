@@ -40,7 +40,7 @@ public sealed record NodeResetResult(NodeResetOutcome Outcome, Guid? OldNodeId =
 /// <para>
 /// A sealed node (docs/design/step-b-spec.md 13.1) is reset keyed, with the master password (a closed database is opened for the action only);
 /// then the gate closes, the boot store and the encrypted databases - empty by now - are deleted, and the node is an uninitialized plain node.
-/// <c>snapshots/</c> and <c>pre-encryption/</c> stay: the way back of 10.7 needs them.
+/// <c>snapshots/</c> stays.
 /// </para>
 /// </summary>
 public sealed class NodeResetService(
@@ -139,6 +139,9 @@ public sealed class NodeResetService(
                 // account's permissions.
                 FolderAccessService.InvalidateAll();
 
+                // The node is empty again: a setup, join or restore that was waiting for its encryption has nothing left to wait for.
+                BeeMemoryBank.AppPaths.SealIntent.Complete(dataPath);
+
                 return new NodeResetResult(NodeResetOutcome.Done, identity.NodeId, sealedNode);
             }
             finally
@@ -153,9 +156,49 @@ public sealed class NodeResetService(
     }
 
     /// <summary>
+    /// Takes back a setup, join or restore that failed after it began (its seal intent is pending) and the node is not encrypted: every content and identity
+    /// table is emptied, the media files and what the hooks own go, and the intent ends - the node is the empty node it was before, and the flow is run
+    /// again. No password is asked: nothing here is a node yet, and the method is not reachable from any route (the flows call it on their own failure).
+    /// Returns false when nothing was pending, when the pending operation is not the calling flow's own (<see cref="BeeMemoryBank.AppPaths.SealIntent.OwnsPending"/>:
+    /// a flow that failed before it began, or whose begin was refused, never takes back what another operation is writing), when the node is encrypted (then the
+    /// encryption, not this, decides), or when the wipe itself failed; the intent then stays and the next start wipes what is in the open
+    /// (<see cref="BeeMemoryBank.AppPaths.SealIntent"/>).
+    /// </summary>
+    public async Task<bool> DiscardPendingSetupAsync(string reason, CancellationToken ct = default)
+    {
+        if (!BeeMemoryBank.AppPaths.SealIntent.IsPending(dataPath) || !BeeMemoryBank.AppPaths.SealIntent.OwnsPending(dataPath) || gate is { IsSealed: true }) return false;
+        logger.LogWarning("A setup of this node failed ({Reason}); what it wrote in the open is being removed.", reason);
+        maintenance.Enter("Taking back the setup...");
+        try
+        {
+            session.Lock();
+            WipeVaultDatabase();
+            var mediaDir = Path.Combine(dataPath, "media");
+            if (Directory.Exists(mediaDir))
+                foreach (var f in Directory.GetFiles(mediaDir, "*.enc")) File.Delete(f);
+            foreach (var hook in hooks)
+            {
+                try { await hook.AfterVaultWipedAsync(ct); }
+                catch (Exception ex) { logger.LogWarning(ex, "Reset hook {Hook} failed while taking back a setup (non-fatal)", hook.GetType().Name); }
+            }
+            FolderAccessService.InvalidateAll();
+            return BeeMemoryBank.AppPaths.SealIntent.Complete(dataPath);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "The setup could not be taken back ({Type}); the next start removes what it wrote.", ex.GetType().Name);
+            return false;
+        }
+        finally
+        {
+            maintenance.Exit();
+        }
+    }
+
+    /// <summary>
     /// The end of the reset of a sealed node (spec 13.1): the gate closes (the boot store is not rewritten: it is about to go), the session forgets
     /// its key, the boot store and the two databases - empty tables now - are deleted, and the gate is a plain gate again. Nothing here removes
-    /// <c>snapshots/</c>, <c>pre-encryption/</c> or anything else.
+    /// <c>snapshots/</c> or anything else.
     /// </summary>
     private async Task ReturnToPlainAsync(CancellationToken ct)
     {
@@ -177,6 +220,7 @@ public sealed class NodeResetService(
         if (conn.State != System.Data.ConnectionState.Open) conn.Open();
 
         Exec(conn, "PRAGMA foreign_keys = OFF");
+        Exec(conn, "PRAGMA secure_delete = ON");
         using (var tx = conn.BeginTransaction())
         {
             // Enumerate every real content table from the LIVE schema instead of hand-maintaining a
@@ -230,10 +274,31 @@ public sealed class NodeResetService(
                     logger.LogWarning(ex, "Reset: failed to clear table {Table}", table);
                 }
             }
+
+            // The full-text indexes are external-content tables: the delete triggers above only add tombstones, so the old titles, paths and tag names stay
+            // in the index segments (and so in the file) until the index is emptied by its own command.
+            var fullTextIndexes = new List<string>();
+            using (var listFts = conn.CreateCommand())
+            {
+                listFts.Transaction = tx;
+                listFts.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'fts_%' AND sql LIKE 'CREATE VIRTUAL TABLE%' AND sql LIKE '%content=%'";
+                using var reader = listFts.ExecuteReader();
+                while (reader.Read()) fullTextIndexes.Add(reader.GetString(0));
+            }
+            foreach (var fts in fullTextIndexes)
+            {
+                using var emptyCmd = conn.CreateCommand();
+                emptyCmd.Transaction = tx;
+                emptyCmd.CommandText = $"INSERT INTO [{fts}]([{fts}]) VALUES ('delete-all')";
+                try { emptyCmd.ExecuteNonQuery(); }
+                catch (Exception ex) { logger.LogWarning(ex, "Reset: failed to empty the full-text index {Index}", fts); }
+            }
             tx.Commit();
         }
         Exec(conn, "PRAGMA foreign_keys = ON");
         Exec(conn, "VACUUM");
+        // In WAL mode the vacuumed file is in the log until a checkpoint: the pages of the wiped rows stay readable in the main file until it is overwritten.
+        Exec(conn, "PRAGMA wal_checkpoint(TRUNCATE)");
     }
 
     private static void Exec(System.Data.IDbConnection conn, string sql)

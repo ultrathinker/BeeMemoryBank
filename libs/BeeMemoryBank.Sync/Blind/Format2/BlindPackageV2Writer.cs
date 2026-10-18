@@ -163,6 +163,8 @@ public sealed class BlindPackageV2Writer(
     /// <summary>
     /// <c>control.db</c> (spec 8.4): a plain SQLite file holding exactly the tables of <see cref="SnapshotTables.Control"/>,
     /// row for row, same column names. Copied through an ATTACH on one connection, detached again before it goes back.
+    /// The ATTACH names an empty key: on the connection of a SEALED (encrypted) node an attach with no <c>KEY</c> clause gives the new file the
+    /// main database's key, and the blind node, which holds no key, then refuses the whole seed ("file is not a database").
     /// </summary>
     private async Task WriteControlDbAsync(string path, CancellationToken ct)
     {
@@ -170,7 +172,7 @@ public sealed class BlindPackageV2Writer(
             created.Open();
         using var conn = db.CreateConnection();
         if (conn.State != System.Data.ConnectionState.Open) conn.Open();
-        await conn.ExecuteAsync($"ATTACH DATABASE {Quote(path)} AS ctl");
+        await conn.ExecuteAsync($"ATTACH DATABASE {Quote(path)} AS ctl KEY ''");
         try
         {
             foreach (var table in SnapshotTables.Control)

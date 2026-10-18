@@ -15,25 +15,18 @@
         }
     }
 
-    async function postJson(url, body, method) {
-        var resp = await fetch(url, {
-            method: method || 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: body === null ? undefined : JSON.stringify(body)
-        });
-        if (resp.ok) return { ok: true };
-        var msg = 'Request failed (HTTP ' + resp.status + ')';
-        try {
-            var text = await resp.text();
-            if (text) {
-                try {
-                    var data = JSON.parse(text);
-                    if (data && data.error) msg = data.error;
-                    else msg += ': ' + text.slice(0, 300);
-                } catch (e) { msg += ': ' + text.slice(0, 300); }
-            }
-        } catch (e) { }
-        return { ok: false, error: msg };
+    // The one busy helper (BMB-311): the button spins while the node answers and the reason of a refusal comes back in full.
+    // Resolves { ok, error }; the dialog that asked writes the error next to the button.
+    async function postJson(url, body, method, btn) {
+        var outcome = { ok: false, error: 'This is already in progress.' };
+        outcome.ok = await bmbBusy.run(btn || null, function () {
+            return bmbBusy.request(url, {
+                method: method || 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: body === null ? undefined : JSON.stringify(body)
+            });
+        }, { quiet: true, error: function (err) { outcome.error = err.message; } });
+        return outcome;
     }
 
     function normalizeRoleName(raw) {
@@ -83,14 +76,12 @@
         if (problem) { showDlgError('add-role-error', problem); return; }
 
         var btn = document.getElementById('btn-add-role-submit');
-        if (btn) btn.loading = true;
         var result = await postJson('/api-proxy/roles', {
             name: name,
             displayName: document.getElementById('add-role-display').value.trim() || name,
             description: document.getElementById('add-role-description').value.trim() || null,
             basePolicy: document.getElementById('add-role-policy').value
-        });
-        if (btn) btn.loading = false;
+        }, 'POST', btn);
         if (result.ok) window.location = '?msg=' + encodeURIComponent("Role '" + name + "' created");
         else showDlgError('add-role-error', result.error);
     }
@@ -134,13 +125,11 @@
         if (!displayName) { showDlgError('edit-role-error', 'Display Name is required.'); return; }
 
         var btn = document.getElementById('btn-edit-role-submit');
-        if (btn) btn.loading = true;
         var result = await postJson('/api-proxy/roles/' + encodeURIComponent(name), {
             displayName: displayName,
             description: document.getElementById('edit-role-description').value.trim() || null,
             basePolicy: document.getElementById('edit-role-policy').value
-        }, 'PUT');
-        if (btn) btn.loading = false;
+        }, 'PUT', btn);
         if (result.ok) window.location = '?msg=' + encodeURIComponent('Role updated');
         else showDlgError('edit-role-error', result.error);
     }

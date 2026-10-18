@@ -21,6 +21,7 @@
 
     if (select && form) {
         select.addEventListener('sl-change', function () {
+            // bmb-busy-exempt: runs the search again (a GET form); nothing is changed on the node
             form.submit();
         });
     }

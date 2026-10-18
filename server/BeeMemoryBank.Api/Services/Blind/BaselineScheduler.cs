@@ -55,6 +55,7 @@ public sealed class BaselineScheduler(
     private DateTime _lastAttemptAt = DateTime.MinValue;
     private DateTime _nextFailureRetryAt = DateTime.MinValue;
     private readonly SemaphoreSlim _wake = new(0, 1);
+    private readonly SemaphoreSlim _producing = new(1, 1);   // held while a baseline is made, and by a pause
 
     /// <summary>The reason of the request waiting to be served, or null (a test and status reads it).</summary>
     public string? PendingReason
@@ -70,6 +71,22 @@ public sealed class BaselineScheduler(
             _requests++;
         }
         try { _wake.Release(); } catch (SemaphoreFullException) { /* a wake-up is already waiting */ }
+    }
+
+    public async Task<IDisposable> PauseAsync(CancellationToken ct = default)
+    {
+        await _producing.WaitAsync(ct);
+        return new Release(_producing);
+    }
+
+    private sealed class Release(SemaphoreSlim held) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0) held.Release();
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -122,6 +139,8 @@ public sealed class BaselineScheduler(
         if (reason is null) return false;
         if (now - _lastAttemptAt < Debounce || now < _nextFailureRetryAt) return false;
 
+        // A pause (the setup of a node that is about to be encrypted) or a baseline in the making holds this: the request stays, the next tick asks again.
+        if (!await _producing.WaitAsync(0, ct)) return false;
         _lastAttemptAt = now;
         try
         {
@@ -146,6 +165,10 @@ public sealed class BaselineScheduler(
             _nextFailureRetryAt = now + Debounce;
             logger.LogWarning("Baseline ({Reason}) was not produced: {Why}", reason, ex.Message);
             return false;
+        }
+        finally
+        {
+            _producing.Release();
         }
     }
 

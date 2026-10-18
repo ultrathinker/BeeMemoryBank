@@ -44,7 +44,8 @@ public static class BlindNodeManagementEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
-        });
+        })
+            .SingleFlight("blind-add", "Adding a blind node");
 
         group.MapPost("/{nodeId:guid}/reseed", async (Guid nodeId, BlindNodeManager manager, CancellationToken ct) =>
         {
@@ -65,7 +66,8 @@ public static class BlindNodeManagementEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
-        });
+        })
+            .SingleFlight("blind-reseed:{nodeId}", "A reseed of this blind node");
     }
 }
 

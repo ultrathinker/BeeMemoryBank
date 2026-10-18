@@ -14,6 +14,9 @@ namespace BeeMemoryBank.Core.Services;
 /// step fails partway. Articles and folders created during the call are
 /// tracked, and on exception their soft-delete is invoked under the system
 /// scope. Cleanup itself never throws — it surfaces the original error.
+///
+/// Stopping (BMB-311 fix round 3): a copy takes the caller's token and looks at it between its writes - before the first one, before each folder, article and media
+/// record - and a stop is a failure like any other: what was created so far is rolled back, so the vault is left as it was. The rollback itself does not look at the token.
 /// </summary>
 public class CopyService(
     ArticleService articleService,
@@ -34,19 +37,20 @@ public class CopyService(
     /// re-mapped to fresh per-copy media records so the original article can
     /// be deleted without breaking the copy. Returns the new article ID.
     /// </summary>
-    public async Task<Guid> CopyArticleAsync(Guid sourceArticleId, string targetFolderPath)
+    public async Task<Guid> CopyArticleAsync(Guid sourceArticleId, string targetFolderPath, CancellationToken ct = default)
     {
         var createdArticles = new List<Guid>();
         var createdFolders = new List<Guid>();
         var createdMedia = new List<Guid>();
 
+        ct.ThrowIfCancellationRequested();
         // One scope for all the writes of the copy (see ArticleService.BeginAuthoringAsync): a refusal comes before the first one, and
         // the failure rollback below never has to undo articles whose events were already logged.
         using var authoring = await articleService.BeginAuthoringAsync();
         try
         {
             return await CopyArticleInternalAsync(
-                sourceArticleId, targetFolderPath, createdArticles, createdFolders, createdMedia);
+                sourceArticleId, targetFolderPath, createdArticles, createdFolders, createdMedia, ct);
         }
         catch
         {
@@ -61,17 +65,18 @@ public class CopyService(
     /// underneath a (possibly renamed) root. On any failure during traversal,
     /// the partial copy is rolled back via soft-delete (best-effort).
     /// </summary>
-    public async Task<Guid> CopyFolderAsync(Guid sourceFolderId, string targetParentPath)
+    public async Task<Guid> CopyFolderAsync(Guid sourceFolderId, string targetParentPath, CancellationToken ct = default)
     {
         var createdArticles = new List<Guid>();
         var createdFolders = new List<Guid>();
         var createdMedia = new List<Guid>();
 
+        ct.ThrowIfCancellationRequested();
         using var authoring = await articleService.BeginAuthoringAsync();
         try
         {
             return await CopyFolderInternalAsync(
-                sourceFolderId, targetParentPath, createdArticles, createdFolders, createdMedia);
+                sourceFolderId, targetParentPath, createdArticles, createdFolders, createdMedia, ct);
         }
         catch
         {
@@ -80,12 +85,16 @@ public class CopyService(
         }
     }
 
+    /// <summary>Test seam: called after each folder, article or media record the copy has created (a test stops the copy from here, at a known point).</summary>
+    internal Action? AfterWrite { get; set; }
+
     private async Task<Guid> CopyArticleInternalAsync(
         Guid sourceArticleId,
         string targetFolderPath,
         List<Guid> createdArticles,
         List<Guid> createdFolders,
-        List<Guid> createdMedia)
+        List<Guid> createdMedia,
+        CancellationToken ct)
     {
         var source = await articleRepo.GetByIdAsync(sourceArticleId)
             ?? throw new KeyNotFoundException($"Article {sourceArticleId} not found.");
@@ -100,8 +109,10 @@ public class CopyService(
 
         // First, create the article with the original content. The new article
         // ID is needed to link the freshly-copied media records.
+        ct.ThrowIfCancellationRequested();
         var created = await articleService.CreateAsync(newTitle, targetFolderPath, tags.ToList(), sourceContent);
         createdArticles.Add(created.Id);
+        AfterWrite?.Invoke();
 
         // CreateAsync already derived the `protected` flag from the copied BMBENC1 body; carry the
         // reminder hint across too so the copy's lock screen looks identical to the original.
@@ -116,6 +127,7 @@ public class CopyService(
         var idMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var oldMedia in sourceMedia)
         {
+            ct.ThrowIfCancellationRequested();
             var fetched = await mediaService.GetContentAsync(oldMedia.Id);
             if (fetched is null)
             {
@@ -130,6 +142,7 @@ public class CopyService(
                 fetched.Value.fileName, fetched.Value.contentType, fetched.Value.data, created.Id,
                 isAttachment: oldMedia.Kind == "attachment");
             createdMedia.Add(newMedia.Id);
+            AfterWrite?.Invoke();
             idMap[oldMedia.Id.ToString("D")] = newMedia.Id.ToString("D");
         }
 
@@ -144,7 +157,10 @@ public class CopyService(
         });
 
         if (!ReferenceEquals(newContent, sourceContent) && newContent != sourceContent)
+        {
+            ct.ThrowIfCancellationRequested();
             await articleService.UpdateAsync(created.Id, plaintext: newContent);
+        }
 
         return created.Id;
     }
@@ -154,7 +170,8 @@ public class CopyService(
         string targetParentPath,
         List<Guid> createdArticles,
         List<Guid> createdFolders,
-        List<Guid> createdMedia)
+        List<Guid> createdMedia,
+        CancellationToken ct)
     {
         var source = await folderRepo.GetByIdAsync(sourceFolderId)
             ?? throw new KeyNotFoundException($"Folder {sourceFolderId} not found.");
@@ -171,8 +188,10 @@ public class CopyService(
         var newRootName = await ResolveFolderNameCollision(source.Name, targetParentPath);
         var newRootPath = JoinPath(targetParentPath, newRootName);
 
+        ct.ThrowIfCancellationRequested();
         var newRoot = await folderService.CreateAsync(newRootPath);
         createdFolders.Add(newRoot.Id);
+        AfterWrite?.Invoke();
 
         var allFolders = await folderRepo.GetAllActiveAsync();
         var subFolders = allFolders
@@ -184,8 +203,10 @@ public class CopyService(
         {
             var suffix = subfolder.Path[source.Path.Length..]; // includes leading '/'
             var mapped = newRootPath + suffix;
+            ct.ThrowIfCancellationRequested();
             var created = await folderService.CreateAsync(mapped);
             createdFolders.Add(created.Id);
+            AfterWrite?.Invoke();
         }
 
         // Filter at SQL layer (LIKE prefix) instead of loading the entire vault
@@ -199,7 +220,8 @@ public class CopyService(
                 ? sourcePath[source.Path.Length..]
                 : "";
             var targetPath = newRootPath + suffix;
-            await CopyArticleInternalAsync(article.Id, targetPath, createdArticles, createdFolders, createdMedia);
+            ct.ThrowIfCancellationRequested();
+            await CopyArticleInternalAsync(article.Id, targetPath, createdArticles, createdFolders, createdMedia, ct);
         }
 
         return newRoot.Id;

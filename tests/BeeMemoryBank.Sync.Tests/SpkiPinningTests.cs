@@ -43,7 +43,10 @@ public class SpkiPinningTests : SyncTestFixture
     {
         var handler = (SpkiPinGuardHandler)_pins.CreateHandler();
 
-        ((HttpClientHandler)handler.InnerHandler!).AllowAutoRedirect.Should().BeFalse();
+        var inner = (SocketsHttpHandler)handler.InnerHandler!;   // the checked connect needs the sockets handler itself (PeerSocketConnector)
+        inner.AllowAutoRedirect.Should().BeFalse();
+        inner.UseProxy.Should().BeFalse("a proxy would resolve and connect for this node, so the address check would judge the proxy");
+        inner.ConnectCallback.Should().NotBeNull("every name is resolved and checked where the socket is opened");
     }
 
     /// <summary>

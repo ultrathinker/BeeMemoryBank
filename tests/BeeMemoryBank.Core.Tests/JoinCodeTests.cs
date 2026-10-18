@@ -54,32 +54,21 @@ public class JoinCodeTests
     }
 
     [Fact]
-    public void TheDoorsSentence_IsShown_ButOnlyIfItIsOne()
+    public void TheDoorsAnswer_IsToldByItsStatus_ForTheTwoThingsTheDoorSays()
     {
-        JoinCode.ReadDoorError("{\"error\":\"This join code is not valid.\"}").Should().Be("This join code is not valid.");
-        JoinCode.ReadDoorError("{\"Error\":\"Another device is joining with this code right now.\"}").Should().StartWith("Another device");
+        JoinCode.DescribeDoorAnswer(403).Should().Be(JoinCode.DoorRefusedMessage).And.Contain("not valid").And.Contain("Connect a device");
+        JoinCode.DescribeDoorAnswer(409).Should().Be(JoinCode.DoorBusyMessage).And.StartWith("Another device");
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("<html>403</html>")]
-    [InlineData("[\"error\"]")]
-    [InlineData("{\"message\":\"nope\"}")]
-    [InlineData("{\"error\":42}")]
-    [InlineData("{\"error\":\"   \"}")]
-    public void ReadDoorError_IsNullForAnythingElse_SoNoRawBodyIsEverShown(string? body) =>
-        JoinCode.ReadDoorError(body).Should().BeNull();
-
-    [Fact]
-    public void TheDoorsSentence_IsStrippedOfControlCharacters_AndCapped_BecauseItIsShownOnAPage()
-    {
-        var long300 = new string('x', 500);
-
-        JoinCode.ReadDoorError("{\"error\":\"line1\\r\\nline2\\u0007\"}").Should().Be("line1line2");
-        JoinCode.ReadDoorError("{\"error\":\"" + long300 + "\"}")!.Length.Should().Be(300);
-    }
+    [InlineData(200)]
+    [InlineData(400)]
+    [InlineData(401)]
+    [InlineData(404)]
+    [InlineData(500)]
+    [InlineData(502)]
+    public void ForAnyOtherStatus_NothingIsSaid_SoNoTextOfTheOtherComputerIsEverShown(int status) =>
+        JoinCode.DescribeDoorAnswer(status).Should().BeNull();
 
     [Fact]
     public void TheMessages_AreOnePlainSentenceEach_NamingTheNextStep()

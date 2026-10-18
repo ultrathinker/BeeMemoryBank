@@ -9,57 +9,10 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Cli.Tests;
 
 /// <summary>
-/// The CLI writers of a snapshot remove their working copy and the SQLite sidecars of it: a sidecar that cannot be removed fails the command
-/// (repair-required) and the snapshot is never reported as made. The sidecars are planted, or held, where the working copy is removed.
+/// The writer of <c>bmb snapshot create</c> (<see cref="SnapshotCommand.CreateSealedSnapshotAsync"/>) removes its working copy and the SQLite sidecars of
+/// it: a sidecar that cannot be removed fails the command (repair-required) and the snapshot is never reported as made. The sidecars are planted, or
+/// held, where the working copy is removed. (The plain writer is gone with BMB-306: a node in the open makes no snapshot here.)
 /// </summary>
-public sealed class SnapshotCommandStagingTests : IAsyncLifetime
-{
-    private readonly string _dir = Path.Combine(Path.GetTempPath(), "bmb_clistaging_" + Guid.NewGuid().ToString("N"));
-
-    public async Task InitializeAsync() => await InitCommand.HandleAsync(_dir, "StagingNode", "stagingPassword");
-
-    public Task DisposeAsync()
-    {
-        SqliteConnection.ClearAllPools();
-        try { Directory.Delete(_dir, recursive: true); } catch { /* best-effort */ }
-        return Task.CompletedTask;
-    }
-
-    [Fact]
-    public async Task A_plain_snapshot_leaves_none_of_the_sidecars_its_working_copy_had()
-    {
-        var output = new StringWriter();
-
-        var code = await SnapshotCommand.HandleCreateAsync(_dir, output, PlantClearSidecars);
-
-        code.Should().Be(0, output.ToString());
-        StagingEntries().Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task A_plain_snapshot_whose_sidecar_cannot_be_removed_fails_and_is_not_reported_as_made()
-    {
-        var output = new StringWriter();
-
-        var code = await SnapshotCommand.HandleCreateAsync(_dir, output, copy => Directory.CreateDirectory(copy + "-journal"));
-
-        code.Should().Be(1, output.ToString());
-        output.ToString().Should().Contain("repair").And.NotContain("Snapshot created");
-        foreach (var dir in StagingEntries().Where(Directory.Exists)) Directory.Delete(dir, recursive: true);
-    }
-
-    private static void PlantClearSidecars(string copy)
-    {
-        foreach (var suffix in new[] { "-journal", "-wal", "-shm" }) File.WriteAllText(copy + suffix, "clear vault pages");
-    }
-
-    private List<string> StagingEntries() =>
-        Directory.Exists(SnapshotStaging.DirIn(_dir))
-            ? Directory.EnumerateFileSystemEntries(SnapshotStaging.DirIn(_dir)).ToList()
-            : [];
-}
-
-/// <summary>The sealed writer of <c>bmb snapshot create</c> (<see cref="SnapshotCommand.CreateSealedSnapshotAsync"/>) with the same sidecar rules.</summary>
 public sealed class SealedSnapshotCommandStagingTests : IDisposable
 {
     private readonly string _data = Path.Combine(Path.GetTempPath(), "bmb_clisealedstaging_" + Guid.NewGuid().ToString("N"));

@@ -11,8 +11,15 @@ using BeeMemoryBank.Sync;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
-file record RemoteIdentityCheck(Guid NodeId);
-file record SyncStatusEntry(Guid NodeId, DateTime UpdatedAt);
+/// <summary>
+/// One row of the Trusted Nodes "Last contact" column. <c>UpdatedAt</c> keeps its documented meaning, the DELIVERY time: the later of the last pull from the
+/// node and the last push of events to it (<c>0001-01-01</c> when neither exists: a node that only calls in); a client of an earlier version reads it as
+/// before. The contact (the last completed session, either way, whether or not events moved, BMB-313) is in the NEW field <c>LastContactAt</c>, with
+/// <c>Direction</c> (whose call it was), <c>PushedAt</c> (when events last went out) and whether this node's calls to it fail.
+/// </summary>
+file record SyncStatusEntry(
+    Guid NodeId, DateTime UpdatedAt, DateTime? LastContactAt = null, string? Direction = null, DateTime? PushedAt = null, string State = "unknown",
+    DateTime? NotAnsweringSince = null, string? NotAnsweringReason = null);
 
 public static class WhitelistEndpoints
 {
@@ -37,23 +44,32 @@ public static class WhitelistEndpoints
         var group = app.MapGroup("/api/whitelist").WithTags("Whitelist")
             .RequireInternalKey().RequireSuperadmin();
 
-        group.MapGet("/sync-status", async (HttpContext ctx, ISyncPositionRepository syncRepo, ISyncPushPositionRepository pushRepo) =>
+        group.MapGet("/sync-status", async (
+            HttpContext ctx, ISyncPositionRepository syncRepo, ISyncPushPositionRepository pushRepo, IWhitelistRepository whitelistRepo, PeerContactLog contacts,
+            IEventLogRepository eventLogRepo, INodeIdentityRepository nodeRepo, SyncScheduler? scheduler) =>
         {
-
-            // "Last sync" = most recent contact in EITHER direction. sync_position tracks how far
-            // WE pulled FROM a node; push_position tracks how far a node pulled FROM us / reported.
-            // Private nodes (no API address) are never pulled from, so their only signal is the
-            // push position — using sync_position alone left them at DateTime.MinValue (rendered
-            // as a nonsensical "739772d ago").
-            var latest = new Dictionary<Guid, DateTime>();
-            foreach (var p in await syncRepo.GetAllAsync())
-                if (!latest.TryGetValue(p.RemoteNodeId, out var cur) || p.UpdatedAt > cur)
-                    latest[p.RemoteNodeId] = p.UpdatedAt;
-            foreach (var p in await pushRepo.GetAllAsync())
-                if (!latest.TryGetValue(p.RemoteNodeId, out var cur) || p.PushedAt > cur)
-                    latest[p.RemoteNodeId] = p.PushedAt;
-
-            return Results.Ok(latest.Select(kv => new SyncStatusEntry(kv.Key, kv.Value)));
+            // "Last contact" = the last successful session in EITHER direction, as the sync status of the header reads it (PeerContactView): this node's own call
+            // (the pull position a finished pull leaves, and this process's record of it) or the peer's call (its authentication, its token on a request).
+            // It used to be the later of the pull and the push position, and only the pull position says that THIS node called: a push position moves when
+            // events go out or when the peer reports, so a node with no address (never pulled from: a phone) showed the time of its last event, and in a
+            // quiet network nothing at all (once "739772d ago", before pre-2000 times were treated as never).
+            var identity = await nodeRepo.GetAsync();
+            var pulls = (await syncRepo.GetAllAsync()).ToDictionary(p => p.RemoteNodeId, p => (DateTime?)p.UpdatedAt);
+            var pushes = (await pushRepo.GetAllAsync()).ToDictionary(p => p.RemoteNodeId);
+            var headSeq = await eventLogRepo.GetMaxSequenceAsync();
+            var entries = new List<SyncStatusEntry>();
+            foreach (var node in (await whitelistRepo.GetAllActiveAsync()).Where(n => n.NodeId != identity?.NodeId))
+            {
+                pushes.TryGetValue(node.NodeId, out var push);
+                var pulled = pulls.GetValueOrDefault(node.NodeId);
+                var view = PeerContactView.Build(node, contacts.Get(node.NodeId, node.ApiAddress), pulled, push, headSeq, 0, DateTime.UtcNow, scheduler?.Interval);
+                if (view.LastContactAt is null && view.LastPushAt is null && view.NotAnsweringSince is null) continue;
+                // UpdatedAt: the delivery time of before (the later of the pull position and the push position); the contact is the new LastContactAt.
+                var delivered = new[] { pulled ?? default, push?.PushedAt ?? default }.Max();
+                entries.Add(new SyncStatusEntry(node.NodeId, delivered, view.LastContactAt, view.LastContactDirection, view.LastPushAt,
+                    view.State, view.NotAnsweringSince, view.NotAnsweringReason));
+            }
+            return Results.Ok(entries);
         });
 
         // POST /api/whitelist/backfill-revokes — heal legacy revoked rows that carry no
@@ -98,7 +114,8 @@ public static class WhitelistEndpoints
                 : Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
         });
 
-        // PUT /api/whitelist/{nodeId} — update ApiAddress and CanGenerateEmbeddings
+        // PUT /api/whitelist/{nodeId} — update DisplayName and CanGenerateEmbeddings. NOT the address: that has one door, /address below
+        // (BMB-307 fix round: this route used to take ApiAddress with no password, no check of what answers there and no validation).
         group.MapPut("/{nodeId:guid}", async (
             Guid nodeId,
             UpdateWhitelistEntryRequest req,
@@ -110,23 +127,23 @@ public static class WhitelistEndpoints
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
+            // A client that still sends the address gets an answer, not a silent drop: the change it asked for would not be made.
+            if (req.ApiAddress != null)
+                return Results.BadRequest(new ErrorResponse(
+                    $"The address is not changed here. Use PUT /api/whitelist/{nodeId}/address (master password; the new address is checked first)."));
+
             var entry = await repo.GetByNodeIdAsync(nodeId, includeDeleted: true);
             if (entry == null || entry.Status != "A")
                 return Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
 
             if (req.DisplayName != null) entry.DisplayName = req.DisplayName;
-            // Normalize the same way /api/join and the /address endpoint below do: every consumer
-            // builds request URLs as $"{apiAddress}/api/sync/...", so a stored trailing slash
-            // yields a double slash and a 404. The sync clients trim defensively too, but the
-            // stored value also travels to other nodes, so keep the table itself clean.
-            if (req.ApiAddress != null) entry.ApiAddress = req.ApiAddress.Trim().TrimEnd('/');
             if (req.CanGenerateEmbeddings.HasValue) entry.CanGenerateEmbeddings = req.CanGenerateEmbeddings.Value;
 
             // Tell the mesh, and stamp the row with the version that event published — the same
             // shape the /superadmin and /address handlers below already use. The event IS the
-            // sync: without it, renaming a peer or changing its address here stays a purely
-            // local edit and every other node keeps the old values forever.
-            var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, entry.ApiAddress, entry.DisplayName);
+            // sync: without it, renaming a peer here stays a purely local edit and every other
+            // node keeps the old values forever.
+            var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, apiAddress: null, entry.DisplayName);
 
             entry.UpdatedAt = DateTime.UtcNow;
             entry.LamportTs = version.LamportTs;
@@ -191,16 +208,15 @@ public static class WhitelistEndpoints
             return Results.Ok(WhitelistEntryResponse.From(entry));
         }).RequireSuperadmin().RequireNonAgent();
 
-        // PUT /api/whitelist/{nodeId}/address — change node URL with validation
+        // PUT /api/whitelist/{nodeId}/address — change node URL with validation. Superadmin (the group), NOT an agent (a local agent key would otherwise
+        // act as a superadmin here), the master password, and then PeerAddressService: the one writer of a peer's address, shared with the phone.
         group.MapPut("/{nodeId:guid}/address", async (
             Guid nodeId,
             ChangeNodeAddressRequest req,
-            IWhitelistRepository repo,
-            IEventLogger eventLogger,
             SessionService session,
-            INodeIdentityRepository nodeIdentityRepo,
-            IHttpClientFactory httpClientFactory,
-            HttpContext ctx) =>
+            PeerAddressService addresses,
+            HttpContext ctx,
+            CancellationToken ct) =>
         {
 
             // 1. Re-authenticate. The whitelist_update event below is signed with the node identity
@@ -213,58 +229,18 @@ public static class WhitelistEndpoints
             if (!await session.VerifyMasterPasswordAsync(req.Password))
                 return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 403);
 
-            var entry = await repo.GetByNodeIdAsync(nodeId, includeDeleted: true);
-            if (entry == null || entry.Status != "A")
-                return Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
-
-            // 2. Cannot change your own URL
-            var localIdentity = await nodeIdentityRepo.GetAsync();
-            if (localIdentity != null && localIdentity.NodeId == nodeId)
-                return Results.BadRequest(new ErrorResponse("Cannot change the URL of your own node"));
-
-            // 3. Verify that the new URL responds and belongs to the same node
-            var newUrl = req.NewApiAddress.Trim().TrimEnd('/');
-            if (!newUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                && !newUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                newUrl = "https://" + newUrl;
-            try
+            // Everything else - the peer, not this node, the policy and the canonical form, no change when nothing changes, no other peer's address, what
+            // answers there (a sync server, with this node id AND the key on record), the event, the loop's memory, the audit line - is the service's.
+            // Its messages never quote the address.
+            var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
+            var result = await addresses.ChangeAsync(nodeId, req.NewApiAddress, actor, "web", ct: ct);
+            return result.Outcome switch
             {
-                var http = httpClientFactory.CreateClient();
-                http.Timeout = TimeSpan.FromSeconds(10);
-                var resp = await http.GetAsync($"{newUrl}/api/sync/identity");
-                resp.EnsureSuccessStatusCode();
-                var identity = await resp.Content.ReadFromJsonAsync<RemoteIdentityCheck>();
-                if (identity == null)
-                    return Results.BadRequest(new ErrorResponse("Failed to get identity from the remote node"));
-                if (identity.NodeId != nodeId)
-                    return Results.BadRequest(new ErrorResponse(
-                        $"NodeId at the new URL ({identity.NodeId}) does not match the expected ({nodeId}). This is a different node!"));
-            }
-            catch (Exception ex)
-            {
-                return Results.BadRequest(new ErrorResponse($"Failed to connect to {newUrl}: {ex.Message}"));
-            }
-
-            // 4. Verify that the URL is not already used by another node
-            var allEntries = await repo.GetAllActiveAsync();
-            var conflict = allEntries.FirstOrDefault(e => e.NodeId != nodeId
-                && string.Equals(e.ApiAddress, newUrl, StringComparison.OrdinalIgnoreCase));
-            if (conflict != null)
-                return Results.BadRequest(new ErrorResponse($"URL is already used by node {conflict.DisplayName}"));
-
-            // 5. Sync event first — it mints the version the row has to carry, so that a peer's
-            //    concurrent address change is judged against what this node actually announced.
-            var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, newUrl, null);
-
-            // 6. Update
-            entry.ApiAddress = newUrl;
-            entry.UpdatedAt = DateTime.UtcNow;
-            entry.LamportTs = version.LamportTs;
-            entry.SourceNodeId = version.SourceNodeId;
-            await repo.UpdateAsync(entry);
-
-            return Results.Ok(WhitelistEntryResponse.From(entry));
-        });
+                PeerAddressOutcome.NotFound => Results.NotFound(new ErrorResponse(result.Message)),
+                _ when result.Succeeded => Results.Ok(WhitelistEntryResponse.From(result.Entry!)),
+                _ => Results.BadRequest(new ErrorResponse(result.Message)),
+            };
+        }).RequireNonAgent();
 
         // PUT /api/whitelist/{nodeId}/hub — let blind copies call this node, or stop (ADR 0007)
         //
@@ -285,6 +261,7 @@ public static class WhitelistEndpoints
             HubTrustProbe probe,
             BeeMemoryBank.Sync.Blind.SpkiPinRegistry pins,
             IAuditLogRepository auditRepo,
+            PeerAddressService addresses,
             HttpContext ctx,
             CancellationToken ct) =>
         {
@@ -315,16 +292,9 @@ public static class WhitelistEndpoints
                     return Results.Ok(new HubSetResponse(WhitelistEntryResponse.From(entry), null, false, null));
 
                 // "" takes the pin off for a node that predates the mode as well (WhitelistUpdatePayload).
-                var offVersion = await eventLogger.LogWhitelistUpdateAsync(nodeId, apiAddress: null, displayName: null,
-                    tlsSpki: "", tlsTrust: BlindTrust.None);
-                entry.TlsSpki = null;
-                entry.TlsTrust = null;
-                entry.UpdatedAt = DateTime.UtcNow;
-                entry.LamportTs = offVersion.LamportTs;
-                entry.SourceNodeId = offVersion.SourceNodeId;
-                await repo.UpdateAsync(entry);
+                var off = await addresses.ApplyProofAsync(entry, new PeerProof(null, TlsSpki: "", TlsTrust: BlindTrust.None, PairingChanged: true), actor, "web");
+                if (!off.Succeeded) return Results.BadRequest(new ErrorResponse(off.Message));
                 pins.Invalidate();
-                eventLogger.SignalSync();
                 await auditRepo.LogAsync("whitelist", nodeId.ToString(), "hub_disabled", "web",
                     $"Blind copies can no longer be told to call {entry.DisplayName} (set by user {actor})");
                 return Results.Ok(new HubSetResponse(WhitelistEntryResponse.From(entry), null, false,
@@ -341,6 +311,10 @@ public static class WhitelistEndpoints
             if (BlindListener.Origin(address) is not { } origin)
                 return Results.BadRequest(new ErrorResponse(
                     "Blind copies call https only: give the address as https://host or https://host:port, without a path."));
+            // The one policy for a peer's address (no user name, no query, no link-local or metadata target), and the one canonical form that is stored and sent on.
+            var canonical = PeerAddressPolicy.Canonicalize(origin);
+            if (!canonical.Ok) return Results.BadRequest(new ErrorResponse(canonical.Refusal!));
+            origin = canonical.Address!;
 
             string? expectedPin = null;
             if (mode == BlindTrust.Pin && !string.IsNullOrWhiteSpace(req.ExpectedPin))
@@ -376,19 +350,12 @@ public static class WhitelistEndpoints
             if (!BlindListener.IsCallable(origin, pin, entry.Ed25519PublicKey, mode))
                 return Results.BadRequest(new ErrorResponse("Could not read a certificate key from the node."));
 
-            // Log first, like every whitelist write: the row carries the version the mesh is told. "" removes a pin
-            // an older node may hold when the new mode pins nothing.
-            var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, apiAddress: origin, displayName: null,
-                tlsSpki: pin ?? "", tlsTrust: mode);
-            entry.ApiAddress = origin;
-            entry.TlsSpki = pin;
-            entry.TlsTrust = mode;
-            entry.UpdatedAt = DateTime.UtcNow;
-            entry.LamportTs = version.LamportTs;
-            entry.SourceNodeId = version.SourceNodeId;
-            await repo.UpdateAsync(entry);
+            // The one writer of a peer's row on a running node: the probe read this key, so it is the proof; the event is logged first and the row carries its version
+            // ("" removes a pin an older node may hold when the new mode pins nothing), and the loop forgets what it learned about the old address or the old key.
+            var paired = await addresses.ApplyProofAsync(entry,
+                new PeerProof(origin, ProvenKey: Convert.FromBase64String(found.Ed25519PublicKeyB64), TlsSpki: pin ?? "", TlsTrust: mode), actor, "web");
+            if (!paired.Succeeded) return Results.BadRequest(new ErrorResponse(paired.Message));
             pins.Invalidate();
-            eventLogger.SignalSync();
             await auditRepo.LogAsync("whitelist", nodeId.ToString(), "hub_enabled", "web",
                 $"Blind copies can be told to call {entry.DisplayName} at {origin} ({mode}) (set by user {actor})");
 
@@ -471,7 +438,8 @@ public static class WhitelistEndpoints
             IWhitelistRepository repo,
             IEventLogger eventLogger,
             SessionService session,
-            HttpContext ctx) =>
+            HttpContext ctx,
+            IPeerStateResetter? peerState) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
@@ -484,6 +452,7 @@ public static class WhitelistEndpoints
             // and an add issued BEFORE this revoke must lose that comparison.
             var version = await eventLogger.LogWhitelistRevokeAsync(nodeId);
             await repo.RevokeAsync(nodeId, version);
+            peerState?.PeerChanged(nodeId);   // what the sync loop learned about this peer is forgotten (BMB-313)
 
             return Results.NoContent();
         });

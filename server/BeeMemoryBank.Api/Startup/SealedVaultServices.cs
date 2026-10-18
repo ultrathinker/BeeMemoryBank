@@ -62,10 +62,9 @@ public static class SealedVaultServices
         // What the auto-unlock services call to open a sealed node: the session's own unlock with a master DEK (spec 4.7).
         services.AddSingleton<SealedDekUnlock>(sp => (dek, door, ct) => sp.GetRequiredService<SessionService>().TryUnlockWithDekAsync(dek, door, ct));
 
-        // "Encrypt this node" (spec 10): the migration and what the Api adds to it (the way-back snapshot). A plain node runs it on the owner's word;
-        // a sealed one only reports "already_sealed" from its preflight.
-        services.AddSingleton<ISealMigrationHost>(sp => new ApiSealMigrationHost(
-            dataPath, sp.GetRequiredService<SnapshotService>(), sp.GetRequiredService<DbConnectionFactory>(), sp));
+        // "Encrypt this node" (spec 10): the migration and what the Api adds to it. A plain node runs it on the owner's word or, when it is being set
+        // up, on the setup's own (FreshNodeSealing); a sealed one only reports "already_sealed" from its preflight.
+        services.AddSingleton<ISealMigrationHost>(sp => new ApiSealMigrationHost(sp));
         var killAfter = builder.Environment.IsEnvironment("Testing") ? builder.Configuration["BMB_SEAL_TEST_KILL_AFTER"] : null;
         services.AddSingleton(sp =>
         {
@@ -82,6 +81,12 @@ public static class SealedVaultServices
             }
             return seal;
         });
+
+        // What every setup ends with (BMB-306): the new node's metadata encryption on and its database encrypted, under the master password just given.
+        services.AddScoped<FreshNodeSealing>();
+        // The marker a setup, join or restore writes before its first write in the open and FreshNodeSealing removes when the node is encrypted: a start
+        // that finds it still there wipes what was written (VaultStartup.Enter -> SealIntent.Resolve).
+        services.AddSingleton<ISealIntents>(sp => new SealIntents(dataPath, () => SealIntents.HoldsNoNode(sp.GetRequiredService<DbConnectionFactory>())));
 
         // The start tasks that read the database, as work done at every open (spec 5.3 table 2).
         services.AddSingleton<IVaultOpenStep>(sp => new MigrationsOpenStep(sp));

@@ -69,7 +69,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
     /// <summary>Every step of 10.4 and of the swap of 10.6 after which a process may die, in the order they happen on a node with a chat database.</summary>
     private static readonly string[] Steps =
     [
-        "preflight", "checkpoint", "journal-building", "snapshot", "keys", "vacuum-vault", "vacuum-chat", "boot-target", "verified-check",
+        "preflight", "checkpoint", "journal-building", "keys", "vacuum-vault", "vacuum-chat", "boot-target", "verified-check",
         "journal-verified", "journal-swapping",
         "wiped-old-beememorybank.db", "old-aside-beememorybank.db", "renamed-beememorybank.db",
         "wiped-old-chat.db", "old-aside-chat.db", "renamed-chat.db",
@@ -103,12 +103,10 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         var preflight = await seal.PreflightAsync(new SealOptions());
         preflight.Blockers.Should().BeEmpty("the activated canary node may be encrypted: " + string.Join(", ", preflight.Blockers.Select(b => b.Code)));
 
-        var copies = RecordWayBackCopies(node);
-        var result = await seal.RunAsync(Password, new SealOptions());
+        var result = await seal.RunAsync(new SealOptions());
 
         result.Phase.Should().Be(SealProgress.Done, result.Error);
-        result.Snapshot.Should().NotBeNull("the way back was written");
-        copies.Should().NotBeEmpty("the way-back snapshot made its working copy");
+        NoCopyOfThePlainNodeIsKept(node.Dir);
         node.Gate.IsSealed.Should().BeTrue();
         node.Gate.State.Should().Be(VaultState.Open, "the session's key opens the new database without a door");
         NoCanaryAndNoLeftover(node.Dir, template.Canaries);
@@ -121,11 +119,9 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         node.Gate.State.Should().Be(VaultState.Closed, "a sealed node starts closed");
         (await node.Session.UnlockAsync(Password)).Should().BeTrue();
         (await DumpAsync(node)).Should().BeEquivalentTo(before, "the data after the unlock is the data before the migration");
-        var dek = node.Session.GetMasterDek();
-        (await SnapshotOpensAsync(Directory.EnumerateFiles(Path.Combine(node.Dir, "pre-encryption"), "bmb-snapshot-*.tar.gz").Single(), dek)).Should().BeTrue();
         // After the restart the node's own background work may hold a staging copy of a baseline (made once the vault opens): a sealed copy in
-        // progress, which is not a leftover. What must be gone is the copy of the way-back snapshot; no canary may be in the folder.
-        WayBackCopiesGone(copies);
+        // progress, which is not a leftover. No canary may be in the folder.
+        NoCopyOfThePlainNodeIsKept(node.Dir);
         NoLeftover(node.Dir);
         Scan(node.Dir, template.Canaries).Should().BeEmpty("a raw scan of every file of the data folder finds no canary");
     }
@@ -140,7 +136,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         var seen = new List<string>();
         seal.StepHook = seen.Add;
 
-        (await seal.RunAsync(Password, new SealOptions())).Phase.Should().Be(SealProgress.Done);
+        (await seal.RunAsync(new SealOptions())).Phase.Should().Be(SealProgress.Done);
 
         // SQLite's -wal and -shm of a replaced database exist or not by what was still open: their wipes are steps only when there is something to wipe.
         seen.RemoveAll(s => s.EndsWith("-wal", StringComparison.Ordinal) || s.EndsWith("-shm", StringComparison.Ordinal));
@@ -159,7 +155,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         var seal = node.Services.GetRequiredService<SealMigrationService>();
         seal.StepHook = s => { if (s == step) throw new SealKill(s); };
 
-        var kill = async () => await seal.RunAsync(Password, new SealOptions());
+        var kill = async () => await seal.RunAsync(new SealOptions());
         await kill.Should().ThrowAsync<SealKill>();
 
         node.Restart();
@@ -170,10 +166,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
 
         NoLeftover(node.Dir);
         if (sealedNow) Scan(node.Dir, template.Canaries).Should().BeEmpty("no plain copy survives the next start");
-        foreach (var archive in SnapshotsIn(node.Dir))
-            (await SnapshotOpensAsync(archive, node.Session.GetMasterDek())).Should().BeTrue("the way back decrypts with the key at every kill point");
-        if (step is "snapshot" or "keys" or "vacuum-vault" or "journal-verified" or "audit")
-            SnapshotsIn(node.Dir).Should().NotBeEmpty("a snapshot written before the first change stays");
+        NoCopyOfThePlainNodeIsKept(node.Dir);
     }
 
     public static IEnumerable<object[]> KillPoints() => Steps.Select(s => new object[] { s });
@@ -187,7 +180,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         var seal = node.Services.GetRequiredService<SealMigrationService>();
         seal.WipeOverride = _ => false;   // a locked file, and it stays locked
 
-        var result = await seal.RunAsync(Password, new SealOptions());
+        var result = await seal.RunAsync(new SealOptions());
 
         result.Phase.Should().Be(SealProgress.Failed, "a readable plain database on the disk is not a finished encryption");
         result.ErrorCode.Should().Be(SealFailures.Wipe);
@@ -222,7 +215,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         using var node = await StartAsync();
         var seal = node.Services.GetRequiredService<SealMigrationService>();
         seal.WipeOverride = _ => false;
-        (await seal.RunAsync(Password, new SealOptions())).ErrorCode.Should().Be(SealFailures.Wipe);
+        (await seal.RunAsync(new SealOptions())).ErrorCode.Should().Be(SealFailures.Wipe);
         (await node.Session.UnlockAsync(Password)).Should().BeFalse();
 
         seal.WipeOverride = null;   // the lock is lifted
@@ -245,7 +238,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
             return tries[path] >= 3 && SecureFileWipe.TryWipe(path);   // the third try goes through
         };
 
-        var result = await seal.RunAsync(Password, new SealOptions());
+        var result = await seal.RunAsync(new SealOptions());
 
         result.Phase.Should().Be(SealProgress.Done, result.Error);
         NoCanaryAndNoLeftover(node.Dir, template.Canaries);
@@ -260,7 +253,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         var copy = Path.Combine(node.Dir, "vault-copy.db");
         seal.StepHook = step => { if (step == "swapped") File.Copy(Path.Combine(template.PlainDir, VaultStoreFiles.Database), copy); };   // appears during the run
 
-        var result = await seal.RunAsync(Password, new SealOptions());
+        var result = await seal.RunAsync(new SealOptions());
 
         result.Phase.Should().Be(SealProgress.Done, result.Error);
         File.Exists(copy).Should().BeFalse("a plain copy of the vault is erased by the run, the owner is not asked to");
@@ -277,7 +270,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         seal.StepHook = step => { if (step == "swapped") File.Copy(Path.Combine(template.PlainDir, VaultStoreFiles.Database), copy); };
         seal.WipeOverride = path => !path.EndsWith("vault-copy.db", StringComparison.Ordinal) && SecureFileWipe.TryWipe(path);   // this one is locked
 
-        var result = await seal.RunAsync(Password, new SealOptions());
+        var result = await seal.RunAsync(new SealOptions());
 
         result.Phase.Should().Be(SealProgress.Failed);
         result.ErrorCode.Should().Be(SealFailures.PlainCopies);
@@ -299,7 +292,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
             TestLinks.CreateHardLink(Path.Combine(node.Dir, "beememorybank.db.seal-old"), other);   // the owner's own second name for the plain file
             throw new SealKill(s);
         };
-        var kill = async () => await seal.RunAsync(Password, new SealOptions());
+        var kill = async () => await seal.RunAsync(new SealOptions());
         await kill.Should().ThrowAsync<SealKill>();
         var plainBytes = File.ReadAllBytes(other);
 
@@ -364,81 +357,43 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
             }
         };
 
-        var result = await seal.RunAsync(Password, new SealOptions());
+        var result = await seal.RunAsync(new SealOptions());
 
         result.Phase.Should().Be(SealProgress.Failed);
         result.ErrorCode.Should().StartWith(expectedCode);
         Unchanged(node, before);
     }
 
-    [Fact]
-    public async Task A_way_back_snapshot_that_fails_its_self_check_stops_the_run_with_the_code_snapshot_and_changes_nothing()
+    /// <summary>The two shapes of "no sentinel": NULL (a vault of the first months) and an empty BLOB (a partly migrated row: the owner's own node had this one).</summary>
+    [Theory]
+    [InlineData("NULL")]
+    [InlineData("X''")]
+    public async Task A_vault_older_than_the_sentinel_is_given_one_and_is_encrypted(string missing)
     {
+        // A real owner's node of the first months: its identity row has no sentinel (NULL or empty), the slots are all there, and no unlock ever wrote one.
+        // The verification of the encrypted copy names the master key through the sentinel.
         using var node = await StartAsync();
+        using (var conn = node.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            conn.Execute($"UPDATE tbl_node_identity SET sentinel_value = {missing}");
         var before = await DumpAsync(node);
         var seal = node.Services.GetRequiredService<SealMigrationService>();
 
-        // The envelope of the snapshot has to open with the password the run is given: a different one fails the check.
-        var result = await seal.RunAsync("a password that is not the master password", new SealOptions());
-
-        result.Phase.Should().Be(SealProgress.Failed);
-        result.ErrorCode.Should().Be(SealFailures.Snapshot);
-        SnapshotsIn(node.Dir).Should().BeEmpty("a snapshot that failed its check is removed");
-        Unchanged(node, before);
-    }
-
-    [Fact]
-    public async Task The_way_back_copy_leaves_no_SQLite_sidecar_behind_and_the_migration_is_done()
-    {
-        using var node = await StartAsync();
-        node.Services.GetRequiredService<SnapshotService>().AfterStagingWork = PlantClearSidecars;
-        var seal = node.Services.GetRequiredService<SealMigrationService>();
-
-        var result = await seal.RunAsync(Password, new SealOptions());
+        var result = await seal.RunAsync(new SealOptions());
 
         result.Phase.Should().Be(SealProgress.Done, result.Error);
-        result.PlainCopiesFound.Should().BeEmpty();
-        NoCanaryAndNoLeftover(node.Dir, template.Canaries);
-        Directory.EnumerateFileSystemEntries(SnapshotStaging.DirIn(node.Dir)).Should().BeEmpty("the way-back copy and its sidecars are gone");
-    }
-
-    [Fact]
-    public async Task A_way_back_copy_whose_sidecar_cannot_be_removed_fails_the_migration_and_changes_nothing()
-    {
-        using var node = await StartAsync();
-        var before = await DumpAsync(node);
-        node.Services.GetRequiredService<SnapshotService>().AfterStagingWork = copy => Directory.CreateDirectory(copy + "-journal");
-        var seal = node.Services.GetRequiredService<SealMigrationService>();
-
-        var result = await seal.RunAsync(Password, new SealOptions());
-
-        result.Phase.Should().Be(SealProgress.Failed, "a clear copy that stays is a failure, never Done");
-        result.ErrorCode.Should().Be(SealFailures.Snapshot);
-        SnapshotsIn(node.Dir).Should().BeEmpty();
-        Unchanged(node, before);
+        node.Gate.IsSealed.Should().BeTrue();
+        node.Restart();
+        (await node.Session.UnlockAsync(Password)).Should().BeTrue();
+        (await DumpAsync(node)).Should().BeEquivalentTo(before, "the data after the unlock is the data before the migration");
+        byte[]? sentinel;
+        using (var conn = node.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            sentinel = conn.ExecuteScalar<byte[]?>("SELECT sentinel_value FROM tbl_node_identity LIMIT 1");
+        sentinel.Should().NotBeNullOrEmpty("the migration made the sentinel the old setup never wrote");
+        var dek = node.Session.GetMasterDek();
+        BeeMemoryBank.Crypto.MasterKeyManager.VerifySentinel(sentinel!, dek).Should().BeTrue("the sentinel names the key that opens this vault");
     }
 
     // ---------------------------------------------------------------- helpers
-
-    /// <summary>Records the working copies the snapshot service makes (the way-back snapshot is the only one a migration makes).</summary>
-    private static List<string> RecordWayBackCopies(SealedApiNode node)
-    {
-        var copies = new List<string>();
-        node.Services.GetRequiredService<SnapshotService>().AfterStagingWork = copies.Add;
-        return copies;
-    }
-
-    /// <summary>The recorded copies and each of their SQLite sidecars are gone.</summary>
-    private static void WayBackCopiesGone(List<string> copies) =>
-        copies.SelectMany(copy => new[] { copy, copy + "-journal", copy + "-wal", copy + "-shm" })
-            .Where(file => File.Exists(file) || Directory.Exists(file))
-            .Should().BeEmpty("the way-back copy and its SQLite sidecars are removed");
-
-    /// <summary>What SQLite leaves beside a working copy of a plain vault: the same kind of bytes it would hold.</summary>
-    private static void PlantClearSidecars(string copy)
-    {
-        foreach (var suffix in new[] { "-journal", "-wal", "-shm" }) File.WriteAllText(copy + suffix, "clear vault pages");
-    }
 
     private void Unchanged(SealedApiNode node, Dictionary<string, string> before)
     {
@@ -448,6 +403,13 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         File.Exists(Path.Combine(node.Dir, VaultStoreFiles.SealJournal)).Should().BeFalse("the journal went with them");
         node.Session.IsUnlocked.Should().BeTrue();
         DumpAsync(node).GetAwaiter().GetResult().Should().BeEquivalentTo(before);
+    }
+
+    /// <summary>Encrypting keeps no copy of the node as it was (BMB-306): no pre-encryption folder, no snapshot of any kind in the data folder.</summary>
+    private static void NoCopyOfThePlainNodeIsKept(string dir)
+    {
+        Directory.Exists(Path.Combine(dir, "pre-encryption")).Should().BeFalse("there is no way-back snapshot");
+        Directory.EnumerateFiles(dir, "bmb-snapshot-*", SearchOption.AllDirectories).Should().BeEmpty("no snapshot was made on the way");
     }
 
     private static void NoLeftover(string dir)
@@ -480,29 +442,6 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
         NoLeftover(dir);
         Scan(dir, canaries).Should().BeEmpty("a raw scan of every file of the data folder finds no canary");
         PlainCopyScan.Run(dir, PlainScanMode.Sealed).Should().BeEmpty();   // the product's scan: a running node's own lock file is not a finding
-    }
-
-    private static List<string> SnapshotsIn(string dir)
-    {
-        var folder = Path.Combine(dir, VaultStoreFiles.PreEncryptionDir);
-        return Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "bmb-snapshot-*.tar.gz").ToList() : [];
-    }
-
-    /// <summary>The snapshot's database container decrypts with <paramref name="dek"/> to a whole SQLite image.</summary>
-    private static async Task<bool> SnapshotOpensAsync(string archive, byte[] dek)
-    {
-        await using var file = File.OpenRead(archive);
-        await using var gzip = new GZipStream(file, CompressionMode.Decompress);
-        using var tar = new TarReader(gzip);
-        while (await tar.GetNextEntryAsync(copyData: true) is { } entry)
-        {
-            if (entry.Name != "beememorybank.db" || entry.DataStream is null) continue;
-            using var buffer = new MemoryStream();
-            await entry.DataStream.CopyToAsync(buffer);
-            var image = await Bmbdb2Container.DecryptAsync(new MemoryStream(buffer.ToArray()), buffer.Length, dek);
-            return image.Length > 100 && image.AsSpan(0, 16).SequenceEqual("SQLite format 3\0"u8);
-        }
-        return false;
     }
 
     /// <summary>A hash per table of what the owner would call the vault, and the position of the log.</summary>

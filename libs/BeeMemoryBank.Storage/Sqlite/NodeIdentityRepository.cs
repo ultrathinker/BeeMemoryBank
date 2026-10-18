@@ -65,6 +65,15 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
             new { sentinelValue });
     }
 
+    public async Task<bool> StoreSentinelIfMissingAsync(byte[] sentinelValue)
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteAsync(
+            "UPDATE tbl_node_identity SET sentinel_value = @sentinelValue " +
+            "WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1) AND (sentinel_value IS NULL OR length(sentinel_value) = 0)",
+            new { sentinelValue }) > 0;
+    }
+
     public async Task<byte[]?> GetSentinelAsync()
     {
         using var conn = OpenConnection();

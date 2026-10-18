@@ -133,6 +133,35 @@ public class QuickUnlockTests
         store.IsEnrolled.Should().BeFalse();
     }
 
+    /// <summary>
+    /// The quick key opens a plain phone's vault only against its sentinel, so a vault with none (NULL or an empty BLOB: one predicate, BMB-312/308)
+    /// turns the quick unlock off like any key that cannot be verified; the password opens it and heals the sentinel.
+    /// </summary>
+    [Theory]
+    [InlineData("NULL")]
+    [InlineData("X''")]
+    public async Task AVaultWithNoSentinel_OfEitherShape_IsNotOpenedByTheQuickKey(string missing)
+    {
+        var (test, _) = await TestVault.CreateAsync("quick-nosentinel-" + (missing == "NULL" ? "null" : "empty"));
+        await using var _2 = test;
+        var store = new FakeStore();
+        var quick = new QuickUnlock(store, test.Services);
+        quick.Enable();
+        test.Vault.Lock();
+        using (var conn = test.Services.GetRequiredService<BeeMemoryBank.Core.Interfaces.IDbConnectionFactory>().CreateConnection())
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"UPDATE tbl_node_identity SET sentinel_value = {missing}";
+            cmd.ExecuteNonQuery();
+        }
+
+        var result = await quick.UnlockAsync("x");
+
+        result.Should().Be(QuickUnlockResult.TurnedOff);
+        test.Vault.IsUnlocked.Should().BeFalse();
+        store.IsEnrolled.Should().BeFalse();
+    }
+
     [Fact]
     public async Task ADamagedSlot_TurnsTheQuickUnlockOff_WithoutAsking()
     {

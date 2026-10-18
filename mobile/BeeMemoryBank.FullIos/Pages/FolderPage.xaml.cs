@@ -1,3 +1,4 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.FullIos.Services;
 
 namespace BeeMemoryBank.FullIos.Pages;
@@ -49,9 +50,21 @@ public partial class FolderPage : ContentPage
 
     private async void OnRefreshing(object? sender, EventArgs e)
     {
-        await _sync.RoundAsync();
-        await LoadAsync();
-        Refresher.IsRefreshing = false;
+        // Pulling the list down asks for a sync round: a request to the computer, not a read. The one busy helper (BMB-311) refuses a second round while one
+        // runs (a second pull, the round of the loop is the sync's own business); the spinner of the pull is the pull's own, so no pop-up, and a failure to
+        // even ask is said in full.
+        try
+        {
+            await BusyAction.RunAsync(Refresher, async () =>
+            {
+                await _sync.RoundAsync();
+                await LoadAsync();
+            }, new BusyOptions { FailureTitle = "Sync" });
+        }
+        finally
+        {
+            Refresher.IsRefreshing = false;
+        }
     }
 
     private async Task LoadAsync()
@@ -67,6 +80,7 @@ public partial class FolderPage : ContentPage
         }
     }
 
+    // busy-exempt: opens the folder or note tapped, nothing is sent and nothing waits
     private async void OnItemTapped(object? sender, TappedEventArgs e)
     {
         if ((sender as BindableObject)?.BindingContext is not NoteListItem item) return;
@@ -76,6 +90,7 @@ public partial class FolderPage : ContentPage
             await Navigation.PushAsync(_services.GetRequiredService<NotePage>().For(id));
     }
 
+    // busy-exempt: opens the editor, nothing is sent and nothing waits
     private async void OnNewNote(object? sender, EventArgs e) =>
         await Navigation.PushAsync(_services.GetRequiredService<EditNotePage>().New(_path));
 
@@ -83,30 +98,24 @@ public partial class FolderPage : ContentPage
     {
         var name = await DisplayPromptAsync("New folder", $"A folder inside {NotesService.FolderTitle(_path)}:", "Create", "Cancel", "Name", 100);
         if (string.IsNullOrWhiteSpace(name)) return;
-        try
+        // The one busy helper (BMB-311): the entry is off until the folder is made; a failure is said in full.
+        await BusyAction.RunAsync(sender as BindableObject, async () =>
         {
             await _notes.CreateFolderAsync(_path, name);
             await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlertAsync("New folder", ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = "New folder" });
     }
 
     private async void OnSwipeDelete(object? sender, EventArgs e)
     {
         if ((sender as BindableObject)?.BindingContext is not NoteListItem { NoteId: { } id } item) return;
-        try
+        await BusyAction.RunAsync(sender as BindableObject, async () =>
         {
             await _notes.DeleteAsync(id);
             await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlertAsync(item.Name, ex.Message, "OK");
-        }
+        }, new BusyOptions { FailureTitle = item.Name });
     }
 
+    // busy-exempt: opens the trash page, nothing is sent and nothing waits
     private async void OnTrash(object? sender, EventArgs e) => await Navigation.PushAsync(_services.GetRequiredService<TrashPage>());
 }

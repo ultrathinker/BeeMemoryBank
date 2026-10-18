@@ -217,9 +217,12 @@ BeeMemoryBank.Vault.Sealed.BrokenStart
 BeeMemoryBank.Vault.Sealed.DatabaseKeyCrypto
 BeeMemoryBank.Vault.Sealed.DatabaseKeyService
 BeeMemoryBank.Vault.Sealed.EventApplierRelayAdapter
+BeeMemoryBank.Vault.Sealed.FreshNodeSealing
+BeeMemoryBank.Vault.Sealed.FreshNodeSealingException
 BeeMemoryBank.Vault.Sealed.IDatabaseKeyService
 BeeMemoryBank.Vault.Sealed.IPhoneEnvironment
 BeeMemoryBank.Vault.Sealed.IRelayEventApplier
+BeeMemoryBank.Vault.Sealed.ISealIntents
 BeeMemoryBank.Vault.Sealed.ISealMigrationHost
 BeeMemoryBank.Vault.Sealed.ISealedRelayLifecycle
 BeeMemoryBank.Vault.Sealed.ISealedUnlockDiagnostics
@@ -244,6 +247,7 @@ BeeMemoryBank.Vault.Sealed.RelayWriteLock+LeaseKind
 BeeMemoryBank.Vault.Sealed.SealBlocker
 BeeMemoryBank.Vault.Sealed.SealBlockers
 BeeMemoryBank.Vault.Sealed.SealFailures
+BeeMemoryBank.Vault.Sealed.SealIntents
 BeeMemoryBank.Vault.Sealed.SealKill
 BeeMemoryBank.Vault.Sealed.SealMigrationException
 BeeMemoryBank.Vault.Sealed.SealMigrationService
@@ -258,6 +262,7 @@ BeeMemoryBank.Vault.Sealed.SealVerifier+IDEK
 BeeMemoryBank.Vault.Sealed.SealVerifier+Sample
 BeeMemoryBank.Vault.Sealed.SealVerifyInput
 BeeMemoryBank.Vault.Sealed.SealWarning
+BeeMemoryBank.Vault.Sealed.SealWarnings
 BeeMemoryBank.Vault.Sealed.SealedFile
 BeeMemoryBank.Vault.Sealed.SealedRelayLifecycleServiceCollectionExtensions
 BeeMemoryBank.Vault.Sealed.SealedRotationHooks
@@ -277,4 +282,3 @@ BeeMemoryBank.Vault.Sealed.VaultGate+NoLease
 BeeMemoryBank.Vault.Sealed.VaultGate+TemporaryLease
 BeeMemoryBank.Vault.Sealed.VaultVerifier
 BeeMemoryBank.Vault.Sealed.VaultVerifyResult
-BeeMemoryBank.Vault.Sealed.WayBackSnapshot
