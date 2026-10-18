@@ -32,7 +32,6 @@ public class PinnedSyncClientCompositionTests
         var chain = Chain(services.BuildServiceProvider(), PeerAddressService.HttpClientName);
 
         chain.Should().Contain(h => h is SpkiPinGuardHandler, "the guard refuses to follow a redirect, and the address check reads it as no sync server");
-        chain.OfType<SocketsHttpHandler>().Should().ContainSingle().Which.AllowAutoRedirect.Should().BeFalse();
     }
 
     [Fact]

@@ -7,15 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-#### 2.6.2 (2026-10-18)
+#### 2.6.3 (2026-10-18)
 
-A node is now encrypted from its first day, long operations say what they are doing, and the database schema is folded into one baseline. **Updating from a version older than 2.6: update to 2.6.1 first, then to 2.6.2** (see "Notes for upgrading").
+A node is now encrypted from its first day, long operations say what they are doing, and the database schema is folded into one baseline. **Updating from a version older than 2.6: update to 2.6.1 first, then to 2.6.3** (see "Notes for upgrading").
 
 ### Changed
 
 - **A new node is encrypted from its first day.** A node you set up (Web Setup, `bmb init`, Docker, a join, the restore wizard) is created encrypted, under the master password you gave, with metadata encryption on. A new node joins only a node that already has metadata encryption on, and a restore never reads an unencrypted copy and never produces an unencrypted node. The "way back" snapshot that "Encrypt this node" made in 2.6.0 (and its block in Admin) is gone: going back to an unencrypted node is not possible from the node, and the warning before encryption says so.
 
-- **One database baseline.** The database schema is now one baseline migration instead of a chain of 39. A 2.6.0 or 2.6.1 database is adopted automatically at its first start: its structure is checked in full, missing indexes and triggers are repaired, nothing is re-run. A database (or a backup) older than 2.6 is refused untouched with a message that says to update through 2.6.1 first. Restoring a backup refuses one whose structure this version cannot open, before anything is replaced. A program of 2.6.1 or earlier no longer opens a database that 2.6.2 has taken over: it stops with a message instead of replaying its migrations. To go back, restore the snapshot made before the update.
+- **One database baseline.** The database schema is now one baseline migration instead of a chain of 39. A 2.6.0 or 2.6.1 database is adopted automatically at its first start: its structure is checked in full, missing indexes and triggers are repaired, nothing is re-run. A database (or a backup) older than 2.6 is refused untouched with a message that says to update through 2.6.1 first. Restoring a backup refuses one whose structure this version cannot open, before anything is replaced. A program of 2.6.1 or earlier no longer opens a database that 2.6.3 has taken over: it stops with a message instead of replaying its migrations. To go back, restore the snapshot made before the update.
 
 - **Admin shows what is left to do.** Once metadata encryption is on, its card is one line ("On since ..."); on an encrypted node the encryption page is "Storage protection" and does not offer "Encrypt this node". The result of an action shows in the card of its button, and the page opens at that card. Master password fields are password fields. "Activate the new sync format first" now names the real place (Admin > Metadata encryption) and links to it.
 
@@ -46,8 +46,8 @@ A node is now encrypted from its first day, long operations say what they are do
 
 ### Notes for upgrading
 
-- **From a version older than 2.6, update to 2.6.1 first, then to 2.6.2.** 2.6.2 refuses an older database or backup, leaves it unchanged and says so.
-- After the first start of 2.6.2, a database cannot be opened by 2.6.1 or earlier. To go back, restore the snapshot or backup you made before the update.
+- **From a version older than 2.6, update to 2.6.1 first, then to 2.6.3.** 2.6.3 refuses an older database or backup, leaves it unchanged and says so.
+- After the first start of 2.6.3, a database cannot be opened by 2.6.1 or earlier. To go back, restore the snapshot or backup you made before the update.
 - Nodes that already run 2.6.0 or 2.6.1 keep their data, their keys and their settings; the schema is adopted at the first start, which takes a moment on a large database.
 - Before activating metadata encryption, check the readiness report in Admin > Metadata encryption: a device that does not declare `metadata-envelope-v1` must be updated, or revoked in Trusted nodes and joined again.
 

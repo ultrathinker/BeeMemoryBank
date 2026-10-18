@@ -487,6 +487,7 @@ BeeMemoryBank.Sync BeeMemoryBank.Sync.Blind.PinnedSyncHttpClient
 BeeMemoryBank.Sync BeeMemoryBank.Sync.Blind.Spki
 BeeMemoryBank.Sync BeeMemoryBank.Sync.Blind.SpkiPinGuardHandler
 BeeMemoryBank.Sync BeeMemoryBank.Sync.Blind.SpkiPinRegistry
+BeeMemoryBank.Sync BeeMemoryBank.Sync.Blind.SpkiPinRegistry+PinLanes
 BeeMemoryBank.Sync BeeMemoryBank.Sync.BlindEventLogger
 BeeMemoryBank.Sync BeeMemoryBank.Sync.BlobMissingException
 BeeMemoryBank.Sync BeeMemoryBank.Sync.BlobReferences

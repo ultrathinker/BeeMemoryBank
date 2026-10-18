@@ -490,7 +490,9 @@ public class ForbiddenReferencesTests
                 return typeName is "BlindPhoneReplicaClient" or "BlindPhonePullClient" or "IBlindPhonePullClient" or "BlindEmbeddingGenerator" or "BlindState" or "BlindRestoreInitiator" or "BlindDekRotationApplier"
                     or "BlindPhonePackageSource" or "IBlindVerifiedPackageFetcher" or "VerifiedReplicaPackage" or "BlindPhoneRecoverySetSource";
             if (typeNs.Equals("BeeMemoryBank.Sync", StringComparison.Ordinal))
-                return typeName is "IRestoreInitiator" or "LamportClock" or "HardDeleteService" or "EventApplier" or "SnapshotRequiredException";
+                return typeName is "IRestoreInitiator" or "LamportClock" or "HardDeleteService" or "EventApplier" or "SnapshotRequiredException"
+                    // The one mechanism that tells a failed call to another device as a kind of failure (BusyAction.Describe, shared source). It holds text only.
+                    or "FailureText";
             return false;
         }
 

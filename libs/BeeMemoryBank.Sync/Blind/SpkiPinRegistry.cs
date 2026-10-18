@@ -56,10 +56,16 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
     /// the name mean nothing — and refused on any other key, whatever a CA says about it. Every
     /// other host gets the ordinary validation.
     /// </summary>
-    public bool Validate(HttpRequestMessage request, X509Certificate2? certificate, SslPolicyErrors errors, X509Chain? chain = null)
-    {
-        var pin = request.Options.TryGetValue(ExplicitPin, out var explicitPin) ? explicitPin
+    public bool Validate(HttpRequestMessage request, X509Certificate2? certificate, SslPolicyErrors errors, X509Chain? chain = null) =>
+        Check(PinOf(request), certificate, errors, chain);
+
+    /// <summary>The pin a request must meet: the one it carries itself, else its host:port's row; null = the ordinary check.</summary>
+    internal string? PinOf(HttpRequestMessage request) =>
+        request.Options.TryGetValue(ExplicitPin, out var explicitPin) ? explicitPin
             : request.RequestUri is { } uri ? PinFor(uri) : null;
+
+    private bool Check(string? pin, X509Certificate2? certificate, SslPolicyErrors errors, X509Chain? chain)
+    {
         if (pin is null) return PublicCaTls.IsValid(certificate, chain, errors, anchors);
         return certificate is not null && Spki.Equal(Spki.Of(certificate), pin);
     }
@@ -70,25 +76,58 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
     /// resolved here, every answer must be an address a node may call, and only those are connected to - so a name that
     /// resolves to a link-local or cloud-metadata address, or resolves differently the second time, never gets a connection.
     /// </summary>
-    public HttpMessageHandler CreateHandler()
+    public HttpMessageHandler CreateHandler() => new SpkiPinGuardHandler(this, new PinLanes(this, network ?? PeerNetwork.Production));
+
+    /// <summary>
+    /// A sockets handler for one pin (null = the ordinary check). The certificate callback of a <see cref="SocketsHttpHandler"/>
+    /// gets the <see cref="System.Net.Security.SslStream"/> as its sender, NOT the request (only HttpClientHandler's own callback is
+    /// given the request), so a handler cannot learn the pin from the request: each handler is made for one pin instead.
+    /// </summary>
+    internal SocketsHttpHandler NewSocketsHandler(PeerNetwork net, string? pin) => new()
     {
-        var net = network ?? PeerNetwork.Production;
-        return new SpkiPinGuardHandler(this, new SocketsHttpHandler
+        // A redirect would take the request to a host the pin never covered — an unpinned host
+        // with any CA-valid certificate passes the ordinary check (review L-stage1 #5).
+        AllowAutoRedirect = false,
+        // A proxy would resolve and connect on this node's behalf: the check below would judge the proxy, not the peer.
+        UseProxy = false,
+        ConnectCallback = (context, ct) => PeerSocketConnector.ConnectAsync(context, net, ct),
+        SslOptions = new SslClientAuthenticationOptions
         {
-            // A redirect would take the request to a host the pin never covered — an unpinned host
-            // with any CA-valid certificate passes the ordinary check (review L-stage1 #5).
-            AllowAutoRedirect = false,
-            // A proxy would resolve and connect on this node's behalf: the check below would judge the proxy, not the peer.
-            UseProxy = false,
-            ConnectCallback = (context, ct) => PeerSocketConnector.ConnectAsync(context, net, ct),
-            SslOptions = new SslClientAuthenticationOptions
-            {
-                // The handler hands the request to this callback as the sender (the way HttpClientHandler's own callback gets it).
-                RemoteCertificateValidationCallback = (sender, certificate, chain, errors) =>
-                    Validate((HttpRequestMessage)sender, certificate as X509Certificate2 ?? (certificate is null ? null : new X509Certificate2(certificate)), errors, chain)
-            }
-        });
+            RemoteCertificateValidationCallback = (_, certificate, chain, errors) =>
+                Check(pin, certificate as X509Certificate2 ?? (certificate is null ? null : new X509Certificate2(certificate)), errors, chain)
+        }
+    };
+
+    /// <summary>
+    /// Sends each request through the sockets handler made for ITS pin: one lane per host:port and pin (the request's own pin, else
+    /// the row's, else none), so a pinned peer is only ever dialled by a handler whose certificate check is its pin, and a peer
+    /// without one by a handler with the ordinary check. A changed pin is a new lane; the pins are few, so the lanes are too.
+    /// </summary>
+    private sealed class PinLanes(SpkiPinRegistry owner, PeerNetwork net) : HttpMessageHandler
+    {
+        // Ordinal: a pin is base64url, whose letter case is part of the key it names.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<HttpMessageInvoker>> _lanes = new(StringComparer.Ordinal);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var uri = request.RequestUri ?? throw new InvalidOperationException("The request has no address.");
+            var pin = owner.PinOf(request);
+            // Lazy: two requests racing for one new lane build ONE handler (a second one would never be disposed).
+            var lane = _lanes.GetOrAdd(LaneKey(uri, pin),
+                _ => new Lazy<HttpMessageInvoker>(() => new HttpMessageInvoker(owner.NewSocketsHandler(net, pin), disposeHandler: true)));
+            return lane.Value.SendAsync(request, ct);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                foreach (var lane in _lanes.Values.Where(l => l.IsValueCreated)) lane.Value.Dispose();
+            base.Dispose(disposing);
+        }
     }
+
+    /// <summary>One lane per host:port (host in lower case, as <see cref="Uri.Host"/> gives it) and EXACT pin: a pin that differs in letter case is another key; no pin is not an empty pin.</summary>
+    internal static string LaneKey(Uri uri, string? pin) => $"{uri.Host.ToLowerInvariant()}:{uri.Port}|{(pin is null ? "-" : "pin:" + pin)}";
 
     /// <summary>True if this request goes to a pinned peer (by the request's own pin or the whitelist).</summary>
     public bool IsPinned(HttpRequestMessage request) =>

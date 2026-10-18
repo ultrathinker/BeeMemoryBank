@@ -439,6 +439,21 @@ internal sealed class SchemaShape
         }
     }
 
+    private static readonly Regex UniqueIndexStart = new(@"^\s*CREATE\s+UNIQUE\s+INDEX\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex PlainIndexStart = new(@"^\s*CREATE\s+INDEX\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>True when the baseline's index is UNIQUE and the database's is the same statement without UNIQUE.</summary>
+    internal static bool DiffersOnlyByUniqueness(string referenceSql, string actualSql) =>
+        UniqueIndexStart.IsMatch(referenceSql) && PlainIndexStart.IsMatch(actualSql)
+        && Normalize(UniqueIndexStart.Replace(referenceSql, "CREATE INDEX")) == Normalize(actualSql);
+
+    /// <summary>The name in <c>CREATE UNIQUE INDEX name ON ...</c>, or null.</summary>
+    internal static string? UniqueIndexName(string statement)
+    {
+        var m = Regex.Match(statement, @"^\s*CREATE\s+UNIQUE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?[""`\[]?([A-Za-z0-9_]+)", RegexOptions.IgnoreCase);
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
     private static void CompareNamed(string kind, string drop, Dictionary<string, Named> reference, Dictionary<string, Named> actual, Diff diff)
     {
         foreach (var (name, r) in reference)
@@ -450,6 +465,14 @@ internal sealed class SchemaShape
             }
             else if (Normalize(a.Sql) != Normalize(r.Sql))
             {
+                // A unique index that the database has WITHOUT the uniqueness (the first migration was corrected after the first nodes had run it, so
+                // their index is the same index on the same columns, not unique, and real rows may already repeat): the program has always run on
+                // it, and making it unique would fail on those rows. Left as it is.
+                if (kind == "index" && DiffersOnlyByUniqueness(r.Sql, a.Sql))
+                {
+                    diff.Tolerated.Add($"the index {name} is not unique");
+                    continue;
+                }
                 diff.Repairs.Add($"DROP {drop} {Quote(name)}");
                 diff.Repairs.Add(r.Sql);
                 diff.Repaired.Add(name);

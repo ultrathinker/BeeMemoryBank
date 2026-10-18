@@ -99,6 +99,46 @@ internal static class LegacyChainAdoption
         }
     }
 
+    /// <summary>
+    /// Runs the repairs in order. A UNIQUE index (with the DROP of the index it replaces) is tried inside a savepoint: when the rows already
+    /// repeat what the index forbids, that one repair is undone and the index stays as the database had it (a missing one stays missing).
+    /// An index holds no data of its own and the program has always run without the uniqueness, so this is not a reason to refuse a
+    /// database. Returns the names of the indexes that were left.
+    /// </summary>
+    private static async Task<List<string>> RunRepairsAsync(IDbConnection connection, IDbTransaction transaction, List<string> repairs)
+    {
+        var kept = new List<string>();
+        for (var i = 0; i < repairs.Count; i++)
+        {
+            var statement = repairs[i];
+            var group = 1;
+            if (statement.StartsWith("DROP INDEX", StringComparison.OrdinalIgnoreCase) && i + 1 < repairs.Count
+                && SchemaShape.UniqueIndexName(repairs[i + 1]) is not null)
+                group = 2;
+            var unique = SchemaShape.UniqueIndexName(repairs[i + group - 1]);
+            if (unique is null)
+            {
+                await connection.ExecuteAsync(statement, transaction: transaction);
+                continue;
+            }
+
+            await connection.ExecuteAsync("SAVEPOINT repair_unique_index", transaction: transaction);
+            try
+            {
+                for (var k = 0; k < group; k++) await connection.ExecuteAsync(repairs[i + k], transaction: transaction);
+                await connection.ExecuteAsync("RELEASE repair_unique_index", transaction: transaction);
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 19) // constraint: the rows repeat what the unique index forbids
+            {
+                await connection.ExecuteAsync("ROLLBACK TO repair_unique_index", transaction: transaction);
+                await connection.ExecuteAsync("RELEASE repair_unique_index", transaction: transaction);
+                kept.Add(unique);
+            }
+            i += group - 1;
+        }
+        return kept;
+    }
+
     public static async Task AdoptAsync(IDbConnection connection, string baselineSql, ILogger? logger)
     {
         var reference = ReferenceOf(baselineSql);
@@ -124,15 +164,16 @@ internal static class LegacyChainAdoption
             diff = SchemaShape.Compare(reference, SchemaShape.Read(connection, transaction));
             if (diff.Problems.Count > 0) throw MigrationRefusedException.Incompatible(diff.Problems);
 
-            foreach (var statement in diff.Repairs)
-                await connection.ExecuteAsync(statement, transaction: transaction);
+            var keptNonUnique = await RunRepairsAsync(connection, transaction, diff.Repairs);
             if (diff.Repairs.Count > 0)
             {
-                // What the repair made must be what the baseline has; otherwise the whole attempt is undone.
+                // What the repair made must be what the baseline has; otherwise the whole attempt is undone. A unique index the rows could not
+                // satisfy was left as it was (above): it is the one thing that may still differ.
                 var after = SchemaShape.Compare(reference, SchemaShape.Read(connection, transaction));
-                if (after.Problems.Count > 0 || after.Repairs.Count > 0)
+                if (after.Problems.Count > 0 || after.Repaired.Any(name => !keptNonUnique.Contains(name, StringComparer.OrdinalIgnoreCase)))
                     throw MigrationRefusedException.Incompatible(after.Problems.Count > 0 ? after.Problems : ["a repaired object does not have the expected definition"]);
             }
+            foreach (var name in keptNonUnique) diff.Tolerated.Add($"the index {name} could not be made unique");
 
             // The guard (if the ledger has one: a tool turned a 2.6.2 ledger back into the old rows) must let this one delete through, and
             // it is created again in the same transaction, so the baseline row never commits without it.
