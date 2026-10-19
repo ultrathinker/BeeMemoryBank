@@ -1711,9 +1711,12 @@ sl-input.bmb-secret::part(input) {
 /* Colors come from the same theme variables the tree uses, so the block follows every
    theme without needing per-theme rules. The gold star is deliberately literal: it is the
    one accent that must read as "starred" in all 12 themes. */
+/* The block reads as a folder: the header sits where a top-level folder row does (chevron at
+   18px, icon at 36px, label at 56px) and the starred articles are indented one level, the same
+   columns the tree gives an article inside a folder (marker at 36px, title at 56px). */
 .sidebar-favorites {
     flex-shrink: 0;
-    padding: 2px 4px 6px 8px;
+    padding: 10px 4px 24px 8px;
     border-bottom: 1px solid var(--border);
 }
 
@@ -1727,10 +1730,10 @@ sl-input.bmb-secret::part(input) {
 .favorites-toggle {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 7px;
     flex: 1;
     min-width: 0;
-    padding: 3px 2px;
+    padding: 3px 2px 3px 10px;
     background: none;
     border: none;
     cursor: pointer;
@@ -1767,7 +1770,7 @@ sl-input.bmb-secret::part(input) {
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: 3px 2px 3px 6px;
+    padding: 3px 2px 3px 28px;
     border-radius: 4px;
     font-size: 0.85rem;
     transition: background 0.12s;
@@ -1779,7 +1782,7 @@ sl-input.bmb-secret::part(input) {
 .fav-link {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -1798,9 +1801,12 @@ sl-input.bmb-secret::part(input) {
 
 .fav-link:hover { color: var(--accent); }
 
+/* The margins widen the icon to the 16px marker column the tree's article dash uses, so the
+   title of a protected favorite starts in the same column as a tree article's title. */
 .fav-lock {
     flex-shrink: 0;
     font-size: 0.78rem;
+    margin: 0 1.75px;
     color: var(--sl-color-warning-600);
 }
 

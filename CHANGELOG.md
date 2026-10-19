@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Favorites block in the web sidebar reads as a folder.** Its header now sits where a top-level folder row does, and the starred articles are indented one level, in the same columns the tree gives an article inside a folder, so a protected article no longer looks like a sibling of the block. The block also has some room above its header and more below the last article.
+
 #### 2.6.3 (2026-10-18)
 
 A node is now encrypted from its first day, long operations say what they are doing, and the database schema is folded into one baseline. **Updating from a version older than 2.6: update to 2.6.1 first, then to 2.6.3** (see "Notes for upgrading").
