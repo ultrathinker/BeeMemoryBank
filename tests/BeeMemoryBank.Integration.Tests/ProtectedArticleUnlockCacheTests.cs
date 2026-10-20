@@ -139,6 +139,100 @@ public class ProtectedArticleUnlockCacheTests : IAsyncLifetime
         edit.UnlockExpiresInSeconds.Should().BeInRange(1, ttlSeconds);
     }
 
+    // BMB-319: the time ONE article keeps its password for (15 min .. 8 h).
+    private const int Eight = 8 * 3600;
+
+    private async Task<EditContentResponse> EditContentAsync(Guid articleId, HttpClient? client = null) =>
+        (await (await (client ?? _client).GetAsync($"/api/articles/{articleId}/edit-content")).Content.ReadFromJsonAsync<EditContentResponse>())!;
+
+    [Fact]
+    public async Task UnlockDuration_ChangesOnlyThisArticle_HoldsThroughASave_AndIsGoneWhenTheArticleLocks()
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+        var chosen = await CreateAndProtectArticleAsync();
+        var other = await CreateAndProtectArticleAsync();
+
+        var set = await _client.PostAsJsonAsync($"/api/articles/{chosen}/unlock-duration", new { seconds = Eight });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        var applied = await set.Content.ReadFromJsonAsync<UnlockDurationResponse>();
+        applied!.UnlockDurationSeconds.Should().Be(Eight);
+        applied.UnlockExpiresInSeconds.Should().BeInRange(Eight - 10, Eight, "the chosen time counts from now");
+
+        var edit = await EditContentAsync(chosen);
+        edit.UnlockDurationSeconds.Should().Be(Eight, "the editor opens with the time chosen on the article page");
+        edit.UnlockExpiresInSeconds.Should().BeInRange(Eight - 10, Eight);
+        (await EditContentAsync(other)).UnlockDurationSeconds.Should().Be(15 * 60, "the time belongs to the one article it was chosen for");
+
+        // A save asks the node to remember the password again: that counts the chosen time anew and does not take the default back.
+        var save = await _client.PutAsJsonAsync($"/api/articles/{chosen}", new { content = "written after the time was chosen" });
+        save.StatusCode.Should().Be(HttpStatusCode.OK);
+        var afterSave = await EditContentAsync(chosen);
+        afterSave.Content.Should().Be("written after the time was chosen");
+        afterSave.UnlockDurationSeconds.Should().Be(Eight);
+        afterSave.UnlockExpiresInSeconds.Should().BeInRange(Eight - 10, Eight);
+
+        // Unlocking again while it is unlocked keeps it too (the page of the article can be opened twice).
+        var again = await (await _client.PostAsJsonAsync($"/api/articles/{chosen}/unlock", new { passphrase = ArticlePassphrase }))
+            .Content.ReadFromJsonAsync<UnlockArticleResponse>();
+        again!.UnlockDurationSeconds.Should().Be(Eight);
+
+        // Locked: the chosen time is gone, and a locked article cannot be given one.
+        (await _client.PostAsync($"/api/articles/{chosen}/relock", null)).EnsureSuccessStatusCode();
+        var locked = await _client.PostAsJsonAsync($"/api/articles/{chosen}/unlock-duration", new { seconds = Eight });
+        locked.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await locked.Content.ReadAsStringAsync()).Should().Contain("NotUnlocked");
+        var reunlocked = await (await _client.PostAsJsonAsync($"/api/articles/{chosen}/unlock", new { passphrase = ArticlePassphrase }))
+            .Content.ReadFromJsonAsync<UnlockArticleResponse>();
+        reunlocked!.UnlockDurationSeconds.Should().Be(15 * 60, "after the article locked, the standard time applies again");
+        reunlocked.UnlockExpiresInSeconds.Should().BeInRange(15 * 60 - 10, 15 * 60);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-900)]
+    [InlineData(14 * 60 + 59)]
+    [InlineData(Eight + 1)]
+    [InlineData(int.MaxValue)]
+    public async Task UnlockDuration_OutsideFifteenMinutesToEightHours_IsRefused_AndChangesNothing(int seconds)
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+        var articleId = await CreateAndProtectArticleAsync();
+
+        var set = await _client.PostAsJsonAsync($"/api/articles/{articleId}/unlock-duration", new { seconds });
+
+        set.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await EditContentAsync(articleId)).UnlockDurationSeconds.Should().Be(15 * 60);
+    }
+
+    [Theory]
+    [InlineData(15 * 60)]
+    [InlineData(Eight)]
+    public async Task UnlockDuration_TheEndsOfTheRange_Apply(int seconds)
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+        var articleId = await CreateAndProtectArticleAsync();
+
+        (await _client.PostAsJsonAsync($"/api/articles/{articleId}/unlock-duration", new { seconds })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await EditContentAsync(articleId)).UnlockDurationSeconds.Should().Be(seconds);
+    }
+
+    [Fact]
+    public async Task UnlockDuration_IsRefusedForABrowserThatDidNotUnlockTheArticle()
+    {
+        (await _client.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
+        var articleId = await CreateAndProtectArticleAsync();
+
+        using var otherBrowser = BrowserClient("browser-b");
+        (await otherBrowser.PostAsJsonAsync($"/api/articles/{articleId}/unlock-duration", new { seconds = Eight })).StatusCode
+            .Should().Be(HttpStatusCode.Conflict);
+        using var noSession = BrowserClient(null);
+        (await noSession.PostAsJsonAsync($"/api/articles/{articleId}/unlock-duration", new { seconds = Eight })).StatusCode
+            .Should().Be(HttpStatusCode.Conflict, "a request without a login-session id has no entry to give a time to");
+
+        (await EditContentAsync(articleId)).UnlockDurationSeconds.Should().Be(15 * 60, "the other browser changed nothing of browser-a's");
+    }
+
     [Fact]
     public async Task UnlockInOneBrowser_DoesNotOpenTheArticleInAnotherBrowserOfTheSameUser()
     {

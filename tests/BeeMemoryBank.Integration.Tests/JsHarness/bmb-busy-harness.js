@@ -168,6 +168,12 @@ function loadSyncStatus() {
     const file = path.join(path.dirname(scriptPath), 'site-sync-status.js');
     vm.runInContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file });
 }
+// pages/protected-save-dialog.js (BMB-316: the dialog that asks for the password when the save of a protected article finds its unlock gone)
+function loadProtectedSaveDialog() {
+    const file = path.join(path.dirname(scriptPath), 'pages', 'protected-save-dialog.js');
+    vm.runInContext(fs.readFileSync(file, 'utf8'), sandbox, { filename: file });
+    return sandbox.window.bmbProtectedSave;
+}
 function jsonResponse(data) { return { ok: true, status: 200, json: () => Promise.resolve(data), text: () => Promise.resolve(JSON.stringify(data)) }; }
 
 function submit(form, own) {
@@ -427,6 +433,261 @@ const scenarios = {
         assert(posts === 4 && row.disabled === false, 'an answer left the row busy');
     },
 
+    // BMB-317: a node of the dropdown is two lines (the name, when it was last heard from); the rest of what the row says is under a chevron, closed
+    async the_sync_dropdown_is_two_lines_with_the_rest_under_a_chevron() {
+        const button = fresh('button'); button.id = 'syncStatusBtn';
+        const dropdown = fresh('div'); dropdown.id = 'syncDropdown';
+        const badge = fresh('span'); badge.id = 'syncBadge';
+        const list = fresh('div'); list.id = 'syncNodeList';
+        let html = '';
+        Object.defineProperty(list, 'innerHTML', { configurable: true, get: () => html, set: (v) => { html = v; } });
+        const ago = (s) => new Date(Date.now() - s * 1000).toISOString();
+        const nodes = [
+            { nodeId: 'a', displayName: 'Hetzner', online: true, state: 'answering', canBeCalled: true, isSynced: true, lastContactAt: ago(57), lastContactDirection: 'outbound' },
+            { nodeId: 'b', displayName: 'Blind', online: false, state: 'not_answering', canBeCalled: true, isSynced: false, unsyncedCount: 3, headSeq: 10, lastPushedSeq: 7,
+              notAnsweringSince: ago(600), notAnsweringReason: 'no answer: it did not answer in time', lastContactAt: ago(700) },
+            { nodeId: 'c', displayName: 'OnePlus 12', online: false, state: 'calls_us', canBeCalled: false, isSynced: false, unsyncedCount: 5, headSeq: 10, lastPushedSeq: 5 },
+        ];
+        sandbox.fetch = () => Promise.resolve(jsonResponse({ nodes, isInvisible: false }));
+        loadSyncStatus();
+        await flush();
+        button.listeners.click[0]({ stopPropagation() { } });
+        await flush();
+
+        assert(!/Press "Check now"/.test(html) && !/sync-node-hint/.test(html), 'the hint about Check now is still in the dropdown');
+        const rows = html.split('class="sync-node-item').slice(1);
+        assert(rows.length === 3, 'three nodes were not drawn as three rows: ' + rows.length);
+        const summary = (row) => (/class="sync-node-summary">([^<]*)</.exec(row) || [])[1];
+        assert(summary(rows[0]) === 'Last contact 57s ago', 'the second line of the first node is "' + summary(rows[0]) + '"');
+        assert(/>Hetzner <small[^>]*>ONLINE</.test(rows[0]), 'the name line does not say ONLINE');
+        assert(/class="sync-node-name">Blind <small class="sync-bad"[^>]*>NOT ANSWERING</.test(rows[1]), 'a node that does not answer does not say so on its name line (it must not wait under the chevron)');
+        assert(summary(rows[1]) === 'Last contact 11m ago', 'the second line of the node that does not answer is "' + summary(rows[1]) + '"');
+        assert(summary(rows[2]) === 'No call since this node started', 'the second line of a node that only calls in is "' + summary(rows[2]) + '"');
+        rows.forEach((row, i) => {
+            assert(/class="sync-node-details" hidden>/.test(row), 'the details of node ' + i + ' are not closed');
+            assert(/data-toggle-node="/.test(row) && /aria-expanded="false"/.test(row), 'node ' + i + ' has no closed chevron');
+            assert(/data-check-node="/.test(row) && /<sl-progress-bar/.test(row) === (i > 0), 'Check now and the delivery bar are not both under the chevron for node ' + i);
+        });
+        assert(/waiting for it to call/.test(rows[2]) && !/not delivered/.test(rows[2]), 'a node that calls in is said to be "not delivered" to');
+        assert(/3 changes not delivered/.test(rows[1]), 'the node that is called does not say how many changes are not delivered');
+    },
+    // the chevron opens and closes the details in place, two quick presses of it are no check, and a check opens the row it asks about
+    async the_chevron_opens_the_details_and_a_check_opens_a_closed_row() {
+        const button = fresh('button'); button.id = 'syncStatusBtn';
+        const dropdown = fresh('div'); dropdown.id = 'syncDropdown';
+        const badge = fresh('span'); badge.id = 'syncBadge';
+        const list = fresh('div'); list.id = 'syncNodeList';
+        let html = '';
+        Object.defineProperty(list, 'innerHTML', { configurable: true, get: () => html, set: (v) => { html = v; } });
+        const nodes = [{ nodeId: 'a', displayName: 'A', state: 'answering', canBeCalled: true, isSynced: true, lastContactAt: new Date().toISOString() }];
+        let posts = 0;
+        sandbox.fetch = (url, init) => {
+            if (init && init.method === 'POST') { posts++; return Promise.resolve(fakeResponse(200, JSON.stringify({ outcome: 'answered', node: { unsyncedCount: 0 } }))); }
+            return Promise.resolve(jsonResponse({ nodes, isInvisible: false }));
+        };
+        loadSyncStatus();
+        await flush();
+        button.listeners.click[0]({ stopPropagation() { } });
+        await flush();
+
+        const row = new El('div'); row.setAttribute('data-node-id', 'a'); row.className = 'sync-node-item'; list.appendChild(row);
+        const summary = new El('div'); summary.className = 'sync-node-summary'; row.appendChild(summary);
+        const details = new El('div'); details.className = 'sync-node-details'; details.hidden = true; row.appendChild(details);
+        const chevron = new El('button'); chevron.setAttribute('data-toggle-node', 'a'); chevron.setAttribute('aria-expanded', 'false');
+        chevron.setAttribute('aria-label', 'Show the details of A'); row.appendChild(chevron);
+        const press = () => list.listeners.click[0]({ target: chevron, stopPropagation() { this.stopped = true; } });
+
+        press();
+        assert(details.hidden === false && chevron.getAttribute('aria-expanded') === 'true' && row.classList.contains('is-open'), 'the chevron did not open the details');
+        assert(chevron.getAttribute('aria-label') === 'Hide the details of A', 'the chevron does not say that it hides: ' + chevron.getAttribute('aria-label'));
+        press();
+        assert(details.hidden === true && chevron.getAttribute('aria-expanded') === 'false' && !row.classList.contains('is-open'), 'the chevron did not close the details');
+
+        list.listeners.dblclick[0]({ target: chevron });
+        await flush();
+        assert(posts === 0, 'two quick presses of the chevron made a check');
+
+        list.listeners.dblclick[0]({ target: row });   // the double-click shortcut on a closed row
+        assert(details.hidden === false, 'a check did not open the row that it asks about');
+        await flush();
+        assert(posts === 1, 'the check was not sent');
+        assert(/class="sync-node-item is-open"/.test(html), 'the row drawn again after the check is closed: ' + html.slice(0, 120));
+        assert(/class="sync-node-details">/.test(html) && !/class="sync-node-details" hidden/.test(html), 'the details drawn again are closed');
+    },
+
+    // BMB-316: which failures of the save of a protected article are "the password is needed", and which are not
+    async the_save_of_a_protected_article_tells_a_missing_password_from_other_failures() {
+        const api = loadProtectedSaveDialog();
+        const err = (status, body, message) => Object.assign(new Error(message || ''), { status, body });
+        assert(api.needsPassword(err(400, { error: 'This article is protected — a passphrase is required to edit its content.', code: 'PassphraseRequired' })), 'the code is not the sign');
+        assert(api.needsPassword(err(400, { error: 'This article is protected — a passphrase is required to edit its content.' }, 'This article is protected — a passphrase is required to edit its content.')),
+            'a node or proxy that does not send the code is not understood by its words: the person would get a toast instead of the dialog');
+        assert(api.needsPassword(err(400, null, 'A passphrase is required.')), 'the words alone are not enough when there is no body');
+        assert(!api.needsPassword(err(400, { error: 'Title cannot be empty.' }, 'Title cannot be empty.')), 'a blank title is taken for a missing password');
+        assert(!api.needsPassword(err(403, { error: 'This article is in a read-only folder for your user.' }, 'This article is in a read-only folder for your user.')), 'a refusal of the folder is taken for a missing password');
+        assert(!api.needsPassword(err(0, null, 'The node did not answer.')) && !api.needsPassword(null), 'a failure without a status is taken for a missing password');
+        assert(api.wrongPassword(err(401, { error: 'Wrong passphrase.' }, 'Wrong passphrase.')), 'a wrong password is not told');
+        assert(!api.wrongPassword(err(401, null, 'Your session has ended. Sign in again.')), 'the end of the web session is taken for a wrong password');
+        assert(!api.wrongPassword(err(400, { error: 'Wrong passphrase.' })), 'only a 401 is a wrong password');
+    },
+    // the dialog asks, takes the password, saves with it, and says why it failed without closing or touching anything else
+    async the_password_dialog_saves_with_what_is_typed_and_stays_open_when_it_fails() {
+        const api = loadProtectedSaveDialog();
+        const dialog = new El('sl-dialog'); dialog.open = false; let shown = 0, hidden = 0;
+        dialog.show = () => { dialog.open = true; shown++; };
+        dialog.hide = () => { dialog.open = false; hidden++; };
+        const input = new El('sl-input'); let focused = 0;
+        input.focus = () => { focused++; };
+        const error = new El('div'); error.style.display = 'none';
+        const saveButton = new El('sl-button');
+        const calls = [];
+        let outcome = null;   // what the next save does: a function of fail
+        const reauth = api.attach({ dialog, input, error, saveButton, save: (button, password, fail) => { calls.push({ password, button }); if (outcome) outcome(fail); } });
+        const err = (status, message, body) => Object.assign(new Error(message), { status, body: body || null });
+
+        assert(!reauth.isOpen(), 'the dialog is open before anything asked');
+        input.value = 'left over';
+        reauth.ask('');
+        assert(shown === 1 && reauth.isOpen() && input.value === '' && error.style.display === 'none', 'ask() did not show a clean dialog');
+
+        saveButton.listeners.click[0]();   // nothing typed
+        assert(calls.length === 0 && focused >= 1, 'an empty password was sent');
+
+        input.value = 'wrong';
+        outcome = (fail) => fail(err(401, 'Wrong passphrase.', { error: 'Wrong passphrase.' }));
+        saveButton.listeners.click[0]();
+        assert(calls.length === 1 && calls[0].password === 'wrong' && calls[0].button === saveButton, 'the save was not asked with what was typed and the busy button');
+        assert(/Wrong password/.test(error.textContent) && error.style.display === '', 'a wrong password is not said in the dialog: "' + error.textContent + '"');
+        assert(dialog.open === true && hidden === 0, 'the dialog closed after a wrong password');
+
+        input.value = 'again';
+        outcome = (fail) => fail(err(403, 'This article is in a read-only folder for your user.'));
+        let enter = false;
+        input.listeners.keydown[0]({ key: 'Enter', preventDefault() { enter = true; } });   // Enter saves, as the button does
+        assert(enter && calls.length === 2 && calls[1].password === 'again', 'Enter did not save');
+        assert(error.textContent === 'This article is in a read-only folder for your user.' && dialog.open === true, 'another refusal is not said in the dialog, or closes it');
+
+        input.listeners.keydown[0]({ key: 'a', preventDefault() { throw new Error('a letter was taken'); } });
+        assert(calls.length === 2, 'a letter saved');
+
+        // what is inside the dialog does not count as the dialog being shown or hidden; its own hiding wipes the password and the words
+        input.value = 'secret';
+        dialog.listeners['sl-after-hide'][0]({ target: new El('sl-tooltip') });
+        assert(input.value === 'secret', 'the hiding of something inside the dialog wiped the password');
+        dialog.listeners['sl-after-hide'][0]({ target: dialog });
+        assert(input.value === '' && error.style.display === 'none', 'the password was left in the page after the dialog was closed');
+    },
+
+    // BMB-318: the strip over the editor counts the remembered password down, says when the time is out, and does not keep a timer after that
+    async the_unlock_strip_over_the_editor_counts_down_and_says_when_the_time_is_out() {
+        const api = loadProtectedSaveDialog();
+        const banner = new El('div'); banner.style.display = 'none';
+        const counting = new El('span'); const over = new El('span'); over.style.display = 'none';
+        const note = new El('small'); const remaining = new El('strong');
+        let t = 1000000;
+        const strip = api.unlockBanner({ banner, counting, remaining, note, over, now: () => t });
+        const shown = (el) => el.style.display !== 'none';
+
+        strip.start(null);
+        assert(!shown(banner), 'a strip was shown for an article that is not unlocked');
+
+        strip.start(125);
+        assert(shown(banner) && shown(counting) && shown(note) && !shown(over), 'the counting strip is not shown');
+        assert(remaining.textContent === '3 min', 'two minutes and five seconds do not read "3 min": "' + remaining.textContent + '"');
+        assert(intervals.size === 1, 'there is not exactly one timer: ' + intervals.size);
+        t += 70000;
+        [...intervals.values()][0].fn();
+        assert(remaining.textContent === '55 s', 'the rest does not read "55 s": "' + remaining.textContent + '"');
+        t += 55000;
+        [...intervals.values()][0].fn();
+        assert(shown(banner) && !shown(counting) && !shown(note) && shown(over), 'the strip does not say that the time is out');
+        assert(intervals.size === 0, 'a timer is left running after the time is out');
+
+        strip.start(120);   // unlocked again
+        assert(shown(counting) && !shown(over) && remaining.textContent === '2 min' && intervals.size === 1, 'a new unlock does not start the count again');
+        strip.expire();     // the node says the password is gone (a save was refused for it)
+        assert(shown(over) && !shown(counting) && intervals.size === 0, 'expire() does not stop the count and say so');
+        strip.start(0);
+        assert(shown(over) && intervals.size === 0, 'an unlock with no time left starts a timer');
+    },
+    // BMB-319: the strip says hours when the time is long ("8 h", "2 h 15 min"), minutes round up, and a strip that runs out closes the slider
+    async the_strip_says_hours_for_a_long_time_and_closes_the_slider_when_the_time_is_out() {
+        const api = loadProtectedSaveDialog();
+        const f = api.formatSpan;
+        const said = [[45, '45 s'], [60, '1 min'], [61, '2 min'], [3540, '59 min'], [3599, '1 h'], [3600, '1 h'], [3601, '1 h 1 min'], [8100, '2 h 15 min'], [28800, '8 h'], [28740, '7 h 59 min']];
+        for (const [sec, text] of said) assert(f(sec) === text, sec + ' s reads "' + f(sec) + '", not "' + text + '"');
+
+        const banner = new El('div'); const counting = new El('span'); const over = new El('span'); over.style.display = 'none';
+        const note = new El('small'); const remaining = new El('strong');
+        let t = 5000000, closed = 0;
+        const strip = api.unlockBanner({ banner, counting, remaining, note, over, now: () => t, onExpire: () => { closed++; } });
+        strip.start(28800);
+        assert(remaining.textContent === '8 h', 'eight hours read "' + remaining.textContent + '"');
+        t += 28800 * 1000;
+        [...intervals.values()][0].fn();
+        assert(closed === 1 && over.style.display !== 'none', 'the time that ran out did not close the slider');
+        strip.start(600); strip.expire();
+        assert(closed === 2, 'expire() did not close the slider');
+    },
+    // BMB-319: the slider moves in steps of 15 min between 15 min and 8 h, says what it is set to while it moves, and applies the time when it is let go
+    async the_unlock_time_of_one_article_is_chosen_on_a_slider_that_applies_when_it_is_let_go() {
+        const api = loadProtectedSaveDialog();
+        const link = new El('a'); link.textContent = 'change';
+        const panel = new El('span'); panel.style.display = 'none';
+        const range = new El('sl-range'); const picked = new El('strong');
+        const requests = [], applied = [], failed = [];
+        let answer = (seconds) => Promise.resolve({ unlockExpiresInSeconds: seconds - 3, unlockDurationSeconds: seconds });
+        const picker = api.durationPicker({
+            link, panel, range, picked,
+            request: (s) => { requests.push(s); return answer(s); },
+            applied: (b) => applied.push(b), failed: (e) => failed.push(e)
+        });
+        const shown = () => panel.style.display !== 'none';
+        const press = () => link.listeners.click[0]({ preventDefault() { } });
+        const letGo = async () => { range.listeners['sl-change'][0](); await flush(); };
+
+        assert(!shown() && link.textContent === 'change' && !picker.isOpen(), 'the slider is open before "change" was pressed');
+        press();
+        assert(shown() && link.textContent === 'close' && picker.isOpen(), '"change" did not open the slider');
+        press();
+        assert(!shown() && link.textContent === 'change', 'the link did not close the slider again');
+
+        picker.setSeconds(900);
+        assert(range.value === 15 && picked.textContent === '15 min', 'the standard time is not on the slider: ' + range.value + ' ' + picked.textContent);
+        picker.setSeconds(130 * 60);
+        assert(range.value === 135 && picked.textContent === '2 h 15 min', 'a time between two steps is not rounded to a step: ' + range.value);
+        picker.setSeconds(100 * 3600);
+        assert(range.value === 480 && picked.textContent === '8 h', 'a time over 8 h is not held at 8 h: ' + range.value);
+        picker.setSeconds(120);   // the node-wide time can be set shorter by BMB_PROTECTED_UNLOCK_SECONDS; the slider never goes under 15 min
+        assert(range.value === 15, 'a time under 15 min is not held at 15 min: ' + range.value);
+        picker.setSeconds(null);
+        assert(range.value === 15, 'a missing time is not the standard time');
+
+        // moving the handle says the time and sends nothing
+        press();
+        range.value = 135; range.listeners['sl-input'][0]();
+        assert(picked.textContent === '2 h 15 min' && requests.length === 0 && shown(), 'moving the handle sent or closed something');
+
+        // letting go sends it, the slider goes, and what the node answers goes to the page
+        range.listeners['sl-change'][0]();
+        assert(range.disabled === true, 'the slider can be moved while the time is being sent');
+        await flush();
+        assert(requests.length === 1 && requests[0] === 135 * 60, 'the time was not sent in seconds: ' + requests);
+        assert(applied.length === 1 && applied[0].unlockExpiresInSeconds === 8097 && failed.length === 0, 'the answer of the node did not come to the page');
+        assert(!shown() && range.disabled === false && link.textContent === 'change', 'the slider did not go away after the time was applied');
+        assert(range.value === 135, 'the slider does not stay on the time the node says it keeps');
+
+        // the node says it is locked already (409), or fails: the slider goes, the page is told, nothing is applied
+        answer = () => Promise.reject(Object.assign(new Error('This article is locked. Enter its password again.'), { status: 409 }));
+        press(); range.value = 30; await letGo();
+        assert(failed.length === 1 && failed[0].status === 409 && applied.length === 1 && !shown() && range.disabled === false, 'a refusal was not told or left the slider open');
+        answer = () => { throw new Error('the request could not even start'); };
+        press(); range.value = 45; await letGo();
+        assert(failed.length === 2 && applied.length === 1 && !shown() && range.disabled === false, 'a request that throws was not turned into a failure');
+
+        picker.close();
+        assert(!shown(), 'close() left the slider open');
+    },
     // F13: the single-page navigation replaces the content while an operation runs
     async an_operation_of_a_replaced_page_closes_its_popup_and_says_its_result_as_a_notice() {
         const content = fresh('div');

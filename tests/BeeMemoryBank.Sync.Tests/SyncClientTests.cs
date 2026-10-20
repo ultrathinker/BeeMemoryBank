@@ -624,6 +624,64 @@ public class SyncClientTests : IAsyncLifetime
         laterApplied.SequenceNum.Should().BeGreaterThan(skipped.SequenceNum);
     }
 
+    // BMB-315: the events after the cursor are all the peer's own (a push never sends them back). The cursor used to stay where it was for
+    // ever, so the delivery status read "151 changes not delivered" next to an empty push; it now moves to the head, and "last delivery"
+    // (pushed_at) keeps the time something was last really delivered.
+    [Fact]
+    public async Task Push_WhenOnlyThePeersOwnEventsAreLeft_MovesTheCursorToTheHeadAndKeepsLastDelivery()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var initialSequence = await _node.EventLogRepo.GetMaxSequenceAsync();
+        var lastDelivery = new DateTime(2026, 10, 7, 12, 0, 0, DateTimeKind.Utc);
+        var positions = new SyncPushPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPushPosition { RemoteNodeId = _remoteNodeId, LastPushedSeq = initialSequence, PushedAt = lastDelivery });
+        await AppendOutgoingEventAsync("{}", authoredBy: _remoteNodeId);
+        await AppendOutgoingEventAsync("{}", authoredBy: _remoteNodeId);
+        var head = (await AppendOutgoingEventAsync("{}", authoredBy: _remoteNodeId)).SequenceNum;
+        (await _node.EventLogRepo.CountEventsAfterSequenceAsync(initialSequence)).Should().Be(3);
+        (await _node.EventLogRepo.CountEventsToRelayAfterAsync(_remoteNodeId, initialSequence)).Should().Be(0, "nothing is owed to the peer");
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        _mockHandler.CallLog.Should().NotContain("POST /api/sync/events", "there was nothing to send");
+        var after = (await positions.GetAsync(_remoteNodeId))!;
+        after.LastPushedSeq.Should().Be(head, "the cursor passes what the peer wrote itself");
+        after.PushedAt.Should().BeCloseTo(lastDelivery, TimeSpan.FromSeconds(1), "nothing was delivered, so the last delivery is still the old one");
+    }
+
+    [Fact]
+    public async Task Push_WhenASendIsStalled_DoesNotMoveTheCursorOverTheTailOfTheLog()
+    {
+        MapIdentity(SyncProtocolVersion.Current);
+        var initialSequence = await _node.EventLogRepo.GetMaxSequenceAsync();
+        var positions = new SyncPushPositionRepository(_node.Factory);
+        await positions.UpsertAsync(new SyncPushPosition { RemoteNodeId = _remoteNodeId, LastPushedSeq = initialSequence, PushedAt = DateTime.UtcNow });
+        var skipped = await AppendOutgoingEventAsync("{}");
+        await AppendOutgoingEventAsync("{}", authoredBy: _remoteNodeId);
+        _mockHandler.MapRoute("/api/sync/events", request => request.Method == HttpMethod.Get
+            ? JsonResponse("[]")
+            : JsonResponse(JsonSerializer.Serialize(new { applied = 0, skipped = 1, dropped = 0, lastAppliedSequence = (long?)null })));
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        (await positions.GetAsync(_remoteNodeId))!.LastPushedSeq.Should().Be(initialSequence,
+            "a skipped event is still owed: the peer's own event after it must not carry the cursor past it");
+        skipped.SequenceNum.Should().BeGreaterThan(initialSequence);
+    }
+
+    [Fact]
+    public async Task CountEventsToRelayAfter_LeavesOutWhatThePeerWroteItself()
+    {
+        var total = await _node.EventLogRepo.CountEventsAfterSequenceAsync(0);
+        await AppendOutgoingEventAsync("{}");
+        await AppendOutgoingEventAsync("{}", authoredBy: _remoteNodeId);
+        await AppendOutgoingEventAsync("{}", authoredBy: _remoteNodeId);
+
+        (await _node.EventLogRepo.CountEventsAfterSequenceAsync(0)).Should().Be(total + 3);
+        (await _node.EventLogRepo.CountEventsToRelayAfterAsync(_remoteNodeId, 0)).Should().Be(total + 1);
+        (await _node.EventLogRepo.CountEventsToRelayAfterAsync(Guid.NewGuid(), 0)).Should().Be(total + 3, "another peer is owed all of it");
+    }
+
     [Fact]
     public async Task Push_WhenASkippedEventPrecedesADroppedEvent_DoesNotAdvancePastTheSkip()
     {
@@ -822,13 +880,13 @@ public class SyncClientTests : IAsyncLifetime
             }), Encoding.UTF8, "application/json")
         });
 
-    private async Task<SyncEvent> AppendOutgoingEventAsync(string payload)
+    private async Task<SyncEvent> AppendOutgoingEventAsync(string payload, Guid? authoredBy = null)
     {
         var identity = (await _node.NodeRepo.GetAsync())!;
         var evt = new SyncEvent
         {
             EventId = Guid.NewGuid(),
-            NodeId = identity.NodeId,
+            NodeId = authoredBy ?? identity.NodeId,
             LamportTs = await _node.EventLogRepo.GetMaxLamportTimestampAsync() + 1,
             EventType = "test_event",
             Payload = payload,

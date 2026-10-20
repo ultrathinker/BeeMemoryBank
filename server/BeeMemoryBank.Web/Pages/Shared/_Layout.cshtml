@@ -28,15 +28,15 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>@ViewData["Title"] - @brandName</title>
-    <script type="module" src="/js/shoelace-init.js"></script>
-    <link rel="stylesheet" href="/lib/shoelace/themes/light.css" />
-    <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" />
+    <script type="module" src="/js/shoelace-init.js" asp-append-version="true"></script>
+    <link rel="stylesheet" href="/lib/shoelace/themes/light.css" asp-append-version="true" />
+    <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" asp-append-version="true" />
     <link href="/css/site.css" rel="stylesheet" asp-append-version="true" />
     @await RenderSectionAsync("HeadStyles", required: false)
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-    <script src="/lib/marked/marked.umd.js"></script>
-    <script src="/lib/dompurify/purify.min.js"></script>
-    <script src="/js/theme-init.js"></script>
+    <script src="/lib/marked/marked.umd.js" asp-append-version="true"></script>
+    <script src="/lib/dompurify/purify.min.js" asp-append-version="true"></script>
+    <script src="/js/theme-init.js" asp-append-version="true"></script>
     <script src="/js/layout.js" asp-append-version="true"></script>
 </head>
 <body data-username="@themeUser">
@@ -113,7 +113,11 @@
                     <sl-icon name="eye-slash"></sl-icon>
                 </span>
                 <div class="sync-dropdown" id="syncDropdown" style="display:none;">
-                    <div class="sync-dropdown-header">Sync Status</div>
+                    @* BMB-322: the title opens the network map (this node and the nodes it knows, with the calls between them). *@
+                    <a class="sync-dropdown-header" href="/Network" title="Open the network map">
+                        <span>Sync Status</span>
+                        <span class="sync-dropdown-map"><sl-icon name="diagram-3"></sl-icon> Network map <sl-icon name="chevron-right"></sl-icon></span>
+                    </a>
                     <div id="syncNodeList" class="sync-node-list">Loading...</div>
                 </div>
             </div>
@@ -183,7 +187,7 @@
         @RenderBody()
     </div>
 
-    <script src="/lib/vendor.min.js"></script>
+    <script src="/lib/vendor.min.js" asp-append-version="true"></script>
     <script src="/js/bmb-busy.js" asp-append-version="true"></script>
     <script src="/js/site-tree.js" asp-append-version="true"></script>
     <script src="/js/site-search.js" asp-append-version="true"></script>

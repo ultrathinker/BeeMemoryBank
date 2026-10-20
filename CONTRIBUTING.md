@@ -114,6 +114,7 @@ The project uses these conventions (enforced via `Directory.Build.props` and `.e
 - Request/Response records in `server/BeeMemoryBank.Api/Models/Requests.cs` and `Responses.cs`
 - Migrations are embedded SQL files in `libs/BeeMemoryBank.Storage/Migrations/NNN_name.sql`: today only `040_baseline.sql` (the whole schema), so a new migration is `041_name.sql`; the baseline is generated, never edited (see `AGENTS.md`)
 - UI uses [Shoelace 2](https://shoelace.style/) web components
+- Every script and stylesheet a Razor page names carries `asp-append-version="true"`: the address becomes `file.js?v=<hash of the content>`, so a changed file is a new address and a browser cannot keep the copy of an older version (there is no version number to raise by hand). The Web host sends `Cache-Control: public, max-age=31536000, immutable` for `?v=` addresses and `no-cache` (revalidate, a 304 when unchanged) for any other script or style, such as a file a script loads itself. `StaticAssetCachingTests` fails for a page tag without it
 - All code, comments, and UI text must be in English
 
 ## Pull Request Process

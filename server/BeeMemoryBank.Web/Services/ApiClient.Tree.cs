@@ -148,15 +148,30 @@ public partial class ApiClient
 
     // ─── Protected ("second-layer") articles ───────────────────────────────────
 
-    public async Task<(bool ok, int status, string? content, int? expiresInSeconds, string? error)> UnlockArticleAsync(Guid id, string passphrase)
+    public async Task<(bool ok, int status, string? content, int? expiresInSeconds, int? durationSeconds, string? error)> UnlockArticleAsync(Guid id, string passphrase)
     {
         var resp = await http.PostAsync($"/api/articles/{id}/unlock", Body(new { passphrase }));
         if (resp.IsSuccessStatusCode)
         {
             var dto = await resp.Content.ReadFromJsonAsync<UnlockArticleDto>(JsonOpts);
-            return (true, (int)resp.StatusCode, dto?.Content, dto?.UnlockExpiresInSeconds, null);
+            return (true, (int)resp.StatusCode, dto?.Content, dto?.UnlockExpiresInSeconds, dto?.UnlockDurationSeconds, null);
         }
-        return (false, (int)resp.StatusCode, null, null, await ReadErrorAsync(resp));
+        return (false, (int)resp.StatusCode, null, null, null, await ReadErrorAsync(resp));
+    }
+
+    // The time ONE unlocked article keeps its password for (15 min .. 8 h). The refusal keeps the node's code ("NotUnlocked" when the article locked meanwhile),
+    // so the page can tell "ask for the password again" from a bad number.
+    public async Task<(UnlockDurationDto? Result, int Status, string? Error, string? Code)> SetUnlockDurationAsync(Guid id, int seconds)
+    {
+        var resp = await http.PostAsync($"/api/articles/{id}/unlock-duration", Body(new { seconds }));
+        if (resp.IsSuccessStatusCode)
+            return (await resp.Content.ReadFromJsonAsync<UnlockDurationDto>(JsonOpts), (int)resp.StatusCode, null, null);
+        try
+        {
+            var err = await resp.Content.ReadFromJsonAsync<JsonNode>(JsonOpts);
+            return (null, (int)resp.StatusCode, err?["error"]?.GetValue<string>(), err?["code"]?.GetValue<string>());
+        }
+        catch { return (null, (int)resp.StatusCode, null, null); }
     }
 
     public async Task<(bool ok, int status, string? error)> ProtectArticleAsync(Guid id, string passphrase, string? hint)

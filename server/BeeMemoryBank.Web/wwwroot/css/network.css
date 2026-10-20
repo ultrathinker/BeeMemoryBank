@@ -1,0 +1,164 @@
+/* ===== Network map page (BMB-322) ===== */
+.net-scope {
+    /* what the colours mean: the same on the rings, the arrows, the cards and the table */
+    --net-ok: var(--sl-color-success-600, #16a34a);
+    --net-bad: var(--sl-color-danger-600, #dc2626);
+    --net-warn: var(--sl-color-warning-600, #d97706);
+    --net-idle: var(--text-secondary, #6a7380);
+    --net-rule: var(--text-secondary, #6a7380);
+}
+.net-scope .tone-ok { --tone: var(--net-ok); }
+.net-scope .tone-bad { --tone: var(--net-bad); }
+.net-scope .tone-warn { --tone: var(--net-warn); }
+.net-scope .tone-idle { --tone: var(--net-idle); }
+.net-scope .tone-rule { --tone: var(--net-rule); }
+.net-scope .tone-self { --tone: var(--accent, #2563eb); }
+
+.net-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 4px; }
+.net-title { font-size: 1.4rem; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 8px; }
+.net-sub { color: var(--text-secondary); margin: 0 0 14px; max-width: 78ch; font-size: .92rem; }
+.net-tools { display: flex; align-items: center; gap: 10px; font-size: .82rem; color: var(--text-secondary); }
+#net-note.is-bad { color: var(--net-bad); }
+
+.net-invisible {
+    margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--net-warn); border-radius: 10px; font-size: .86rem;
+    background: color-mix(in srgb, var(--net-warn) 10%, transparent);
+}
+
+.net-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 10px; font-size: .8rem; color: var(--text-secondary); }
+.net-legend-item { display: inline-flex; align-items: center; gap: 7px; }
+.net-legend svg { width: 38px; height: 14px; overflow: visible; flex: none; }
+.net-legend .lg-line { fill: none; stroke: var(--tone); stroke-width: 2.4; stroke-linecap: round; }
+.net-legend .lg-ok .lg-line { stroke-dasharray: 7 9; }
+.net-legend .lg-bad .lg-line { stroke-dasharray: 3 7; }
+.net-legend .lg-rule .lg-line { stroke-width: 1.6; stroke-dasharray: 2 7; }
+.net-legend .lg-head { fill: var(--tone); }
+.net-legend .lg-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--tone); }
+
+#net-stage {
+    position: relative; width: 100%; max-width: 1180px; margin: 0 auto; min-height: 420px;
+    border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
+    background-color: var(--bg-secondary);
+    background-image:
+        radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent, #2563eb) 11%, transparent), transparent 62%),
+        radial-gradient(color-mix(in srgb, var(--text-secondary) 26%, transparent) 1px, transparent 1.3px);
+    background-size: auto, 24px 24px;
+}
+.net-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); gap: 10px; }
+.net-empty {
+    position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(520px, calc(100% - 32px)); text-align: center;
+    font-size: .88rem; color: var(--text-secondary); pointer-events: none;
+}
+
+.net-map { display: block; max-width: 100%; height: auto; font-family: var(--sl-font-sans, system-ui, sans-serif); user-select: none; }
+
+/* ---- a node ---- */
+.net-node { cursor: pointer; outline: none; transition: opacity .2s; animation: net-in .55s ease both; animation-delay: var(--delay, 0ms); }
+.net-halo { fill: var(--tone); opacity: .1; transition: opacity .2s; }
+.net-node.tone-ok .net-halo, .net-node.tone-self .net-halo { animation: net-breathe 3.2s ease-in-out infinite; }
+.net-ring { fill: var(--bg-secondary); stroke: var(--tone); stroke-width: 3; transition: stroke-width .15s, filter .15s; }
+.net-node:hover .net-halo, .net-node.is-focus .net-halo, .net-node:focus-visible .net-halo { opacity: .3; animation: none; }
+.net-node:hover .net-ring, .net-node.is-focus .net-ring { stroke-width: 4.6; filter: drop-shadow(0 0 9px var(--tone)); }
+.net-node:focus-visible .net-ring { stroke-dasharray: 7 5; stroke-width: 4; }
+.net-node.is-self .net-ring { stroke-width: 3.8; }
+.net-dot { fill: var(--tone); stroke: var(--bg-secondary); stroke-width: 2.6; }
+
+.net-glyph { fill: none; stroke: var(--g, var(--text-secondary)); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; transition: transform .2s; transform-box: fill-box; transform-origin: center; }
+.net-node:hover .net-glyph, .net-node.is-focus .net-glyph { transform: scale(1.1); }
+.net-glyph .g-fill { fill: var(--g, var(--text-secondary)); stroke: none; }
+.net-glyph .g-tint { fill: var(--g, var(--text-secondary)); fill-opacity: .16; }
+.net-glyph.is-windows { --g: #3b9cff; }
+.net-glyph.is-mac { --g: #8f9bb0; }
+.net-glyph.is-linux { --g: #f5b73b; }
+.net-glyph.is-android { --g: #3ddc84; }
+.net-glyph.is-iphone { --g: #9b8cff; }
+
+.net-badge circle { fill: var(--bg-primary); stroke: var(--border); stroke-width: 1.5; }
+.net-badge-glyph { fill: none; stroke: var(--bg-g); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.net-badge-glyph .g-fill { fill: var(--bg-g); stroke: none; }
+.net-badge-glyph.is-docker { --bg-g: #2496ed; }
+.net-badge-glyph.is-blind { --bg-g: #9b8cff; }
+
+.net-name { font-size: 15px; font-weight: 650; fill: var(--text-primary); paint-order: stroke; stroke: var(--bg-secondary); stroke-width: 5px; stroke-linejoin: round; }
+.net-caption { font-size: 12px; fill: var(--text-secondary); paint-order: stroke; stroke: var(--bg-secondary); stroke-width: 4px; stroke-linejoin: round; }
+.net-self-pill rect { fill: color-mix(in srgb, var(--accent, #2563eb) 24%, var(--bg-secondary)); stroke: var(--accent, #2563eb); stroke-width: 1.2; }
+.net-self-pill text { font-size: 10px; font-weight: 700; letter-spacing: .09em; fill: var(--text-primary); }
+
+/* ---- a call ---- */
+.net-link { transition: opacity .2s; }
+.net-link-line { fill: none; stroke: var(--tone); stroke-width: 2.4; stroke-linecap: round; transition: stroke-width .15s; }
+.net-link.tone-ok .net-link-line { stroke-dasharray: 7 9; animation: net-flow 1s linear infinite; }
+.net-link.tone-bad .net-link-line { stroke-dasharray: 3 7; }
+.net-link.tone-warn .net-link-line { stroke-dasharray: 9 5; }
+.net-link.tone-idle .net-link-line { stroke-width: 1.9; }
+.net-link.tone-rule .net-link-line { stroke-width: 1.5; stroke-dasharray: 2 7; opacity: .6; }
+.net-link-hit { fill: none; stroke: transparent; stroke-width: 20; cursor: help; pointer-events: stroke; }
+.net-link:hover .net-link-line, .net-link.is-related .net-link-line { stroke-width: 3.8; filter: drop-shadow(0 0 5px var(--tone)); }
+.net-arrow { fill: var(--net-idle); }
+.net-arrow.tone-ok { fill: var(--net-ok); }
+.net-arrow.tone-bad { fill: var(--net-bad); }
+.net-arrow.tone-warn { fill: var(--net-warn); }
+.net-arrow.tone-idle { fill: var(--net-idle); }
+.net-arrow.tone-rule { fill: var(--net-rule); }
+.net-link-tag { font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: var(--text-secondary); paint-order: stroke; stroke: var(--bg-secondary); stroke-width: 4px; stroke-linejoin: round; pointer-events: none; }
+
+.net-map.has-focus .net-node:not(.is-focus):not(.is-neighbour) { opacity: .4; }
+.net-map.has-focus .net-link:not(.is-related) { opacity: .14; }
+
+@keyframes net-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes net-breathe { 0%, 100% { opacity: .08; } 50% { opacity: .2; } }
+@keyframes net-flow { to { stroke-dashoffset: -16; } }
+@keyframes net-pop-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* ---- the card ---- */
+.net-pop {
+    position: absolute; z-index: 5; width: 316px; max-width: calc(100% - 16px); padding: 12px 14px 10px;
+    background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .3); pointer-events: none; font-size: .84rem; animation: net-pop-in .14s ease-out;
+}
+.net-pop.is-pinned { pointer-events: auto; border-color: var(--accent, #2563eb); user-select: text; }
+.net-pop.is-sheet { left: 8px; right: 8px; bottom: 8px; top: auto; width: auto; max-width: none; }
+.net-pop[hidden] { display: none; }
+.net-pop-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.net-pop-glyph { width: 40px; height: 40px; flex: none; }
+.net-pop-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.net-pop-title strong { font-size: .98rem; overflow-wrap: anywhere; }
+.net-pop-title small { color: var(--text-secondary); }
+.net-pop-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--tone); flex: none; box-shadow: 0 0 8px var(--tone); }
+.net-pop-arrow { font-size: 1.5rem; font-weight: 700; line-height: 1; color: var(--tone); flex: none; width: 40px; text-align: center; }
+.net-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.net-chip { font-size: .72rem; padding: 1px 9px; border-radius: 999px; border: 1px solid currentColor; }
+.net-chip.is-docker { color: #2496ed; }
+.net-chip.is-blind { color: #9b8cff; }
+.net-pop-rows { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.net-pop-rows dt { color: var(--text-secondary); }
+.net-pop-rows dd { margin: 0; overflow-wrap: anywhere; }
+.net-pop-note { margin: 8px 0 0; color: var(--text-secondary); font-size: .78rem; }
+.net-pop-hint { margin: 8px 0 0; color: var(--text-secondary); font-size: .74rem; opacity: .85; }
+
+/* ---- the table under the map ---- */
+.net-calls { max-width: 1180px; margin: 22px auto 0; }
+.net-calls h2 { font-size: 1.05rem; margin: 0 0 4px; }
+.net-calls p { margin: 0 0 6px; color: var(--text-secondary); font-size: .84rem; }
+.net-table-wrap { overflow-x: auto; }
+.net-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+.net-table th { text-align: left; color: var(--text-secondary); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.net-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.net-table-empty { color: var(--text-secondary); text-align: center; }
+.net-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.net-pill { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: .72rem; border: 1px solid var(--tone); color: var(--tone); white-space: nowrap; }
+
+/* on a phone the table is a list of small cards: a row is one call, each cell says what it is */
+@media (max-width: 640px) {
+    .net-table thead { display: none; }
+    .net-table, .net-table tbody, .net-table tr, .net-table td { display: block; width: 100%; }
+    .net-table tr { padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .net-table td { border: 0; padding: 2px 4px; }
+    .net-table td[data-label]::before { content: attr(data-label) ": "; color: var(--text-secondary); }
+    .net-table td.net-mono { overflow-wrap: anywhere; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .net-node, .net-link-line, .net-halo, .net-pop { animation: none !important; }
+    .net-glyph { transition: none; }
+}

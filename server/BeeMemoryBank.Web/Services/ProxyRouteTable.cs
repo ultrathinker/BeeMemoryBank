@@ -140,6 +140,8 @@ public static class ProxyRouteTable
         //    are local and explicit rather than an upstream 403) ──
         ["sync/status"] = new("/api/sync/status", [new("GET", UserRoles.Superadmin)]),
         ["sync/delivery-status"] = new("/api/sync/delivery-status", [new("GET", UserRoles.Superadmin)]),
+        // The network map (BMB-322): this node, the nodes it knows and who calls whom.
+        ["sync/network"] = new("/api/sync/network", [new("GET", UserRoles.Superadmin)]),
         ["sync/invisible"] = new("/api/sync/invisible",
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin)]),
         // A double-click on a node of the sync status: this node asks that node now (/api/sync/nodes/{id}/check).

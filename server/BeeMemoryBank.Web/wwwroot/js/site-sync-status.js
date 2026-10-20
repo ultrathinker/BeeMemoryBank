@@ -67,6 +67,21 @@
         return c.html;
     }
 
+    // BMB-317: in the dropdown a node is two lines, its name and when it was last heard from; everything else (the whole of what the row says, the delivery
+    // bar, Check now) is under the chevron. Which nodes are open is kept across the redraws and, for the session, across the pages.
+    var expanded = {};   // node id -> true while its details are open
+    try {
+        var savedOpen = JSON.parse(sessionStorage.getItem('bmbSyncNodesOpen') || '{}');
+        if (savedOpen && typeof savedOpen === 'object') expanded = savedOpen;
+    } catch (e) { /* no session storage here: the rows start closed */ }
+    function rememberOpen() {
+        try { sessionStorage.setItem('bmbSyncNodesOpen', JSON.stringify(expanded)); } catch (e) { /* only a convenience */ }
+    }
+    function setOpen(id, open) {
+        if (open) expanded[id] = true; else delete expanded[id];
+        rememberOpen();
+    }
+
     function nodeMeta(n) {
         if (checking[n.nodeId]) {
             return '<sl-spinner style="font-size:0.9rem;vertical-align:-2px;"></sl-spinner> Checking this node now...';
@@ -88,16 +103,34 @@
             lines.push('No contact since this node started');
         }
         var pushed = n.lastPushAt ? 'last delivery ' + getRelativeTime(n.lastPushAt) : 'nothing delivered yet';
+        var plural = n.unsyncedCount === 1 ? '' : 's';
         lines.push(n.isSynced
             ? 'All changes delivered' + (n.lastPushAt ? ' \u00b7 ' + pushed : '')
-            : n.unsyncedCount + ' change' + (n.unsyncedCount === 1 ? '' : 's') + ' not delivered \u00b7 ' + pushed);
+            // A node without an address cannot be called: it fetches its changes itself, so they are waiting for it, not "not delivered".
+            : n.unsyncedCount + ' change' + plural + (n.canBeCalled === false ? ' waiting for it to call' : ' not delivered') + ' \u00b7 ' + pushed);
         var found = checkLine(n);
         if (found) lines.push(found);
         return lines.join('<br>');
     }
 
+    // After the name: green when it is alive, red when this node calls it and gets no answer (a failure is not left to be found under the chevron).
     function nodeName(n, size) {
-        return syncEscapeHtml(n.displayName) + (n.online ? ' <small style="color:var(--sl-color-success-600);font-size:' + size + ';">ONLINE</small>' : '');
+        var tag = n.state === 'not_answering'
+            ? ' <small class="sync-bad" style="font-size:' + size + ';">NOT ANSWERING</small>'
+            : n.online ? ' <small style="color:var(--sl-color-success-600);font-size:' + size + ';">ONLINE</small>' : '';
+        return syncEscapeHtml(n.displayName) + tag;
+    }
+
+    // The second line of a closed row: when it was last heard from, in either direction.
+    function summaryLine(n) {
+        if (checking[n.nodeId]) return '<sl-spinner style="font-size:0.9rem;vertical-align:-2px;"></sl-spinner> Checking this node now...';
+        if (n.lastContactAt) return 'Last contact ' + getRelativeTime(n.lastContactAt);
+        return n.state === 'calls_us' ? 'No call since this node started' : 'No contact since this node started';
+    }
+
+    function toggleButton(n, open) {
+        return '<button type="button" class="sync-node-toggle" data-toggle-node="' + syncEscapeHtml(n.nodeId) + '" aria-expanded="' + (open ? 'true' : 'false') +
+            '" aria-label="' + (open ? 'Hide' : 'Show') + ' the details of ' + syncEscapeHtml(n.displayName) + '"><sl-icon name="chevron-down"></sl-icon></button>';
     }
 
     function deliveryBar(n, height, margin) {
@@ -115,14 +148,19 @@
     }
 
     function dropdownRow(n) {
-        return '<div class="sync-node-item" data-node-id="' + syncEscapeHtml(n.nodeId) + '" title="Double-click to check this node now">' +
+        var open = !!expanded[n.nodeId];
+        return '<div class="sync-node-item' + (open ? ' is-open' : '') + '" data-node-id="' + syncEscapeHtml(n.nodeId) + '" title="Double-click to check this node now">' +
             '<sl-icon name="' + getNodeIcon(n) + '" style="font-size:1.1rem;color:' + (n.online ? 'var(--accent)' : 'var(--text-secondary)') + ';"></sl-icon>' +
             '<div class="sync-node-info">' +
                 '<div class="sync-node-name">' + nodeName(n, '0.65rem') + '</div>' +
-                '<div class="sync-node-meta">' + nodeMeta(n) + '</div>' +
-                checkButton(n) +
-                deliveryBar(n, '4px', '4px') +
+                '<div class="sync-node-summary">' + summaryLine(n) + '</div>' +
+                '<div class="sync-node-details"' + (open ? '' : ' hidden') + '>' +
+                    '<div class="sync-node-meta">' + nodeMeta(n) + '</div>' +
+                    checkButton(n) +
+                    deliveryBar(n, '4px', '4px') +
+                '</div>' +
             '</div>' +
+            toggleButton(n, open) +
         '</div>';
     }
 
@@ -162,9 +200,15 @@
         if (checking[id]) return;
         checking[id] = true;
         delete checks[id];
+        // The answer is written in the details: a node that is asked is opened, or the answer would be there and not seen.
+        setOpen(id, true);
         // At once, before anything is fetched: the row says it is working.
         var meta = row && row.querySelector('.sync-node-meta');
         if (meta) meta.innerHTML = nodeMeta({ nodeId: id });
+        var summary = row && row.querySelector('.sync-node-summary');
+        if (summary) summary.innerHTML = summaryLine({ nodeId: id });
+        var details = row && row.querySelector('.sync-node-details');
+        if (details) details.hidden = false;
         redraw();
         // The one busy helper (BMB-311): the row is marked working; the answer, or why there is none, is written on the row itself.
         bmbBusy.run(row || null, function () {
@@ -183,15 +227,36 @@
         }).then(function () { delete checking[id]; redraw(); });
     }
 
+    // The chevron of a row: its details open or close where they are (no redraw: what the person is reading stays put).
+    function toggleDetails(chevron) {
+        var id = chevron.getAttribute('data-toggle-node');
+        var open = !expanded[id];
+        setOpen(id, open);
+        var row = chevron.closest('[data-node-id]');
+        var details = row && row.querySelector('.sync-node-details');
+        if (details) details.hidden = !open;
+        if (row) row.className = row.className.replace(/\s*\bis-open\b/g, '') + (open ? ' is-open' : '');
+        chevron.setAttribute('aria-expanded', open ? 'true' : 'false');
+        var label = chevron.getAttribute('aria-label') || '';
+        chevron.setAttribute('aria-label', label.replace(/^(Show|Hide)/, open ? 'Hide' : 'Show'));
+    }
+
     function bindChecks(container, redraw) {
         if (!container || container._bmbCheckBound) return;
         container._bmbCheckBound = true;
         container.addEventListener('dblclick', function (e) {
+            if (e.target.closest('[data-toggle-node]')) return;   // two quick presses of the chevron are not a check
             var row = e.target.closest('[data-node-id]');
             if (row) checkNode(row.getAttribute('data-node-id'), redraw, row);
         });
         // The button: a click, a tap, Enter and Space all arrive as a click.
         container.addEventListener('click', function (e) {
+            var chevron = e.target.closest('[data-toggle-node]');
+            if (chevron) {
+                e.stopPropagation();   // not a click on the row of a dropdown that closes on an outside click
+                toggleDetails(chevron);
+                return;
+            }
             var button = e.target.closest('[data-check-node]');
             if (!button) return;
             e.stopPropagation();   // not a click on the row of a dropdown that closes on an outside click
@@ -220,8 +285,7 @@
                 if (data.nodes.length === 0) {
                     html += '<div class="sync-node-empty">No remote nodes configured</div>';
                 } else {
-                    html += data.nodes.map(dropdownRow).join('') +
-                            '<div class="sync-node-hint">Press "Check now" (or double-click a node) to check it now.</div>';
+                    html += data.nodes.map(dropdownRow).join('');
                 }
                 list.innerHTML = html;
             })
@@ -328,8 +392,7 @@
                 setInvisible(data.isInvisible);
 
                 content.innerHTML = invisibleNote(data) +
-                    (data.nodes.length === 0 ? '<div class="sync-node-empty">No remote nodes configured</div>'
-                        : data.nodes.map(modalRow).join('') + '<div class="sync-node-hint">Press "Check now" (or double-click a node) to check it now.</div>');
+                    (data.nodes.length === 0 ? '<div class="sync-node-empty">No remote nodes configured</div>' : data.nodes.map(modalRow).join(''));
 
                 var modal = document.getElementById('syncModal');
                 if (modal && modal.open) {

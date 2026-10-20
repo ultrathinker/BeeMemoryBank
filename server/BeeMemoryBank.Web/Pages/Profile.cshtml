@@ -193,4 +193,4 @@
 <script type="application/json" id="profile-page-data">
     {"mcpUrl":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Mcp.Url)),"mcpUnavailableMessage":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Mcp.Message))}
 </script>
-<script src="/js/pages/profile.js"></script>
+<script src="/js/pages/profile.js" asp-append-version="true"></script>

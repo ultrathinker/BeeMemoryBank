@@ -80,6 +80,16 @@ public class BusyHelperBehaviorTests
     // BMB-313 Q3: the header badge of the sync status and the check of a node
     [InlineData("the_header_badge_follows_the_status_when_the_page_loads")]
     [InlineData("a_check_that_is_rejected_gives_the_node_row_back")]
+    // BMB-317: two lines a node, the rest under a chevron
+    [InlineData("the_sync_dropdown_is_two_lines_with_the_rest_under_a_chevron")]
+    [InlineData("the_chevron_opens_the_details_and_a_check_opens_a_closed_row")]
+    // BMB-316: the password dialog of the save of a protected article
+    [InlineData("the_save_of_a_protected_article_tells_a_missing_password_from_other_failures")]
+    [InlineData("the_password_dialog_saves_with_what_is_typed_and_stays_open_when_it_fails")]
+    [InlineData("the_unlock_strip_over_the_editor_counts_down_and_says_when_the_time_is_out")]
+    // BMB-319: the time one article stays unlocked for, chosen on a slider
+    [InlineData("the_strip_says_hours_for_a_long_time_and_closes_the_slider_when_the_time_is_out")]
+    [InlineData("the_unlock_time_of_one_article_is_chosen_on_a_slider_that_applies_when_it_is_let_go")]
     // F13: a page that is replaced while its operation runs
     [InlineData("an_operation_of_a_replaced_page_closes_its_popup_and_says_its_result_as_a_notice")]
     [InlineData("an_operation_of_a_control_that_stays_keeps_its_popup_through_a_navigation")]

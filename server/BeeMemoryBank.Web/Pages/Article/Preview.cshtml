@@ -11,13 +11,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="bmb-user" content="@(User.Identity?.Name ?? "")" />
     <title>@Model.Article?.Title - Preview</title>
-    <script type="module" src="/js/shoelace-init.js"></script>
-    <script src="/js/theme-init.js"></script>
-    <link rel="stylesheet" href="/lib/shoelace/themes/light.css" />
-    <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" />
-    <link href="/css/site.css" rel="stylesheet" />
-    <script src="/lib/marked/marked.umd.js"></script>
-    <script src="/lib/dompurify/purify.min.js"></script>
+    <script type="module" src="/js/shoelace-init.js" asp-append-version="true"></script>
+    <script src="/js/theme-init.js" asp-append-version="true"></script>
+    <link rel="stylesheet" href="/lib/shoelace/themes/light.css" asp-append-version="true" />
+    <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" asp-append-version="true" />
+    <link href="/css/site.css" rel="stylesheet" asp-append-version="true" />
+    <script src="/lib/marked/marked.umd.js" asp-append-version="true"></script>
+    <script src="/lib/dompurify/purify.min.js" asp-append-version="true"></script>
 </head>
 <body class="sl-theme-dark" style="padding: 24px; margin: 0; background: var(--bg-primary); height: auto; min-height: 100vh; overflow: visible; display: block;">
 @if (Model.Article != null)
@@ -84,7 +84,7 @@
     <script type="application/json" id="article-preview-data">
         {"content":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""))}
     </script>
-    <script src="/js/pages/article-preview.js"></script>
+    <script src="/js/pages/article-preview.js" asp-append-version="true"></script>
 }
 else
 {

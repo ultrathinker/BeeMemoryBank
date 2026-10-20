@@ -1,0 +1,15 @@
+@* BMB-320: what a password-protected article cannot do, in one place under the editor. Every line states what the node does today (MediaService, CommentService,
+   SearchService, ArticleContentPolicy/MCP, ZipExportService, VersionEndpoints); change a line here when one of those changes. *@
+<div class="protected-limits" id="protected-limits" role="note" aria-label="What a password-protected article cannot do">
+    <div class="protected-limits-title"><sl-icon name="shield-lock"></sl-icon> Limits of a password-protected article</div>
+    <ul>
+        <li><strong>No attachments or pictures.</strong> Files are kept under the vault key, not under this article's password, so anyone with the vault open could read them. They cannot be added to this article.</li>
+        <li><strong>Comments are allowed, but sealed with the password.</strong> They can be read and written only while the article is unlocked.</li>
+        <li><strong>Search does not look into the text</strong> (neither by words nor by meaning). The title, folder and tags are not covered by the password: they stay visible and searchable.</li>
+        <li><strong>AI assistants and MCP tools cannot read or change it.</strong> They see a notice instead of the text.</li>
+        <li><strong>Export leaves the text out.</strong> The archive holds a notice in its place.</li>
+        <li><strong>Earlier versions are not shown.</strong> The history lists them with a notice instead of the text.</li>
+        <li><strong>No draft autosave.</strong> Drafts of the text are not kept in the browser; save before you leave.</li>
+        <li><strong>The password cannot be recovered.</strong> If it is lost, the text is lost.</li>
+    </ul>
+</div>

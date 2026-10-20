@@ -150,6 +150,8 @@ NodeB → NodeA: POST /api/sync/events
 
 **Push position tracking:** After a successful push, `tbl_sync_push_position` is updated with the last pushed sequence number. This enables the delivery status UI to show per-node sync progress.
 
+**What is owed to a peer (2.6.4).** A push carries everything but the events the peer wrote itself, so the delivery status counts the same rows (`unsyncedCount`, `IEventLogRepository.CountEventsToRelayAfterAsync`), not every event after the peer's position. When the push finds nothing left to send, the log after the peer's position can only be its own events; the position then moves to the head of the log that was read before the push (`ISyncPushPositionRepository.AdvanceCursorAsync`, only for a peer that already has a row, never after a stalled send) and `pushed_at`, which is "last delivery", is left as it was. Before this, such a peer showed "N changes not delivered" for ever and the stuck position looked like a gap to the compaction of the log.
+
 ## Push-on-Save (SyncTrigger)
 
 By default, SyncScheduler polls every 60 seconds. With push-on-save, saves trigger immediate synchronization:
@@ -249,6 +251,26 @@ A double-click on a node of the sync status (the header dropdown and the "Sync D
 The same projection tells the blind nodes' contact: `GET /api/blind-nodes` carries `contact` for every node, the Blind nodes page shows its direction, the last delivery and "not checked since this node started", the host status of a blind node (`bmb blind status`, `/api/blind/status`) lists the additive fields `contact_at`, `contact_direction`, `last_push_at`, `last_outbound_at`, `last_inbound_at`, `state`, `online`, `not_answering_since`, `not_answering_reason` per peer (`last_contact` keeps its delivery meaning), and a blind node this PC cannot call for six hours is a `not_answering` banner on the Blind nodes page (a banner only; the desktop's notifications stay the `silent` and stale-baseline kinds'). This PC's own my-standing call to a blind node is outbound contact; the protocol column it also stamps is never read as the node calling in.
 
 Protected by `InternalKeyValidator` — only accessible from the Web proxy (same server). Used by the sync status UI widget and post-save toast.
+
+## Network Map Endpoint
+
+```
+GET /api/sync/network        (superadmin, internal key; the Web proxy route is /api-proxy/sync/network)
+
+{
+  "self":  { ...a node... },
+  "peers": [ { ...a node... } ],
+  "links": [ { "from": "guid", "to": "guid", "basis": "observed" | "expected", "state": "...", "scheme": "https", "host": "...", "port": 443,
+               "seenFrom": "203.0.113.7", "lastOkAt": "...", "failingSince": null, "reason": null } ],
+  "isInvisible": false
+}
+```
+
+The page the header's **Sync Status** title opens (`/Network`) draws this: this node and the nodes of the whitelist on a circle (one in the middle, two on a line, three a triangle, four or more a circle), an arrow for each call. A node carries the fields of the delivery status plus `kind` (`full`: has an address and is called; `device`: has none, a phone or a node behind a NAT, it calls in; `blind`: a blind copy), `platform` (`windows`, `macos`, `linux`, `android`, `ios`), `inContainer`, the version and protocol it last showed, its address as `scheme`, `host` and `port` (never a path, a query or credentials), `seenFrom` (where its last call came from, as this node's server saw it), and for this node alone `notes`, `folders` and `changes`.
+
+**What is measured and what is expected.** A call is one direction: `from` calls `to`, at the address of `to`. This node can measure only the calls it is one end of: the ones it makes (`observed`, state `answering`, `not_answering` or `unknown`, with since when and why a failing call fails) and the ones it receives (`observed`, state `heard` within the time a call is expected in, `stale` after it). The calls between two other nodes are given as `expected`, by the rule of the network - every node calls every node that has an address, and a blind node calls only where nobody can call it - and are never drawn as seen.
+
+**Where `platform` comes from.** A node says what it runs on in its sync identity (`GET /api/sync/identity`: `platform`, `inContainer`) and in the authentication it sends when it calls (`POST /api/sync/authenticate`). `NodePlatform` is a closed set; what a peer sends is read through `NodePlatform.Normalize` and anything else is dropped. A container is `DOTNET_RUNNING_IN_CONTAINER=true` or `/.dockerenv` (`/run/.containerenv` for Podman). Both are additive fields: a node of an earlier version sends nothing and is drawn from what is known of it (a server, a device, a blind copy) until it runs 2.6.4. What a node told is kept in memory, per process, with the rest of the contact memory (`PeerContactLog`): after a restart a peer is drawn without a platform until the next call, which is within a sync interval for a node this one calls and within the cadence of a phone for one that calls in.
 
 ## Node-Local Entities (Not Synced)
 

@@ -22,28 +22,90 @@ namespace BeeMemoryBank.Api.Services;
 ///  - Entries auto-expire after the TTL and are dropped on explicit re-lock / unprotect / passphrase change.
 ///  - The TTL is absolute from the last Remember (unlock or save), not sliding on reads — merely
 ///    viewing the article again does not extend it.
+///  - A person may choose another time (15 min .. 8 h) for ONE article; it lives in that article's entry, so
+///    it holds across View and Edit and across saves, and is gone with the entry (re-lock, time out, vault lock).
 ///  - A null caller key means "no stable identity to scope to": every method is then a no-op / miss,
 ///    so the caller is simply re-prompted (fail closed).
 /// </summary>
 public sealed class ProtectedUnlockCache
 {
-    public static readonly TimeSpan Ttl = TimeSpan.FromMinutes(15);
-    private readonly ConcurrentDictionary<string, (string passphrase, DateTime expiresUtc)> _entries = new();
+    public static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(15);
 
-    /// <summary>Caches the passphrase for <see cref="Ttl"/>; returns when that entry expires (UTC).</summary>
+    /// <summary>
+    /// How long a verified password is remembered. 15 minutes unless <c>BMB_PROTECTED_UNLOCK_SECONDS</c> says another (30 s to 1 h):
+    /// a short time lets the save that finds the unlock gone be tried without waiting a quarter of an hour.
+    /// </summary>
+    public static readonly TimeSpan Ttl = ParseTtl(Environment.GetEnvironmentVariable("BMB_PROTECTED_UNLOCK_SECONDS"));
+
+    /// <summary>The configured time, or the default for nothing, a non-number, and anything outside 30 s .. 1 h.</summary>
+    public static TimeSpan ParseTtl(string? seconds) =>
+        int.TryParse(seconds?.Trim(), out var s) && s is >= 30 and <= 3600 ? TimeSpan.FromSeconds(s) : DefaultTtl;
+
+    /// <summary>The shortest time a person can choose for one article (the slider of the unlock strip).</summary>
+    public static readonly TimeSpan MinChosenTtl = TimeSpan.FromMinutes(15);
+
+    /// <summary>The longest time a person can choose for one article.</summary>
+    public static readonly TimeSpan MaxChosenTtl = TimeSpan.FromHours(8);
+
+    // ttl is how long this one article keeps its password after each Remember: the node-wide Ttl until a person chooses another time.
+    private readonly record struct Entry(string Passphrase, DateTime ExpiresUtc, TimeSpan Ttl);
+
+    private readonly ConcurrentDictionary<string, Entry> _entries = new();
+    private readonly Func<DateTime> _now;
+
+    public ProtectedUnlockCache() : this(() => DateTime.UtcNow) { }
+
+    /// <summary>For tests that move the clock (an unlock that has run out cannot be waited for).</summary>
+    internal ProtectedUnlockCache(Func<DateTime> utcNow) => _now = utcNow;
+
+    /// <summary>
+    /// Caches the passphrase; returns when that entry expires (UTC). A time the person chose for this article
+    /// (<see cref="SetDuration"/>) is kept while the entry is alive, so a save or a re-unlock does not take it back
+    /// to the default; once the entry has run out or been dropped (the article got locked) the node-wide <see cref="Ttl"/> applies again.
+    /// </summary>
     public DateTime Remember(string? callerKey, Guid articleId, string passphrase)
     {
-        var now = DateTime.UtcNow;
-        var expiresUtc = now.Add(Ttl);
-        if (callerKey == null) return expiresUtc;
+        var now = _now();
+        if (callerKey == null) return now.Add(Ttl);
         // Opportunistic sweep so passphrases of articles that were unlocked-but-never-edited don't
         // linger in memory past their TTL (TryGet only evicts the key it's asked about). Remember is
         // infrequent (fires on unlock), so an O(n) pass over the tiny dictionary is cheap.
         foreach (var kv in _entries)
-            if (now >= kv.Value.expiresUtc)
+            if (now >= kv.Value.ExpiresUtc)
                 _entries.TryRemove(kv.Key, out _);
-        _entries[Key(callerKey, articleId)] = (passphrase, expiresUtc);
+        var key = Key(callerKey, articleId);
+        var ttl = _entries.TryGetValue(key, out var alive) ? alive.Ttl : Ttl;
+        var expiresUtc = now.Add(ttl);
+        _entries[key] = new Entry(passphrase, expiresUtc, ttl);
         return expiresUtc;
+    }
+
+    /// <summary>
+    /// Makes this article keep its password for <paramref name="duration"/> from now on (and counts it from now). Only an article that is
+    /// unlocked at this moment can be given a time: false when there is nothing remembered (or it just ran out). The time is not stored
+    /// anywhere else and goes with the entry.
+    /// </summary>
+    public bool SetDuration(string? callerKey, Guid articleId, TimeSpan duration, out DateTime expiresUtc)
+    {
+        expiresUtc = default;
+        if (callerKey == null) return false;
+        var key = Key(callerKey, articleId);
+        var now = _now();
+        while (_entries.TryGetValue(key, out var e))
+        {
+            if (now >= e.ExpiresUtc) { _entries.TryRemove(key, out _); return false; }
+            var next = e with { ExpiresUtc = now.Add(duration), Ttl = duration };
+            if (_entries.TryUpdate(key, next, e)) { expiresUtc = next.ExpiresUtc; return true; }
+        }
+        return false;
+    }
+
+    /// <summary>The time this article keeps its password after each unlock or save, if it is unlocked now; else null.</summary>
+    public TimeSpan? DurationOf(string? callerKey, Guid articleId)
+    {
+        if (callerKey == null) return null;
+        var key = Key(callerKey, articleId);
+        return _entries.TryGetValue(key, out var e) && _now() < e.ExpiresUtc ? e.Ttl : null;
     }
 
     /// <summary>Returns the cached passphrase if still fresh, else null (and evicts the stale entry).</summary>
@@ -60,10 +122,10 @@ public sealed class ProtectedUnlockCache
         var k = Key(callerKey, articleId);
         if (_entries.TryGetValue(k, out var e))
         {
-            if (DateTime.UtcNow < e.expiresUtc)
+            if (_now() < e.ExpiresUtc)
             {
-                expiresUtc = e.expiresUtc;
-                return e.passphrase;
+                expiresUtc = e.ExpiresUtc;
+                return e.Passphrase;
             }
             _entries.TryRemove(k, out _);
         }

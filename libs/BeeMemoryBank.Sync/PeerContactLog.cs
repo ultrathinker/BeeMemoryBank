@@ -36,9 +36,13 @@ public sealed class PeerContactLog
     /// <param name="OutboundFailure">Why the last call failed, in a short sentence from a closed set (<see cref="Describe"/>).</param>
     /// <param name="OutboundFailureAt">When the last call failed.</param>
     /// <param name="OutboundEndpoint">The address the outbound facts were learned at (<see cref="EndpointKey"/>); null when the caller did not say.</param>
+    /// <param name="Platform">What the peer runs on (<see cref="Metadata.NodePlatform"/>), as it told this process; null until it did (a build before 2.6.4 never does).</param>
+    /// <param name="InContainer">The peer said it runs in a container; null until it said anything.</param>
+    /// <param name="InboundFrom">The address the peer's last call came from, as this node's server saw it (behind a proxy that is the proxy).</param>
     public sealed record Contact(
         DateTime? OutboundOkAt = null, DateTime? InboundAt = null, DateTime? OutboundFailingSince = null,
-        string? OutboundFailure = null, DateTime? OutboundFailureAt = null, string? OutboundEndpoint = null)
+        string? OutboundFailure = null, DateTime? OutboundFailureAt = null, string? OutboundEndpoint = null,
+        string? Platform = null, bool? InContainer = null, string? InboundFrom = null)
     {
         /// <summary>The newest thing noted, for the retention rule.</summary>
         internal DateTime? Newest => new[] { OutboundOkAt, InboundAt, OutboundFailureAt }.Max();
@@ -79,8 +83,21 @@ public sealed class PeerContactLog
             });
     }
 
-    public void NoteInbound(Guid nodeId, DateTime nowUtc) =>
-        _peers.AddOrUpdate(nodeId, _ => new Contact(InboundAt: nowUtc), (_, c) => c with { InboundAt = nowUtc });
+    /// <param name="from">Where the call came from; kept from the last call that said, so a call that does not say leaves what an earlier one did.</param>
+    public void NoteInbound(Guid nodeId, DateTime nowUtc, string? from = null) =>
+        _peers.AddOrUpdate(nodeId, _ => new Contact(InboundAt: nowUtc, InboundFrom: from), (_, c) => c with { InboundAt = nowUtc, InboundFrom = from ?? c.InboundFrom });
+
+    /// <summary>
+    /// What a peer said it runs on (in its identity, or when it called this node). Not a contact and not an endpoint's fact: it stays through an address change and a
+    /// failure streak. A peer that says nothing (a build before 2.6.4) leaves what is known as it is.
+    /// </summary>
+    public void NotePlatform(Guid nodeId, string? platform, bool? inContainer)
+    {
+        if (platform is null && inContainer is null) return;
+        _peers.AddOrUpdate(nodeId,
+            _ => new Contact(Platform: platform, InContainer: inContainer),
+            (_, c) => c with { Platform = platform ?? c.Platform, InContainer = inContainer ?? c.InContainer });
+    }
 
     /// <summary>
     /// What is known about a peer. With <paramref name="endpoint"/> (the address the whitelist has for it now) what was learned at ANOTHER address is left out:

@@ -15,6 +15,7 @@ GET /api/sync/events
 GET /api/sync/identity
 GET /api/sync/invisible
 GET /api/sync/my-standing
+GET /api/sync/network
 GET /api/sync/ping
 GET /api/sync/quarantine
 GET /api/sync/sentinel

@@ -10,6 +10,14 @@ public interface ISyncPushPositionRepository
     Task UpdatePositionAsync(Guid remoteNodeId, long lastPushedSeq);
 
     /// <summary>
+    /// Moves the delivery watermark of a peer that already has a row forward over events there was nothing to
+    /// deliver (the tail of the log is what the peer wrote itself, and that is never sent back to it). Unlike
+    /// <see cref="UpdatePositionAsync"/> it leaves <c>pushed_at</c> alone: nothing was delivered, so "last delivery"
+    /// keeps telling when something last was. Never moves backwards; no row, no change.
+    /// </summary>
+    Task AdvanceCursorAsync(Guid remoteNodeId, long lastPushedSeq);
+
+    /// <summary>
     /// Records how far the peer says it has read our log, in its own words
     /// (<c>POST /api/sync/report-position</c>). Kept apart from
     /// <see cref="UpdatePositionAsync"/>'s delivery watermark, which moves when a page is merely

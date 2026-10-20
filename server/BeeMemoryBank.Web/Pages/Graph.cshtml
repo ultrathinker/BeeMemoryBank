@@ -278,14 +278,14 @@
 
 @section Scripts {
     <script src="~/lib/d3/d3.v7.min.js" asp-append-version="true"></script>
-    <script src="~/lib/cytoscape/cytoscape.min.js"></script>
-    <script src="~/lib/cytoscape/layout-base.js"></script>
-    <script src="~/lib/cytoscape/cose-base.js"></script>
-    <script src="~/lib/cytoscape/cytoscape-fcose.js"></script>
+    <script src="~/lib/cytoscape/cytoscape.min.js" asp-append-version="true"></script>
+    <script src="~/lib/cytoscape/layout-base.js" asp-append-version="true"></script>
+    <script src="~/lib/cytoscape/cose-base.js" asp-append-version="true"></script>
+    <script src="~/lib/cytoscape/cytoscape-fcose.js" asp-append-version="true"></script>
     <script type="application/json" id="graph-data">
     {
         "focusConcept": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.FocusConcept))
     }
     </script>
-    <script src="/js/pages/graph.js"></script>
+    <script src="/js/pages/graph.js" asp-append-version="true"></script>
 }

@@ -23,6 +23,8 @@ public class ViewModel(ApiClient api) : PageModel
     public bool IsUnlockedFromCache { get; private set; }
     // Seconds left in that recent-unlock window, for the "locks automatically in N min" countdown.
     public int? UnlockExpiresInSeconds { get; private set; }
+    // The time this article keeps its password for after each unlock or save (the slider of the strip starts there).
+    public int? UnlockDurationSeconds { get; private set; }
 
     public async Task<IActionResult> OnGetAsync(Guid id)
     {
@@ -49,6 +51,7 @@ public class ViewModel(ApiClient api) : PageModel
                     Content = ec.Content;
                     IsUnlockedFromCache = true;
                     UnlockExpiresInSeconds = ec.UnlockExpiresInSeconds;
+                    UnlockDurationSeconds = ec.UnlockDurationSeconds;
                 }
                 else
                 {

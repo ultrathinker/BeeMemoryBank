@@ -53,6 +53,13 @@ public interface IEventLogRepository
     /// at that position would be "behind" in our log.
     /// </summary>
     Task<int> CountEventsAfterSequenceAsync(long seqNum);
+    /// <summary>
+    /// How many events a push to the given peer still has to carry after <paramref name="afterSequenceNum"/>: the same
+    /// rows <see cref="GetEventsToRelayAsync"/> returns (everything but what the peer wrote itself, which is never sent back).
+    /// The delivery status counts with this, not with <see cref="CountEventsAfterSequenceAsync"/>: a peer's own events are
+    /// not "undelivered" to it.
+    /// </summary>
+    Task<int> CountEventsToRelayAfterAsync(Guid excludeNodeId, long afterSequenceNum);
     Task<SyncEvent?> GetByIdAsync(string eventId);
 
     // ─── Held events (step-a-spec 6) ────────────────────────────────────────

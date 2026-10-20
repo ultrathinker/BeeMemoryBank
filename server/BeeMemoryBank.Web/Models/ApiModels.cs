@@ -18,9 +18,11 @@ public record ArticleDto(
 
 public record ArticleContentDto(Guid Id, string Content);
 
-public record EditContentDto(Guid Id, bool Protected, bool Unlocked, string? Content, int? UnlockExpiresInSeconds = null);
+public record EditContentDto(Guid Id, bool Protected, bool Unlocked, string? Content, int? UnlockExpiresInSeconds = null, int? UnlockDurationSeconds = null);
 
-public record UnlockArticleDto(Guid Id, string Content, int? UnlockExpiresInSeconds = null);
+public record UnlockArticleDto(Guid Id, string Content, int? UnlockExpiresInSeconds = null, int? UnlockDurationSeconds = null);
+
+public record UnlockDurationDto(int UnlockExpiresInSeconds, int UnlockDurationSeconds);
 
 public record SessionStatusDto(bool IsUnlocked);
 

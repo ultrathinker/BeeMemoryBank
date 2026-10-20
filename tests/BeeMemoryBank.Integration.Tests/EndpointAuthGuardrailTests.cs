@@ -202,6 +202,7 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         "POST /api/articles/{id:guid}/change-passphrase",
         "POST /api/articles/{id:guid}/unlock",
         "POST /api/articles/{id:guid}/relock",
+        "POST /api/articles/{id:guid}/unlock-duration",
         "PUT /api/articles/{id:guid}/concept-tags",
         "POST /api/folders/",
         "PATCH /api/folders/",

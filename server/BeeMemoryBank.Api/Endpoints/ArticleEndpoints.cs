@@ -395,10 +395,14 @@ public static class ArticleEndpoints
                 // No caller key (browser request without a Web session) → nothing is cached, and the
                 // page gets no countdown because the next load will prompt again anyway.
                 int? expiresIn = null;
+                int? duration = null;
                 var callerKey = CallerKey(ctx);
                 if (meta.Protected && callerKey != null)
+                {
                     expiresIn = SecondsUntil(unlockCache.Remember(callerKey, id, req.Passphrase));
-                return Results.Ok(new UnlockArticleResponse(id, content, expiresIn));
+                    duration = DurationSeconds(unlockCache, callerKey, id);
+                }
+                return Results.Ok(new UnlockArticleResponse(id, content, expiresIn, duration));
             }
             catch (CryptographicException)
             {
@@ -416,6 +420,21 @@ public static class ArticleEndpoints
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
             unlockCache.Forget(CallerKey(ctx), id);
             return Results.Ok(new { relocked = true });
+        });
+
+        // The time ONE article keeps its password (the slider of the unlock strip, 15 min .. 8 h). It counts from now, holds for this
+        // article across View, Edit and saves, and is gone once the article locks (re-lock, time out, vault lock): the default applies again.
+        group.MapPost("/{id:guid}/unlock-duration", (Guid id, UnlockDurationRequest req, HttpContext ctx, SessionService session, ProtectedUnlockCache unlockCache) =>
+        {
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+            var min = (int)ProtectedUnlockCache.MinChosenTtl.TotalSeconds;
+            var max = (int)ProtectedUnlockCache.MaxChosenTtl.TotalSeconds;
+            if (req.Seconds < min || req.Seconds > max)
+                return Results.BadRequest(new ErrorResponse($"The time must be between {min / 60} minutes and {max / 3600} hours."));
+            if (!unlockCache.SetDuration(CallerKey(ctx), id, TimeSpan.FromSeconds(req.Seconds), out var expiresUtc))
+                return Results.Json(new ErrorResponse("This article is locked. Enter its password again.", "NotUnlocked"), statusCode: 409);
+            return Results.Ok(new UnlockDurationResponse(SecondsUntil(expiresUtc), req.Seconds));
         });
 
         // Cache-aware content load: tells the caller whether the article is protected and, if it was
@@ -451,7 +470,7 @@ public static class ArticleEndpoints
             try
             {
                 var content = await svc.UnlockContentAsync(id, cached);
-                return Results.Ok(new EditContentResponse(id, true, true, content, SecondsUntil(expiresUtc)));
+                return Results.Ok(new EditContentResponse(id, true, true, content, SecondsUntil(expiresUtc), DurationSeconds(unlockCache, CallerKey(ctx), id)));
             }
             catch (CryptographicException)
             {
@@ -528,6 +547,9 @@ public static class ArticleEndpoints
 
     private static int SecondsUntil(DateTime utc) =>
         Math.Max(0, (int)Math.Ceiling((utc - DateTime.UtcNow).TotalSeconds));
+
+    private static int? DurationSeconds(ProtectedUnlockCache cache, string? callerKey, Guid id) =>
+        cache.DurationOf(callerKey, id) is { } d ? (int)d.TotalSeconds : null;
 
     // Shared gate for protected-article WRITE operations: internal key + unlocked session + write ACL.
     // Returns the metadata on success, or the IResult to return on failure.

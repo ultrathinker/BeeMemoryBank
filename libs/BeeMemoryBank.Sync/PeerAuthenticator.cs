@@ -161,6 +161,9 @@ public static class PeerAuthenticator
             ProtocolVersion = declaredProtocol ?? SyncProtocolVersion.Current,
             Capabilities = Metadata.MetadataCapabilities.Advertised,
             AppVersion = Metadata.BuildVersion.Current,
+            // What this build runs on, for the network map of the node that is called (a peer that does not know the fields ignores them).
+            Platform = Metadata.NodePlatform.Current,
+            InContainer = Metadata.NodePlatform.InContainer,
         }, ct);
 
         authResp.EnsureSuccessStatusCode();

@@ -111,7 +111,7 @@ public class SealedRelayTests
                  {
                      ("DELETE", "/api/sync/events"), ("GET", "/api/sync/status"), ("GET", "/api/sync/snapshot/for-join"), ("GET", "/api/sync/my-standing"),
                      ("GET", "/api/sync/sentinel"), ("POST", "/api/sync/invisible"), ("GET", "/api/articles"), ("POST", "/api/session/unlock"),
-                     ("GET", "/api/blind/replica"), ("GET", "/api/sync/delivery-status"),
+                     ("GET", "/api/blind/replica"), ("GET", "/api/sync/delivery-status"), ("GET", "/api/sync/network"),
                  })
             relay.Handles(path, method).Should().BeFalse($"{method} {path}");
     }

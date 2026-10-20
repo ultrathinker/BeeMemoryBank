@@ -18,6 +18,7 @@
     <Compile Include="..\BeeMemoryBank.Api\Middleware\MaintenanceMiddleware.cs" Link="Api\Middleware\MaintenanceMiddleware.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Middleware\PublicSurfaceMiddleware.cs" Link="Api\Middleware\PublicSurfaceMiddleware.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Middleware\RateLimitMiddleware.cs" Link="Api\Middleware\RateLimitMiddleware.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Models\NetworkModels.cs" Link="Api\Models\NetworkModels.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Models\Requests.cs" Link="Api\Models\Requests.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Models\Responses.cs" Link="Api\Models\Responses.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Models\SyncModels.cs" Link="Api\Models\SyncModels.cs" />
@@ -54,6 +55,7 @@
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindStatus\CoreBlindStatusContributor.cs" Link="Api\Services\BlindStatus\CoreBlindStatusContributor.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindStatus\IBlindStatusContributor.cs" Link="Api\Services\BlindStatus\IBlindStatusContributor.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\ISnapshotKeyOperations.cs" Link="Api\Services\ISnapshotKeyOperations.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\NetworkMapBuilder.cs" Link="Api\Services\NetworkMapBuilder.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\PublicHostValidator.cs" Link="Api\Services\PublicHostValidator.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\BlindRestoreCode.cs" Link="Api\Services\Recovery\BlindRestoreCode.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\BlindRestoreCodeService.cs" Link="Api\Services\Recovery\BlindRestoreCodeService.cs" />

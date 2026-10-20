@@ -149,7 +149,7 @@ public sealed class SealedRelay : ISealedRelay
         if (await _mirror.GetIdentityAsync(ct) is not { } identity) return Results.Problem("Node is not initialized.", statusCode: 503);
         // A sealed node has applied the metadata activation (spec 2.5): it declares the sealed protocol.
         return Results.Ok(new SyncIdentityResponse(identity.NodeId, identity.DisplayName, Convert.ToBase64String(identity.Ed25519PublicKey),
-            EventClasses.SealedProtocol, MetadataCapabilities.Advertised, BuildVersion.Current));
+            EventClasses.SealedProtocol, MetadataCapabilities.Advertised, BuildVersion.Current, NodePlatform.Current, NodePlatform.InContainer));
     }
 
     private async Task<IResult> ChallengeAsync(HttpContext context, CancellationToken ct)

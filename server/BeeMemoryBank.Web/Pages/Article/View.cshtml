@@ -127,8 +127,15 @@
         <div class="card" id="unlocked-card" style="@(Model.IsUnlockedFromCache ? "" : "display:none;")">
             <div class="unlock-banner" id="unlock-banner" style="display:none;">
                 <sl-icon name="unlock"></sl-icon>
-                <span>Temporarily unlocked &middot; locks automatically in <strong id="unlock-remaining"></strong></span>
+                <span>Temporarily unlocked &middot; locks automatically in <strong id="unlock-remaining"></strong>
+                    <a href="#" class="unlock-change" id="unlock-change" role="button" aria-controls="unlock-picker" aria-expanded="false">change</a></span>
                 <a href="#" id="lnk-lock-now">Lock now</a>
+                @* BMB-319: the time THIS article stays unlocked for, 15 min .. 8 h; it applies when the slider is let go and holds in View, in Edit and across saves until the article locks. *@
+                <span class="unlock-picker" id="unlock-picker" style="display:none;">
+                    <span>Keep it unlocked for</span>
+                    <sl-range id="unlock-range" label="How long this article stays unlocked" min="15" max="480" step="15" value="15" tooltip="none"></sl-range>
+                    <strong id="unlock-picked">15 min</strong>
+                </span>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px;">
                 @if (!Model.IsReadOnly)
@@ -461,11 +468,13 @@ else
     "isProtected": @(Model.Article?.Protected == true ? "true" : "false"),
     "isUnlockedFromCache": @(Model.IsUnlockedFromCache ? "true" : "false"),
     "unlockExpiresInSeconds": @(Model.UnlockExpiresInSeconds?.ToString() ?? "null"),
+    "unlockDurationSeconds": @(Model.UnlockDurationSeconds?.ToString() ?? "null"),
     "articleTitle": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Title ?? "")),
     "articleTreePath": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.TreePath ?? "/"))
 }
 </script>
-<script src="/js/pages/article-view.js"></script>
+<script src="/js/pages/protected-save-dialog.js" asp-append-version="true"></script>
+<script src="/js/pages/article-view.js" asp-append-version="true"></script>
 
 </div>
 </div>

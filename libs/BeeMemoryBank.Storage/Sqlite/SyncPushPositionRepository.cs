@@ -45,6 +45,16 @@ public class SyncPushPositionRepository(DbConnectionFactory factory) : BaseRepos
             new { remoteNodeId, lastPushedSeq, now = DateTime.UtcNow });
     }
 
+    public async Task AdvanceCursorAsync(Guid remoteNodeId, long lastPushedSeq)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            @"UPDATE tbl_sync_push_position
+              SET last_pushed_seq = MAX(last_pushed_seq, @lastPushedSeq)
+              WHERE remote_node_id = @remoteNodeId",
+            new { remoteNodeId, lastPushedSeq });
+    }
+
     public async Task RecordReportedPositionAsync(Guid remoteNodeId, long reportedSeq)
     {
         using var conn = OpenConnection();

@@ -112,9 +112,9 @@
     <div id="versionDialogContent" style="flex:1;overflow:auto;"></div>
 </sl-dialog>
 
-<script src="/lib/jsdiff/diff.min.js"></script>
-<script src="/lib/jszip/jszip.min.js"></script>
-<script src="/lib/file-saver/FileSaver.min.js"></script>
+<script src="/lib/jsdiff/diff.min.js" asp-append-version="true"></script>
+<script src="/lib/jszip/jszip.min.js" asp-append-version="true"></script>
+<script src="/lib/file-saver/FileSaver.min.js" asp-append-version="true"></script>
 <style>
     .fullscreen-dialog::part(panel) { height:90vh; max-height:90vh; display:flex; flex-direction:column; }
     .fullscreen-dialog::part(body) { flex:1; overflow:hidden; display:flex; flex-direction:column; padding:0; }
@@ -137,4 +137,4 @@
 <script type="application/json" id="article-history-data">
     {"articleId":@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Article?.Id.ToString() ?? ""))}
 </script>
-<script src="/js/pages/article-history.js"></script>
+<script src="/js/pages/article-history.js" asp-append-version="true"></script>

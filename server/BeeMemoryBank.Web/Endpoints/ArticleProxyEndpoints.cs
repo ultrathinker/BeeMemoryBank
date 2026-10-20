@@ -51,10 +51,21 @@ public static class ArticleProxyEndpoints
         {
             var req = await ctx.Request.ReadFromJsonAsync<UnlockArticleProxyRequest>();
             if (req == null) return Results.BadRequest();
-            var (ok, status, content, expiresInSeconds, error) = await api.UnlockArticleAsync(id, req.Passphrase);
+            var (ok, status, content, expiresInSeconds, durationSeconds, error) = await api.UnlockArticleAsync(id, req.Passphrase);
             return ok
-                ? Results.Ok(new { content, unlockExpiresInSeconds = expiresInSeconds })
+                ? Results.Ok(new { content, unlockExpiresInSeconds = expiresInSeconds, unlockDurationSeconds = durationSeconds })
                 : Results.Json(new { error = error ?? "Unlock failed" }, statusCode: status);
+        }).RequireAuthorization();
+
+        // The slider of the unlock strip: the time this one article keeps its password for (BMB-319).
+        app.MapPost("/api-proxy/article/{id:guid}/unlock-duration", async (Guid id, HttpContext ctx, ApiClient api) =>
+        {
+            var req = await ctx.Request.ReadFromJsonAsync<UnlockDurationProxyRequest>();
+            if (req == null) return Results.BadRequest();
+            var (result, status, error, code) = await api.SetUnlockDurationAsync(id, req.Seconds);
+            return result != null
+                ? Results.Ok(new { unlockExpiresInSeconds = result.UnlockExpiresInSeconds, unlockDurationSeconds = result.UnlockDurationSeconds })
+                : Results.Json(new { error = error ?? "The time could not be changed.", code }, statusCode: status);
         }).RequireAuthorization();
 
         app.MapPost("/api-proxy/article/{id:guid}/relock", async (Guid id, ApiClient api) =>

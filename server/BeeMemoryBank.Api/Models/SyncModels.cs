@@ -12,8 +12,10 @@ public record SyncChallengeResponse(string Challenge, Guid ServerNodeId);
 /// </param>
 /// <param name="Capabilities">What the caller's build advertises (docs/design/step-a-spec.md 5.1); absent from 2.5 builds.</param>
 /// <param name="AppVersion">The caller's application version; absent from 2.5 builds.</param>
+/// <param name="Platform">What the caller runs on (<see cref="BeeMemoryBank.Sync.Metadata.NodePlatform"/>), for the network map; absent from builds before 2.6.4. Read through <c>NodePlatform.Normalize</c>.</param>
+/// <param name="InContainer">The caller runs in a container; absent from builds before 2.6.4.</param>
 public record SyncAuthRequest(Guid NodeId, string ChallengeB64, string SignatureB64, int? ProtocolVersion = null,
-    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null);
+    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null, string? Platform = null, bool? InContainer = null);
 
 /// <summary>Response after successful authentication.</summary>
 public record SyncAuthResponse(string Token);
@@ -21,8 +23,10 @@ public record SyncAuthResponse(string Token);
 /// <summary>Identity of this node for remote nodes.</summary>
 /// <param name="ProtocolVersion">What this node declares: 3, or 4 once it applied the metadata activation.</param>
 /// <param name="Capabilities">What this build advertises (docs/design/step-a-spec.md 5.1); older nodes ignore it.</param>
+/// <param name="Platform">What this node runs on (<c>windows</c>, <c>macos</c>, <c>linux</c>, <c>android</c>, <c>ios</c>), for the network map of the node that asks; older nodes ignore it.</param>
+/// <param name="InContainer">This node runs in a container.</param>
 public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion,
-    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null);
+    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null, string? Platform = null, bool? InContainer = null);
 
 /// <summary>Result of applying events.</summary>
 /// <param name="Applied">Count of events successfully persisted via ApplyAsync.</param>

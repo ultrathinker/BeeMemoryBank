@@ -32,7 +32,9 @@ public class SyncClient(
     // Step A (docs/design/step-a-spec.md 5.2, 5.6, 5.7): what this node declares and accepts, and where it records what a
     // peer showed. Every host registers both; a hand-built client without them behaves as 2.5.1 did.
     Metadata.ISyncProtocolPolicy? protocolPolicy = null,
-    IWhitelistRepository? whitelistRepo = null)
+    IWhitelistRepository? whitelistRepo = null,
+    // What a peer says it runs on is kept here for the network map; a hand-built client without it just does not remember.
+    PeerContactLog? contacts = null)
 {
     // WhenWritingNull: the push body is written through this too, and the stripped envelope
     // fields (SyncWire.Strip) must vanish from the wire, not ride along as explicit nulls.
@@ -227,6 +229,9 @@ public class SyncClient(
             catch (Exception ex) { logger.LogWarning(ex, "Could not record what {NodeId} advertises", remoteIdentity.NodeId); }
         }
 
+        // The challenge proved who answers: what it says it runs on (a Mac, a Linux server, a container) is for the network map.
+        contacts?.NotePlatform(remoteIdentity.NodeId, Metadata.NodePlatform.Normalize(remoteIdentity.Platform), remoteIdentity.InContainer);
+
         int appliedCount = 0;
 
         var shouldPull = protocolPolicy?.ShouldPullFrom(remoteIdentity.ProtocolVersion)
@@ -407,6 +412,9 @@ public class SyncClient(
         var withholdClearContent = BlindNodeId.IsBlind(remoteIdentity.NodeId) && protocolPolicy is { SealsMetadata: true };
 
         logger.LogInformation("Push to {Remote}: localMaxSeq={MaxSeq}, pushAfter={After}", remoteIdentity.NodeId, localMaxSeq, pushAfter);
+        // True when the loop ran out of events to send (not when it stopped on a stall): everything after the cursor
+        // that is still in the log is then what the peer wrote itself (BMB-315).
+        var drained = false;
         while (true)
         {
             // PushFetchSize bounds how many candidate rows we pull from the local event log in one
@@ -414,7 +422,7 @@ public class SyncClient(
             // deciding whether there's more to fetch after this page).
             var page = await eventLogRepo.GetEventsToRelayAsync(remoteIdentity.NodeId, pushAfter, PushFetchSize);
             logger.LogInformation("Push page to {Remote}: {Count} events", remoteIdentity.NodeId, page.Count);
-            if (page.Count == 0) break;
+            if (page.Count == 0) { drained = true; break; }
 
             var sendable = withholdClearContent
                 ? page.Where(e => !Metadata.EventClasses.IsClearContent(e.ProtocolVersion, e.EventType)).ToList()
@@ -495,7 +503,7 @@ public class SyncClient(
                 totalDropped += withheld;
             }
 
-            if (page.Count < PushFetchSize) break;
+            if (page.Count < PushFetchSize) { drained = true; break; }
         }
 
         if (totalApplied + totalDropped > 0)
@@ -509,6 +517,14 @@ public class SyncClient(
             logger.LogInformation("Push: applied {Applied}, dropped {Dropped}, skipped {Skipped} on {NodeId}",
                 totalApplied, totalDropped, totalSkipped, remoteIdentity.NodeId);
         }
+
+        // BMB-315: what a push sends is "everything but what the peer wrote itself". When all that is left after the cursor is the
+        // peer's own events (the page is empty), the cursor used to stay where it was for ever: the delivery status counted the
+        // peer's own events as "not delivered" (a progress bar that never filled), and after a compaction a cursor below its
+        // point looked like a gap. The loop ran dry, so nothing is owed to the peer up to the head we read before it: move the
+        // cursor there. Only for a peer that has a row (the gap check above is the same), and without touching "last delivery".
+        if (drained && pushPosition != null && pushAfter < localMaxSeq)
+            await pushPositionRepo.AdvanceCursorAsync(remoteIdentity.NodeId, localMaxSeq);
 
         return appliedCount;
     }

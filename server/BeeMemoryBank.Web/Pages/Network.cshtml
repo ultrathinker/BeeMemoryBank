@@ -1,0 +1,66 @@
+@page
+@model BeeMemoryBank.Web.Pages.NetworkModel
+@{
+    ViewData["Title"] = "Network";
+}
+
+@section HeadStyles {
+    <link rel="stylesheet" href="/css/network.css" asp-append-version="true" />
+}
+
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content net-scope">
+
+    <div class="net-head">
+        <h1 class="net-title"><sl-icon name="diagram-3"></sl-icon> Network</h1>
+        <div class="net-tools">
+            <span id="net-note" role="status" aria-live="polite">Loading...</span>
+            <sl-tooltip content="Refresh now">
+                <sl-icon-button id="net-refresh" name="arrow-clockwise" label="Refresh the network"></sl-icon-button>
+            </sl-tooltip>
+        </div>
+    </div>
+    <p class="net-sub">
+        This node and every node it knows, with the calls between them: an arrow goes from the node that calls to the node that answers. Point at a node for what this node
+        knows about it, at an arrow for the address it goes to; click to keep the card open.
+    </p>
+
+    <div id="net-invisible" class="net-invisible" hidden>
+        <sl-icon name="eye-slash"></sl-icon> Invisible Mode is on: this node calls nobody and answers nobody, so the calls below are not being made.
+        <a href="/Admin#card-invisible-mode">Change it in Admin</a>
+    </div>
+
+    <div class="net-legend" aria-label="What the drawing means">
+        <span class="net-legend-item tone-ok lg-ok"><svg viewBox="0 0 38 14" aria-hidden="true"><path class="lg-line" d="M2 7 H28"/><path class="lg-head" d="M26 3 L36 7 L26 11 Z"/></svg>answering</span>
+        <span class="net-legend-item tone-bad lg-bad"><svg viewBox="0 0 38 14" aria-hidden="true"><path class="lg-line" d="M2 7 H28"/><path class="lg-head" d="M26 3 L36 7 L26 11 Z"/></svg>no answer</span>
+        <span class="net-legend-item tone-warn"><svg viewBox="0 0 38 14" aria-hidden="true"><path class="lg-line" d="M2 7 H28" style="stroke-dasharray: 9 5"/><path class="lg-head" d="M26 3 L36 7 L26 11 Z"/></svg>not heard lately</span>
+        <span class="net-legend-item tone-rule lg-rule"><svg viewBox="0 0 38 14" aria-hidden="true"><path class="lg-line" d="M2 7 H28"/><path class="lg-head" d="M26 3 L36 7 L26 11 Z"/></svg>expected by the network's rule (other nodes' calls, not seen from here)</span>
+        <span class="net-legend-item">one arrow = a call one way, two arrows = both ways</span>
+    </div>
+
+    <div id="net-stage">
+        <div class="net-loading"><sl-spinner></sl-spinner> Loading the network...</div>
+        <p id="net-empty" class="net-empty" hidden>
+            No other nodes yet. Add one in <a href="/Admin#card-trusted-nodes">Admin</a> (a node that joins this network) or on the <a href="/BlindNodes">Blind nodes</a> page.
+        </p>
+    </div>
+
+    <section class="net-calls" aria-labelledby="net-calls-title">
+        <h2 id="net-calls-title">Calls</h2>
+        <p>The same arrows in words. "Measured here" is what this node saw itself; "by the network's rule" is how the network is built (every node calls every node that has an address).</p>
+        <div class="net-table-wrap">
+            <table class="net-table">
+                <thead><tr><th>Call</th><th>Goes to</th><th>State</th><th>Source</th></tr></thead>
+                <tbody id="net-links-body"><tr><td colspan="4" class="net-table-empty">Loading...</td></tr></tbody>
+            </table>
+        </div>
+    </section>
+
+</div>
+</div>
+
+@section Scripts {
+    <script src="/js/pages/network-model.js" asp-append-version="true"></script>
+    <script src="/js/pages/network-map.js" asp-append-version="true"></script>
+}

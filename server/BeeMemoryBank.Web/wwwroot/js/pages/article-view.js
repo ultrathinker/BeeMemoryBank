@@ -109,7 +109,39 @@
         var unlockTimer = null;
 
         function formatRemaining(sec) {
-            return sec >= 60 ? Math.ceil(sec / 60) + ' min' : sec + ' s';
+            return window.bmbProtectedSave ? window.bmbProtectedSave.formatSpan(sec) : (sec >= 60 ? Math.ceil(sec / 60) + ' min' : sec + ' s');
+        }
+
+        // BMB-319: "change" opens a slider (15 min .. 8 h) for how long THIS article stays unlocked. It applies when the slider is let go; the node keeps
+        // the time for this article through Edit and saves, and forgets it when the article locks.
+        var unlockPicker = null;
+        if (window.bmbProtectedSave && document.getElementById('unlock-change') && document.getElementById('unlock-range')) {
+            unlockPicker = window.bmbProtectedSave.durationPicker({
+                link: document.getElementById('unlock-change'),
+                panel: document.getElementById('unlock-picker'),
+                range: document.getElementById('unlock-range'),
+                picked: document.getElementById('unlock-picked'),
+                // The one busy helper (BMB-311): the slider is busy until the node answers; the picker is told the answer, or the reason it failed.
+                request: function (seconds) {
+                    var range = document.getElementById('unlock-range');
+                    return new Promise(function (resolve, reject) {
+                        bmbBusy.run(range, function () {
+                            return bmbBusy.request('/api-proxy/article/' + articleId + '/unlock-duration', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ seconds: seconds })
+                            }).then(function (res) { resolve(res.body || {}); });
+                        }, { quiet: true, error: reject });
+                    });
+                },
+                applied: function (body) { startUnlockCountdown(body.unlockExpiresInSeconds); },
+                failed: function (err) {
+                    // 409: the article locked while the slider was open - show it locked, as the countdown does at zero
+                    if (err && err.status === 409) { relock(); return; }
+                    bmbBusy.showResult(document.getElementById('unlock-change'), false, (err && err.message) || 'The time could not be changed.');
+                }
+            });
+            unlockPicker.setSeconds(pageData.unlockDurationSeconds != null ? Number(pageData.unlockDurationSeconds) : 900);
         }
 
         function startUnlockCountdown(seconds) {
@@ -143,6 +175,7 @@
             var body = document.getElementById('article-body');
             if (body) body.innerHTML = '';
             if (unlockBanner) unlockBanner.style.display = 'none';
+            if (unlockPicker) { unlockPicker.close(); unlockPicker.setSeconds(900); }   // locked: the standard time applies again
             if (unlockedCard) unlockedCard.style.display = 'none';
             if (lockCard) lockCard.style.display = '';
             if (unlockPass) unlockPass.focus();
@@ -167,6 +200,10 @@
                     if (unlockPass) unlockPass.value = '';
                     if (lockCard) lockCard.style.display = 'none';
                     if (unlockedCard) unlockedCard.style.display = '';
+                    if (unlockPicker) {
+                        unlockPicker.close();
+                        unlockPicker.setSeconds(data.unlockDurationSeconds != null ? Number(data.unlockDurationSeconds) : 900);
+                    }
                     startUnlockCountdown(data.unlockExpiresInSeconds);
                 });
             }, {

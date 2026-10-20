@@ -8,8 +8,8 @@
 }
 
 @section HeadStyles {
-<link rel="stylesheet" href="/lib/easymde/easymde.min.css" />
-<link rel="stylesheet" href="/lib/tagify/tagify.css" />
+<link rel="stylesheet" href="/lib/easymde/easymde.min.css" asp-append-version="true" />
+<link rel="stylesheet" href="/lib/tagify/tagify.css" asp-append-version="true" />
 <style>
     /* EasyMDE toolbar icons are rendered via local Shoelace <sl-icon> (bootstrap-icons),
        replacing EasyMDE's FontAwesome <i> glyphs. Align them with the other toolbar buttons. */
@@ -143,12 +143,39 @@
         }
 
         <div style="margin-bottom:16px;" id="content-block" @(Model.IsLocked ? "hidden" : "")>
+            @if (Model.IsProtected)
+            {
+                @* BMB-318: how long the node still remembers the password, right over the text it is needed to save (the same strip as on the article page). *@
+                <div class="unlock-banner" id="edit-unlock-banner" role="status" style="display:none;">
+                    <sl-icon name="unlock"></sl-icon>
+                    <span id="edit-unlock-counting">Temporarily unlocked &middot; locks automatically in <strong id="edit-unlock-remaining"></strong>
+                        <a href="#" class="unlock-change" id="edit-unlock-change" role="button" aria-controls="edit-unlock-picker" aria-expanded="false">change</a></span>
+                    <span id="edit-unlock-over" style="display:none;"><strong>The unlock time is over.</strong> Saving may ask for the password again; what you have written stays here.</span>
+                    @* BMB-319: the time THIS article stays unlocked for, 15 min .. 8 h; it applies when the slider is let go and holds in View, in Edit and across saves until the article locks. *@
+                    <span class="unlock-picker" id="edit-unlock-picker" style="display:none;">
+                        <span>Keep it unlocked for</span>
+                        <sl-range id="edit-unlock-range" label="How long this article stays unlocked" min="15" max="480" step="15" value="15" tooltip="none"></sl-range>
+                        <strong id="edit-unlock-picked">15 min</strong>
+                    </span>
+                    <small id="edit-unlock-note" style="flex-basis:100%;color:var(--text-secondary);">The text stays in the editor when it locks. Saving after that may ask for the password.</small>
+                </div>
+            }
             <label style="display:block;font-size:0.88rem;color:var(--text-secondary);margin-bottom:6px;">Content (Markdown)</label>
             <textarea name="content" id="md-editor">@Model.Content</textarea>
         </div>
 
-        @if (!Model.IsProtected)
+        @if (Model.IsProtected)
         {
+            @* BMB-320: no attachments block here, and the page says why and what else a protected article cannot do. *@
+            <div style="margin-bottom:16px;"><partial name="_ProtectedLimits" /></div>
+        }
+        else
+        {
+            if (Model.IsNew)
+            {
+                @* A new article: the same list appears as soon as a password is typed above (article-edit.js). *@
+                <div style="margin-bottom:16px;display:none;" id="create-limits"><partial name="_ProtectedLimits" /></div>
+            }
             <div style="margin-bottom:16px;" id="attachments-block">
                 <label style="display:block;font-size:0.88rem;color:var(--text-secondary);margin-bottom:6px;">
                     <sl-icon name="paperclip"></sl-icon> Attachments (<span id="attachments-count">@Model.Attachments.Count</span>)
@@ -192,18 +219,36 @@
             <sl-button variant="default" size="large" href="@cancelUrl">Cancel</sl-button>
         </div>
     </form>
+
+    @if (Model.IsProtected)
+    {
+        @* BMB-316: asked when a save finds the unlock of this article gone. It sits over the editor and leaves it as it is: Cancel (or Esc) gives it back to be edited and copied from. *@
+        <sl-dialog id="dlg-reauth" label="Password needed to save">
+            <p style="margin:0 0 12px;font-size:0.92rem;">
+                This article is password-protected, and the time its password was remembered for is over, so it cannot be saved yet.
+                Enter the password to save. Everything you have written stays in the editor until then; <strong>Cancel</strong> takes you back to it.
+            </p>
+            <sl-input id="reauth-pass" type="text" inputmode="text" autocomplete="off" class="bmb-secret" data-1p-ignore data-lpignore="true" label="Password"></sl-input>
+            <div id="reauth-error" role="alert" style="display:none;color:var(--sl-color-danger-600);font-size:0.9rem;margin-top:8px;"></div>
+            <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-reauth">Cancel</sl-button>
+            <sl-button slot="footer" variant="primary" id="reauth-save">Save</sl-button>
+        </sl-dialog>
+    }
 </div>
 </div>
 
-<script src="/lib/editor.min.js"></script>
+<script src="/lib/editor.min.js" asp-append-version="true"></script>
 <script type="application/json" id="article-edit-data">
     {
         "isProtected": @(Model.IsProtected ? "true" : "false"),
         "isLocked": @(Model.IsLocked ? "true" : "false"),
+        "unlockExpiresInSeconds": @(Model.UnlockExpiresInSeconds?.ToString() ?? "null"),
+        "unlockDurationSeconds": @(Model.UnlockDurationSeconds?.ToString() ?? "null"),
         "isNew": @(Model.IsNew ? "true" : "false"),
         "treePath": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.TreePath)),
         "originalTitle": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Title ?? "")),
         "originalContent": @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Content ?? ""))
     }
 </script>
-<script src="/js/pages/article-edit.js"></script>
+<script src="/js/pages/protected-save-dialog.js" asp-append-version="true"></script>
+<script src="/js/pages/article-edit.js" asp-append-version="true"></script>

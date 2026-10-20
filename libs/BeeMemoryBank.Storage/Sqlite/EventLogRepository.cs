@@ -242,6 +242,14 @@ public class EventLogRepository(DbConnectionFactory factory) : BaseRepository(fa
             new { seqNum });
     }
 
+    public async Task<int> CountEventsToRelayAfterAsync(Guid excludeNodeId, long afterSequenceNum)
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM tbl_event WHERE node_id != @excludeNodeId AND sequence_num > @afterSequenceNum",
+            new { excludeNodeId, afterSequenceNum });
+    }
+
     public async Task<SyncEvent?> GetByIdAsync(string eventId)
     {
         using var conn = OpenConnection();

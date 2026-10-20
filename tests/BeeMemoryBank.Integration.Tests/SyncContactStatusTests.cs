@@ -4,6 +4,7 @@ using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Metadata;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -240,6 +241,7 @@ public sealed class SyncContactStatusTests : IAsyncLifetime
 
     [Theory]
     [InlineData("GET", "/api/sync/delivery-status")]
+    [InlineData("GET", "/api/sync/network")]
     [InlineData("GET", "/api/whitelist/sync-status")]
     [InlineData("POST", "/api/sync/nodes/{id}/check")]
     [InlineData("GET", "/api/sync/invisible")]
@@ -370,6 +372,75 @@ public sealed class SyncContactStatusTests : IAsyncLifetime
 
         forged.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "a signature that is not the peer's gets no token");
         contacts.Get(_bId).InboundAt.Should().Be(inboundBefore, "asking for a challenge, or claiming to be a node, is not contact with it");
+    }
+
+    // ---- BMB-322: the network map (the page the header's "Sync Status" opens) ----
+
+    [Fact]
+    public async Task The_network_map_draws_the_node_it_called_with_what_it_said_it_runs_on_and_the_call_as_measured()
+    {
+        (await _clientA.PostAsync($"/api/sync/nodes/{_bId}/check", null)).EnsureSuccessStatusCode();
+
+        var map = await _clientA.GetFromJsonAsync<JsonElement>("/api/sync/network", JsonOpts);
+
+        var self = map.GetProperty("self");
+        self.GetProperty("isSelf").GetBoolean().Should().BeTrue();
+        self.GetProperty("platform").GetString().Should().Be(NodePlatform.Current);
+        self.GetProperty("notes").GetInt32().Should().BeGreaterThanOrEqualTo(0, "this node says how many notes it holds");
+        var b = map.GetProperty("peers").EnumerateArray().Single(p => p.GetProperty("nodeId").GetGuid() == _bId);
+        b.GetProperty("kind").GetString().Should().Be("full", "node A has an address for it");
+        b.GetProperty("host").GetString().Should().Be("nodeb.test");
+        b.GetProperty("platform").GetString().Should().Be(NodePlatform.Current, "node B told what it runs on in its identity, during the session");
+        var link = map.GetProperty("links").EnumerateArray().Single(l => l.GetProperty("to").GetGuid() == _bId);
+        link.GetProperty("from").GetGuid().Should().Be(_aId);
+        link.GetProperty("basis").GetString().Should().Be("observed");
+        link.GetProperty("state").GetString().Should().Be("answering");
+        link.GetProperty("host").GetString().Should().Be("nodeb.test", "the arrow carries the address the call goes to");
+    }
+
+    [Fact]
+    public async Task The_node_that_was_called_draws_the_caller_as_a_device_that_calls_in_and_knows_what_it_runs_on()
+    {
+        (await _clientA.PostAsync($"/api/sync/nodes/{_bId}/check", null)).EnsureSuccessStatusCode();
+
+        var map = await _clientB.GetFromJsonAsync<JsonElement>("/api/sync/network", JsonOpts);
+
+        var a = map.GetProperty("peers").EnumerateArray().Single(p => p.GetProperty("nodeId").GetGuid() == _aId);
+        a.GetProperty("kind").GetString().Should().Be("device", "node B has no address for node A: node A calls in");
+        a.GetProperty("platform").GetString().Should().Be(NodePlatform.Current, "node A said what it runs on when it authenticated");
+        var link = map.GetProperty("links").EnumerateArray().Single();
+        link.GetProperty("from").GetGuid().Should().Be(_aId);
+        link.GetProperty("to").GetGuid().Should().Be(_bId);
+        link.GetProperty("basis").GetString().Should().Be("observed");
+        link.GetProperty("state").GetString().Should().Be("heard");
+    }
+
+    [Fact]
+    public async Task A_phone_that_called_in_is_an_android_device_with_the_address_it_came_from()
+    {
+        var phone = Guid.NewGuid();
+        using (var scope = _a.Services.CreateScope())
+            await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().CreateAsync(new WhitelistEntry
+            {
+                NodeId = phone, DisplayName = "Kitchen phone", Ed25519PublicKey = new byte[32], ApiAddress = null,
+                Status = "A", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+        var contacts = _a.Services.GetRequiredService<PeerContactLog>();
+        contacts.NoteInbound(phone, DateTime.UtcNow.AddMinutes(-1), "203.0.113.7");
+        contacts.NotePlatform(phone, "android", inContainer: false);
+
+        var map = await _clientA.GetFromJsonAsync<JsonElement>("/api/sync/network", JsonOpts);
+
+        var node = map.GetProperty("peers").EnumerateArray().Single(p => p.GetProperty("nodeId").GetGuid() == phone);
+        node.GetProperty("kind").GetString().Should().Be("device");
+        node.GetProperty("platform").GetString().Should().Be("android");
+        node.GetProperty("seenFrom").GetString().Should().Be("203.0.113.7");
+        var call = map.GetProperty("links").EnumerateArray().Single(l => l.GetProperty("from").GetGuid() == phone && l.GetProperty("basis").GetString() == "observed");
+        call.GetProperty("to").GetGuid().Should().Be(_aId);
+        call.GetProperty("state").GetString().Should().Be("heard");
+        call.GetProperty("seenFrom").GetString().Should().Be("203.0.113.7");
+        map.GetProperty("links").EnumerateArray().Should().Contain(l => l.GetProperty("from").GetGuid() == phone && l.GetProperty("to").GetGuid() == _bId && l.GetProperty("basis").GetString() == "expected",
+            "the phone calls node B too, by the network's rule: not measured here, so not given as seen");
     }
 
     [Fact]

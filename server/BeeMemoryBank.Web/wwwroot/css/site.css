@@ -1096,6 +1096,55 @@ a.search-result-title:hover {
     text-decoration: underline;
     cursor: pointer;
 }
+/* BMB-319: "change" sits right after the time it changes; the slider that it opens is a row of its own under the strip's text. */
+.unlock-banner a.unlock-change {
+    margin-left: 6px;
+    font-weight: 500;
+}
+.unlock-picker {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+}
+.unlock-picker sl-range {
+    flex: 0 1 320px;
+    min-width: 180px;
+}
+.unlock-picker sl-range::part(form-control-label) {
+    display: none;
+}
+.unlock-picker strong {
+    min-width: 6.5em;
+}
+
+/* BMB-320: the list of what a password-protected article cannot do, under the editor. */
+.protected-limits {
+    padding: 12px 14px;
+    border: 1px solid var(--sl-color-warning-300);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--sl-color-warning-500) 8%, transparent);
+    color: var(--sl-color-neutral-700);
+    font-size: 0.88rem;
+}
+.protected-limits-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-weight: 600;
+}
+.protected-limits-title sl-icon {
+    color: var(--sl-color-warning-600);
+}
+.protected-limits ul {
+    margin: 0;
+    padding-left: 20px;
+}
+.protected-limits li {
+    margin: 3px 0;
+}
 
 .article-content h1, .article-content h2, .article-content h3 {
     margin-top: 1.4em;
@@ -1502,10 +1551,37 @@ a.search-result-title:hover {
 .sync-bad {
     color: var(--sl-color-danger-600);
 }
-.sync-node-hint {
-    padding: 4px 14px 8px;
+/* BMB-317: a node of the dropdown is two lines (name, last contact); the rest is under a chevron. */
+.sync-node-summary {
     font-size: 11px;
     color: var(--text-secondary, var(--sl-color-neutral-500));
+}
+.sync-node-details {
+    margin-top: 2px;
+}
+.sync-node-toggle {
+    flex-shrink: 0;
+    align-self: flex-start;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary, var(--sl-color-neutral-500));
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.sync-node-toggle:hover,
+.sync-node-toggle:focus-visible {
+    color: var(--accent, var(--sl-color-primary-600));
+    background: var(--bg-secondary, var(--sl-color-neutral-100));
+}
+.sync-node-toggle sl-icon {
+    display: block;
+    transition: transform 0.15s ease;
+}
+.sync-node-item.is-open .sync-node-toggle sl-icon {
+    transform: rotate(180deg);
 }
 /* The "Check now" action of a node's row: a real button, so that the check does not need a mouse (BMB-313). */
 .sync-check-btn {
@@ -1538,22 +1614,44 @@ a.search-result-title:hover {
     overflow: hidden;
 }
 .sync-dropdown-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
     padding: 10px 14px;
     font-weight: 600;
     font-size: 13px;
     border-bottom: 1px solid var(--border, var(--sl-color-neutral-300));
     color: var(--text-primary, inherit);
+    text-decoration: none;
+}
+/* BMB-322: the title is a link to the network map */
+a.sync-dropdown-header:hover,
+a.sync-dropdown-header:focus-visible {
+    background: var(--sl-color-neutral-200);
+    outline: none;
+}
+.sync-dropdown-map {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--accent, var(--sl-color-primary-600));
 }
 .sync-node-list {
     padding: 6px 0;
-    max-height: 300px;
+    max-height: min(70vh, 520px);   /* rows that are opened need more than the 300px two lines a node were given */
     overflow-y: auto;
 }
 .sync-node-item {
     display: flex;
-    align-items: center;
+    align-items: flex-start;   /* the icon and the chevron stay at the name when the details open */
     padding: 8px 14px;
     gap: 10px;
+}
+.sync-node-item > sl-icon {
+    margin-top: 2px;
 }
 .sync-node-item:hover {
     background: var(--sl-color-neutral-200);

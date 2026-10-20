@@ -7,9 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.6.4 (2026-10-20)
+
+The header's Sync Status opens a network map, a protected article can stay unlocked for a time you choose, and a browser can no longer keep the page scripts of an older version. The database schema does not change from 2.6.3.
+
+### Added
+
+- **A network map.** Click **Sync Status** at the top of the sync dropdown in the header to open a new **Network** page: this node and every node it knows, on a circle (two on a line, three a triangle, four or more a circle), with an arrow for every call between them, one-way or two-way. Point at an arrow to see the address and port it goes to (and, for a call to this node, where it came from); point at a node to see what this node knows about it: what it runs on, its address, version, how it stands, how many notes it holds (or how many changes are still to be delivered to it), when it was last heard from. A node is drawn as what it runs on - a Windows PC, a Mac, a Linux server, an Android phone or an iPhone - with a Docker badge for a node in a container and an eye badge for a blind node. Click a node or an arrow to keep its card open. The arrows this node measures itself (the calls it makes, the calls it receives) are solid and coloured by how they go (answering, no answer, not heard lately); the calls between two other nodes cannot be seen from here and are dotted, "expected by the network's rule". Nodes tell what they run on in their sync identity and when they call (`platform`, `inContainer`; additive, so an older node simply is drawn as a server or a device until it runs 2.6.4). Superadmin only, like the sync status; `GET /api/sync/network`.
+
 ### Changed
 
 - **The Favorites block in the web sidebar reads as a folder.** Its header now sits where a top-level folder row does, and the starred articles are indented one level, in the same columns the tree gives an article inside a folder, so a protected article no longer looks like a sibling of the block. The block also has some room above its header and more below the last article.
+
+- **The sync status shows two lines a node.** In the header dropdown each node is its name (with ONLINE, or a red NOT ANSWERING) and when it was last heard from; everything else (what the node answered, how many changes are waiting, the delivery bar, Check now) is under a chevron. A node you ask with Check now (or a double-click) opens to show the answer. The line that explained how to check a node is gone. A device that has no address and only calls this node is said to have changes "waiting for it to call", not "not delivered".
+
+- **The editor of a protected article shows how long its password is still remembered.** Over the text it says Temporarily unlocked · locks automatically in N min, counting down as the article page does, and when the time is out it says that saving may ask for the password again and that what you wrote stays. The time is 15 minutes unless the new setting BMB_PROTECTED_UNLOCK_SECONDS (30 to 3600) says another.
+
+- **You can choose how long one protected article stays unlocked.** The strip over the article (in the editor and on the article page) has a **change** link next to the time. It opens a slider from 15 minutes to 8 hours, in steps of 15 minutes; when you let it go the time applies at once, the slider goes away and the strip counts the new time. The time belongs to that one article, is kept when you go from the article page to the editor and back and when you save, and ends when the article locks (Re-lock, the time running out, locking the vault): the standard 15 minutes apply again. It is for the web and the desktop apps, not for the phone apps.
+
+- **A protected article's editor says what such an article cannot do.** Instead of the attachments block simply not being there, a list under the editor says: no attachments or pictures (files are kept under the vault key, not under the article's password); comments are allowed but sealed with the password and readable and writable only while the article is unlocked; search does not look into the text; AI assistants and MCP tools cannot read or change it; export leaves the text out; earlier versions are not shown; no draft autosave; the password cannot be recovered. A new article shows the same list as soon as a password is typed.
+
+### Fixed
+
+- **After an update the browser could keep running the page scripts of the version before.** The files of the installed app all carry the same old "last modified" date, so a browser told nothing about freshness kept a script for years: the **change** link of the unlock strip did nothing (it only added "#" to the address) until the cache cleared by itself. Every script and style of a page is now asked for as `?v=<hash of its content>` (the address changes whenever the file does, with nothing to raise by hand), the server lets a `?v=` file be kept for a year and makes the browser ask again for a script or style asked for without it (a 304 when it did not change), and a test fails for a page tag without the version.
+
+- **"N changes not delivered" and a half-full delivery bar for a node that wrote those changes itself.** A push never sends a node its own events back, so a node whose events were the last in the log stayed at the same position for ever: the sync status counted them as undelivered ("151 changes not delivered", a bar that never filled, "last delivery" weeks ago) although nothing was left to send, and Check now could not change it. The count now covers what a push to the node would really carry, and the delivery position moves past the node's own events once nothing else is owed ("last delivery" still tells when something was last sent). The same stuck position made compaction think the node was far behind.
+
+- **Saving a password-protected article after its password was forgotten no longer ends in a red message.** The node remembers the password of an article you unlocked for a quarter of an hour. Editing for longer and pressing Save used to fail with "400 ... a passphrase is required" at the top of the page. The page now asks for the password in a dialog over the editor, which keeps everything you wrote. **Cancel** closes the dialog and gives the editor back (it can still be edited and copied from); the right password saves what is in the editor; a wrong one says so in the dialog.
 
 #### 2.6.3 (2026-10-18)
 

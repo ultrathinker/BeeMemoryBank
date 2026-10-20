@@ -36,10 +36,16 @@ public record ArticleContentResponse(Guid Id, string Content);
 // passphrase gate (Content is null). UnlockExpiresInSeconds is set only when a protected body came
 // from the recent-unlock cache: how long until that window closes (relative, so a skewed browser
 // clock can't distort the countdown the page shows).
-public record EditContentResponse(Guid Id, bool Protected, bool Unlocked, string? Content, int? UnlockExpiresInSeconds = null);
+// UnlockDurationSeconds is the time this article keeps its password after each unlock or save (15 min unless a person chose another).
+public record EditContentResponse(Guid Id, bool Protected, bool Unlocked, string? Content, int? UnlockExpiresInSeconds = null, int? UnlockDurationSeconds = null);
 
 // POST /api/articles/{id}/unlock: the plaintext plus how long the recent-unlock window now lasts.
-public record UnlockArticleResponse(Guid Id, string Content, int? UnlockExpiresInSeconds);
+public record UnlockArticleResponse(Guid Id, string Content, int? UnlockExpiresInSeconds, int? UnlockDurationSeconds = null);
+
+// POST /api/articles/{id}/unlock-duration: the time a person chose for one unlocked article, in seconds.
+public record UnlockDurationRequest(int Seconds);
+
+public record UnlockDurationResponse(int UnlockExpiresInSeconds, int UnlockDurationSeconds);
 
 /// <param name="Sealed">True when this node's database is encrypted (docs/design/step-b-spec.md 5.6): then <see cref="State"/> says whether it is open.</param>
 /// <param name="State">The gate's state (<c>Plain</c>, <c>Closed</c>, <c>Opening</c>, <c>Importing</c>, <c>Open</c>, <c>Closing</c>).</param>

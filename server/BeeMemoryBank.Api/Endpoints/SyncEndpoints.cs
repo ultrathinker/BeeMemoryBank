@@ -80,7 +80,9 @@ public static class SyncEndpoints
                 Convert.ToBase64String(identity.Ed25519PublicKey),
                 policy.Declared,
                 MetadataCapabilities.Advertised,
-                BuildVersion.Current));
+                BuildVersion.Current,
+                NodePlatform.Current,
+                NodePlatform.InContainer));
         }).WithTags("Sync");
 
         // ─── Sentinel (no auth — encrypted, useless without DEK) ───────────────
@@ -217,7 +219,10 @@ public static class SyncEndpoints
 
             var token = store.IssueToken(req.NodeId, req.ProtocolVersion!.Value, req.Capabilities);
             // The peer called this node and the session got as far as a token: that is contact, it -> us (BMB-313).
-            httpCtx.RequestServices.GetService<PeerContactLog>()?.NoteInbound(req.NodeId, DateTime.UtcNow);
+            // Where the call came from and what the caller says it runs on go to the network map; the caller is proven by its signature above.
+            var contacts = httpCtx.RequestServices.GetService<PeerContactLog>();
+            contacts?.NoteInbound(req.NodeId, DateTime.UtcNow, NetworkMapBuilder.CallerAddress(httpCtx.Connection.RemoteIpAddress));
+            contacts?.NotePlatform(req.NodeId, NodePlatform.Normalize(req.Platform), req.InContainer);
             return Results.Ok(new SyncAuthResponse(token));
         }).WithTags("Sync");
 
@@ -904,8 +909,10 @@ public static class SyncEndpoints
                 var push = pushPositions.FirstOrDefault(p => p.RemoteNodeId == node.NodeId);
                 var lastPushed = push?.LastPushedSeq ?? 0;
                 // Exact count of events the node hasn't received yet — robust to gaps left by
-                // compaction (head - lastPushed would over-count deleted events).
-                var unsyncedCount = await eventLogRepo.CountEventsAfterSequenceAsync(lastPushed);
+                // compaction (head - lastPushed would over-count deleted events). Events the node
+                // wrote itself are never sent back to it, so they are not "not delivered" either
+                // (BMB-315): the count is of what a push to it would carry.
+                var unsyncedCount = await eventLogRepo.CountEventsToRelayAfterAsync(node.NodeId, lastPushed);
                 // LastContactAt is the last successful contact, either way (BMB-313); the last push of events is LastPushAt.
                 statuses.Add(PeerContactView.Build(node, contacts.Get(node.NodeId, node.ApiAddress), pullPositions.GetValueOrDefault(node.NodeId), push, headSeq, unsyncedCount, DateTime.UtcNow,
                     scheduler?.Interval));
@@ -913,6 +920,52 @@ public static class SyncEndpoints
 
             return Results.Ok(new DeliveryStatusResponse(identity?.NodeId, invisibleMode.IsInvisible, statuses));
         // Network topology — peer node ids, display names and, in /status, their API addresses. Every browser consumer already reaches it through an /api-proxy route that requires the superadmin role, so this only stops a signed-in user calling the API directly.
+        }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
+
+        // ─── The network map (BMB-322: the page the header's "Sync Status" opens) ────────────────────────────────────────────────────────────
+        // This node, the nodes of the whitelist with what this node knows about each, and who calls whom (NetworkMapBuilder says what is measured and what is
+        // only the network's rule). The same topology and superadmin gate as the delivery status it extends; read only.
+        app.MapGet("/api/sync/network", async (
+            IEventLogRepository eventLogRepo,
+            ISyncPushPositionRepository pushPositionRepo,
+            ISyncPositionRepository pullPositionRepo,
+            IWhitelistRepository whitelistRepo,
+            IArticleRepository articleRepo,
+            IFolderRepository folderRepo,
+            PeerContactLog contacts,
+            BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
+            INodeIdentityRepository nodeRepo,
+            INodeRole role,
+            ISyncProtocolPolicy policy,
+            SyncScheduler? scheduler) =>
+        {
+            var identity = await nodeRepo.GetAsync();
+            if (identity is null) return Results.Problem("Node is not initialized.", statusCode: 503);
+            var headSeq = await eventLogRepo.GetMaxSequenceAsync();
+            var pushPositions = await pushPositionRepo.GetAllAsync();
+            var pullPositions = (await pullPositionRepo.GetAllAsync()).ToDictionary(p => p.RemoteNodeId, p => (DateTime?)p.UpdatedAt);
+            var whitelist = await whitelistRepo.GetAllActiveAsync();
+            var now = DateTime.UtcNow;
+
+            var peers = new List<NetworkMapBuilder.Peer>();
+            foreach (var node in whitelist.Where(node => node.NodeId != identity.NodeId))
+            {
+                var push = pushPositions.FirstOrDefault(p => p.RemoteNodeId == node.NodeId);
+                var unsynced = await eventLogRepo.CountEventsToRelayAfterAsync(node.NodeId, push?.LastPushedSeq ?? 0);
+                var contact = contacts.Get(node.NodeId, node.ApiAddress);
+                var status = PeerContactView.Build(node, contact, pullPositions.GetValueOrDefault(node.NodeId), push, headSeq, unsynced, now, scheduler?.Interval);
+                peers.Add(new NetworkMapBuilder.Peer(node, status, contact));
+            }
+
+            // What this node holds: counted when it can be (a closed vault cannot be read: the map is then drawn without the numbers).
+            int? notes = null, folders = null;
+            try { notes = await articleRepo.CountAsync(); folders = await folderRepo.CountAsync(); }
+            catch (Exception) { notes = null; folders = null; }
+
+            var self = new NetworkMapBuilder.SelfInfo(
+                identity.NodeId, identity.DisplayName, role.IsBlind, whitelist.FirstOrDefault(n => n.NodeId == identity.NodeId), NodePlatform.Current, NodePlatform.InContainer,
+                BuildVersion.Current, policy.Declared, notes, folders, headSeq);
+            return Results.Ok(NetworkMapBuilder.Build(self, peers, invisibleMode.IsInvisible, now, scheduler?.Interval));
         }).RequireInternalKey().RequireSuperadmin().WithTags("Sync");
 
         // ─── Check one node now (BMB-313: a double-click on a node of the sync status) ───────────────────────────────────────────────────────
@@ -940,7 +993,7 @@ public static class SyncEndpoints
                 var push = (await pushPositionRepo.GetAllAsync()).FirstOrDefault(p => p.RemoteNodeId == nodeId);
                 var pulled = (await pullPositionRepo.GetAllAsync()).FirstOrDefault(p => p.RemoteNodeId == nodeId)?.UpdatedAt;
                 return PeerContactView.Build(node, contacts.Get(nodeId, node.ApiAddress), pulled, push, await eventLogRepo.GetMaxSequenceAsync(),
-                    await eventLogRepo.CountEventsAfterSequenceAsync(push?.LastPushedSeq ?? 0), DateTime.UtcNow, scheduler.Interval);
+                    await eventLogRepo.CountEventsToRelayAfterAsync(nodeId, push?.LastPushedSeq ?? 0), DateTime.UtcNow, scheduler.Interval);
             }
 
             if (invisibleMode.IsInvisible)

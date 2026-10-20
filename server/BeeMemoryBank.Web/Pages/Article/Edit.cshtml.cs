@@ -20,6 +20,10 @@ public class EditModel(ApiClient api) : PageModel
     public bool IsProtected { get; private set; }
     // Protected AND not unlockable from the recent-unlock cache → show the passphrase gate.
     public bool IsLocked { get; private set; }
+    // Seconds the node still remembers the password of this protected article (null: nothing is remembered, or the article is not protected).
+    public int? UnlockExpiresInSeconds { get; private set; }
+    // The time this article keeps its password for after each unlock or save: 15 min unless the person chose another (the slider of the strip).
+    public int? UnlockDurationSeconds { get; private set; }
     public string? ErrorMessage { get; set; }
     // Existing article: its current file attachments (uploaded straight onto the article).
     public List<MediaDto> Attachments { get; private set; } = [];
@@ -48,7 +52,11 @@ public class EditModel(ApiClient api) : PageModel
                 // that was unlocked recently by this user (server-side cache → no re-prompt).
                 var ec = await api.GetEditContentAsync(id.Value);
                 if (ec is { Unlocked: true })
+                {
                     Content = ec.Content ?? "";
+                    UnlockExpiresInSeconds = article.Protected ? ec.UnlockExpiresInSeconds : null;
+                    UnlockDurationSeconds = article.Protected ? ec.UnlockDurationSeconds : null;
+                }
                 else if (!article.Protected)
                 {
                     // Non-protected but the helper failed for some reason — fall back to the normal path.

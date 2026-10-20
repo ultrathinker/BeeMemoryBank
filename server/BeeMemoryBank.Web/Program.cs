@@ -379,7 +379,22 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-app.UseStaticFiles();
+// Scripts and styles say how long a browser may keep them. The files of a packaged app (the desktop installer) all carry the same old "last modified" date, and a
+// browser that is told nothing decides by that date that a file is good for years: after an update it kept running the page script of the version before (a
+// "change" link that did nothing). A file asked for as ?v=<hash> (asp-append-version) changes its address when its content changes, so it may be kept for a year;
+// any other script or style is asked about again each time (a 304 when it did not change). Pictures, fonts and icons keep the browser's own rule.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        var ext = Path.GetExtension(ctx.File.Name);
+        if (!(ext.Equals(".js", StringComparison.OrdinalIgnoreCase) || ext.Equals(".css", StringComparison.OrdinalIgnoreCase) || ext.Equals(".mjs", StringComparison.OrdinalIgnoreCase)))
+            return;
+        ctx.Context.Response.Headers.CacheControl = ctx.Context.Request.Query.ContainsKey("v")
+            ? "public, max-age=31536000, immutable"
+            : "no-cache";
+    }
+});
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -424,6 +439,7 @@ internal record UpdateArticleProxyRequest(
 
 internal record ProtectArticleProxyRequest(string Passphrase, string? Hint = null);
 internal record UnlockArticleProxyRequest(string Passphrase);
+internal record UnlockDurationProxyRequest(int Seconds);
 internal record ChangePassphraseProxyRequest(string OldPassphrase, string NewPassphrase, string? Hint = null);
 
 internal record CopyArticleProxyRequest(string TargetFolderPath);

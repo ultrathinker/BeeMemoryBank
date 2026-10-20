@@ -25,9 +25,12 @@ public sealed class NoSyncServerException(string reason)
     public string Reason { get; } = reason;
 }
 
-/// <summary>What <c>/api/sync/identity</c> of a peer says about itself (a 2.5 peer sends no capabilities and no version).</summary>
+/// <summary>
+/// What <c>/api/sync/identity</c> of a peer says about itself (a 2.5 peer sends no capabilities and no version; a build before 2.6.4 sends no platform: what the
+/// network map draws it as is then decided without it).
+/// </summary>
 public sealed record RemoteIdentity(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0,
-    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null);
+    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null, string? Platform = null, bool? InContainer = null);
 
 public enum AddressVerdict
 {

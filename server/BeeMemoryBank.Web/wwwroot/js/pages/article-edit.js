@@ -379,9 +379,50 @@
         var protUnlockBtn = document.getElementById('prot-unlock');
         var protError = document.getElementById('prot-error');
         var contentBlock = document.getElementById('content-block');
-        var reauthPending = false;
 
         if (isLocked) easyMDE.codemirror.refresh();
+
+        // BMB-318: over the text, how long the node still remembers the password (the node tells it when the editor opens from an unlock, and when the gate
+        // below is used); out of time it says that saving will ask again.
+        var unlockStrip = window.bmbProtectedSave.unlockBanner({
+            banner: document.getElementById('edit-unlock-banner'),
+            counting: document.getElementById('edit-unlock-counting'),
+            remaining: document.getElementById('edit-unlock-remaining'),
+            note: document.getElementById('edit-unlock-note'),
+            over: document.getElementById('edit-unlock-over'),
+            onExpire: function () { if (unlockPicker) unlockPicker.close(); }
+        });
+        if (pageSignal) pageSignal.addEventListener('abort', function () { unlockStrip.stop(); });
+
+        // BMB-319: "change" opens a slider (15 min .. 8 h) for how long THIS article stays unlocked. It applies when the slider is let go; the node keeps the
+        // time for this article through View, Edit and saves, and forgets it when the article locks (then 15 min apply again).
+        var unlockPicker = window.bmbProtectedSave.durationPicker({
+            link: document.getElementById('edit-unlock-change'),
+            panel: document.getElementById('edit-unlock-picker'),
+            range: document.getElementById('edit-unlock-range'),
+            picked: document.getElementById('edit-unlock-picked'),
+            // The one busy helper (BMB-311): the slider is busy until the node answers; the picker is told the answer, or the reason it failed.
+            request: function (seconds) {
+                var range = document.getElementById('edit-unlock-range');
+                return new Promise(function (resolve, reject) {
+                    bmbBusy.run(range, function () {
+                        return bmbBusy.request('/api-proxy/article/' + articleId + '/unlock-duration', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ seconds: seconds })
+                        }).then(function (res) { resolve(res.body || {}); });
+                    }, { quiet: true, error: reject });
+                });
+            },
+            applied: function (body) { unlockStrip.start(body.unlockExpiresInSeconds != null ? Number(body.unlockExpiresInSeconds) : null); },
+            failed: function (err) {
+                // 409: the article locked while the slider was open - the strip says the time is over (saving asks for the password), the text stays
+                if (err && err.status === 409) { unlockStrip.expire(); return; }
+                showToast((err && err.message) || 'The time could not be changed.');
+            }
+        });
+        unlockPicker.setSeconds(pageData.unlockDurationSeconds != null ? Number(pageData.unlockDurationSeconds) : 900);
+        if (!isLocked) unlockStrip.start(pageData.unlockExpiresInSeconds != null ? Number(pageData.unlockExpiresInSeconds) : null);
 
         function protUnlock() {
             var pass = protPassInput.value || '';
@@ -396,15 +437,15 @@
                 }).then(function (res) {
                     var data = res.body || {};
                     protPass = pass;
-                    if (!reauthPending) {
-                        easyMDE.value(data.content || '');
-                        originalContent = data.content || '';
-                    }
+                    easyMDE.value(data.content || '');
+                    originalContent = data.content || '';
                     protPassInput.value = '';
                     if (protGate) protGate.hidden = true;
                     if (contentBlock) contentBlock.hidden = false;
                     easyMDE.codemirror.refresh();
-                    if (reauthPending) { reauthPending = false; doProtectedSave(); }
+                    unlockPicker.close();
+                    unlockPicker.setSeconds(data.unlockDurationSeconds != null ? Number(data.unlockDurationSeconds) : 900);
+                    unlockStrip.start(data.unlockExpiresInSeconds != null ? Number(data.unlockExpiresInSeconds) : null);
                 });
             }, {
                 quiet: true,
@@ -420,15 +461,16 @@
             if (e.key === 'Enter') { e.preventDefault(); protUnlock(); }
         });
 
-        function doProtectedSave() {
+        // Sends the edited article, with the passphrase when this page has one (otherwise the node uses the unlock it kept for a quarter of an hour).
+        // The one busy helper (BMB-311): `target` spins until the article is saved; `fail` says what went wrong, and what it says is not lost with the page.
+        function saveProtected(target, passphrase, fail) {
             var payload = {
                 title: titleInput.value,
                 treePath: form.querySelector('input[name="treePath"]').value,
                 content: easyMDE.value()
             };
-            if (protPass) payload.passphrase = protPass;
-            // The one busy helper (BMB-311): the Save button spins until the article is saved; a refusal is said in a toast, in full.
-            bmbBusy.run(form.querySelector('sl-button[type="submit"]'), function () {
+            if (passphrase) payload.passphrase = passphrase;
+            bmbBusy.run(target, function () {
                 return bmbBusy.request('/api-proxy/article/' + articleId, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
@@ -443,22 +485,25 @@
                         window.location.href = '/Article/View?id=' + articleId;
                     });
                 });
-            }, {
-                quiet: true,
-                error: function (err) {
-                    if (err.status === 401) protPass = null;
-                    // Only this code means the server-side unlock expired; any other 400 is a
-                    // validation error (e.g. a blank title) and is shown as is.
-                    if (err.status === 400 && err.body && err.body.code === 'PassphraseRequired') {
-                        reauthPending = true;
-                        if (protGate) protGate.hidden = false;
-                        protError.textContent = 'Your unlock expired — re-enter the password to save.';
-                        protError.style.display = '';
-                        protPassInput.focus();
-                        return;
-                    }
-                    showToast(err.status === 401 ? 'Wrong password — re-enter to save.' : err.message);
-                }
+            }, { quiet: true, error: fail });
+        }
+
+        // BMB-316: when the unlock is gone (or the password was wrong) the save asks for the password in a dialog over the editor; Cancel gives the
+        // editor back as it was. Any other refusal (a blank title, a read-only folder ...) is said as it always was, in a toast.
+        var reauth = window.bmbProtectedSave.attach({
+            dialog: document.getElementById('dlg-reauth'),
+            input: document.getElementById('reauth-pass'),
+            error: document.getElementById('reauth-error'),
+            saveButton: document.getElementById('reauth-save'),
+            save: saveProtected   // (button, passphrase, fail): the same order as its own definition above
+        });
+
+        function doProtectedSave() {
+            if (reauth.isOpen()) { document.getElementById('reauth-pass').focus(); return; }   // Ctrl+S with the dialog already open
+            saveProtected(form.querySelector('sl-button[type="submit"]'), protPass, function (err) {
+                if (window.bmbProtectedSave.needsPassword(err)) { protPass = null; unlockStrip.expire(); reauth.ask(''); return; }
+                if (window.bmbProtectedSave.wrongPassword(err)) { protPass = null; reauth.ask('Wrong password. Try again.'); return; }
+                showToast(err.message);
             });
         }
 
@@ -606,6 +651,8 @@
                 if (createPassEl.value) { try { localStorage.removeItem(draftKey); } catch (e) {} }
                 var note = document.getElementById('attachments-protect-note');
                 var zone = document.getElementById('attachment-dropzone');
+                var limits = document.getElementById('create-limits');   // BMB-320: the list of what a protected article cannot do
+                if (limits) limits.style.display = createPassEl.value ? '' : 'none';
                 if (note) note.style.display = createPassEl.value ? '' : 'none';
                 if (zone) zone.setAttribute('aria-disabled', createPassEl.value ? 'true' : 'false');
             });
