@@ -569,6 +569,7 @@ BeeMemoryBank.Sync BeeMemoryBank.Sync.Metadata.MetadataHostServices
 BeeMemoryBank.Sync BeeMemoryBank.Sync.Metadata.MetadataKeyMissingException
 BeeMemoryBank.Sync BeeMemoryBank.Sync.Metadata.MetadataKeySetPayload
 BeeMemoryBank.Sync BeeMemoryBank.Sync.Metadata.NoHeldEventDrain
+BeeMemoryBank.Sync BeeMemoryBank.Sync.Metadata.NodePlatform
 BeeMemoryBank.Sync BeeMemoryBank.Sync.Metadata.OriginatorInfo
 BeeMemoryBank.Sync BeeMemoryBank.Sync.Metadata.RelayEnvelopeOpener
 BeeMemoryBank.Sync BeeMemoryBank.Sync.Metadata.SealedEnvelope
