@@ -343,7 +343,7 @@ public sealed class AdminPagesSuccessTests : IAsyncLifetime
         disabled.Should().Be("/Admin/OsAutoUnlock?msg=OS auto-unlock disabled. The vault will no longer unlock automatically on startup.");
         _scripted.BodiesOf("POST", "/api/keys/auto-unlock/enable").Should().HaveCount(1);
         _scripted.BodiesOf("POST", "/api/keys/auto-unlock/disable").Should().HaveCount(1);
-        if (!OperatingSystem.IsWindows())
+        if (OperatingSystem.IsMacOS())
             enabled.Should().NotContain("Windows", "a Mac has no Windows account");
     }
 

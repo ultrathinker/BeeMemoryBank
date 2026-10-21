@@ -128,13 +128,13 @@ public sealed class AdminPagesSourceTests
     }
 
     [Theory]
-    [InlineData("@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n@section About { <p>Short.</p> }\n", 1)]
-    [InlineData("@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n@{ Layout = \"_Layout\"; }\n@section About { <p>__LONG__</p> }\n", 1)]
-    [InlineData("@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n<p>__LONG__</p>\n", 1)]
-    [InlineData("@page\n@model BeeMemoryBank.Web.Pages.Admin.OtherModel\n@section About { <p>__LONG__</p> }\n", 1)]
-    [InlineData("@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n@section About { <p>__LONG__</p> }\n<p>content</p>\n", 0)]
-    [InlineData("@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n@section About { @if (true) { <p>__LONG__</p> } }\n", 0)]
-    public void TheTemplateGuard_FlagsAPageThatLeavesTheTemplateOrSaysNothing(string source, int expected)
+    [InlineData("a short description", "@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n@section About { <p>Short.</p> }\n", 1)]
+    [InlineData("a page that sets its own layout", "@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n@{ Layout = \"_Layout\"; }\n@section About { <p>__LONG__</p> }\n", 1)]
+    [InlineData("a description outside the section", "@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n<p>__LONG__</p>\n", 1)]
+    [InlineData("another model", "@page\n@model BeeMemoryBank.Web.Pages.Admin.OtherModel\n@section About { <p>__LONG__</p> }\n", 1)]
+    [InlineData("a page with its content", "@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n@section About { <p>__LONG__</p> }\n<p>content</p>\n", 0)]
+    [InlineData("a description with a condition", "@page\n@model BeeMemoryBank.Web.Pages.Admin.XModel\n@section About { @if (true) { <p>__LONG__</p> } }\n", 0)]
+    public void TheTemplateGuard_FlagsAPageThatLeavesTheTemplateOrSaysNothing(string label, string source, int expected)
     {
         var long150 = string.Join(' ', Enumerable.Repeat("This page does something useful and says what.", 5));
         TemplateProblems("X", source.Replace("__LONG__", long150)).Should().HaveCount(expected);
