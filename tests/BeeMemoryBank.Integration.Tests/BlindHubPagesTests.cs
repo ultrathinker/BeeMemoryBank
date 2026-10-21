@@ -69,7 +69,7 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
     [Fact]
     public async Task TrustedNodes_ShowTheModeOfACallableNode_AndOfferTheButtonToFullNodesOnly()
     {
-        var html = await PageAsync("/Admin");
+        var html = await PageAsync("/Admin/TrustedNodes");
 
         Row(html, "Server Normal").Should().Contain("blind copies: normal certificate");
         Row(html, "Server Pinned").Should().Contain("blind copies: pinned certificate").And.Contain(Pin);
@@ -84,7 +84,7 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
     [Fact]
     public async Task TheDialog_OffersTheThreeChoices_AndSaysWhatEachCostsInPlainWords()
     {
-        var html = await PageAsync("/Admin");
+        var html = await PageAsync("/Admin/TrustedNodes");
 
         html.Should().Contain("id=\"dlg-hub\"").And.Contain("Let blind copies call this node");
         html.Should().Contain("Normal certificate").And.Contain("Pinned certificate").And.Contain("Do not let blind copies call this node");
@@ -105,7 +105,7 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
         html.Should().Contain("Blind copies can no longer be paired to call this node");
         var row = (await _api.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(_normal))!;
         (row.TlsTrust, row.TlsSpki).Should().Be((null, null));
-        (await PageAsync("/Admin")).Should().NotContain("blind copies: normal certificate");
+        (await PageAsync("/Admin/TrustedNodes")).Should().NotContain("blind copies: normal certificate");
     }
 
     [Fact]
@@ -173,13 +173,13 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
     /// <summary>Posts the dialog's form the way the browser does (antiforgery), follows the redirect, returns the page shown.</summary>
     private async Task<(HttpStatusCode Status, string Html)> SubmitAdminAsync(Dictionary<string, string> fields)
     {
-        var form = await _admin.GetAsync("/Admin");
+        var form = await _admin.GetAsync("/Admin/TrustedNodes");
         var html = await form.Content.ReadAsStringAsync();
         var session = string.Join("; ", _admin.DefaultRequestHeaders.GetValues("Cookie"));
         var antiforgery = form.Headers.TryGetValues("Set-Cookie", out var set)
             ? string.Join("; ", set.Select(c => c.Split(';')[0])) : "";
         var body = new Dictionary<string, string>(fields) { ["__RequestVerificationToken"] = Token.Match(html).Groups[1].Value };
-        using var post = new HttpRequestMessage(HttpMethod.Post, "/Admin?handler=SetBlindCallable") { Content = new FormUrlEncodedContent(body) };
+        using var post = new HttpRequestMessage(HttpMethod.Post, "/Admin/TrustedNodes?handler=SetBlindCallable") { Content = new FormUrlEncodedContent(body) };
         post.Headers.TryAddWithoutValidation("Cookie", session + "; " + antiforgery);
         var resp = await _admin.SendAsync(post);
         if (resp.StatusCode is HttpStatusCode.Redirect or HttpStatusCode.Found)

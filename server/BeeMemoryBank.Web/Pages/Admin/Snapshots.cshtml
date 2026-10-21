@@ -1,0 +1,164 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.SnapshotsModel
+
+@section About {
+    <p>
+        A <strong>snapshot</strong> is a complete copy of this node at one moment: its database (articles, folders, tags, comments, versions, users, key slots, the
+        node's identity, the trusted nodes) and its encrypted files, packed into one file and encrypted under the master key. Snapshots are your backups. Make one
+        before anything risky: an update, a restore, a key rotation. You can copy the files out of the data folder whenever you like, even while the node runs, and
+        a file can only be opened by someone who has the master password.
+    </p>
+    <p>
+        From this page you can <strong>create</strong> a snapshot, <strong>download</strong> one to keep elsewhere, <strong>upload</strong> one made by this vault (on
+        this node, or on another node of the same network) and <strong>delete</strong> one you no longer need. <strong>Restore</strong> opens a dialog with two
+        choices, and they are very different:
+    </p>
+    <ul>
+        <li><strong>This node only</strong> replaces everything on this node with the snapshot. The node becomes a <em>new</em> node: new identity, and it forgets the nodes it
+            trusted, its blind copies and its sync history, so the other devices have to be joined to it again. The server is unavailable while it restores, and you sign in afterwards.</li>
+        <li><strong>The whole network</strong> asks every trusted node to restore the same snapshot. This node keeps its identity; each other node applies it when it next
+            syncs, and only if it trusts this node as a superadmin and has Auto-restore switched on for it (<a href="/Admin/TrustedNodes">Trusted Nodes</a>).</li>
+    </ul>
+    <p>
+        Both ask for the master password. A restore of the whole network always takes a safety backup of this node first; for this node only, the box
+        &ldquo;Create backup before restore&rdquo; is ticked for you. A restore replaces content: it cannot be undone except from another snapshot.
+        <a href="https://github.com/ultrathinker/BeeMemoryBank/blob/main/docs/snapshot-restore.md" target="_blank" rel="noopener noreferrer">What a restore does</a>.
+    </p>
+}
+
+@* The upload, the restore and the network restore are sent by admin.js with this token (no form of the page may be there to carry one: an empty list has none). *@
+@Html.AntiForgeryToken()
+
+<div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;gap:8px;flex-wrap:wrap;">
+    <sl-button size="small" variant="default" id="btn-show-upload">
+        <sl-icon slot="prefix" name="cloud-upload"></sl-icon> Upload
+    </sl-button>
+    <sl-button size="small" variant="success" id="btn-create-snapshot">
+        <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Snapshot
+    </sl-button>
+</div>
+
+<div id="snapshot-upload-zone"
+     style="display:none;border:2px dashed var(--text-secondary);padding:20px;text-align:center;border-radius:8px;margin-bottom:16px;cursor:pointer;transition:background 0.15s;">
+    <sl-icon name="cloud-upload" style="font-size:1.6rem;color:var(--text-secondary);"></sl-icon>
+    <p style="margin:8px 0 4px 0;">
+        Drag &amp; drop a snapshot file (<code>.tar.gz</code> / <code>.bin</code>)
+        or <sl-button variant="text" id="btn-pick-file">browse</sl-button>
+    </p>
+    <p class="text-muted text-sm" style="margin:0;">Uploaded snapshots appear in the list below and can be restored.</p>
+    <input type="file" id="snapshot-file-input" accept=".tar.gz,.bin" style="display:none;" />
+    <div id="upload-progress" style="display:none;margin-top:12px;">
+        <sl-progress-bar id="upload-progress-bar" value="0"></sl-progress-bar>
+        <span id="upload-status" class="text-sm text-muted"></span>
+    </div>
+</div>
+
+@if (Model.Snapshots != null && Model.Snapshots.Count > 0)
+{
+    <div class="card" style="padding:0;overflow:hidden;">
+        <table class="version-table">
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Size</th>
+                    <th>Date</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var snap in Model.Snapshots)
+                {
+                    <tr>
+                        <td><code class="text-sm">@snap.FileName</code></td>
+                        <td class="text-muted text-sm">@(snap.SizeBytes / 1024) KB</td>
+                        <td class="text-muted text-sm">@snap.CreatedAt.ToString("g")</td>
+                        <td style="text-align:right;">
+                            <a href="/Admin/Snapshots?handler=DownloadSnapshot&fileName=@Uri.EscapeDataString(snap.FileName)"
+                               title="Download snapshot">
+                                <sl-icon-button name="download" label="Download"></sl-icon-button>
+                            </a>
+                            <sl-icon-button name="arrow-counterclockwise" label="Restore"
+                                class="btn-open-restore-snapshot"
+                                data-filename="@snap.FileName">
+                            </sl-icon-button>
+                            <form data-busy="short" method="post" asp-page-handler="DeleteSnapshot" style="display:inline;">
+                                <input type="hidden" name="fileName" value="@snap.FileName" />
+                                <sl-icon-button name="trash" label="Delete"
+                                    class="btn-confirm-submit"
+                                    data-confirm-pattern="Delete snapshot {name}?"
+                                    data-name="@snap.FileName">
+                                </sl-icon-button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+else
+{
+    <div class="card" style="text-align:center;padding:40px;">
+        <sl-icon name="archive" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+        <p class="text-muted">No snapshots</p>
+    </div>
+}
+
+<!-- Restore Snapshot Dialog -->
+@{
+    var activePeers = (Model.Whitelist ?? new()).Count(w => w.Status == "A");
+    var autoRestorePeers = (Model.Whitelist ?? new()).Count(w => w.Status == "A" && w.AutoAcceptRestore);
+}
+<sl-dialog id="dlg-restore-snapshot" label="Restore Snapshot" style="--width: 640px;">
+    <input type="hidden" name="fileName" id="restore-file-name" />
+    <p style="margin-top:0;">Snapshot: <code id="restore-snapshot-name-display"></code></p>
+    <p class="text-muted text-sm">A snapshot can be restored here only when it was made by this vault: this node, or another node in the same network that shares its master key. A snapshot from a different vault cannot be opened here, whichever password is entered.</p>
+
+    <sl-radio-group id="restore-mode" name="restoreMode" label="What should be restored?" value="standalone" style="margin-bottom:16px;">
+        <sl-radio value="standalone">Restore this node only <span class="text-muted">(it leaves the network and becomes a new node)</span></sl-radio>
+        <sl-radio value="network">Restore the whole network from this snapshot</sl-radio>
+    </sl-radio-group>
+
+    <div id="restore-mode-standalone">
+        <sl-alert variant="danger" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>This node becomes a new node.</strong> Everything on this node is replaced with the snapshot, and:
+            <ul style="margin:8px 0 0 20px;">
+                <li>It gets a <strong>new identity</strong>: a new node id and a new signing key (the name stays).</li>
+                <li>It <strong>forgets</strong> the nodes it trusted (@activePeers now), its <strong>blind copies</strong> (on a PC, a Mac or a phone) and its <strong>sync history</strong>.</li>
+                <li>Your other devices still know the old node: <strong>join them to this node again</strong>.</li>
+                <li><strong>Pair the blind copies again.</strong></li>
+                <li>The server is unavailable while it restores, and you sign in again afterwards.</li>
+            </ul>
+        </sl-alert>
+    </div>
+
+    <div id="restore-mode-network" hidden>
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Every node of the network is asked to restore this snapshot.</strong>
+            <ul style="margin:8px 0 0 20px;">
+                <li>This node keeps its identity, its users and the nodes it trusts; its articles, folders, tags and media are replaced with the snapshot's.</li>
+                <li>Each other node applies it when it next syncs, and <strong>only if</strong> it trusts this node as a superadmin and has <em>Auto-restore</em> switched on for this node (Admin &rarr; Trusted Nodes). Today @autoRestorePeers of @activePeers trusted node(s) have it on. A node without it does not apply the restore.</li>
+                <li>Keep this node running and reachable: the others download the snapshot from it (the offer is open for 30 days).</li>
+                <li>Blind copies are reseeded.</li>
+                <li>A safety backup of this node is always taken first.</li>
+            </ul>
+            <div style="margin-top:8px;">Only a superadmin can start it, and the vault must be unlocked.</div>
+        </sl-alert>
+    </div>
+
+    <div style="margin-bottom:16px;">
+        <sl-input name="masterPassword" id="restore-master-password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+    </div>
+    <div id="restore-backup-row" style="margin-bottom:8px;">
+        <sl-checkbox name="createBackupFirst" id="restore-backup-checkbox" checked>Create backup before restore</sl-checkbox>
+    </div>
+    <p class="text-muted text-sm" style="margin:0;">
+        <a href="https://github.com/ultrathinker/BeeMemoryBank/blob/main/docs/snapshot-restore.md" target="_blank" rel="noopener noreferrer">What a restore does</a>
+    </p>
+    <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-restore-snapshot">Cancel</sl-button>
+    <sl-button type="button" slot="footer" variant="danger" id="btn-restore-confirm">
+        <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Restore
+    </sl-button>
+</sl-dialog>

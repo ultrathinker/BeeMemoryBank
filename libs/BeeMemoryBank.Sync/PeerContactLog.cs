@@ -39,13 +39,21 @@ public sealed class PeerContactLog
     /// <param name="Platform">What the peer runs on (<see cref="Metadata.NodePlatform"/>), as it told this process; null until it did (a build before 2.6.4 never does).</param>
     /// <param name="InContainer">The peer said it runs in a container; null until it said anything.</param>
     /// <param name="InboundFrom">The address the peer's last call came from, as this node's server saw it (behind a proxy that is the proxy).</param>
+    /// <param name="PausedReason">Why the copy says it is paused (<see cref="PeerPauseReport.Reason"/>: a closed token) - the last report it sent said so; null when it did not, or sent a report without a pause since.</param>
+    /// <param name="PausedUntil">When the pause ends, as the copy said (UTC), or null.</param>
+    /// <param name="PausedUntilOffsetMinutes">The copy's own offset from UTC when it told the end in its own local time, else null.</param>
+    /// <param name="PausedReportedAt">When the pause was reported: a pause counts for <see cref="PeerPauseReport.Fresh"/> from here.</param>
+    /// <param name="LeftAt">When the device's own owner removed the copy from the device (<c>POST /api/sync/leave</c>). The hub cannot revoke by itself; this is a note for the owner of the network, who can.</param>
+    /// <param name="PausedByNode">The pause is a blind NODE's answer to this node's own call (503 + <c>X-BMB-Paused</c>, <see cref="NotePausedByNode"/>), not a copy's report: the words say "blind node's owner", and a good session ends it.</param>
     public sealed record Contact(
         DateTime? OutboundOkAt = null, DateTime? InboundAt = null, DateTime? OutboundFailingSince = null,
         string? OutboundFailure = null, DateTime? OutboundFailureAt = null, string? OutboundEndpoint = null,
-        string? Platform = null, bool? InContainer = null, string? InboundFrom = null)
+        string? Platform = null, bool? InContainer = null, string? InboundFrom = null,
+        string? PausedReason = null, DateTime? PausedUntil = null, int? PausedUntilOffsetMinutes = null, DateTime? PausedReportedAt = null, DateTime? LeftAt = null,
+        bool PausedByNode = false)
     {
         /// <summary>The newest thing noted, for the retention rule.</summary>
-        internal DateTime? Newest => new[] { OutboundOkAt, InboundAt, OutboundFailureAt }.Max();
+        internal DateTime? Newest => new[] { OutboundOkAt, InboundAt, OutboundFailureAt, PausedReportedAt, LeftAt }.Max();
     }
 
     /// <summary>The key of an address for the purpose of "is this the same place": trimmed, without a trailing slash, lower case.</summary>
@@ -55,14 +63,37 @@ public sealed class PeerContactLog
     private static Contact ForEndpoint(Contact c, string? endpoint) =>
         endpoint is null || c.OutboundEndpoint is null || string.Equals(c.OutboundEndpoint, endpoint, StringComparison.Ordinal)
             ? c
-            : c with { OutboundOkAt = null, OutboundFailingSince = null, OutboundFailure = null, OutboundFailureAt = null, OutboundEndpoint = null };
+            : WithoutNodePause(c) with { OutboundOkAt = null, OutboundFailingSince = null, OutboundFailure = null, OutboundFailureAt = null, OutboundEndpoint = null };
+
+    /// <summary>What a blind node's own paused answer taught is the answer of one address and of one moment: a good session, or another address, ends it. A copy's report is not touched.</summary>
+    private static Contact WithoutNodePause(Contact c) =>
+        c.PausedByNode ? c with { PausedReason = null, PausedUntil = null, PausedUntilOffsetMinutes = null, PausedReportedAt = null, PausedByNode = false } : c;
 
     public void NoteOutboundOk(Guid nodeId, DateTime nowUtc, string? endpoint = null)
     {
         var key = EndpointKey(endpoint);
         _peers.AddOrUpdate(nodeId,
             _ => new Contact(OutboundOkAt: nowUtc, OutboundEndpoint: key),
-            (_, c) => ForEndpoint(c, key) with { OutboundOkAt = nowUtc, OutboundFailingSince = null, OutboundFailure = null, OutboundFailureAt = null, OutboundEndpoint = key });
+            (_, c) => WithoutNodePause(ForEndpoint(c, key)) with { OutboundOkAt = nowUtc, OutboundFailingSince = null, OutboundFailure = null, OutboundFailureAt = null, OutboundEndpoint = key });
+    }
+
+    /// <summary>
+    /// A blind node answered this node's call 503 with <c>X-BMB-Paused</c> (<see cref="PeerPausedException"/>): its owner's storage or daily traffic limit stops it. The node
+    /// ANSWERED - its door is open, its identity checked - so this is contact (the failure streak ends, the last good call is now) and a pause, never a failure.
+    /// <paramref name="untilUtc"/> is when the node said it answers again (the next midnight of its own day for a traffic limit), or null (a storage limit has no end of its own).
+    /// A later good session ends it (<see cref="NoteOutboundOk"/>). Memory only, like the rest.
+    /// </summary>
+    public void NotePausedByNode(Guid nodeId, DateTime nowUtc, string reason, DateTime? untilUtc, string? endpoint = null)
+    {
+        var key = EndpointKey(endpoint);
+        var token = PeerPauseReport.Reason(reason) ?? PeerPauseReport.Other;
+        _peers.AddOrUpdate(nodeId,
+            _ => new Contact(OutboundOkAt: nowUtc, OutboundEndpoint: key, PausedReason: token, PausedUntil: untilUtc, PausedReportedAt: nowUtc, PausedByNode: true),
+            (_, c) => ForEndpoint(c, key) with
+            {
+                OutboundOkAt = nowUtc, OutboundFailingSince = null, OutboundFailure = null, OutboundFailureAt = null, OutboundEndpoint = key,
+                PausedReason = token, PausedUntil = untilUtc, PausedUntilOffsetMinutes = null, PausedReportedAt = nowUtc, PausedByNode = true,
+            });
     }
 
     public void NoteOutboundFailure(Guid nodeId, DateTime nowUtc, string reason, string? endpoint = null)
@@ -86,6 +117,35 @@ public sealed class PeerContactLog
     /// <param name="from">Where the call came from; kept from the last call that said, so a call that does not say leaves what an earlier one did.</param>
     public void NoteInbound(Guid nodeId, DateTime nowUtc, string? from = null) =>
         _peers.AddOrUpdate(nodeId, _ => new Contact(InboundAt: nowUtc, InboundFrom: from), (_, c) => c with { InboundAt = nowUtc, InboundFrom = from ?? c.InboundFrom });
+
+    /// <summary>
+    /// A copy's <c>report-position</c> (release 2.7): the <c>paused</c> and <c>pausedUntil</c> fields as the query carried them, or neither. A report that names a
+    /// reason records the pause; one that does not ends it (the copy is running again, or is an older build that never pauses). Memory only, like the rest.
+    /// </summary>
+    public void NotePauseReport(Guid nodeId, DateTime nowUtc, string? paused, string? pausedUntil)
+    {
+        if (PeerPauseReport.Reason(paused) is not { } reason)
+        {
+            if (_peers.TryGetValue(nodeId, out var paused0) && paused0.PausedReason is not null)
+                _peers.TryUpdate(nodeId, paused0 with { PausedReason = null, PausedUntil = null, PausedUntilOffsetMinutes = null, PausedReportedAt = null }, paused0);
+            return;
+        }
+        var (until, offset) = PeerPauseReport.Until(pausedUntil, nowUtc);
+        _peers.AddOrUpdate(nodeId,
+            _ => new Contact(PausedReason: reason, PausedUntil: until, PausedUntilOffsetMinutes: offset, PausedReportedAt: nowUtc),
+            (_, c) => c with { PausedReason = reason, PausedUntil = until, PausedUntilOffsetMinutes = offset, PausedReportedAt = nowUtc, PausedByNode = false });
+    }
+
+    /// <summary>The device's owner removed the copy from the device (<c>POST /api/sync/leave</c>): a note for the owner of the network, who revokes it.</summary>
+    public void NoteLeft(Guid nodeId, DateTime nowUtc) =>
+        _peers.AddOrUpdate(nodeId, _ => new Contact(LeftAt: nowUtc), (_, c) => c with { LeftAt = nowUtc });
+
+    /// <summary>The device authenticated again: whatever it said when it left no longer holds.</summary>
+    public void ClearLeft(Guid nodeId)
+    {
+        if (_peers.TryGetValue(nodeId, out var contact) && contact.LeftAt is not null)
+            _peers.TryUpdate(nodeId, contact with { LeftAt = null }, contact);
+    }
 
     /// <summary>
     /// What a peer said it runs on (in its identity, or when it called this node). Not a contact and not an endpoint's fact: it stays through an address change and a
@@ -131,6 +191,7 @@ public sealed class PeerContactLog
     /// </summary>
     public static string Describe(Exception ex) => ex switch
     {
+        PeerPausedException p => p.Answer,
         NoSyncServerException n => $"{NoSyncServerException.Headline}: {n.Reason}",
         HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden } h =>
             $"it answered {(int)h.StatusCode}: its door is closed to this node (a proxy that does not let this address in, or it no longer knows this node)",

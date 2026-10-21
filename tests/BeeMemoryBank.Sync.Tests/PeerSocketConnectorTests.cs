@@ -159,6 +159,12 @@ public class PeerSocketConnectorTests : IAsyncLifetime
     [InlineData("ff02::1")]
     [InlineData("100.100.100.200")]
     [InlineData("fd00:ec2::254")]
+    [InlineData("192.0.0.192")]
+    [InlineData("168.63.129.16")]
+    [InlineData("fd00:ec2::253")]
+    [InlineData("fd20:ce::254")]
+    [InlineData("64:ff9b::6464:64c8")]
+    [InlineData("2002:a9fe:a9fe::1")]
     [InlineData("::ffff:169.254.169.254")]
     public void Addresses_a_node_never_calls_are_refused_for_a_literal_and_for_a_resolved_name_alike(string literal)
     {

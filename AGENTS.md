@@ -81,11 +81,12 @@ covers what that one doesn't.
   kept (`DeleteOldVersionsAsync(id, 50)`); `Protect`/`ChangePassphrase` pass a `suppressVersion`
   flag to skip snapshotting the pre-protection plaintext into history — those callers purge
   history first. Don't add a new snapshotting path without checking why that flag exists.
-- **The vault has ONE migration: the baseline, and old ledgers are adopted, not replayed.** Since 2.6.2 `libs/BeeMemoryBank.Storage/Migrations/`
-  holds `040_baseline.sql` only (generated from the real final schema of the old 39-file chain by `BaselineGenerator` in
+- **The vault has ONE baseline migration, and old ledgers are adopted, not replayed.** Since 2.6.2 `libs/BeeMemoryBank.Storage/Migrations/`
+  holds `040_baseline.sql` (generated from the real final schema of the old 39-file chain by `BaselineGenerator` in
   `Storage.Tests/LegacyChain/`; `BMB_UPDATE_BASELINE=1` rewrites it, `BaselineTests` keeps it exact — never edit it by hand). It is numbered
   **40** on purpose: `migrationVersion` in snapshots, join archives and blind packages is a schema number, and 2.6.1 and 2.6.2 have the same
-  schema; the next migration is `041_...`. `MigrationRunner` reads the ledger before it writes: a new database gets the baseline; a ledger of
+  schema. Release 2.7.0 adds two additive migrations after it: `041_blind_invite.sql` (the invitations table) and `042_blind_invite_server.sql` (the
+  kind and pair-code columns of a server node's join), so a 2.7 database is schema **42**; the next migration is `043_...`. `MigrationRunner` reads the ledger before it writes: a new database gets the baseline; a ledger of
   this program takes the normal path; EXACTLY the 39 rows of 2.6.0/2.6.1 (`LegacyMigrationChain`, data, never executed) is adopted by
   `LegacyChainAdoption` (structure compared with the baseline, missing tables/indexes/views/triggers/FTS repaired, extras tolerated, rows
   replaced in one transaction, no migration SQL runs); anything else (2.2..2.5, a half-run chain, rows nobody knows, tables with no ledger) is

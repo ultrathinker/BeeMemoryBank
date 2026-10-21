@@ -183,8 +183,68 @@ public sealed class HubProbeAddressGuardTests : IAsyncLifetime
     [InlineData("64:ff9b::a9fe:a9fe")]        // NAT64 of the cloud metadata address
     [InlineData("2002:7f00:1::")]             // 6to4 of 127.0.0.1
     [InlineData("2002:a9fe:a9fe::1")]         // 6to4 of the metadata address
+    // the fixed addresses of the other cloud metadata services (they are not link-local): Alibaba, Oracle, Azure's wire server, AWS and Google over IPv6
+    [InlineData("100.100.100.200")]
+    [InlineData("192.0.0.192")]
+    [InlineData("168.63.129.16")]
+    [InlineData("fd00:ec2::254")]
+    [InlineData("fd00:ec2::253")]
+    [InlineData("fd20:ce::254")]
+    [InlineData("::ffff:100.100.100.200")]    // and every spelling of them that wraps the IPv4 one
+    [InlineData("::ffff:168.63.129.16")]
+    [InlineData("64:ff9b::6464:64c8")]        // NAT64 of 100.100.100.200
+    [InlineData("64:ff9b::a83f:8110")]        // NAT64 of 168.63.129.16
+    [InlineData("2002:6464:64c8::1")]         // 6to4 of 100.100.100.200
+    [InlineData("::100.100.100.200")]         // IPv4-compatible
     public void TheseAddresses_AreNeverAHub(string address) =>
         HostAddressPolicy.IsPossibleHub(IPAddress.Parse(address)).Should().BeFalse();
+
+    [Theory]
+    [InlineData("100.100.100.200")]
+    [InlineData("192.0.0.192")]
+    [InlineData("168.63.129.16")]
+    [InlineData("fd00:ec2::254")]
+    [InlineData("fd20:ce::254")]
+    [InlineData("::ffff:100.100.100.200")]
+    [InlineData("64:ff9b::6464:64c8")]
+    public void TheMetadataAddresses_AreNotPublicEither_ForTheProbeRelay(string address) =>
+        HostAddressPolicy.IsPublic(IPAddress.Parse(address)).Should().BeFalse();
+
+    /// <summary>
+    /// The review's case: the name is an attacker's, its DNS says a metadata address, and the address rule used to be a different, weaker one than the rule a
+    /// literal gets. The probe now refuses each of them on the resolved answer (and the answer connected to), before anything is sent.
+    /// </summary>
+    [Theory]
+    [InlineData("100.100.100.200")]
+    [InlineData("192.0.0.192")]
+    [InlineData("168.63.129.16")]
+    [InlineData("fd00:ec2::254")]
+    [InlineData("fd20:ce::254")]
+    [InlineData("169.254.169.254")]
+    [InlineData("::ffff:100.100.100.200")]
+    [InlineData("64:ff9b::6464:64c8")]
+    public async Task AHostileName_ThatResolvesToAMetadataAddress_IsRefused_AndNothingIsSent(string resolvedTo)
+    {
+        var probe = With(HostAddressPolicy.IsPossibleHub, (_, _) => Task.FromResult(new[] { IPAddress.Parse(resolvedTo) }));
+
+        var act = () => probe.ProbeAsync($"https://hostile.example:{_server.Port}", BlindTrust.Pin, null, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<HubProbeException>()).WithMessage("*can never be a hub*");
+        _server.Requests.Should().Be(0);
+    }
+
+    /// <summary>One answer that is fine and one that is a metadata address: the name is refused (DNS rebinding by a multi-record answer).</summary>
+    [Fact]
+    public async Task AHostileName_WithOneMetadataAnswerAmongGoodOnes_IsRefused()
+    {
+        var probe = With(HostAddressPolicy.IsPossibleHub, (_, _) =>
+            Task.FromResult(new[] { IPAddress.Parse("8.8.8.8"), IPAddress.Parse("100.100.100.200") }));
+
+        var act = () => probe.ProbeAsync($"https://mixed.example:{_server.Port}", BlindTrust.Pin, null, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<HubProbeException>()).WithMessage("*can never be a hub*");
+        _server.Requests.Should().Be(0);
+    }
 
     [Theory]
     [InlineData("10.0.0.5")]

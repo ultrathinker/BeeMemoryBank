@@ -423,7 +423,7 @@ public class AutostartTests
 
         autostart.IsEnabled.Should().BeFalse("the file the login item starts does not exist");
         var refused = () => autostart.Apply(true);
-        refused.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("does not exist");
+        refused.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("does not exist").And.NotContain("/", "the sentence names no place");
     }
 
     [Fact]

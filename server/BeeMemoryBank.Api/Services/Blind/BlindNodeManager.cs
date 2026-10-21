@@ -361,6 +361,7 @@ public sealed class BlindNodeManager(
             // Not a failure of the blind node or the link: the next cycle after the baseline exists seeds it.
             logger.LogInformation("Blind node {NodeId} is not reseeded yet: {Reason}", peer.NodeId, ex.Message);
         }
+        // A PeerPausedException (the blind node's own limit stopped the seed) is not caught here: the loop that called this keeps it as the pause it is.
     }
 
     /// <summary>
@@ -518,6 +519,10 @@ public sealed class BlindNodeManager(
                 "The node at the address in the code is not the one in the pair code.");
     }
 
+    /// <summary>What the owner is told when the blind node's own limit stopped a seed: a pause, nothing that is wrong, and what to do. In this node's words (the closed reason only).</summary>
+    public static string PausedSeedSentence(PeerPausedException pause) =>
+        $"The blind node did not take the seed: {pause.Answer}. Nothing is wrong with it. Its owner can raise the limit; until then it answers the same, and it is tried again later.";
+
     private static string RefusalSaid(int status, string body)
     {
         string? error = null;
@@ -553,6 +558,9 @@ public sealed class BlindNodeManager(
             };
             authorize(req);
             using var resp = await http.SendAsync(req, ct);
+            // The blind node's owner has limits (storage, traffic) and the node says so with a 503 and X-BMB-Paused: that is a pause, which this node keeps apart from a failure
+            // (a refused seed, an unreachable node) - the callers hold the peer for the time it named instead of reporting the seed as failed.
+            PeerPausedException.ThrowIfPaused(resp);
             var body = await resp.Content.ReadAsStringAsync(ct);
             switch (resp.StatusCode)
             {

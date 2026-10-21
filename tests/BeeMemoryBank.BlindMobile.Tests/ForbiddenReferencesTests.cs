@@ -422,7 +422,17 @@ public class ForbiddenReferencesTests
                 // the store line of the screen (docs/design/step-a-spec.md 10.2): what the copy holds, in the host-facing shape
                 "BlindStoreStats" or "BlindStoreInfo" or
                 // how the screen knows that the job it started has ended, from the state and not from a clock (BMB-311 fix round)
-                "BlindJobWait" or "BlindJobAsk" or "BlindJobOutcome" or "BlindJobPhase"
+                "BlindJobWait" or "BlindJobAsk" or "BlindJobOutcome" or "BlindJobPhase" or
+                // the closed formatter of a failure (MauiProgram gives it to the generic BusyAction as its Describer); it holds text only and reads no exception's message
+                "BlindFailureText" or
+                // several accounts (docs/blind-node/ACCOUNTS.md): the account host and the seams a head gives it, the device's schedulers, and the shared view records the pages show
+                "IBlindAccountsController" or "BlindAccountHost" or "BlindAccountHostOptions" or "BlindAccountSnapshot" or "BlindAccountsSnapshot" or "BlindAccountEntry" or
+                "BlindAccountLimits" or "BlindAccountSettings" or "BlindDeviceLimits" or "IBlindDeviceConditions" or "IBlindAccountLifecycle" or
+                "IBlindSecretStoreFactory" or "IBlindSecretBlobAccess" or "IBlindStateStoreFactory" or "BlindAccountNames" or "BlindAccountNames.Role" or
+                "BlindDeviceScheduler" or "BlindDeviceSchedulerOptions" or "BlindInvitationWatch" or "BlindAccountsView" or "BlindAccountCard" or "BlindCardKind" or
+                "BlindRepairIssue" or "BlindDeviceLimitsForm" or "BlindLimitsForm" or "BlindLimitsResult" or "BlindInvitationPreview" or "BlindAddResult" or "BlindRemoveConfirmation" or
+                // the closed failure text of the blind core: the busy helper of the app tells every failed action through it (BlindFailureSetup)
+                "BlindFailureText"
                 || typeNs.Equals("BeeMemoryBank.Core.Services.BlindPhone", StringComparison.Ordinal) && typeName is
                 "BlindPhoneState" or "BlindPhoneLog" or "BlindPhoneLog.Entry" or "BlindHeavyWork" or
                 "BlindBackupSchedule" or "BlindPhoneBackupRunner" or
@@ -488,7 +498,9 @@ public class ForbiddenReferencesTests
             if (typeNs.Equals("BeeMemoryBank.Sync.Blind", StringComparison.Ordinal))
                 // Stage 4 adds the four of the backup: its package source and fetcher contract, the package it fetches, the recovery-set source.
                 return typeName is "BlindPhoneReplicaClient" or "BlindPhonePullClient" or "IBlindPhonePullClient" or "BlindEmbeddingGenerator" or "BlindState" or "BlindRestoreInitiator" or "BlindDekRotationApplier"
-                    or "BlindPhonePackageSource" or "IBlindVerifiedPackageFetcher" or "VerifiedReplicaPackage" or "BlindPhoneRecoverySetSource";
+                    or "BlindPhonePackageSource" or "IBlindVerifiedPackageFetcher" or "VerifiedReplicaPackage" or "BlindPhoneRecoverySetSource"
+                    // the mark of a sentence this code wrote to be read (BlindFailureText says it as it is): what a page throws for a refusal of the shared core
+                    or "BlindSentenceException";
             if (typeNs.Equals("BeeMemoryBank.Sync", StringComparison.Ordinal))
                 return typeName is "IRestoreInitiator" or "LamportClock" or "HardDeleteService" or "EventApplier" or "SnapshotRequiredException"
                     // The one mechanism that tells a failed call to another device as a kind of failure (BusyAction.Describe, shared source). It holds text only.

@@ -1380,7 +1380,7 @@ server checkbox of 11.2 and no OS card for enabling (11.2, "OS auto-unlock on a 
 ### 11.1 Desktop role: OS auto-unlock
 
 The existing opt-in (`OsAutoUnlockService`, Windows DPAPI and macOS Keychain, `libs/BeeMemoryBank.Infrastructure/Secrets/UserSecretStores.cs:14-16`;
-Admin card `server/BeeMemoryBank.Web/Pages/Shared/Admin/_AdminSecurity.cshtml:170-220`) stays, off by default. Its slot is a door (4.1); at start
+Admin card `server/BeeMemoryBank.Web/Pages/Shared/Admin/_AdminSecurity.cshtml:170-220` - a v2.5.1 citation: since 2.6.2 the card is the page `/Admin/OsAutoUnlock`) stays, off by default. Its slot is a door (4.1); at start
 the service unlocks through `TryUnlockWithDekAsync` before anything else (5.2 step 6). The server routes of 11.2 answer 409
 `role_desktop` on this role. On a sealed node the card adds:
 
@@ -1398,7 +1398,7 @@ gets the same checkbox with the same warnings, and a sealed server gets it too. 
 this section runs on any node (no key file is read, no auto-unlock code path is entered, no boot store is created by it; a plain node
 never has one), and a plain server that never uses the checkbox starts exactly as 2.5 does (red test 15.2.8).
 
-- **Where shown:** the encryption page (`/VaultEncryption`), the Admin security card (in the place of the OS card) and
+- **Where shown:** the encryption page (`/VaultEncryption`), the Admin security card (in the place of the OS card; since 2.6.2 the page `/Admin/OsAutoUnlock`) and
   `bmb vault auto-unlock status|enable|disable`.
 - **Three parts, all required, and they must agree before anything is read or unlocked:**
   1. *The slot* - a key slot of type `server_auto_unlock`: the master DEK wrapped (`MasterKeyManager.WrapMasterDek`) under a 32-byte
@@ -2137,7 +2137,7 @@ conflict; if a copy differs, the contract files win and the code is fixed).
 | Sync | - | - | `SyncScheduler.cs`, `CleanupService.cs`, `PendingEmbeddingProcessor.cs` |
 | Embeddings, Vault hosted | - | - | `Embeddings/PendingEmbeddingProcessor.cs`, `Vault/Sync/PendingIndexProcessor.cs` |
 | Api | `Services/ChatDbConnectionFactory.cs`, `Services/UpdateService.cs` | `Services/Sealed/ISealedRelay.cs` is A.5 (a contract file, frozen); new `Services/Sealed/SealedRelay.cs`, `Endpoints/AutoUnlockEndpoints.cs`, `Endpoints/AgentEndpoints.cs` | `Program.cs`, `Startup/ApiStartupTasks.cs`, `Startup/ApiPipeline.cs`, new `Startup/SealedVaultServices.cs`, new `Middleware/SealedVaultMiddleware.cs`, `Middleware/AgentAuthMiddleware.cs`, `Middleware/McpSessionGuardMiddleware.cs`, `Endpoints/SessionEndpoints.cs`, new `Endpoints/VaultEndpoints.cs`, `Helpers/ExceptionStatusMap.cs`, `Models/*` additions in a new `Models/VaultModels.cs`, the hosted services `Services/AuditLogPruningHostedService.cs`, `RemoteAccountSyncScheduler.cs`, `ChatHistoryBackfillProcessor.cs`, `Recovery/RecoveryReconcileWatcher.cs`, `Recovery/StateAnchorScheduler.cs`, `Services/ChatDbInitializer.cs` (open step) |
-| Web | - | - | new `Pages/VaultEncryption.cshtml(.cs)`, `Pages/Login.cshtml(.cs)`, `Pages/Shared/Admin/_AdminSecurity.cshtml` (warning, link), new `Services/ApiClient.Vault.cs` |
+| Web | - | - | new `Pages/VaultEncryption.cshtml(.cs)`, `Pages/Login.cshtml(.cs)`, `Pages/Shared/Admin/_AdminSecurity.cshtml` (warning, link; since 2.6.2 the pages `/Admin/StorageProtection` and `/Admin/OsAutoUnlock`), new `Services/ApiClient.Vault.cs` |
 | CLI | `Commands/SnapshotCommand.cs` | `Commands/AgentCommand.cs` | `CliServiceProvider.cs`, new `Commands/VaultCommand.cs` |
 | Mobile | - | - | `Mobile/App.xaml.cs`, `Mobile/Pages/SecurityPage.xaml(.cs)`, `FullIos/Services/FullNodeServices.cs` (see 17.2), `FullIos/Services/QuickUnlock.cs`, new `FullIos/Pages/EncryptDatabasePage.xaml(.cs)` |
 | Docker | - | `.env.example`, `docker-compose*.yml` comments | - |

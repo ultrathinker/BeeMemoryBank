@@ -1,0 +1,31 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.ResetNodeModel
+
+@section About {
+    <p>
+        Resetting wipes <strong>every article, folder, user, key and sync-state row on this node</strong> and returns it to the first-run Setup screen, ready to start a new vault or to join a
+        different network. Other nodes are not affected, but this node loses its identity, so when it rejoins it is a new node. It is meant for a node that is out of sync and says
+        &ldquo;Snapshot required&rdquo;, or for a node you are repurposing.
+    </p>
+    <p class="admin-warning">
+        <strong>This cannot be undone.</strong> If this node holds the only copy of anything, make a <a href="/Admin/Snapshots">snapshot</a> and download it first. Only a person can do this,
+        signed in as a superadmin and confirming with the master password: an AI agent cannot, even one owned by a superadmin. A line about it is written to a log file in the data folder before
+        anything is wiped.
+    </p>
+    <p>
+        If you are locked out and cannot sign in at all, run <code>bmb init reset</code> on the host instead (see <em>docs/deployment.md</em>).
+    </p>
+}
+
+<div class="card mt-md" style="max-width:640px;">
+    <form data-busy="long" data-busy-title="Resetting this node" method="post" asp-page-handler="ResetNode"
+          class="form-confirm" data-confirm="This will DELETE all local articles, folders, users, keys, and sync state on this node. Proceed?">
+        @Html.AntiForgeryToken()
+        <sl-input name="masterPassword" type="password" required password-toggle autocomplete="off"
+                  label="Master password (confirmation)" placeholder="required to confirm"
+                  style="margin-bottom:12px;"></sl-input>
+        <sl-button type="submit" variant="danger" size="small">
+            <sl-icon slot="prefix" name="trash"></sl-icon> Wipe this node
+        </sl-button>
+    </form>
+</div>

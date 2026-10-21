@@ -1,6 +1,7 @@
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
@@ -17,12 +18,12 @@ public sealed class BlindKeystoreNodeAuthSigner(IBlindSecretStore keys) : INodeA
         ArgumentNullException.ThrowIfNull(challengePayload);
         if (identity.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
         {
-            throw new InvalidOperationException(
+            throw new BlindSentenceException(
                 $"A blind phone signs only with an external v={NodeIdentityCrypto.ExternalKeyVersion} identity key.");
         }
 
         var seed = keys.LoadIdentitySeed()
-            ?? throw new InvalidOperationException("The blind phone identity key is unavailable in Android Keystore.");
+            ?? throw new BlindSentenceException("The blind phone identity key is unavailable in Android Keystore.");
         try
         {
             return Ed25519Signer.Sign(seed, challengePayload);

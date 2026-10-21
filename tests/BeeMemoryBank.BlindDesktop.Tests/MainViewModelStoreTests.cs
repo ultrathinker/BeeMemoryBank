@@ -4,73 +4,39 @@ using BeeMemoryBank.BlindMobile.Services.Blind;
 namespace BeeMemoryBank.BlindDesktop.Tests;
 
 /// <summary>
-/// The Windows and macOS copies' store line (docs/design/step-a-spec.md 10.2): the restore point's age, the changes held since and the bytes stored,
-/// asked for off the UI thread, and never a note count.
+/// The store line of each account's panel (docs/design/step-a-spec.md 10.2) comes from THAT account's copy: the window hands the panel a function bound to the account's id, so two accounts
+/// never show each other's restore point or size. (The line's own wording is <see cref="AccountPanelStoreTests"/>.)
 /// </summary>
 public sealed class MainViewModelStoreTests
 {
-    private static BlindStoreInfo Summary() => new(DateTime.UtcNow - TimeSpan.FromDays(2), ChangesSince: 7, StoredBytes: 2 * 1024 * 1024);
-
-    private static async Task<string> SettledAsync(MainViewModel vm, Func<string, bool> done)
+    private static async Task WaitFor(Func<bool> condition)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (!done(vm.StoreText) && DateTime.UtcNow < deadline) await Task.Delay(20);
-        return vm.StoreText;
+        for (var i = 0; i < 200 && !condition(); i++) await Task.Delay(25);
+        condition().Should().BeTrue("the condition should have become true");
     }
 
     [Fact]
-    public async Task BeforeTheFirstLoad_TheLineSaysNoneYet_AndTheSourceIsNotAsked()
+    public async Task EachAccountsPanel_AsksForItsOwnCopy()
     {
-        var asked = 0;
-        var app = new FakeApp();
-        var vm = new MainViewModel(app, new FakeWorkRequests(), new FakeAutostart(), _ => [],
-            store: _ => { asked++; return Task.FromResult<BlindStoreInfo?>(Summary()); });
-        app.Status = FakeApp.StatusOf(paired: true, loaded: false);
+        var accounts = new FakeAccounts();
+        var (first, _) = accounts.AddAccount("Berlin office");
+        var (second, _) = accounts.AddAccount("Paris");
+        var asked = new List<string>();
+        var vm = new MainViewModel(accounts, _ => new FakeWorkRequests(), new FakeAutostart(), _ => [], zone: TimeZoneInfo.Utc,
+            store: (id, _) =>
+            {
+                lock (asked) asked.Add(id);
+                return Task.FromResult<BlindStoreInfo?>(new BlindStoreInfo(DateTime.UtcNow - TimeSpan.FromDays(2), id == first.Id ? 7 : 3, id == first.Id ? 2 << 20 : 5 << 20));
+            });
 
         await vm.RefreshAsync();
+        await WaitFor(() => vm.Detail!.Panel!.StoreText.Contains("Changes since: 7", StringComparison.Ordinal));
+        lock (asked) asked.Should().OnlyContain(id => id == first.Id);
 
-        vm.StoreText.Should().Contain("none yet").And.Contain("first load");
-        asked.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task AfterTheFirstLoad_TheLineTellsTheRestorePointTheChangesAndTheBytes_ButNoNotes()
-    {
-        var app = new FakeApp();
-        var vm = new MainViewModel(app, new FakeWorkRequests(), new FakeAutostart(), _ => [],
-            store: _ => Task.FromResult<BlindStoreInfo?>(Summary()));
-        app.Status = FakeApp.StatusOf(paired: true, loaded: true);
-
-        await vm.RefreshAsync();
-        var text = await SettledAsync(vm, t => t.Contains("made"));
-
-        text.Should().Be("Restore point: made 2 d ago. Changes since: 7. Stored: 2 MiB.");
-        text.Should().NotContainEquivalentOf("note");
-    }
-
-    [Fact]
-    public async Task ASourceThatCannotRead_LeavesTheLineUnknown_NotZero()
-    {
-        var app = new FakeApp();
-        var vm = new MainViewModel(app, new FakeWorkRequests(), new FakeAutostart(), _ => [],
-            store: _ => Task.FromResult<BlindStoreInfo?>(null));
-        app.Status = FakeApp.StatusOf(paired: true, loaded: true);
-
-        await vm.RefreshAsync();
-        await Task.Delay(100);
-
-        vm.StoreText.Should().Contain("unknown").And.NotContain("0");
-    }
-
-    [Fact]
-    public async Task WithoutASource_TheLineIsUnknown()
-    {
-        var app = new FakeApp();
-        var vm = new MainViewModel(app, new FakeWorkRequests(), new FakeAutostart(), _ => []);
-        app.Status = FakeApp.StatusOf(paired: true, loaded: true);
-
-        await vm.RefreshAsync();
-
-        vm.StoreText.Should().Contain("unknown");
+        vm.SelectedRow = vm.Rows[1];
+        await WaitFor(() => vm.Detail?.Id == second.Id);
+        await WaitFor(() => { lock (asked) return asked.Contains(second.Id); });
+        await WaitFor(() => vm.Detail!.Panel!.StoreText.Contains("Changes since: 3", StringComparison.Ordinal));
+        vm.Dispose();
     }
 }

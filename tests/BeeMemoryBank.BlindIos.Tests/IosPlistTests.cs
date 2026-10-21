@@ -55,6 +55,20 @@ public class IosPlistTests
     }
 
     [Fact]
+    public void TheInvitationLink_OpensTheApp_NextToTheCallCodeLink_EachSchemeUnderANameOfItsOwn()
+    {
+        // The system Camera opens a custom-scheme link in the app that registered it: a bmb-invite: QR code needs no scanner in the app.
+        var types = Value(Dict("Info.plist"), "CFBundleURLTypes")!.Elements("dict").ToList();
+        var schemes = types.SelectMany(t => Strings(Value(t, "CFBundleURLSchemes"))).ToList();
+        schemes.Should().BeEquivalentTo(IosLinks.CallCodeScheme, IosLinks.InvitationScheme);
+        schemes.Should().Contain("bmb-invite").And.Contain("bmb-blind-call");
+        types.Select(t => Value(t, "CFBundleURLName")!.Value).Should().OnlyHaveUniqueItems().And.HaveCount(2);
+        // Nothing else is asked of the system for it: no camera permission (the Camera app does the reading), no associated domains.
+        File.ReadAllText(PlatformFile("Info.plist")).Should().NotContain("NSCameraUsageDescription");
+        Dict("Entitlements.plist").Elements("key").Select(k => k.Value).Should().Equal("keychain-access-groups");
+    }
+
+    [Fact]
     public void TheBundleVersion_IsDerivedFromTheRepositoryVersion_AndNotHardCodedInThePlist()
     {
         var project = File.ReadAllText(Path.Combine(VaultBoundary.RepoRoot(), "mobile", "BeeMemoryBank.BlindIos", "BeeMemoryBank.BlindIos.csproj"));

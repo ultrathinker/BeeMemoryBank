@@ -140,6 +140,18 @@
   </section>
 
   <section>
+    <h2>Limits</h2>
+    <p class="note">What this node may keep and move for the network. Leave a box empty for no limit; 0 pauses the node. Write a size like 500 MB or 2 GB. Less than 10 MB of traffic a day is refused: a sync round would not fit. A full node that is told "paused" waits and asks again within the hour; nothing is lost.</p>
+    <div class="grid2">
+      <label>Storage<input id="l-stored" placeholder="no limit" autocomplete="off"></label>
+      <label>Traffic a day<input id="l-traffic" placeholder="no limit" autocomplete="off"></label>
+    </div>
+    <button id="l-save" style="width:100%;margin-top:8px">Save limits</button>
+    <p class="hidden" id="l-out"></p>
+    <p class="note">If the container sets <code>BMB_BLIND_MAX_STORED_BYTES</code> or <code>BMB_BLIND_MAX_TRAFFIC_PER_DAY</code>, that value is applied again at every start.</p>
+  </section>
+
+  <section>
     <h2>Recovery</h2>
     <p class="note">A one-time code, valid for 15 minutes. The new device enters this node's address, the code and the master password.</p>
     <p><label>Console password (again)<input id="r-pw" type="password" autocomplete="current-password"></label></p>
@@ -188,6 +200,9 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmtBytes = (n) => { if (n == null) return "—"; const u=["B","KB","MB","GB","TB"]; let i=0; while (n>=1000&&i<u.length-1){n/=1000;i++;} return n.toFixed(n>=100?0:1)+" "+u[i]; };
+// A limit as the node reads it back: 1024-based like the apps ("2 GB", "1.5 GB"); empty for no limit.
+const fmtSize = (n) => { if (n == null) return ""; if (n < 1024) return n + " B"; const u=["KB","MB","GB","TB"]; let v=n/1024, i=0; while (v>=1024&&i<u.length-1){v/=1024;i++;} return (Math.round(v*100)/100) + " " + u[i]; };
+const limitText = (n) => n == null ? "no limit" : n === 0 ? "0 (paused)" : fmtSize(n);
 const fmtDate = (iso) => { if (!iso) return "—"; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
 const fmtAge = (s) => { if (s == null) return "?"; return s < 3600 ? Math.floor(s / 60) + " min" : s < 2 * 86400 ? Math.floor(s / 3600) + " h" : Math.floor(s / 86400) + " days"; };
 
@@ -267,6 +282,17 @@ function render(st) {
   }
   if (st.deltas) h += row("Deltas", esc(st.deltas.count) + " deltas · " + fmtBytes(st.deltas.bytes));
   if (st.stored) h += row("Stored", esc(st.stored.blobs) + " blobs · " + fmtBytes(st.stored.bytes));
+  if (st.limits) {
+    const l = st.limits;
+    h += row("Limits", "storage " + limitText(l.max_stored_bytes) + " (holds " + fmtSize(l.stored_bytes || 0) + ") · traffic " +
+      limitText(l.max_traffic_per_day) + " a day (" + fmtSize(l.traffic_today || 0) + " today)");
+    if (l.paused === "disk")
+      h += row("Paused", "<span class='err'>The storage limit holds: the node takes and gives no data until the limit is raised.</span>");
+    else if (l.paused === "traffic")
+      h += row("Paused", "<span class='err'>The daily traffic limit holds: the node answers again " + (l.traffic_resumes_at ? "at " + fmtDate(l.traffic_resumes_at) : "after the next local midnight") + ".</span>");
+    if (l.traffic_unavailable)
+      h += row("Warning", "<span class='err'>The traffic counts cannot be read or saved; with a daily traffic limit set the node stays paused until they can.</span>");
+  }
   if (st.activated && st.metadata_in_backups)
     h += row("Backups", "<span class='err'>Until this node takes its first sealed baseline, its backups still hold the vault's metadata in plain text.</span>");
   for (const copy of (st.legacy_copies || []))
@@ -336,6 +362,17 @@ async function loadBackups() {
     : c.resticPasswordSource === "console" ? "same as the console password (default)" : "set (hidden)";
   $("s-kd").value = c.keepDaily ?? 7; $("s-kw").value = c.keepWeekly ?? 4;
   $("s-km").value = c.keepMonthly ?? 12; $("s-ky").value = c.keepYearly ?? 3;
+}
+
+// What the two boxes showed when they were filled: a box the operator did not touch is not sent, so a limit
+// that came from the environment in exact bytes is not rounded by a save that only meant to change the other.
+let limitsShown = { stored: "", traffic: "" };
+async function loadLimits() {
+  const s = await api("GET", "api/blind/backup/settings");
+  if (!s.json) return;
+  const c = s.json.settings || {};
+  limitsShown = { stored: fmtSize(c.maxStoredBytes), traffic: fmtSize(c.maxTrafficPerDay) };
+  $("l-stored").value = limitsShown.stored; $("l-traffic").value = limitsShown.traffic;
 }
 
 async function loadList() {
@@ -443,6 +480,15 @@ $("s-save").onclick = () => busy($("s-save"), async () => {
   say($("s-out"), "Settings saved.", "ok");
   loadBackups();
 }, { out: $("s-out") });
+$("l-save").onclick = () => busy($("l-save"), async () => {
+  const body = {};
+  if ($("l-stored").value.trim() !== limitsShown.stored) body.maxStoredBytes = $("l-stored").value.trim();
+  if ($("l-traffic").value.trim() !== limitsShown.traffic) body.maxTrafficPerDay = $("l-traffic").value.trim();
+  if (!Object.keys(body).length) { say($("l-out"), "Nothing changed."); return; }
+  need(await api("PUT", "api/blind/backup/settings", body), "Not saved");
+  say($("l-out"), "Limits saved.", "ok");
+  await loadLimits(); await refresh();
+}, { out: $("l-out") });
 $("pair-renew").onclick = () => busy($("pair-renew"), async () => {
   need(await api("POST", "api/blind/pair-code/renew", {}), "The code was not renewed");
   await loadPairCode();
@@ -505,7 +551,7 @@ $("w-btn").onclick = () => {
 function enter() {
   $("login").classList.add("hidden");
   $("app").classList.remove("hidden");
-  refresh(); loadBackups(); loadList(); loadLogins(); loadPairCode(); loadRestoreLog();
+  refresh(); loadBackups(); loadLimits(); loadList(); loadLogins(); loadPairCode(); loadRestoreLog();
   if (timer) clearInterval(timer);
   timer = setInterval(refresh, 5000);
 }

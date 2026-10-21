@@ -112,5 +112,6 @@ public static class BlindNodeServices
 
         // Restore codes: the blind side of a restore.
         services.AddScoped<BlindRestoreCodeService>();
+        services.AddSingleton<BlindRestoreCodeThrottle>();
     }
 }

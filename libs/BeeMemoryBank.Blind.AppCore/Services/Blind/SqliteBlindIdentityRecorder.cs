@@ -3,6 +3,7 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
@@ -16,7 +17,8 @@ namespace BeeMemoryBank.BlindMobile.Services.Blind;
 /// </summary>
 public sealed class SqliteBlindIdentityRecorder(DbConnectionFactory factory) : IBlindIdentityRecorder
 {
-    private static readonly SemaphoreSlim _gate = new(1, 1);
+    // Per instance (one per account's database): a static gate would make every account's identity insert wait for the others'.
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     public async Task<BlindIdentityRecord?> GetRecordedAsync(CancellationToken ct = default)
     {
@@ -42,22 +44,22 @@ public sealed class SqliteBlindIdentityRecorder(DbConnectionFactory factory) : I
         // 4. can_generate_embeddings = 0 (blind nodes cannot generate embeddings)
         if (!BlindNodeId.IsBlind(row.NodeId))
         {
-            throw new InvalidOperationException($"Existing node identity {row.NodeId} in database is not a blind node ID. Refusing to adopt non-blind node as blind node.");
+            throw new BlindSentenceException($"Existing node identity {row.NodeId} in database is not a blind node ID. Refusing to adopt non-blind node as blind node.");
         }
 
         if (row.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
         {
-            throw new InvalidOperationException($"Existing node identity in database has key version {row.Ed25519PrivateKeyV}, expected v={NodeIdentityCrypto.ExternalKeyVersion}. Refusing to adopt.");
+            throw new BlindSentenceException($"Existing node identity in database has key version {row.Ed25519PrivateKeyV}, expected v={NodeIdentityCrypto.ExternalKeyVersion}. Refusing to adopt.");
         }
 
         if (row.Ed25519PrivateKey is { Length: > 0 } || row.Ed25519PrivateKeyIV is { Length: > 0 })
         {
-            throw new InvalidOperationException("Existing node identity contains private key material in database; blind node identities must have external keys only.");
+            throw new BlindSentenceException("Existing node identity contains private key material in database; blind node identities must have external keys only.");
         }
 
         if (row.CanGenerateEmbeddings != 0)
         {
-            throw new InvalidOperationException("Existing node identity has can_generate_embeddings enabled; blind node identities must have can_generate_embeddings = 0.");
+            throw new BlindSentenceException("Existing node identity has can_generate_embeddings enabled; blind node identities must have can_generate_embeddings = 0.");
         }
 
         return new BlindIdentityRecord(

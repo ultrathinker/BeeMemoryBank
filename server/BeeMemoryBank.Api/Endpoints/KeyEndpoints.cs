@@ -39,7 +39,7 @@ public static class KeyEndpoints
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
-            // A signed-in user (the web's Admin -> Security page) changes THEIR password: login hash,
+            // A signed-in user (the web's Admin -> Master Password page) changes THEIR password: login hash,
             // key slot and security stamp together, the same as Profile -> Change password. The
             // slot-only rotation below used to run for them too and left the login hash on the old
             // password: the new one was refused at sign-in, and the old one signed in but could no

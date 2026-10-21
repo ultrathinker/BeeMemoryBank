@@ -78,6 +78,15 @@ public static class PublicSurface
         // before adding a blind node (plan 4.2). Sync bearer token, checked in the handler.
         new("GET", "/api/sync/my-standing"),
 
+        // The invitation of a blind copy (release 2.7): the invited device has only the invitation's secret and its own key, no token and no internal key.
+        // Redeeming needs the node unlocked and burns the secret in one statement; both routes answer one 410 for everything that is not a valid invitation
+        // and are rate limited per caller address (BlindInviteRateLimits). Under /api/sync/ so that no documented proxy recipe has to change.
+        new("POST", "/api/sync/invite/redeem"),
+        new("POST", "/api/sync/invite/status"),
+        // A blind copy whose owner removed it from the device says goodbye (sync token, checked in the handler): the owner of the network sees "removed by the
+        // device's owner" and revokes. The hub cannot revoke by itself.
+        new("POST", "/api/sync/leave"),
+
         // ── Blind nodes (plan 4.2-4.3, 10) ──────────────────────────────────
         // The seed of a blind node, in parts: authorized by the one-time secret of its pair code
         // or by the sync token of a superadmin peer (reseed), both checked in the handler.

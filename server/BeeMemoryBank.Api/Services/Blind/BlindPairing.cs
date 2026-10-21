@@ -13,6 +13,7 @@ namespace BeeMemoryBank.Api.Services;
 /// </summary>
 public sealed class BlindPairing(
     BlindState state,
+    BlindJoinStore joinStore,
     INodeIdentityRepository nodeRepo,
     BlindTlsIdentity tls,
     IConfiguration config,
@@ -31,11 +32,12 @@ public sealed class BlindPairing(
     /// </summary>
     public async Task<BlindPairCode> GetCodeAsync(bool renew)
     {
-        var address = config["BMB_PUBLIC_ADDRESS"];
-        if (string.IsNullOrWhiteSpace(address))
-            throw new InvalidOperationException(
-                "BMB_PUBLIC_ADDRESS is not set: the pair code must tell the PC where to reach this node (https://host:port).");
-
+        // One way of being attached at a time: while this node waits for a full node's answer to its join, nobody may read or renew the secret it gave that node.
+        if (await BlindJoinRecord.InProgressAsync(joinStore, state, time) is { } join)
+            throw new BlindJoinInProgressException(join);
+        // A join that says it waits, but has no secret behind it any more (the node was wiped, the secret ran out) is over: a new secret made below must not bring it back to life.
+        if (joinStore.Read() is { State: BlindJoinStates.Awaiting or BlindJoinStates.Redeeming } stale) await joinStore.WriteAsync(stale with { State = BlindJoinStates.Expired });
+        var address = PublicAddress();
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
         var now = time.GetUtcNow().UtcDateTime;
@@ -53,8 +55,45 @@ public sealed class BlindPairing(
             await state.SetPairingSecretAsync(secret, expiresAt);
         }
 
-        return new BlindPairCode(identity.NodeId, Convert.ToBase64String(identity.Ed25519PublicKey),
-            address.Trim().TrimEnd('/'), tls.Spki, secret, expiresAt);
+        return new BlindPairCode(identity.NodeId, Convert.ToBase64String(identity.Ed25519PublicKey), address, tls.Spki, secret, expiresAt);
+    }
+
+    /// <summary>
+    /// The pair code of a JOIN (<c>bmb blind join</c>): the same code, but its secret stays valid for <paramref name="lifetime"/> (the full node's owner has days to answer: a join lives
+    /// about 73 hours, <see cref="BlindJoinService.PairingLifetime"/>; a shown code lives <see cref="BlindPairCode.Lifetime"/>, 15 minutes) and the join keeps it from being read by the old way. <paramref name="reuseCurrent"/> keeps the secret of an earlier call of the same join (a retry sends the same
+    /// code); otherwise a new secret replaces whatever was there.
+    /// </summary>
+    public async Task<BlindPairCode> IssueJoinCodeAsync(TimeSpan lifetime, bool reuseCurrent)
+    {
+        var address = PublicAddress();
+        var identity = await nodeRepo.GetAsync()
+            ?? throw new InvalidOperationException("Node is not initialized.");
+        var now = time.GetUtcNow().UtcDateTime;
+        string secret;
+        DateTime expiresAt;
+        if (reuseCurrent && await state.GetPairingSecretAsync() is { } c && c.ExpiresAt > now)
+        {
+            (secret, expiresAt) = c;
+        }
+        else
+        {
+            secret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+            expiresAt = now + lifetime;
+            await state.SetPairingSecretAsync(secret, expiresAt);
+        }
+        return new BlindPairCode(identity.NodeId, Convert.ToBase64String(identity.Ed25519PublicKey), address, tls.Spki, secret, expiresAt);
+    }
+
+    /// <summary>A join ended without a seed (refused, run out, cancelled): the secret it gave the full node is no longer valid.</summary>
+    public Task ForgetJoinSecretAsync() => state.ClearPairingSecretAsync();
+
+    private string PublicAddress()
+    {
+        var address = config["BMB_PUBLIC_ADDRESS"];
+        if (string.IsNullOrWhiteSpace(address))
+            throw new InvalidOperationException(
+                "BMB_PUBLIC_ADDRESS is not set: the pair code must tell the PC where to reach this node (https://host:port).");
+        return address.Trim().TrimEnd('/');
     }
 
     /// <summary>For the status page: is there a code someone could still use.</summary>

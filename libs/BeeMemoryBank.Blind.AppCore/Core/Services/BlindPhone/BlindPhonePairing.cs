@@ -39,7 +39,7 @@ public sealed class BlindPhonePairing(
         if (HasIdentity) return;
         displayName = displayName.Trim();
         if (displayName.Length is 0 or > BlindPhoneCode.MaxDisplayNameLength)
-            throw new ArgumentException($"A name of 1 to {BlindPhoneCode.MaxDisplayNameLength} characters is needed.", nameof(displayName));
+            throw BeeMemoryBank.Sync.Blind.BlindOwnSentence.Mark(new ArgumentException($"A name of 1 to {BlindPhoneCode.MaxDisplayNameLength} characters is needed.", nameof(displayName)));
 
         var nodeId = BlindNodeId.NewId();
         var (publicKey, seed) = Ed25519Signer.GenerateKeyPair();
@@ -85,7 +85,7 @@ public sealed class BlindPhonePairing(
     /// </summary>
     public void StartRePair()
     {
-        if (!HasIdentity) throw new InvalidOperationException("This phone has no blind identity.");
+        if (!HasIdentity) throw new BeeMemoryBank.Sync.Blind.BlindSentenceException("This phone has no blind identity.");
         var secret = BlindPairingSecret.New();
         try { keys.SavePairingSecret(secret); }
         finally { CryptographicOperations.ZeroMemory(secret); }
@@ -105,7 +105,7 @@ public sealed class BlindPhonePairing(
         if (secret is null)
             return IsPaired
                 ? "This phone is already paired. To connect it to another computer, choose Re-pair first."
-                : "This phone has no pairing secret. Disconnect and set it up again.";
+                : "This phone has no pairing secret. Remove this account from the accounts list and add it again.";
         try
         {
             if (!code.IsAuthenticBy(secret))

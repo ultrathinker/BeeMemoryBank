@@ -87,3 +87,8 @@ api:Startup/ApiServices.Baselines.cs
 # blind node; added when the linked set was recomputed for Step A (the checked-in set already left them out).
 api:Services/Blind/BlindAlarmService.cs
 api:Services/Blind/HubTrustProbe.cs
+# Invitations to a blind copy (release 2.7): made, redeemed and confirmed on a full node. The service holds the master-key flow (the backup key under the
+# DEK, the enrolment and the seal) and the endpoints are full-node routes; the blind host answers none of them.
+api:Services/Blind/BlindInviteService.cs
+api:Endpoints/BlindInviteEndpoints.cs
+api:Services/Blind/BlindInviteBudget.cs

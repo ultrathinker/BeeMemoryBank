@@ -1,0 +1,145 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.DevicesOnMyNetworkModel
+@{
+    var devices = Model.DevicesCard;
+}
+
+@section About {
+    <p>
+        By default a node answers <strong>this computer only</strong>: nobody else on your network can open its web page, and another computer cannot join it.
+        Switch this on to open the node to the local network. It then serves its web page and API over HTTPS on port 5311 and announces itself on the network,
+        so another computer running Bee Memory Bank can find it and join, and a phone can open it in a browser. The change is immediate: no restart, and the vault
+        stays unlocked.
+    </p>
+    <p>
+        <strong>What this exposes:</strong> everything the node serves, not only a join page. Anyone on the same network can reach the sign-in page and try
+        passwords (the node limits attempts). The certificate comes from this node's own certificate authority, not from a public one: a phone or another computer
+        must trust it once (<a href="/Connect">Connect a device</a> has the file and the steps), and until it does the browser warns. Use it on a home or office
+        network you trust, not on a public Wi-Fi.
+    </p>
+    <p>
+        If you only want to add one device now, <a href="/Admin/ConnectDevice">Connect a device</a> is the safer way: it opens the door for 15 minutes and closes it again.
+    </p>
+}
+
+<div class="card mt-md" id="devices-on-my-network" style="max-width:640px;">
+    @if (devices.Kind == DevicesCardKind.NotADesktopNode)
+    {
+        <p class="text-muted text-sm" style="margin-bottom:8px;">
+            There is no switch here: this node is not the desktop app. Which computers can reach it is decided by how it was
+            started. With Docker, the published ports in <code>docker-compose.yml</code> decide: the web page is published on
+            this computer only (<code>127.0.0.1</code>) unless you set <code>BMB_WEB_BIND</code>, and the API port, which AI
+            assistants and other nodes use, is not published at all unless you add it. See <code>docs/deployment.md</code>.
+        </p>
+    }
+    else
+    {
+        @if (devices.Error != null)
+        {
+            <sl-alert variant="danger" open style="margin-bottom:12px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @devices.Error
+            </sl-alert>
+        }
+
+        @if (devices.Kind == DevicesCardKind.ForcedByEnvironment)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:12px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>On, set by <code>BMB_HTTPS_ENABLED=1</code>.</strong> This node was started with that environment variable,
+                which keeps the network listener open whatever is chosen here. Remove the variable and restart the node to
+                control it from this page.
+            </sl-alert>
+        }
+        else if (devices.ListenerFailed)
+        {
+            <sl-alert variant="danger" open style="margin-bottom:12px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                <strong>Switched on, but the node could not open port 5311.</strong> Another program may be using that port.
+                Close it and try again, or switch this off.
+            </sl-alert>
+            <div style="display:flex;gap:8px;">
+                <form data-busy="short" method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                    <input type="hidden" name="enabled" value="true" />
+                    <sl-button type="submit" variant="primary" size="small">Try again</sl-button>
+                </form>
+                <form data-busy="short" method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                    <input type="hidden" name="enabled" value="false" />
+                    <sl-button type="submit" variant="default" size="small">Switch off</sl-button>
+                </form>
+            </div>
+        }
+        else if (devices.On)
+        {
+            <p style="margin:0 0 8px;"><sl-badge variant="warning">On</sl-badge>
+                Other devices on this network can reach this node.</p>
+            <form data-busy="short" method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                <input type="hidden" name="enabled" value="false" />
+                <sl-button type="submit" variant="default" size="small">Switch off</sl-button>
+            </form>
+        }
+        else
+        {
+            <p style="margin:0 0 8px;"><sl-badge variant="neutral">Off</sl-badge>
+                This node answers this computer only.</p>
+            <form data-busy="short" method="post" asp-page-handler="SetDevicesOnMyNetwork">
+                <input type="hidden" name="enabled" value="true" />
+                <sl-button type="submit" variant="primary" size="small">Switch on</sl-button>
+            </form>
+        }
+
+        @if (devices.Urls.Count > 0)
+        {
+            <p class="text-muted text-sm" style="margin:16px 0 4px;">Address to open on the other device:</p>
+            @foreach (var url in devices.Urls)
+            {
+                <div><code data-bmb-copy="@url" title="Click to copy">@url</code></div>
+            }
+        }
+        else if (devices.On)
+        {
+            <p class="text-muted text-sm" style="margin:16px 0 0;">No network address was found on this computer. Connect to a network first.</p>
+        }
+
+        @switch (devices.Firewall)
+        {
+            case DevicesFirewallStep.AddRule:
+                <div style="margin-top:16px;border:1px solid var(--sl-color-warning-600);border-radius:10px;padding:12px;">
+                    <p class="text-sm" style="margin:0 0 8px;"><strong>Windows Firewall will block other devices.</strong>
+                        One rule, for this computer's local network only on port 5311, lets them in. Windows asks for
+                        administrator permission; Bee Memory Bank never changes the firewall without asking.</p>
+                    <form data-busy="short" method="post" asp-page-handler="DevicesFirewall">
+                        <input type="hidden" name="action" value="add" />
+                        <sl-button type="submit" size="small"><sl-icon slot="prefix" name="shield-check"></sl-icon> Allow in Windows Firewall&hellip;</sl-button>
+                    </form>
+                </div>
+                break;
+            case DevicesFirewallStep.RuleInPlace:
+                <p class="text-muted text-sm" style="margin:16px 0 0;">The Windows Firewall rule for port 5311 is in place (local network only).</p>
+                break;
+            case DevicesFirewallStep.RemoveRule:
+                <div style="margin-top:16px;">
+                    <p class="text-muted text-sm" style="margin:0 0 8px;">The Windows Firewall rule for port 5311 is still in place. Nothing is listening now,
+                        but you can remove it. This also removes the rule the Connect a device page uses; it asks again when needed.</p>
+                    <form data-busy="short" method="post" asp-page-handler="DevicesFirewall">
+                        <input type="hidden" name="action" value="remove" />
+                        <sl-button type="submit" size="small"><sl-icon slot="prefix" name="shield-x"></sl-icon> Remove the Windows Firewall rule&hellip;</sl-button>
+                    </form>
+                </div>
+                break;
+            case DevicesFirewallStep.MacAsksOnFirstConnection:
+                <p class="text-muted text-sm" style="margin:16px 0 0;">
+                    <strong>On a Mac:</strong> macOS asks, when the first device connects, whether &ldquo;Bee Memory Bank&rdquo; may accept
+                    incoming network connections. Choose Allow. Bee Memory Bank does not change the firewall itself.
+                </p>
+                break;
+            case DevicesFirewallStep.ServiceInstaller:
+                <p class="text-muted text-sm" style="margin:16px 0 0;">
+                    <strong>Windows service:</strong> the firewall is not changed from here. The installer's
+                    &ldquo;Configure Windows Firewall Exception&rdquo; option opens port 5311; if you did not choose it, add an
+                    inbound rule for TCP 5311 yourself.
+                </p>
+                break;
+        }
+    }
+</div>

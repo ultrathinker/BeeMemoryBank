@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.BlindIos.Pages.AddAccountPage"
+             Title="Add account"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="16" MaximumWidthRequest="520">
+
+            <!-- With an invitation: the person pastes it, or the Camera app opens this page with it (a bmb-invite: QR code) -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="With an invitation" FontAttributes="Bold" />
+                    <Label x:Name="IntroLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Editor x:Name="InviteEditor" AutomationId="BlindInviteEditor" Placeholder="bmb-invite:?…" HeightRequest="110" AutoSize="Disabled"
+                            IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" Style="{StaticResource BaseEditor}" TextChanged="OnInviteTextChanged" />
+                    <Button x:Name="PasteButton" Text="Paste" Style="{StaticResource SecondaryButton}" Clicked="OnPasteClicked" />
+
+                    <!-- What the invitation is, read from its text alone: nothing was sent and nothing was added yet -->
+                    <VerticalStackLayout x:Name="PreviewHost" IsVisible="False" Spacing="4">
+                        <Label x:Name="PreviewDescriptionLabel" AutomationId="BlindInvitationPreview" LineBreakMode="WordWrap" />
+                        <Label x:Name="PreviewLimitsLabel" FontSize="12" LineBreakMode="WordWrap" />
+                        <Label x:Name="PreviewValidityLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                        <Label x:Name="PreviewRefusalLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
+                    </VerticalStackLayout>
+
+                    <Button x:Name="AddInvitationButton" AutomationId="BlindAddFromInvitation" Text="Add" IsEnabled="False" Style="{StaticResource PrimaryButton}" Clicked="OnAddInvitationClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <Label x:Name="AddErrorLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap" />
+
+            <!-- The old way: this phone shows a pairing code on the account's own page, the computer answers with a code -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="With a pairing code" FontAttributes="Bold" />
+                    <Label Text="For a computer that has no invitation to give: the account shows this iPhone's code, you add it on the computer under Blind nodes, and the computer shows a code back."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Entry x:Name="PairingNameEntry" Placeholder="Name of the account (optional)" IsSpellCheckEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <Button x:Name="AddWithCodeButton" AutomationId="BlindAddWithPairingCode" Text="Add with a pairing code" Style="{StaticResource SecondaryButton}" Clicked="OnAddWithCodeClicked" />
+                </VerticalStackLayout>
+            </Frame>
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

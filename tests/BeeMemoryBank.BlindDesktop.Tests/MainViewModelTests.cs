@@ -1,627 +1,336 @@
 using BeeMemoryBank.BlindDesktop.Scheduling;
 using BeeMemoryBank.BlindDesktop.ViewModels;
 using BeeMemoryBank.BlindMobile.Services.Blind;
-using BeeMemoryBank.Core.Services.BlindPhone;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindDesktop.Tests;
 
+/// <summary>
+/// The window of a device that holds several accounts: the list on the left, the selected account on the right, the Add page, the repair states, the device limits, autostart and
+/// quit. The view model is a thin adapter: these tests check that what it shows IS what the view records say (<see cref="BlindAccountsView"/>, <see cref="BlindAccountCard"/>), and that
+/// every action reaches <see cref="IBlindAccountsController"/>. Today's panel of one account is <see cref="AccountPanelViewModelTests"/>.
+/// </summary>
 public sealed class MainViewModelTests
 {
+    private static readonly TimeZoneInfo Zone = TimeZoneInfo.Utc;
+
     private sealed class Rig
     {
-        public FakeApp App { get; } = new();
-        public FakeWorkRequests Work { get; } = new();
+        public FakeAccounts Accounts { get; } = new();
         public FakeAutostart Autostart { get; } = new();
-        public List<string> QrFor { get; } = [];
+        public ManualTimeProvider Time { get; } = new();
+        public Dictionary<string, FakeWorkRequests> Work { get; } = [];
+        public List<(string What, Exception Error)> Problems { get; } = [];
         public MainViewModel Vm { get; }
 
-        public Rig()
+        public Rig(Action<Action>? post = null, string statusArea = "tray", BlindInvitationWatch? watch = null)
         {
-            Vm = new MainViewModel(App, Work, Autostart, text =>
-            {
-                QrFor.Add(text);
-                return [0x89, 0x50, 0x4E, 0x47];
-            });
+            Vm = new MainViewModel(Accounts, id => Work.TryGetValue(id, out var w) ? w : Work[id] = new FakeWorkRequests(), Autostart, _ => [0x89, 0x50, 0x4E, 0x47], post,
+                (what, ex) => Problems.Add((what, ex)), statusArea, time: Time, zone: Zone, watch: watch);
         }
 
-        public async Task<MainViewModel> Shown(BlindAppStatus status)
-        {
-            App.Status = status;
-            await Vm.RefreshAsync();
-            return Vm;
-        }
+        public BlindAccountsView View() => BlindAccountsView.Build(Accounts.GetSnapshot(), Zone, Time.GetUtcNow());
     }
 
-    private static BlindPhoneLog.Entry Entry(string message, int minute = 0) =>
-        new(new DateTimeOffset(2026, 10, 4, 12, minute, 0, TimeSpan.Zero), "k", message);
-
-    // ---- what it shows ------------------------------------------------------------------------------------------------------
-
-    [Fact]
-    public async Task BeforePairing_ItShowsTheIdentity_TheCodeWithItsQr_AndTheAnswerField()
+    private static async Task WaitFor(Func<bool> condition)
     {
-        var rig = new Rig();
-        rig.App.PairingCodeValue = "bmb-blind-phone:?n=1";
-
-        var vm = await rig.Shown(FakeApp.StatusOf(paired: false, loaded: false, awaiting: true));
-
-        vm.IdentityText.Should().Be("Test PC");
-        vm.NodeText.Should().StartWith("Node 11111111");
-        vm.PairText.Should().Contain("Not paired yet");
-        vm.ShowPairingCode.Should().BeTrue();
-        vm.PairingCodeText.Should().Be("bmb-blind-phone:?n=1");
-        vm.PairingQrPng.Should().NotBeNull();
-        vm.CanConnect.Should().BeTrue();
-        vm.CanRePair.Should().BeFalse();
-        vm.CanSyncNow.Should().BeFalse();
-        vm.CanBackupNow.Should().BeFalse();
-        vm.LoadText.Should().Be("First load: starts after pairing.");
+        for (var i = 0; i < 200 && !condition(); i++) await Task.Delay(25);
+        condition().Should().BeTrue("the condition should have become true");
     }
 
+    // ---- what it shows -------------------------------------------------------------------------------------------------------
+
     [Fact]
-    public async Task TheQr_IsMadeOncePerCode_NotOnEveryRefresh()
+    public async Task ADeviceWithNoAccount_OpensOnTheAddPage_WithNothingSelected()
     {
         var rig = new Rig();
-        rig.App.PairingCodeValue = "code-A";
-        await rig.Shown(FakeApp.StatusOf(paired: false, awaiting: true));
+
         await rig.Vm.RefreshAsync();
+
+        rig.Vm.Rows.Should().BeEmpty();
+        rig.Vm.Detail.Should().BeNull();
+        rig.Vm.ShowAdd.Should().BeTrue("there is nothing else to show");
+        rig.Vm.ShowDetail.Should().BeFalse();
+        rig.Vm.CanCloseAdd.Should().BeFalse("there is no account to go back to");
+        rig.Vm.DeviceLine.Should().Be(rig.View().DeviceLine).And.Be("No accounts");
+        rig.Vm.CanAdd.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task TheList_IsTheCardsOfTheViewRecord_WordForWord()
+    {
+        var rig = new Rig();
+        var (berlin, _) = rig.Accounts.AddAccount("Berlin office", status: FakeApp.StatusOf(lastSyncAt: rig.Time.GetUtcNow() - TimeSpan.FromMinutes(4)));
+        var (paris, _) = rig.Accounts.AddAccount("Paris");
+        rig.Accounts.Pauses[paris.Id] = new BlindPause(BlindPauseReasons.Traffic, Limit: 200L << 20);
+        rig.Accounts.Usage[berlin.Id] = new BlindAccountUsageView(1_288_490_189, 312, 30L << 20, 8L << 20, 40L << 20);
+
         await rig.Vm.RefreshAsync();
-        rig.QrFor.Should().Equal("code-A");
 
-        rig.App.PairingCodeValue = "code-B";
+        var expected = rig.View();
+        rig.Vm.Rows.Select(r => (r.Id, r.Name, r.SourceHost, r.State, r.Kind, r.Stored))
+            .Should().Equal(expected.Cards.Select(c => (c.Id, c.Name, c.SourceHost, c.State, c.Kind, c.Stored)));
+        rig.Vm.Rows[0].State.Should().Be("Synced 4 min ago");
+        rig.Vm.Rows[1].State.Should().StartWith("Paused: daily traffic limit reached (200 MB)");
+        rig.Vm.DeviceLine.Should().Be(expected.DeviceLine).And.StartWith("2 accounts");
+    }
+
+    [Fact]
+    public async Task TheFirstAccountIsSelected_AndItsDetailShowsItsCardAndItsPanel()
+    {
+        var rig = new Rig();
+        var (first, _) = rig.Accounts.AddAccount("Berlin office");
+        rig.Accounts.AddAccount("Paris");
+
         await rig.Vm.RefreshAsync();
-        rig.QrFor.Should().Equal("code-A", "code-B");
 
-        rig.App.PairingCodeValue = null;
-        await rig.Shown(FakeApp.StatusOf(awaiting: false));
-        rig.Vm.PairingQrPng.Should().BeNull();
-        rig.Vm.ShowPairingCode.Should().BeFalse();
+        rig.Vm.Detail!.Id.Should().Be(first.Id);
+        rig.Vm.SelectedRow!.Id.Should().Be(first.Id);
+        rig.Vm.ShowDetail.Should().BeTrue();
+        rig.Vm.ShowAdd.Should().BeFalse();
+        rig.Vm.Detail.StateLine.Should().Be(rig.View().Cards[0].State);
+        rig.Vm.Detail.HasPanel.Should().BeTrue("an active account that is up shows today's panel");
     }
 
     [Fact]
-    public async Task WhenPaired_ItShowsTheEndpoint_TheTimes_AndRePair()
+    public async Task SelectingAnotherRow_ShowsThatAccount()
     {
         var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf(paired: true, loaded: true) with
-        {
-            LastSyncAt = new DateTimeOffset(2026, 10, 4, 10, 30, 0, TimeSpan.Zero),
-        });
+        rig.Accounts.AddAccount("Berlin office");
+        var (second, _) = rig.Accounts.AddAccount("Paris");
+        await rig.Vm.RefreshAsync();
 
-        vm.PairText.Should().Be("Calls https://127.0.0.1:5610");
-        vm.PairingMessage.Should().Contain("Paired. The code was used up");
-        vm.ShowPairingCode.Should().BeFalse();
-        vm.CanRePair.Should().BeTrue();
-        vm.CanConnect.Should().BeFalse();
-        vm.CanSyncNow.Should().BeTrue();
-        vm.CanBackupNow.Should().BeTrue();
-        vm.LoadText.Should().Be("First load: done.");
-        vm.SyncText.Should().StartWith("Last sync: ").And.NotContain("never");
-        vm.BackupText.Should().Be("Last backup: never");
+        rig.Vm.SelectedRow = rig.Vm.Rows[1];
+
+        await WaitFor(() => rig.Vm.Detail?.Id == second.Id);
+        rig.Vm.Detail!.Name.Should().Be("Paris");
+        rig.Vm.SelectedRow!.Id.Should().Be(second.Id);
     }
 
-    // ---- the first-load line says what is really going on (fix round 1) ------------------------------------------------------------
-
-    private static readonly DateTimeOffset FailedAt = new(2026, 10, 4, 12, 0, 0, TimeSpan.Zero);
-
-    private static BlindAppFailure Failed(string message, int attempts = 1, string title = "First load") => new(title, message, FailedAt, attempts);
-
     [Fact]
-    public async Task LoadText_BeforePairing_AndWhenDone_AndWhenAboutToStart()
+    public async Task TheSelection_SurvivesARefresh_AndMovesOnWhenItsAccountIsGone()
     {
         var rig = new Rig();
+        var (first, _) = rig.Accounts.AddAccount("Berlin office");
+        var (second, _) = rig.Accounts.AddAccount("Paris");
+        await rig.Vm.RefreshAsync();
+        rig.Vm.SelectedRow = rig.Vm.Rows[1];
+        await WaitFor(() => rig.Vm.Detail?.Id == second.Id);
+        var row = rig.Vm.Rows[1];
 
-        (await rig.Shown(FakeApp.StatusOf(paired: false, loaded: false))).LoadText.Should().Be("First load: starts after pairing.");
-        (await rig.Shown(FakeApp.StatusOf(paired: true, loaded: false))).LoadText.Should().Be("First load: starting.");
-        (await rig.Shown(FakeApp.StatusOf(paired: true, loaded: true))).LoadText.Should().Be("First load: done.");
+        await rig.Vm.RefreshAsync();
+        rig.Vm.Rows[1].Should().BeSameAs(row, "the same row object for the same account: a selection must survive a refresh");
+        rig.Vm.Detail!.Id.Should().Be(second.Id);
+
+        rig.Accounts.Entries.RemoveAll(e => e.Id == second.Id);
+        await rig.Vm.RefreshAsync();
+        rig.Vm.Detail!.Id.Should().Be(first.Id, "the account that was shown is gone: the first one is shown");
     }
 
     [Fact]
-    public async Task LoadText_WhileRunning_ShowsTheProgress_OrJustThatItRuns()
+    public async Task AnAccountThatIsNotActive_ShowsItsStateLine_AndNoPanel()
     {
         var rig = new Rig();
+        var (entry, _) = rig.Accounts.AddAccount("Alex", phase: BlindAccountPhases.AwaitingConfirmation);
+        rig.Accounts.Entries[0] = entry with { MatchCode = "K7F-2QX", InviteId = "i1" };
 
-        var vm = await rig.Shown(FakeApp.StatusOf(loaded: false, activeJob: "First load", progress: 0.4));
-        vm.LoadText.Should().Be($"First load: running ({0.4:P0}).");
+        await rig.Vm.RefreshAsync();
 
-        await rig.Shown(FakeApp.StatusOf(loaded: false, activeJob: "First load"));
-        vm.LoadText.Should().Be("First load: running.");
-
-        // A sync or a backup running is not the first load running.
-        await rig.Shown(FakeApp.StatusOf(loaded: false, activeJob: "Sync"));
-        vm.LoadText.Should().Be("First load: starting.");
+        rig.Vm.Detail!.HasPanel.Should().BeFalse("an invited account has nothing to pair yet");
+        rig.Vm.Detail.AwaitingOwner.Should().BeTrue();
+        rig.Vm.Detail.StateLine.Should().Be("Waiting for Alex to confirm. Read this code out to them: K7F-2QX");
+        rig.Vm.Rows[0].State.Should().Be(rig.Vm.Detail.StateLine);
     }
 
+    // ---- the add page, the cap, a damaged list ------------------------------------------------------------------------------------
+
     [Fact]
-    public async Task LoadText_AFailedTry_ShowsTheReason_TheTries_AndTheNextTime_AndNeverBlamesAMissingCondition()
+    public async Task AddAccount_OpensTheAddPage_AndBackReturnsToTheAccount()
     {
         var rig = new Rig();
-        var next = new DateTimeOffset(2026, 10, 4, 12, 1, 0, TimeSpan.Zero);
-        rig.Work.FirstLoadRetry = new FirstLoadRetryInfo(next, TimeSpan.FromSeconds(60), 3, AtCeiling: false);
+        rig.Accounts.AddAccount("Berlin office");
+        await rig.Vm.RefreshAsync();
+        rig.Vm.ShowAdd.Should().BeFalse();
 
-        var vm = await rig.Shown(FakeApp.StatusOf(loaded: false,
-            lastFailure: Failed("Response status code does not indicate success: 401 (Unauthorized).", attempts: 3)));
+        rig.Vm.AddAccountCommand.Execute(null);
+        rig.Vm.ShowAdd.Should().BeTrue();
+        rig.Vm.ShowDetail.Should().BeFalse();
+        rig.Vm.CanCloseAdd.Should().BeTrue();
 
-        vm.LoadText.Should().StartWith("First load: the last try failed - Response status code does not indicate success: 401 (Unauthorized).");
-        vm.LoadText.Should().Contain("probably not heard of this device", "a 401 right after pairing is the normal case and is said so");
-        vm.LoadText.Should().Contain("(3 tries in a row)");
-        vm.LoadText.Should().Contain($"Next try at {next.ToLocalTime():HH:mm:ss}.");
-        vm.LoadText.Should().NotContain("waiting");
+        rig.Vm.CloseAddCommand.Execute(null);
+        rig.Vm.ShowAdd.Should().BeFalse();
+        rig.Vm.ShowDetail.Should().BeTrue();
     }
 
     [Fact]
-    public async Task LoadText_AFailedTry_ForAnotherReason_ShowsThatReason_NotTheHint()
+    public async Task AtTheCap_AddIsOff_AndTheHintIsTheViewRecordsSentence()
     {
         var rig = new Rig();
-        rig.Work.FirstLoadRetry = new FirstLoadRetryInfo(FailedAt.AddSeconds(30), TimeSpan.FromSeconds(30), 1, AtCeiling: false);
+        rig.Accounts.Max = 1;
+        rig.Accounts.AddAccount("Berlin office");
 
-        var vm = await rig.Shown(FakeApp.StatusOf(loaded: false, lastFailure: Failed("The SSL connection could not be established (pin mismatch).")));
+        await rig.Vm.RefreshAsync();
 
-        vm.LoadText.Should().Contain("pin mismatch").And.NotContain("probably not heard").And.NotContain("tries in a row");
+        rig.Vm.CanAdd.Should().BeFalse();
+        rig.Vm.AddAccountCommand.CanExecute(null).Should().BeFalse();
+        rig.Vm.AddHint.Should().Be(rig.View().AddHint).And.Contain("at most 1 accounts");
+        rig.Vm.HasAddHint.Should().BeTrue();
     }
 
     [Fact]
-    public async Task LoadText_AtTheCeiling_SaysItKeepsTryingEveryFifteenMinutes()
+    public async Task ADamagedList_ShowsOnlyItsSentence_NoCardsAndNoPage()
     {
         var rig = new Rig();
-        rig.Work.FirstLoadRetry = new FirstLoadRetryInfo(FailedAt.AddMinutes(15), TimeSpan.FromMinutes(15), 9, AtCeiling: true);
+        rig.Accounts.RegistryProblem = "accounts.json is damaged and cannot be read. Nothing was started or changed, so that nothing is lost.";
+        rig.Accounts.AddAccount("Berlin office");
 
-        var vm = await rig.Shown(FakeApp.StatusOf(loaded: false, lastFailure: Failed("The connection was refused.", 9)));
+        await rig.Vm.RefreshAsync();
 
-        vm.LoadText.Should().Contain("(9 tries in a row)").And.Contain("it keeps trying every 15 minutes until it works.");
-        vm.LoadText.Should().Contain("Next try at ");
+        rig.Vm.HasRegistryProblem.Should().BeTrue();
+        rig.Vm.RegistryProblem.Should().Be(rig.Accounts.RegistryProblem);
+        rig.Vm.ShowAdd.Should().BeFalse();
+        rig.Vm.ShowDetail.Should().BeFalse();
+        rig.Vm.CanAdd.Should().BeFalse();
+        rig.Vm.AddAccountCommand.CanExecute(null).Should().BeFalse();
     }
 
+    // ---- repair states -----------------------------------------------------------------------------------------------------------
+
     [Fact]
-    public async Task LoadText_AFailedTry_WithNoRetryPlannedYet_SaysItTriesAgainSoon()
+    public async Task EachRepairState_HasItsOwnExplicitAction_NothingIsDoneOnItsOwn()
     {
         var rig = new Rig();
-        rig.Work.FirstLoadRetry = null;
+        rig.Accounts.Repairs.Add(new BlindRepairIssue(BlindRepairKinds.LegacyRootNotListed, null, "A 2.6 copy is in the root and the list omits it."));
+        rig.Accounts.Repairs.Add(new BlindRepairIssue(BlindRepairKinds.FolderNotListed, "aaaa", "A folder is not listed."));
+        rig.Accounts.Repairs.Add(new BlindRepairIssue(BlindRepairKinds.FolderMissing, "bbbb", "A listed account lost its folder."));
+        rig.Accounts.Repairs.Add(new BlindRepairIssue(BlindRepairKinds.UnsafePath, "cccc", "A link is where a folder belongs."));
 
-        var vm = await rig.Shown(FakeApp.StatusOf(loaded: false, lastFailure: Failed("The connection was refused.")));
+        await rig.Vm.RefreshAsync();
 
-        vm.LoadText.Should().EndWith("It tries again soon.").And.NotContain("Next try at");
+        rig.Vm.HasRepairs.Should().BeTrue();
+        rig.Vm.Repairs.Select(r => r.Description).Should().Equal(rig.View().Repairs!.Select(r => r.Description));
+        rig.Accounts.CallsSoFar.Should().NotContain(c => c.StartsWith("Adopt") || c.StartsWith("Forget"), "a repair is never taken by the app on its own");
+        rig.Vm.Repairs.Select(r => r.ActionText).Should().Equal("Add it to the list", "Add it to the list", "Forget it", "");
+        rig.Vm.Repairs[3].Command.CanExecute(null).Should().BeFalse("a link needs a person");
+
+        rig.Vm.Repairs[0].Command.Execute(null);
+        rig.Vm.Repairs[1].Command.Execute(null);
+        rig.Vm.Repairs[2].Command.Execute(null);
+        await WaitFor(() => rig.Accounts.CallsSoFar.Contains("ForgetMissing:bbbb"));
+        rig.Accounts.CallsSoFar.Should().Contain("AdoptLegacyRoot").And.Contain("AdoptFolder:aaaa");
     }
 
     [Fact]
-    public async Task LoadText_ALongOrMultiLineReason_IsCutToOneShortLine()
+    public async Task ARefusedRepair_ShowsTheControllersSentence()
     {
         var rig = new Rig();
+        rig.Accounts.Repairs.Add(new BlindRepairIssue(BlindRepairKinds.FolderMissing, "bbbb", "A listed account lost its folder."));
+        rig.Accounts.Refusals["ForgetMissing"] = "The folder is back; nothing was forgotten.";
+        await rig.Vm.RefreshAsync();
 
-        var vm = await rig.Shown(FakeApp.StatusOf(loaded: false, lastFailure: Failed(new string('x', 400) + "\r\nsecond line")));
+        rig.Vm.Repairs[0].Command.Execute(null);
 
-        vm.LoadText.Should().NotContain("\n").And.NotContain("second line").And.Contain("...");
-        vm.LoadText.Length.Should().BeLessThan(300);
+        await WaitFor(() => rig.Vm.Notice == "The folder is back; nothing was forgotten.");
     }
 
     [Fact]
-    public async Task LoadText_AFailureOfAnotherJob_IsNotShownAsAFirstLoadFailure()
+    public async Task ADeviceUsageProblem_OffersStartNewCounts_AndTheRepairClearsIt()
     {
         var rig = new Rig();
+        rig.Accounts.DeviceUsageProblem = "The device's usage counts cannot be read.";
+        await rig.Vm.RefreshAsync();
+        rig.Vm.HasDeviceUsageProblem.Should().BeTrue();
+        rig.Vm.DeviceUsageProblem.Should().Be(rig.View().DeviceUsageProblem);
 
-        var vm = await rig.Shown(FakeApp.StatusOf(loaded: false, lastFailure: Failed("no room", 2, title: "Backup")));
-        vm.LoadText.Should().Be("First load: starting.");
+        rig.Vm.RepairDeviceUsageCommand.Execute(null);
 
-        // A done first load stays done whatever failed after it.
-        await rig.Shown(FakeApp.StatusOf(loaded: true, lastFailure: Failed("no room", 2, title: "Backup")));
-        vm.LoadText.Should().Be("First load: done.");
+        rig.Accounts.CallsSoFar.Should().Contain("StartNewDeviceUsageLedger");
+        await WaitFor(() => !rig.Vm.HasDeviceUsageProblem);
     }
 
+    // ---- the device's own limits --------------------------------------------------------------------------------------------------
+
     [Fact]
-    public async Task TheLoadText_FollowsTheStateThroughItsWholeLife()
+    public async Task TheDeviceLimitBoxes_AreFilledFromTheDevice_AndSavedThroughTheForm()
     {
         var rig = new Rig();
-        rig.Work.FirstLoadRetry = new FirstLoadRetryInfo(FailedAt.AddSeconds(30), TimeSpan.FromSeconds(30), 1, AtCeiling: false);
-        var vm = await rig.Shown(FakeApp.StatusOf(paired: false, loaded: false));
-        var seen = new List<string> { vm.LoadText };
+        rig.Accounts.Device = new BlindDeviceLimits(5L << 30, 500L << 20);
+        await rig.Vm.RefreshAsync();
+        rig.Vm.DeviceStoredText.Should().Be("5 GB");
+        rig.Vm.DeviceTrafficText.Should().Be("500 MB");
 
-        foreach (var status in new[]
-                 {
-                     FakeApp.StatusOf(loaded: false, activeJob: "First load", progress: 0.1),
-                     FakeApp.StatusOf(loaded: false, lastFailure: Failed("401")),
-                     FakeApp.StatusOf(loaded: false, activeJob: "First load"),
-                     FakeApp.StatusOf(loaded: true),
-                 })
-        {
-            await rig.Shown(status);
-            seen.Add(vm.LoadText);
-        }
+        rig.Vm.DeviceStoredText = "8 GB";
+        rig.Vm.DeviceTrafficText = "";
+        rig.Vm.ApplyDeviceLimitsCommand.Execute(null);
 
-        seen.Should().HaveCount(5);
-        seen[0].Should().Contain("starts after pairing");
-        seen[1].Should().Contain("running (");
-        seen[2].Should().Contain("the last try failed");
-        seen[3].Should().Be("First load: running.");
-        seen[4].Should().Be("First load: done.");
+        rig.Accounts.Device.Should().Be(new BlindDeviceLimits(8L << 30, null));
+        rig.Vm.HasDeviceLimitsProblems.Should().BeFalse();
+        rig.Vm.Notice.Should().Be("Device limits saved.");
     }
 
-    // ---- the key store (fix round 1) -----------------------------------------------------------------------------------------------
-
     [Fact]
-    public async Task AKeyStoreThatDoesNotAnswer_IsANotice_NotALostKey_AndNothingAsksForAWipe()
+    public async Task ADeviceLimitTheFormRefuses_IsShownAsTheFormsSentence_AndNothingIsSaved()
     {
         var rig = new Rig();
+        await rig.Vm.RefreshAsync();
 
-        var vm = await rig.Shown(FakeApp.StatusOf(keyStoreUnavailable: "UnauthorizedAccessException: The keychain is locked."));
+        rig.Vm.DeviceTrafficText = "1 MB";
+        rig.Vm.ApplyDeviceLimitsCommand.Execute(null);
 
-        vm.HasKeyStoreNotice.Should().BeTrue();
-        vm.KeyStoreNoticeText.Should().Contain("UnauthorizedAccessException: The keychain is locked.").And.Contain("no key is lost").And.Contain("Try again");
-        vm.KeyStoreNoticeText.Should().NotContain("wipe", "a transient failure must not push the person to a wipe");
-        vm.HasKeyLost.Should().BeFalse();
-        vm.KeyLostText.Should().BeNull();
-        vm.CanBackupNow.Should().BeTrue("the key is not known to be lost");
-        vm.PairingMessage.Should().Contain("key store").And.NotContain("Disconnect and wipe");
-
-        // It answers again: the notice goes.
-        await rig.Shown(FakeApp.StatusOf());
-        vm.HasKeyStoreNotice.Should().BeFalse();
-        vm.KeyStoreNoticeText.Should().BeNull();
+        rig.Vm.HasDeviceLimitsProblems.Should().BeTrue();
+        rig.Vm.DeviceLimitsProblems.Should().Be(new BlindDeviceLimitsForm("", "1 MB").Validate().Problems.Single());
+        rig.Accounts.CallsSoFar.Should().NotContain(c => c.StartsWith("SetDeviceLimits"));
     }
 
     [Fact]
-    public async Task AKeyStoreNotice_AndARealLostKey_AreNotTheSameThing()
+    public async Task WhatThePersonIsTypingInTheDeviceBoxes_IsNotTakenAwayByARefresh()
     {
         var rig = new Rig();
+        rig.Accounts.Device = new BlindDeviceLimits(5L << 30, null);
+        await rig.Vm.RefreshAsync();
 
-        var vm = await rig.Shown(FakeApp.StatusOf(keyLost: true));
+        rig.Vm.DeviceStoredText = "7 G";
+        await rig.Vm.RefreshAsync();
 
-        vm.HasKeyLost.Should().BeTrue();
-        vm.HasKeyStoreNotice.Should().BeFalse();
+        rig.Vm.DeviceStoredText.Should().Be("7 G");
     }
 
-    // ---- failures of the view model's own callbacks (fix round 1) ----------------------------------------------------------------
-
     [Fact]
-    public async Task ACommandThatThrows_BecomesANotice_AndTheProblemIsLogged_NothingEscapes()
+    public async Task ARefusalOfTheController_ForDeviceLimits_IsShown()
     {
         var rig = new Rig();
-        var problems = new List<(string What, Exception Error)>();
-        var vm = new MainViewModel(rig.App, rig.Work, rig.Autostart, _ => [], problem: (what, ex) => problems.Add((what, ex)));
-        rig.App.Status = FakeApp.StatusOf();
-        await vm.RefreshAsync();
-        rig.Work.Failure = new InvalidOperationException("the scheduler is gone");
+        rig.Accounts.Refusals["SetDeviceLimits"] = "The list of accounts is damaged.";
+        await rig.Vm.RefreshAsync();
 
-        var syncNow = () => vm.SyncNowCommand.Execute(null);
-        var backupNow = () => vm.BackupNowCommand.Execute(null);
+        rig.Vm.DeviceStoredText = "5 GB";
+        rig.Vm.ApplyDeviceLimitsCommand.Execute(null);
 
-        syncNow.Should().NotThrow();
-        backupNow.Should().NotThrow();
-        vm.Notice.Should().Be("That did not work: the scheduler is gone");
-        problems.Should().HaveCount(2);
-        problems[0].What.Should().Be("A command failed");
-        problems[0].Error.Should().BeSameAs(rig.Work.Failure);
+        rig.Vm.DeviceLimitsProblems.Should().Be("The list of accounts is damaged.");
     }
 
-    [Fact]
-    public void ACommandWhoseCanExecuteThrows_IsJustDisabled_NotAnException()
-    {
-        var problems = new List<string>();
-        var command = new RelayCommand(() => { }, () => throw new InvalidOperationException("state"), ex => problems.Add(ex.Message));
-
-        var can = () => command.CanExecute(null);
-
-        can.Should().NotThrow().Which.Should().BeFalse();
-        problems.Should().Equal("state");
-    }
-
-    [Fact]
-    public async Task AQrFunctionThatThrows_IsANotice_TheCodeStaysUsable_AndItIsNotRetriedOnEveryRefresh()
-    {
-        var rig = new Rig();
-        var made = 0;
-        var problems = new List<string>();
-        var vm = new MainViewModel(rig.App, rig.Work, rig.Autostart, _ =>
-        {
-            made++;
-            throw new InvalidOperationException("the QR library is missing");
-        }, problem: (what, _) => problems.Add(what));
-        rig.App.PairingCodeValue = "bmb-blind-phone:?n=1";
-        rig.App.Status = FakeApp.StatusOf(paired: false, loaded: false, awaiting: true);
-
-        var refresh = () => vm.RefreshAsync();
-        await refresh.Should().NotThrowAsync();
-        await vm.RefreshAsync();
-        await vm.RefreshAsync();
-
-        vm.PairingQrPng.Should().BeNull();
-        vm.ShowPairingCode.Should().BeTrue("the text of the code is still there");
-        vm.PairingCodeText.Should().Be("bmb-blind-phone:?n=1");
-        vm.CanConnect.Should().BeTrue("the answer field stays usable");
-        vm.Notice.Should().Contain("QR picture could not be made").And.Contain("the QR library is missing").And.Contain("Copy the code below");
-        made.Should().Be(1);
-        problems.Should().Equal("Making the QR picture failed");
-    }
-
-    [Fact]
-    public async Task AFailureWhileShowingTheStatus_IsANotice_AndTheNextRefreshShowsTheNextStatus()
-    {
-        var rig = new Rig();
-        var problems = new List<string>();
-        var vm = new MainViewModel(rig.App, rig.Work, rig.Autostart, _ => [], problem: (what, _) => problems.Add(what));
-        rig.Autostart.Enabled = true;
-        rig.App.Status = FakeApp.StatusOf(name: "First");
-        await vm.RefreshAsync();
-
-        rig.App.Status = FakeApp.StatusOf(name: "Second") with { Backups = null! };
-        var refresh = () => vm.RefreshAsync();
-        await refresh.Should().NotThrowAsync();
-        vm.Notice.Should().Contain("Could not show the status");
-        problems.Should().Equal("Showing the status failed");
-
-        rig.App.Status = FakeApp.StatusOf(name: "Third");
-        await vm.RefreshAsync();
-        vm.IdentityText.Should().Be("Third");
-    }
-
-    [Fact]
-    public async Task ARunningJob_ShowsItsNameAndProgress()
-    {
-        var rig = new Rig();
-
-        var vm = await rig.Shown(FakeApp.StatusOf(activeJob: "First load", progress: 0.4));
-        vm.JobVisible.Should().BeTrue();
-        vm.JobText.Should().Be($"First load: {0.4:P0}");
-        vm.JobProgress.Should().Be(0.4);
-
-        await rig.Shown(FakeApp.StatusOf(activeJob: "Sync"));
-        vm.JobText.Should().Be("Sync");
-        vm.JobProgress.Should().Be(0);
-
-        await rig.Shown(FakeApp.StatusOf());
-        vm.JobVisible.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task TheLog_ShowsTheLatestLines()
-    {
-        var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf(log: [Entry("newest", 5), Entry("older", 1)]));
-
-        var lines = vm.LogText.Split('\n');
-        lines.Should().HaveCount(2);
-        lines[0].Should().EndWith("newest");
-        lines[1].Should().EndWith("older");
-    }
-
-    [Fact]
-    public async Task AKeyLostCopy_AndAStartError_AreSaidPlainly()
-    {
-        var rig = new Rig();
-
-        var vm = await rig.Shown(FakeApp.StatusOf(keyLost: true));
-        vm.HasKeyLost.Should().BeTrue();
-        vm.KeyLostText.Should().Contain("a new key is never made silently");
-        vm.CanBackupNow.Should().BeFalse();
-
-        await rig.Shown(FakeApp.StatusOf(paired: false, loaded: false, startError: "Disconnect and wipe required."));
-        vm.HasStartError.Should().BeTrue();
-        vm.StartErrorText.Should().Contain("Disconnect and wipe required.");
-        vm.PairingMessage.Should().Contain("could not set itself up");
-    }
-
-    [Fact]
-    public async Task TheBackups_AreListed_AndSaveToSendsTheNameToTheApp()
-    {
-        var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf(backups: [new BlindAppBackup("bmb-phone-2.bmbbackup", 5 * 1024 * 1024), new BlindAppBackup("bmb-phone-1.bmbbackup", 1024)]));
-
-        vm.HasBackups.Should().BeTrue();
-        vm.Backups.Select(b => b.Name).Should().Equal("bmb-phone-2.bmbbackup", "bmb-phone-1.bmbbackup");
-        vm.Backups[0].SizeText.Should().Be("5120 KiB");
-
-        vm.Backups[1].SaveCommand.Execute(null);
-        await WaitFor(() => vm.Notice?.StartsWith("Saved") == true);
-
-        rig.App.Exported.Should().Equal("bmb-phone-1.bmbbackup");
-        vm.Notice.Should().Contain("bmb-phone-1.bmbbackup").And.Contain("chosen place");
-    }
-
-    [Fact]
-    public async Task SaveTo_WhenThePickerIsCancelled_SaysNothingWasSaved_AndOnAFailure_SaysWhy()
-    {
-        var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf(backups: [new BlindAppBackup("a.bmbbackup", 10)]));
-
-        rig.App.ExportBody = _ => throw new OperationCanceledException();
-        vm.Backups[0].SaveCommand.Execute(null);
-        await WaitFor(() => vm.Notice == "Nothing was saved.");
-
-        rig.App.ExportBody = _ => throw new IOException("disk full");
-        vm.Backups[0].SaveCommand.Execute(null);
-        await WaitFor(() => vm.Notice?.Contains("disk full") == true);
-    }
-
-    // ---- what it does -------------------------------------------------------------------------------------------------------
-
-    [Fact]
-    public async Task Connect_WithAWrongCode_ShowsTheReason_AndStaysUnpaired()
-    {
-        var rig = new Rig();
-        rig.App.PairingCodeValue = "code";
-        var vm = await rig.Shown(FakeApp.StatusOf(paired: false, loaded: false, awaiting: true));
-        vm.CallCodeInput = "bmb-blind-call:?junk";
-        rig.App.AcceptError = "This is not a connection code from the computer. Copy it again.";
-
-        vm.ConnectCommand.Execute(null);
-
-        vm.ConnectError.Should().Be("This is not a connection code from the computer. Copy it again.");
-        vm.HasConnectError.Should().BeTrue();
-        vm.CallCodeInput.Should().Be("bmb-blind-call:?junk", "the user can correct it");
-        rig.Work.Heavies.Should().Be(0);
-        rig.App.Accepted.Should().Equal("bmb-blind-call:?junk");
-
-        vm.CallCodeInput = "changed";
-        vm.HasConnectError.Should().BeFalse("typing again clears the old error");
-    }
-
-    [Fact]
-    public async Task Connect_WithTheRightCode_ClearsTheField_AndAsksForTheFirstLoadAtOnce()
-    {
-        var rig = new Rig();
-        rig.App.PairingCodeValue = "code";
-        var vm = await rig.Shown(FakeApp.StatusOf(paired: false, loaded: false, awaiting: true));
-        vm.CallCodeInput = "bmb-blind-call:?ok";
-        rig.App.AcceptError = null;
-
-        vm.ConnectCommand.Execute(null);
-
-        vm.CallCodeInput.Should().BeEmpty();
-        vm.ConnectError.Should().BeNull();
-        vm.Notice.Should().Contain("Paired").And.Contain("first load");
-        rig.Work.Heavies.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task SyncNow_AndBackUpNow_AskTheScheduler_AndOnlyWhenTheyMake_Sense()
-    {
-        var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf(paired: false, loaded: false));
-        vm.SyncNowCommand.CanExecute(null).Should().BeFalse();
-        vm.BackupNowCommand.CanExecute(null).Should().BeFalse();
-
-        await rig.Shown(FakeApp.StatusOf(paired: true, loaded: false));
-        vm.SyncNowCommand.CanExecute(null).Should().BeFalse("a sync needs the first load to be done");
-        vm.BackupNowCommand.CanExecute(null).Should().BeTrue();
-
-        await rig.Shown(FakeApp.StatusOf(paired: true, loaded: true));
-        vm.SyncNowCommand.Execute(null);
-        rig.Work.Syncs.Should().Be(1);
-        // BMB-311: a long operation is running, so no second one can be started until the first has ended.
-        vm.BackupNowCommand.CanExecute(null).Should().BeFalse();
-        rig.Work.Report("Sync finished.");
-        vm.BackupNowCommand.Execute(null);
-        rig.Work.Backups.Should().Be(1);
-        vm.Notice.Should().Be("Backup asked for.");
-    }
-
-    [Fact]
-    public async Task RePair_StartsANewCode()
-    {
-        var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf());
-        vm.RePairCommand.Execute(null);
-        rig.App.RePairCalls.Should().Be(1);
-        vm.Notice.Should().Contain("The current connection stays");
-    }
-
-    [Fact]
-    public async Task TheSchedulePicker_ShowsTheStatus_AndChangesGoToTheApp_ButRefreshesDoNot()
-    {
-        var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf(schedule: BlindBackupSchedule.Daily));
-        vm.ScheduleIndex.Should().Be(1);
-        vm.ScheduleOptions.Should().Equal("Off", "Daily", "Weekly");
-        rig.App.LastSchedule.Should().BeNull("showing the stored schedule does not write it back");
-
-        vm.ScheduleIndex = 0;
-        rig.App.LastSchedule.Should().Be(BlindBackupSchedule.Off);
-        vm.ScheduleIndex = 2;
-        rig.App.LastSchedule.Should().Be(BlindBackupSchedule.Weekly);
-    }
+    // ---- autostart, quit, words ---------------------------------------------------------------------------------------------------
 
     [Fact]
     public async Task Autostart_ShowsTheOsState_WritesItOnToggle_AndRevertsWithANoticeOnFailure()
     {
         var rig = new Rig();
         rig.Autostart.Enabled = true;
-        var vm = await rig.Shown(FakeApp.StatusOf());
-        vm.AutostartOn.Should().BeTrue();
-        vm.AutostartKnown.Should().BeTrue();
+        await rig.Vm.RefreshAsync();
+        rig.Vm.AutostartOn.Should().BeTrue();
+        rig.Vm.AutostartKnown.Should().BeTrue();
 
-        vm.AutostartOn = false;
+        rig.Vm.AutostartOn = false;
         rig.Autostart.Enabled.Should().BeFalse();
 
         rig.Autostart.Failure = new UnauthorizedAccessException("denied");
-        vm.AutostartOn = true;
-        vm.AutostartOn.Should().BeFalse("the box goes back to what the system has");
-        vm.Notice.Should().Contain("denied");
+        rig.Vm.AutostartOn = true;
+        rig.Vm.AutostartOn.Should().BeFalse("the box goes back to what the system has");
+        rig.Vm.Notice.Should().Contain("denied");
 
         rig.Autostart.Failure = null;
         rig.Autostart.Enabled = null;
         await rig.Vm.RefreshAsync();
-        vm.AutostartKnown.Should().BeFalse("a setting that cannot be read is shown as unknown, not as off");
-    }
-
-    // ---- wipe ---------------------------------------------------------------------------------------------------------------
-
-    [Fact]
-    public async Task Wipe_NeedsTheTypedName_ExactlyOnceTrimmed_AndThenWipes()
-    {
-        var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf(name: "Test PC"));
-        vm.WipePanelOpen.Should().BeFalse();
-
-        vm.OpenWipeCommand.Execute(null);
-        vm.WipePanelOpen.Should().BeTrue();
-        vm.WipePrompt.Should().Contain("\"Test PC\"");
-        vm.ConfirmWipeCommand.CanExecute(null).Should().BeFalse("nothing typed");
-
-        vm.WipeTyped = "test pc";
-        vm.ConfirmWipeCommand.CanExecute(null).Should().BeFalse("the name must match exactly");
-        vm.WipeTyped = "Test PC extra";
-        vm.ConfirmWipeCommand.CanExecute(null).Should().BeFalse();
-        vm.ConfirmWipeCommand.Execute(null);
-        rig.App.WipeCalls.Should().Be(0, "nothing is wiped on a wrong name");
-
-        vm.WipeTyped = "  Test PC  ";
-        vm.ConfirmWipeCommand.CanExecute(null).Should().BeTrue();
-        vm.ConfirmWipeCommand.Execute(null);
-        await WaitFor(() => rig.App.WipeCalls == 1 && !vm.WipeBusy);
-    }
-
-    [Fact]
-    public async Task Wipe_Cancel_ClosesThePanel_WithoutWiping()
-    {
-        var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf());
-        vm.OpenWipeCommand.Execute(null);
-        vm.WipeTyped = "Test PC";
-
-        vm.CancelWipeCommand.Execute(null);
-
-        vm.WipePanelOpen.Should().BeFalse();
-        vm.WipeTyped.Should().BeEmpty();
-        rig.App.WipeCalls.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task APartialWipe_SaysWhatIsLeft_AndAsksToPressItAgain()
-    {
-        var rig = new Rig();
-        var vm = await rig.Shown(FakeApp.StatusOf(name: "Test PC"));
-        rig.App.WipeBody = () => throw new AggregateException("The wipe is not complete: removing blind-backups: in use", new IOException("in use"));
-        vm.OpenWipeCommand.Execute(null);
-        vm.WipeTyped = "Test PC";
-
-        vm.ConfirmWipeCommand.Execute(null);
-        await WaitFor(() => vm.Notice?.Contains("Press Disconnect and wipe again") == true);
-
-        vm.Notice.Should().Contain("The wipe is not complete").And.Contain("blind-backups");
-        vm.WipeBusy.Should().BeFalse();
-        vm.WipePanelOpen.Should().BeTrue("the panel stays so that the user can press it again");
-    }
-
-    // ---- events -------------------------------------------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ControllerChangedEvents_AreCoalescedIntoOneRefresh_OnTheUiThread()
-    {
-        var app = new FakeApp();
-        var posted = new List<Action>();
-        var vm = new MainViewModel(app, new FakeWorkRequests(), new FakeAutostart(), _ => [], posted.Add);
-        app.Status = FakeApp.StatusOf(name: "First");
-        app.RaiseChanged();
-        app.RaiseChanged();
-        app.RaiseChanged();
-
-        posted.Should().HaveCount(1, "three events before the UI thread got to it are one refresh");
-        posted[0]();
-        await WaitFor(() => vm.IdentityText == "First");
-
-        app.RaiseChanged();
-        posted.Should().HaveCount(2);
-        vm.Dispose();
-        app.RaiseChanged();
-        posted.Should().HaveCount(2, "a disposed view model does not listen");
+        rig.Vm.AutostartKnown.Should().BeFalse("a setting that cannot be read is shown as unknown, not as off");
     }
 
     [Fact]
@@ -636,50 +345,362 @@ public sealed class MainViewModelTests
         asked.Should().Be(1);
     }
 
-    [Fact]
-    public async Task AUserJobReport_BecomesTheNotice()
+    [Theory]
+    [InlineData("tray", "Start in the tray when I sign in", "Closing this window keeps the app running in the tray.")]
+    [InlineData("menu bar", "Start in the menu bar when I sign in", "Closing this window keeps the app running in the menu bar.")]
+    public void TheWordsFollowThePlatformsNameForItsStatusArea(string area, string autostart, string closing)
     {
-        var rig = new Rig();
-        await rig.Shown(FakeApp.StatusOf());
+        var rig = new Rig(statusArea: area);
 
-        rig.Work.Report("Backup made.");
+        rig.Vm.StatusArea.Should().Be(area);
+        rig.Vm.AutostartText.Should().Be(autostart);
+        rig.Vm.CloseHintText.Should().Be(closing);
+    }
 
-        rig.Vm.Notice.Should().Be("Backup made.");
+    // ---- events -------------------------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ChangedEvents_AreCoalescedIntoOneRefresh_OnTheUiThread()
+    {
+        var posted = new List<Action>();
+        var rig = new Rig(posted.Add);
+        rig.Accounts.AddAccount("Berlin office");
+
+        rig.Accounts.RaiseChanged();
+        rig.Accounts.RaiseChanged();
+        rig.Accounts.RaiseChanged();
+
+        posted.Should().HaveCount(1, "three events before the UI thread got to it are one refresh");
+        posted[0]();
+        await WaitFor(() => rig.Vm.Rows.Count == 1);
+
+        rig.Accounts.RaiseChanged();
+        posted.Should().HaveCount(2);
+        rig.Vm.Dispose();
+        rig.Accounts.RaiseChanged();
+        posted.Should().HaveCount(2, "a disposed view model does not listen");
     }
 
     [Fact]
-    public async Task AFailingStatusRead_IsShownAsANotice_NotThrown()
+    public async Task AFailingRead_IsAnotice_NotThrown_AndTheNextReadShowsTheNextState()
     {
         var rig = new Rig();
-        var vm = new MainViewModel(new ThrowingApp(), rig.Work, rig.Autostart, _ => []);
+        var accounts = new ThrowingOnceAccounts();
+        var vm = new MainViewModel(accounts, _ => new FakeWorkRequests(), rig.Autostart, _ => [], problem: (what, _) => rig.Problems.Add((what, null!)), zone: Zone);
 
+        var first = () => vm.RefreshAsync();
+        await first.Should().NotThrowAsync();
+        vm.Notice.Should().Contain("Could not read the accounts").And.NotContain("db is gone", "a file failure is told by its kind, not by its message");
+        rig.Problems.Select(p => p.What).Should().Equal("Reading the accounts failed");
+
+        accounts.AddAccount("Back again");
+        await vm.RefreshAsync();
+        vm.Rows.Should().ContainSingle().Which.Name.Should().Be("Back again");
+    }
+
+    private sealed class ThrowingOnceAccounts : IBlindAccountsController
+    {
+        private readonly FakeAccounts _inner = new();
+        private bool _thrown;
+        public event Action? Changed { add { } remove { } }
+        public int MaxAccounts => 8;
+        public void AddAccount(string name) => _inner.AddAccount(name);
+        public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public BlindAccountsSnapshot GetSnapshot()
+        {
+            if (_thrown) return _inner.GetSnapshot();
+            _thrown = true;
+            throw new IOException("db is gone");
+        }
+        public IBlindAppController For(string accountId) => _inner.For(accountId);
+        public IServiceProvider ServicesFor(string accountId) => _inner.ServicesFor(accountId);
+        public BlindPause? PauseOf(string accountId) => null;
+        public Task<BlindAddResult> AddAsync(string? name, CancellationToken ct = default) => _inner.AddAsync(name, ct);
+        public BlindInvitationPreview PreviewInvitation(string? text) => _inner.PreviewInvitation(text);
+        public Task<BlindAddResult> AddFromInvitationAsync(string? text, BlindAccountSettings? settings = null, CancellationToken ct = default) => _inner.AddFromInvitationAsync(text, settings, ct);
+        public Task<int> PollInvitationsAsync(bool force = false, CancellationToken ct = default) => Task.FromResult(0);
+        public string? Reconnect(string accountId) => null;
+        public string? AcceptCallCode(string text) => null;
+        public string? Rename(string accountId, string name) => null;
+        public string? SetLimits(string accountId, BlindAccountLimits limits) => null;
+        public string? SetSwitches(string accountId, bool unmeteredOnly, bool pauseOnPowerSaving) => null;
+        public string? SetPaused(string accountId, bool paused) => null;
+        public string? SetDeviceLimits(BlindDeviceLimits limits) => null;
+        public Task RemoveAsync(string accountId, CancellationToken ct = default) => Task.CompletedTask;
+        public string? StartNewUsageLedger(string accountId) => null;
+        public string? StartNewDeviceUsageLedger() => null;
+        public Task<string?> AdoptLegacyRootAsync(CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<string?> AdoptFolderAsync(string accountId, string? name = null, CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<string?> ForgetMissingAccountAsync(string accountId, CancellationToken ct = default) => Task.FromResult<string?>(null);
+    }
+
+    [Fact]
+    public async Task ThePairingCodeCopyOfTheSelectedPanel_ReachesTheWindow()
+    {
+        var rig = new Rig();
+        var (entry, app) = rig.Accounts.AddAccount("Berlin office", status: FakeApp.StatusOf(paired: false, loaded: false, awaiting: true));
+        app.PairingCodeValue = "bmb-blind-phone:?n=1";
+        await rig.Vm.RefreshAsync();
+        var copied = new List<string>();
+        rig.Vm.CopyRequested += copied.Add;
+
+        rig.Vm.Detail!.Panel!.CopyPairingCodeCommand.Execute(null);
+
+        copied.Should().Equal("bmb-blind-phone:?n=1");
+        entry.Id.Should().NotBeNull();
+    }
+
+    // ---- the invitation watch -----------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ShowingTheWindow_StartsTheWatch_AndHidingItStopsIt()
+    {
+        var rig = new Rig();
+        var watch = new BlindInvitationWatch(rig.Accounts, rig.Time);
+        var vm = new MainViewModel(rig.Accounts, _ => new FakeWorkRequests(), rig.Autostart, _ => [], zone: Zone, time: rig.Time, watch: watch);
+        rig.Accounts.AddAccount("Alex", phase: BlindAccountPhases.AwaitingConfirmation);
+
+        vm.OnWindowShown();
+        await WaitFor(() => rig.Accounts.Polls > 0);
+        watch.IsRunning.Should().BeTrue("an account waits for its owner and the window is open");
+
+        vm.OnWindowHidden();
+        await WaitFor(() => !watch.IsRunning);
+        vm.Dispose();
+    }
+
+    [Fact]
+    public async Task AReadThatFinishesAfterTheWindowWasHidden_DoesNotStartTheWatchAgain()
+    {
+        var rig = new Rig();
+        var watch = new BlindInvitationWatch(rig.Accounts, rig.Time);
+        var vm = new MainViewModel(rig.Accounts, _ => new FakeWorkRequests(), rig.Autostart, _ => [], zone: Zone, time: rig.Time, watch: watch);
+        rig.Accounts.AddAccount("Alex", phase: BlindAccountPhases.Pending);
+        var onItsWay = new QueuedContext();
+        var read = StartUnder(onItsWay, vm.RefreshAsync);
+        await WaitFor(() => onItsWay.Pending == 1);
+
+        vm.OnWindowHidden();
+        onItsWay.RunAll();
+        await read;
+
+        watch.IsRunning.Should().BeFalse("the window is hidden: the device loop asks, the screen does not");
+        rig.Accounts.Polls.Should().Be(0);
+        vm.OnWindowShown();
+        watch.IsRunning.Should().BeTrue("showing it again starts the watch");
+        vm.Dispose();
+        await watch.StopAsync();
+    }
+
+    [Fact]
+    public async Task AppStartedInTheTray_WithAnAccountThatWaits_DoesNotStartTheWatch_UntilTheWindowIsShown()
+    {
+        var rig = new Rig();
+        var watch = new BlindInvitationWatch(rig.Accounts, rig.Time);
+        var vm = new MainViewModel(rig.Accounts, _ => new FakeWorkRequests(), rig.Autostart, _ => [], zone: Zone, time: rig.Time, watch: watch);
+        rig.Accounts.AddAccount("Alex", phase: BlindAccountPhases.Pending);
+
+        // --minimized: the view model reads the accounts at start, and the window has never been shown.
+        await vm.RefreshAsync();
         await vm.RefreshAsync();
 
-        vm.Notice.Should().Contain("Could not read the status").And.Contain("db is gone");
+        watch.IsRunning.Should().BeFalse("the window is not open: the device loop asks, the screen does not");
+        rig.Accounts.Polls.Should().Be(0, "no ask of the hub was made on behalf of a window nobody sees");
+
+        vm.OnWindowShown();
+        await WaitFor(() => rig.Accounts.Polls > 0);
+        watch.IsRunning.Should().BeTrue("the window is shown: the watch starts");
+        await vm.RefreshAsync();
+        await vm.RefreshAsync();
+        rig.Accounts.Polls.Should().Be(1, "it was started once: the reads that follow find it running and start no second one");
+        vm.Dispose();
+        await watch.StopAsync();
     }
 
-    private sealed class ThrowingApp : IBlindAppController
+    [Fact]
+    public async Task AnAddThatCompletesAfterTheWindowWasHidden_DoesNotStartTheWatch()
     {
-        public event Action? Changed { add { } remove { } }
-        public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public BlindAppStatus GetStatus() => throw new InvalidOperationException("db is gone");
-        public string? PairingCode() => null;
-        public string? AcceptCallCode(string text) => null;
-        public void StartRePair() { }
-        public void SetSchedule(BlindBackupSchedule schedule) { }
-        public Task<string> RunHeavyAsync(bool forceBackup, CancellationToken ct = default) => Task.FromResult("");
-        public Task<string> RequestSyncAsync(CancellationToken ct = default) => Task.FromResult("");
-        public Task<long> ExportBackupAsync(string backupName, CancellationToken ct = default) => Task.FromResult(0L);
-        public Task DisconnectAndWipeAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private static async Task WaitFor(Func<bool> condition, int seconds = 10)
-    {
-        var end = DateTime.UtcNow.AddSeconds(seconds);
-        while (!condition())
+        var rig = new Rig();
+        var time = new ManualTimeProvider();
+        var invitation = "bmb-invite:?v=1&a=https%3A%2F%2Fmem.example.org";
+        rig.Accounts.Previews[invitation] = new BlindInvitationPreview("Alex", "mem.example.org", BlindAccountDefaults.ForInvited(false), time.GetUtcNow().AddMinutes(28));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Accounts.OnAddFromInvitation = async (_, _) =>
         {
-            if (DateTime.UtcNow > end) throw new TimeoutException("the condition was not met in time");
-            await Task.Delay(10);
+            entered.TrySetResult();
+            await release.Task;
+            var (entry, _) = rig.Accounts.AddAccount("Invited", phase: BlindAccountPhases.AwaitingConfirmation);
+            return new BlindAddResult(entry.Id);
+        };
+        var watch = new BlindInvitationWatch(rig.Accounts, rig.Time);
+        var vm = new MainViewModel(rig.Accounts, _ => new FakeWorkRequests(), rig.Autostart, _ => [], zone: Zone, time: rig.Time, watch: watch);
+        vm.OnWindowShown();
+        await vm.RefreshAsync();
+        await WaitFor(() => !watch.IsRunning);   // nothing waits yet: the watch the window started ends by itself
+        var before = rig.Accounts.Polls;
+        vm.AddAccountCommand.Execute(null);
+        vm.Add.InviteText = invitation;
+        vm.Add.AddInvitationCommand.Execute(null);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(20));
+
+        vm.OnWindowHidden();
+        release.SetResult();
+        await WaitFor(() => rig.Accounts.Entries.Count == 1 && !vm.Add.IsBusy);
+        await vm.RefreshAsync();
+
+        watch.IsRunning.Should().BeFalse("the account was made after the window was hidden: the screen does not ask for it");
+        rig.Accounts.Polls.Should().Be(before);
+        vm.OnWindowShown();
+        await WaitFor(() => rig.Accounts.Polls > before);
+        watch.IsRunning.Should().BeTrue("shown again, the window watches the account that waits");
+        vm.Dispose();
+        await watch.StopAsync();
+    }
+
+    [Fact]
+    public async Task HidingAndShowingTheWindowAtOnce_WhileAnAskIsHeld_NeverMakesTwoAsksAtTheSameTime()
+    {
+        var rig = new Rig();
+        var concurrent = 0;
+        var most = 0;
+        var entered = new SemaphoreSlim(0);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Accounts.AddAccount("Alex", phase: BlindAccountPhases.Pending);
+        // The first ask is held and takes no notice of the cancellation: the stop that hiding the window starts is in flight until the test lets it go.
+        rig.Accounts.OnPoll = async (number, _) =>
+        {
+            most = Math.Max(most, Interlocked.Increment(ref concurrent));
+            entered.Release();
+            try { if (number == 1) await release.Task; }
+            finally { Interlocked.Decrement(ref concurrent); }
+            return 1;
+        };
+        var watch = new BlindInvitationWatch(rig.Accounts, rig.Time);
+        var vm = new MainViewModel(rig.Accounts, _ => new FakeWorkRequests(), rig.Autostart, _ => [], zone: Zone, time: rig.Time, watch: watch);
+        vm.OnWindowShown();
+        (await entered.WaitAsync(TimeSpan.FromSeconds(20))).Should().BeTrue("the shown window asked");
+
+        vm.OnWindowHidden();
+        vm.OnWindowShown();
+        await Task.Delay(200);
+
+        rig.Accounts.Polls.Should().Be(1, "the new watch waits for the old ask: no second ask beside it");
+        most.Should().Be(1);
+        release.SetResult();
+        (await entered.WaitAsync(TimeSpan.FromSeconds(20))).Should().BeTrue("the window is shown: the watch asks again once the old ask has ended");
+        most.Should().Be(1, "at no time were two asks in flight");
+        watch.IsRunning.Should().BeTrue();
+        vm.Dispose();
+        await watch.StopAsync();
+    }
+
+    [Fact]
+    public async Task AnAccountThatWaitsForItsOwner_StartsTheWatchOnTheNextRead_EvenIfTheWindowWasAlreadyOpen()
+    {
+        var rig = new Rig();
+        var watch = new BlindInvitationWatch(rig.Accounts, rig.Time);
+        var vm = new MainViewModel(rig.Accounts, _ => new FakeWorkRequests(), rig.Autostart, _ => [], zone: Zone, time: rig.Time, watch: watch);
+        vm.OnWindowShown();
+        await vm.RefreshAsync();
+        await WaitFor(() => !watch.IsRunning);   // nothing waits: the watch the window started ends by itself
+        var before = rig.Accounts.Polls;
+
+        rig.Accounts.AddAccount("Alex", phase: BlindAccountPhases.Pending);
+        await vm.RefreshAsync();
+
+        await WaitFor(() => rig.Accounts.Polls > before);
+        vm.Dispose();
+        await watch.StopAsync();
+    }
+
+    // ---- the pop-up ---------------------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ThePopUp_FollowsTheSelectedAccountsPanel_AndTheAddPage()
+    {
+        var rig = new Rig();
+        var (entry, app) = rig.Accounts.AddAccount("Berlin office");
+        await rig.Vm.RefreshAsync();
+        rig.Vm.IsBusy.Should().BeFalse();
+
+        rig.Vm.Detail!.Panel!.SyncNowCommand.Execute(null);
+
+        rig.Vm.IsBusy.Should().BeTrue("the panel put up its pop-up for the job it asked for");
+        rig.Vm.BusyTitle.Should().Be("Syncing");
+        rig.Work[entry.Id].Syncs.Should().Be(1, "the request went to the work requests of THIS account");
+        rig.Work[entry.Id].Report("Synced.");
+        rig.Vm.IsBusy.Should().BeFalse();
+        app.Should().NotBeNull();
+    }
+
+    // ---- two reads of the accounts that finish in the wrong order ------------------------------------------------------------------------
+
+    /// <summary>The UI thread, by hand: what an <c>await</c> started under it continues with is queued, and the test runs it when it says.</summary>
+    private sealed class QueuedContext : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> _queue = new();
+
+        public int Pending
+        {
+            get { lock (_queue) return _queue.Count; }
         }
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            lock (_queue) _queue.Enqueue((d, state));
+        }
+
+        public void RunAll()
+        {
+            while (true)
+            {
+                (SendOrPostCallback Callback, object? State) next;
+                lock (_queue)
+                {
+                    if (_queue.Count == 0) return;
+                    next = _queue.Dequeue();
+                }
+                next.Callback(next.State);
+            }
+        }
+    }
+
+    private static Task StartUnder(SynchronizationContext context, Func<Task> start)
+    {
+        var before = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        try { return start(); }
+        finally { SynchronizationContext.SetSynchronizationContext(before); }
+    }
+
+    [Fact]
+    public async Task ARefreshThatReadTheAccountsEarlier_IsNotShownOverOneThatReadThemLater()
+    {
+        var rig = new Rig();
+        var (gone, _) = rig.Accounts.AddAccount("Berlin office");
+        rig.Accounts.AddAccount("Paris");
+        await rig.Vm.RefreshAsync();
+        rig.Vm.Rows.Should().HaveCount(2);
+
+        // The first read sees both accounts; its result waits to be shown (the UI thread is busy).
+        var early = new QueuedContext();
+        var first = StartUnder(early, rig.Vm.RefreshAsync);
+        await WaitFor(() => early.Pending == 1);
+        // The account is removed, and a second read - made later - is shown first.
+        await rig.Accounts.RemoveAsync(gone.Id);
+        var late = new QueuedContext();
+        var second = StartUnder(late, rig.Vm.RefreshAsync);
+        await WaitFor(() => late.Pending == 1);
+        late.RunAll();
+        await second;
+        rig.Vm.Rows.Select(r => r.Id).Should().NotContain(gone.Id);
+
+        // The first one is shown now: it must not bring the removed account back.
+        early.RunAll();
+        await first;
+
+        rig.Vm.Rows.Select(r => r.Id).Should().NotContain(gone.Id, "an older read is not shown over a newer one");
+        rig.Vm.Rows.Should().HaveCount(1);
     }
 }

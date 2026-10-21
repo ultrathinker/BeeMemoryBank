@@ -4,10 +4,16 @@ namespace BeeMemoryBank.BlindDesktop.Views;
 public interface ITrayActions
 {
     void Open();
+
+    /// <summary>Asks every active account for a sync round (the device loop runs them one at a time).</summary>
     void SyncNow();
+
+    /// <summary>Asks every active account for a backup.</summary>
     void BackupNow();
-    void RePair();
+
+    /// <summary>Opens the window on the Add account page.</summary>
+    void AddAccount();
+
     void OpenSettings();
-    void Wipe();
     void Quit();
 }

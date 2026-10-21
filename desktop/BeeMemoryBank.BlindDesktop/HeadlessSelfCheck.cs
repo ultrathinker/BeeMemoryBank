@@ -1,6 +1,6 @@
 using BeeMemoryBank.BlindDesktop.Platform;
+using BeeMemoryBank.BlindDesktop.ViewModels;
 using BeeMemoryBank.BlindMobile.Services.Blind;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.BlindDesktop;
 
@@ -12,14 +12,24 @@ namespace BeeMemoryBank.BlindDesktop;
 /// otherwise, 2 for a wrong command line.
 ///
 /// <para>Items: the platform that was picked; the data folder rules (absolute, not a folder of the full app, private); the composition
-/// resolves (AppCore + the platform's seams + the host's scheduler, lifecycle and notifications) and no key-store call happened; the
-/// device conditions can be read (their answer is printed, "unknown" counts: the point is that reading works and cannot throw); the state
-/// store round-trips; the autostart state can be read (it is not changed); the one-copy lock can be taken, a second try in this process
+/// is built (the account host over the platform's per-account stores, the device loop, the invitation watch; nothing is started, so no account
+/// is opened) and no key-store call happened; the device conditions can be read (their answer is printed, "unknown" counts: the point is that
+/// reading works and cannot throw); the state store of the 2.6 account's slot round-trips; the autostart state can be read (it is not changed); the one-copy lock can be taken, a second try in this process
 /// is refused, and the "show your window" signal arrives; and the platform's own items. With <c>--self-check-wait N</c> the lock is
 /// kept for N more seconds so that a second PROCESS (<c>--self-check-second-start</c>) can be refused for real and its signal received.</para>
 /// </summary>
 internal static class HeadlessSelfCheck
 {
+    private static readonly BlindAccountEntry LegacyAccount = new(BlindAccountEntry.LegacyId, BlindAccountLayouts.Root, "My copy");
+
+    /// <summary>
+    /// A finding of the check itself, in its own words ("the lock could not be taken"): shown as it is. It names no folder and no exception text. Any other exception that comes out of a check
+    /// is told by its type and its frames only (<see cref="DiagnosticText"/>), like every diagnostic of the head.
+    /// </summary>
+    private sealed class SelfCheckFinding(string message) : Exception(message);
+
+    private static string Told(Exception ex) => ex is SelfCheckFinding finding ? finding.Message : DiagnosticText.Describe(ex);
+
     public static int Run(StartupOptions options, IBlindDesktopPlatform platform, TextWriter output)
     {
         if (options.SelfCheckSecondStart) return SecondStart(platform, output);
@@ -33,27 +43,24 @@ internal static class HeadlessSelfCheck
             }
             catch (Exception ex)
             {
-                items.Add(new SelfCheckItem(name, false, $"{ex.GetType().Name}: {ex.Message}".ReplaceLineEndings(" ")));
+                items.Add(new SelfCheckItem(name, false, Told(ex)));
             }
         }
 
         Check("platform", () => $"{platform.Name} ({platform.GetType().Name})");
         Check("data folder", () => DataFolder(platform));
 
-        var trap = new TrappedSecretStore();
+        var trap = new TrappedSecretStoreFactory();
         BlindDesktopRuntime? runtime = null;
         Check("composition", () =>
         {
-            runtime = BlindDesktopRuntime.Create(new CheckedPlatform(platform, trap), () => null, () => { });
-            var services = runtime.Services;
+            runtime = BlindDesktopRuntime.Create(new CheckedPlatform(platform, trap), () => null);
             var names = new[]
             {
-                services.GetRequiredService<IBlindPaths>().GetType().Name, services.GetRequiredService<IBlindStateStore>().GetType().Name,
-                services.GetRequiredService<IBlindAutostart>().GetType().Name,
-                services.GetRequiredService<IBlindLifecycle>().GetType().Name, services.GetRequiredService<IBlindNotifications>().GetType().Name,
-                services.GetRequiredService<IBlindScheduler>().GetType().Name, runtime.App.GetType().Name,
+                runtime.Accounts.GetType().Name, runtime.Scheduler.GetType().Name, runtime.Watch.GetType().Name,
+                runtime.Notifications.GetType().Name, runtime.Autostart.GetType().Name, runtime.Conditions.GetType().Name,
             };
-            return "resolved: " + string.Join(", ", names);
+            return "built: " + string.Join(", ", names) + " (not started: no account was opened)";
         });
 
         if (runtime is not null)
@@ -61,12 +68,17 @@ internal static class HeadlessSelfCheck
             var rt = runtime;
             Check("state store", () =>
             {
-                var state = rt.Services.GetRequiredService<IBlindStateStore>();
+                var state = platform.StateStores.For(LegacyAccount);
                 state.Set("bmb.selfcheck", "ok");
-                if (state.Get("bmb.selfcheck") != "ok") throw new InvalidOperationException("a value that was set could not be read back");
+                if (state.Get("bmb.selfcheck") != "ok") throw new SelfCheckFinding("a value that was set could not be read back");
                 state.Set("bmb.selfcheck", null);
                 state.Erase();
                 return "set, read back and erased in the scratch folder";
+            });
+            Check("device conditions", () =>
+            {
+                static string Word(bool? value) => value switch { true => "yes", false => "no", null => "cannot tell" };
+                return $"metered network: {Word(rt.Conditions.IsMetered)}; saving power: {Word(rt.Conditions.IsPowerSaving)} (read only)";
             });
             Check("autostart", () => "login item is " + (rt.Autostart.IsEnabled switch { true => "on", false => "off", null => "unknown" }) + " (read only, not changed)");
         }
@@ -78,12 +90,12 @@ internal static class HeadlessSelfCheck
         // After everything above has run: the key store was never called, so no key was created or read.
         Check("no key-store call", () => trap.Calls == 0
             ? "the secret store was constructed but never called (nothing created, nothing read)"
-            : throw new InvalidOperationException($"the secret store was called {trap.Calls} time(s): {trap.LastCall}"));
+            : throw new SelfCheckFinding($"the secret store was called {trap.Calls} time(s): {trap.LastCall}"));
 
         if (runtime is not null)
         {
             try { runtime.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
-            catch (Exception ex) { items.Add(new SelfCheckItem("stop", false, $"{ex.GetType().Name}: {ex.Message}")); }
+            catch (Exception ex) { items.Add(new SelfCheckItem("stop", false, Told(ex))); }
         }
 
         var failed = 0;
@@ -117,15 +129,15 @@ internal static class HeadlessSelfCheck
     private static string OneCopy(IBlindDesktopPlatform platform, int waitSeconds, TextWriter output, out bool activated)
     {
         activated = false;
-        using var first = platform.TryAcquireInstance() ?? throw new InvalidOperationException("the lock could not be taken (another copy runs on this folder?)");
+        using var first = platform.TryAcquireInstance() ?? throw new SelfCheckFinding("the lock could not be taken (another copy runs on this folder?)");
         using var shown = new ManualResetEventSlim();
         first.Listen(shown.Set);
         using (var second = platform.TryAcquireInstance())
         {
-            if (second is not null) throw new InvalidOperationException("a second try was NOT refused");
+            if (second is not null) throw new SelfCheckFinding("a second try was NOT refused");
         }
-        if (!platform.SignalRunningInstance()) throw new InvalidOperationException("the show-window signal was not accepted");
-        if (!shown.Wait(TimeSpan.FromSeconds(5))) throw new InvalidOperationException("the show-window signal was accepted but never arrived");
+        if (!platform.SignalRunningInstance()) throw new SelfCheckFinding("the show-window signal was not accepted");
+        if (!shown.Wait(TimeSpan.FromSeconds(5))) throw new SelfCheckFinding("the show-window signal was accepted but never arrived");
         var detail = "lock taken, a second try refused, the show-window signal arrived";
 
         if (waitSeconds > 0)
@@ -134,7 +146,7 @@ internal static class HeadlessSelfCheck
             output.WriteLine($"HOLDING the one-copy lock for up to {waitSeconds} s: start the app again with --self-check-second-start --data-dir <the same folder>");
             output.Flush();
             activated = shown.Wait(TimeSpan.FromSeconds(waitSeconds));
-            if (!activated) throw new InvalidOperationException($"no second start came within {waitSeconds} s");
+            if (!activated) throw new SelfCheckFinding($"no second start came within {waitSeconds} s");
             detail += "; a second PROCESS was refused and its signal arrived";
         }
         return detail;
@@ -143,13 +155,13 @@ internal static class HeadlessSelfCheck
     private static string DataFolder(IBlindDesktopPlatform platform)
     {
         var folder = platform.Paths.DataDirectory;
-        if (!Path.IsPathRooted(folder)) throw new InvalidOperationException("the data folder is not an absolute path: " + folder);
-        if (!Directory.Exists(folder)) throw new InvalidOperationException("the data folder does not exist: " + folder);
+        if (!Path.IsPathRooted(folder)) throw new SelfCheckFinding("the data folder is not an absolute path");
+        if (!Directory.Exists(folder)) throw new SelfCheckFinding("the data folder does not exist");
         var segments = folder.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (segments.Any(s => s.StartsWith("BeeMemoryBankData", StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("the data folder is inside the full app's data: " + folder);
+            throw new SelfCheckFinding("the data folder is inside the full app's data");
         if (!platform.Paths.DatabasePath.StartsWith(folder, StringComparison.Ordinal))
-            throw new InvalidOperationException("the database is outside the data folder");
+            throw new SelfCheckFinding("the database is outside the data folder");
         return folder;
     }
 
@@ -161,23 +173,29 @@ internal static class HeadlessSelfCheck
         }
         catch (Exception ex)
         {
-            return [new SelfCheckItem(platform.Name + " items", false, $"{ex.GetType().Name}: {ex.Message}".ReplaceLineEndings(" "))];
+            return [new SelfCheckItem(platform.Name + " items", false, Told(ex))];
         }
     }
 
     /// <summary>The platform as it is, except that the secret store is a trap: the check must not create or read a key.</summary>
-    private sealed class CheckedPlatform(IBlindDesktopPlatform inner, IBlindSecretStore trap) : IBlindDesktopPlatform
+    private sealed class CheckedPlatform(IBlindDesktopPlatform inner, IBlindSecretStoreFactory trap) : IBlindDesktopPlatform
     {
         public string Name => inner.Name;
         public IBlindPaths Paths => inner.Paths;
+        public IBlindSecretStoreFactory SecretStores => trap;
+        public IBlindStateStoreFactory StateStores => inner.StateStores;
+        public IBlindDeviceConditions DeviceConditions => inner.DeviceConditions;
+        public IBlindAutostart Autostart => inner.Autostart;
         public IInstanceGuard? TryAcquireInstance() => inner.TryAcquireInstance();
         public bool SignalRunningInstance() => inner.SignalRunningInstance();
+    }
 
-        public void AddSeams(IServiceCollection services)
-        {
-            inner.AddSeams(services);
-            services.AddSingleton(trap);   // registered last, so this is the one that is resolved
-        }
+    private sealed class TrappedSecretStoreFactory : IBlindSecretStoreFactory
+    {
+        private readonly TrappedSecretStore _store = new();
+        public int Calls => _store.Calls;
+        public string? LastCall => _store.LastCall;
+        public IBlindSecretStore For(BlindAccountEntry account) => _store;
     }
 
     private sealed class TrappedSecretStore : IBlindSecretStore
@@ -190,7 +208,7 @@ internal static class HeadlessSelfCheck
         {
             LastCall = what;
             Interlocked.Increment(ref _calls);
-            throw new InvalidOperationException("the self-check must not touch a key store: " + what);
+            throw new SelfCheckFinding("the self-check must not touch a key store: " + what);
         }
 
         public byte[]? LoadIdentitySeed() => Trip<byte[]?>(nameof(LoadIdentitySeed));

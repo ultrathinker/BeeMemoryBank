@@ -1,0 +1,44 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.NodeIdentityModel
+
+@section About {
+    <p>
+        Every node of a network has an identity of its own. It is made when the node is set up, and it is how the other nodes tell this one apart: the
+        <strong>ID</strong> names this node in their lists of trusted nodes and in the log of changes, and the <strong>public key</strong> is what they check
+        every change from this node against. This node signs each change it makes with the matching private key (kept encrypted on this node, never shown or sent),
+        so a change that was altered on the way, or that claims to come from this node but does not, is refused.
+    </p>
+    <p>
+        Nothing here can be changed, and nothing here is secret: the ID and the public key are meant to be shared. Use them to check that a device you are
+        pairing is the one you think it is, or to tell a support person which node you mean. A node that is wiped or restored from a snapshot as a new node
+        gets a new identity, and the others have to be joined to it again.
+    </p>
+}
+
+@if (Model.Identity != null)
+{
+    <div class="card">
+        <div class="article-meta">
+            <span><strong>ID:</strong>
+                <span class="article-id-badge" title="Click to copy" data-bmb-copy="@Model.Identity.NodeId">
+                    @Model.Identity.NodeId
+                </span>
+            </span>
+            <span><strong>Name:</strong> @Model.Identity.DisplayName</span>
+        </div>
+        <div style="margin-top:12px;">
+            <label style="font-size:0.85rem;color:var(--text-secondary);">Ed25519 Public Key</label>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <code style="font-size:0.78rem;word-break:break-all;flex:1;" id="pubkey-val">@Model.Identity.Ed25519PublicKeyB64</code>
+                <sl-icon-button id="btn-copy-pubkey" class="btn-copy-pubkey" data-target="pubkey-val" name="clipboard" label="Copy"></sl-icon-button>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <sl-alert variant="warning" open>
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Could not retrieve node identity. Check API connection.
+    </sl-alert>
+}

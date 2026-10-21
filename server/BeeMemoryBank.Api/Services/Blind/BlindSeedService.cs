@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using BeeMemoryBank.Api.Services.BlindBackup;
+using BeeMemoryBank.Api.Services.BlindLimits;
 using BeeMemoryBank.Api.Startup;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -126,6 +127,10 @@ public static class BlindSeedRefusals
     };
 }
 
+/// <summary>The node is being wiped: the seed was stopped, or not started. Nothing of it is kept.</summary>
+public sealed class BlindSeedWipingException()
+    : InvalidOperationException("This node is being wiped; the seed was stopped.");
+
 /// <summary>The pair code this upload came under is spent, renewed or expired by the time it is admitted.</summary>
 public sealed class BlindSeedAuthorityGoneException()
     : InvalidOperationException("The pair code this seed was sent under is no longer valid.");
@@ -147,7 +152,10 @@ public sealed partial class BlindSeedService(
     BlindJobManager jobs,
     IServiceScopeFactory scopeFactory,
     IConfiguration config,
-    ILogger<BlindSeedService> logger)
+    ILogger<BlindSeedService> logger,
+    // The node's own limits (a server blind node; null where there are none): the storage limit is judged here, part by part, for the staging a seed makes.
+    BlindUsageGuard? limits = null,
+    TimeProvider? time = null) : IDisposable
 {
     /// <summary>Default ceiling for a whole package; BMB_BLIND_SEED_MAX_BYTES overrides it.</summary>
     public const long DefaultMaxPackageBytes = 64L * 1024 * 1024 * 1024;
@@ -155,24 +163,144 @@ public sealed partial class BlindSeedService(
     /// <summary>A single part; the sender splits the package into parts no larger than this.</summary>
     public const int MaxChunkBytes = 64 * 1024 * 1024;
 
-    // Package on disk, extracted copy, new database: roughly three times the package at the peak.
+    // Package on disk, extracted copy, new database: roughly three times the package at the peak. This is the free space of the VOLUME the apply needs (checked before the first
+    // byte); the node's own storage limit judges the announced total against the room it leaves (see ReceiveAsync).
     private const double SpaceFactor = 3.0;
 
-    // An upload nobody has touched for this long no longer blocks a new one.
+    // An upload nobody has touched for this long no longer blocks a new one, and its staging goes (on a timer, not only when a new seed arrives).
     private static readonly TimeSpan AbandonedAfter = TimeSpan.FromHours(1);
+    internal static readonly TimeSpan SweepEvery = TimeSpan.FromMinutes(5);
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
     private Upload? _active;
+    private ITimer? _sweep;
+    private volatile bool _disposed;
 
-    private sealed class Upload(Guid seedId, long total, string sha256, BlindSeedAuthority authority, string path)
+    // The wipe's barrier (see QuiesceAsync): _stop cancels the part that is being received; apply is never cut in the middle.
+    private readonly object _barrier = new();
+    private CancellationTokenSource _stop = new();
+    private bool _quiesced;
+
+    private sealed class Upload(Guid seedId, long total, string sha256, BlindSeedAuthority authority, string path, DateTime touched)
     {
+        /// <summary>While the upload lives, its staging is left out of the stored-size walk the door's decisions rest on: the seed judges itself.</summary>
+        public IDisposable? Exclusion { get; set; }
+
         public Guid SeedId { get; } = seedId;
         public long Total { get; } = total;
         public string Sha256 { get; } = sha256;
         public BlindSeedAuthority Authority { get; } = authority;
         public string Path { get; } = path;
         public long Received { get; set; }
-        public DateTime LastTouched { get; set; } = DateTime.UtcNow;
+        public DateTime LastTouched { get; set; } = touched;
+    }
+
+    /// <summary>The upload is over (applied, refused, dropped): out of the way of the door's walk, and its staging goes unless the caller keeps it.</summary>
+    private void EndUpload(Upload upload, bool deleteStaging = true)
+    {
+        if (ReferenceEquals(_active, upload)) _active = null;
+        if (deleteStaging) TryDeleteTree(SeedDir(upload.SeedId));
+        upload.Exclusion?.Dispose();
+        upload.Exclusion = null;
+    }
+
+    /// <summary>
+    /// Drops the upload nobody has continued for <see cref="AbandonedAfter"/>, with its staging. Runs on a timer: an interrupted seed (the sender's computer went to sleep) must not
+    /// keep disk the node's owner limited, until a NEW seed happens to arrive. A part that is arriving holds the gate, so it is never an idle upload.
+    /// </summary>
+    internal void SweepAbandoned()
+    {
+        if (!_gate.Wait(0)) return;
+        try
+        {
+            if (_active is { } idle && _time.GetUtcNow().UtcDateTime - idle.LastTouched >= AbandonedAfter)
+            {
+                logger.LogWarning("Blind seed {SeedId} was not continued for {Hours} hour(s); the {Staged} bytes it had staged were removed", idle.SeedId, AbandonedAfter.TotalHours, idle.Received);
+                EndUpload(idle);
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _sweep?.Dispose();
+    }
+
+    /// <summary>
+    /// The sweep timer's callback. A callback that throws ends the process, and the sweep is a courtesy to the disk of a node whose sender went away: whatever goes wrong in it (a log
+    /// sink that fails, a folder that cannot be removed) is logged and the next tick tries again. After <see cref="Dispose"/> a tick that was already on its way does nothing.
+    /// </summary>
+    private void RunSweep()
+    {
+        try
+        {
+            if (!_disposed) SweepAbandoned();
+        }
+        catch (Exception ex)
+        {
+            try { logger.LogError(ex, "The sweep of abandoned blind seed uploads failed; it is tried again in {Minutes} minutes", SweepEvery.TotalMinutes); }
+            catch (Exception) { /* a callback must not throw, whatever the log does */ }
+        }
+    }
+
+    /// <summary>
+    /// The wipe's half: a seed that is being received is stopped (the part is cancelled, its file closed), the one that is being applied is awaited - never cut in the middle of a
+    /// switch - and no seed starts until the returned handle is disposed. Throws <see cref="TimeoutException"/> when the seed does not leave within <paramref name="timeout"/> (the
+    /// service is open again then). A seed whose authority was checked before the wipe cannot be applied to the emptied node: it either ends before the wipe starts to delete, or does
+    /// not run at all (the authority is checked again under the gate, by a wiped node's cleared secret).
+    /// </summary>
+    public async Task<IDisposable> QuiesceAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        CancellationTokenSource stopping;
+        lock (_barrier)
+        {
+            _quiesced = true;
+            stopping = _stop;
+        }
+        stopping.Cancel();
+        bool entered;
+        try
+        {
+            entered = await _gate.WaitAsync(timeout, ct);
+        }
+        catch
+        {
+            Reopen();
+            throw;
+        }
+        if (!entered)
+        {
+            Reopen();
+            throw new TimeoutException("A seed did not stop in time.");
+        }
+        return new SeedBarrier(this);
+    }
+
+    private void Reopen()
+    {
+        lock (_barrier)
+        {
+            _quiesced = false;
+            if (_stop.IsCancellationRequested) _stop = new CancellationTokenSource();
+        }
+    }
+
+    private sealed class SeedBarrier(BlindSeedService service) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            service.Reopen();
+            service._gate.Release();
+        }
     }
 
     private long MaxPackageBytes =>
@@ -185,16 +313,35 @@ public sealed partial class BlindSeedService(
     /// Appends one part at <paramref name="offset"/>. Returns the progress; when the last part
     /// completes the package, it is verified and applied before this returns.
     /// </summary>
+    /// <param name="announcedBytes">The announced length of this part, or null (a chunked body).</param>
+    /// <exception cref="BlindStoragePausedException">
+    /// The node's storage limit is reached by what it holds plus what this seed has staged (or will with this part): the whole staging of the seed is removed, as for any refusal.
+    /// </exception>
     public async Task<BlindSeedProgress> ReceiveAsync(
         Guid seedId, long offset, long total, string sha256, BlindSeedAuthority authority,
-        Stream body, CancellationToken ct)
+        Stream body, CancellationToken ct, long? announcedBytes = null)
     {
         if (total <= 0 || total > MaxPackageBytes)
             throw new BlindSeedRejectedException(BlindSeedRefusal.SizeOutOfRange);
         if (sha256.Length != 64 || !sha256.All(Uri.IsHexDigit))
             throw new BlindSeedRejectedException(BlindSeedRefusal.HashMalformed);
 
-        await _gate.WaitAsync(ct);
+        CancellationTokenSource stop;
+        lock (_barrier)
+        {
+            if (_quiesced) throw new BlindSeedWipingException();
+            stop = _stop;
+        }
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, stop.Token);
+        try
+        {
+            await _gate.WaitAsync(linked.Token);
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new BlindSeedWipingException();
+        }
+        Upload? staging = null;
         try
         {
             // The pair code is checked again here, under the gate every part and the switch run
@@ -207,9 +354,17 @@ public sealed partial class BlindSeedService(
                 if (!await scope.ServiceProvider.GetRequiredService<BlindPairing>().IsCurrentCodeAsync(pairing.CodeId))
                     throw new BlindSeedAuthorityGoneException();
             }
-            var upload = Admit(seedId, total, sha256.ToLowerInvariant(), authority);
+            var upload = staging = Admit(seedId, total, sha256.ToLowerInvariant(), authority);
             if (offset != upload.Received)
                 throw new BlindSeedOffsetException(upload.Received);
+
+            // The storage limit, with exact numbers: what the node holds without this seed's own staging, against the WHOLE package it announced (it is known from the first part: a
+            // seed that cannot fit is refused before any byte is staged, not after the owner's disk has taken most of it), the bytes staged so far and this part. A part that does
+            // not announce its length is watched as it arrives (below), for what the node grows by meanwhile. The room a seed needs is the old data AND the new: the data the node
+            // holds now is counted until the switch replaces it. (The volume's free space for the apply is a separate check, SpaceFactor, in Admit.)
+            var room = limits?.StagingRoom(SeedDir(upload.SeedId)) ?? BlindStagingRoom.Unlimited;
+            if (room.Judge(Math.Max(total, upload.Received + Math.Max(0, announcedBytes ?? 0))) is { } before)
+                throw new BlindStoragePausedException(before);
 
             // At the recorded offset, not at the end of the file: a part that failed half-way (a dropped
             // connection, a cancel) left bytes on disk that were never counted, and its retry comes
@@ -221,7 +376,7 @@ public sealed partial class BlindSeedService(
                 var buffer = new byte[81920];
                 long chunk = 0;
                 int read;
-                while ((read = await body.ReadAsync(buffer, ct)) > 0)
+                while ((read = await body.ReadAsync(buffer, linked.Token)) > 0)
                 {
                     chunk += read;
                     if (chunk > MaxChunkBytes || upload.Received + chunk > upload.Total)
@@ -229,27 +384,43 @@ public sealed partial class BlindSeedService(
                         file.SetLength(upload.Received);
                         throw new BlindSeedRejectedException(BlindSeedRefusal.PartTooLarge);
                     }
-                    await file.WriteAsync(buffer.AsMemory(0, read), ct);
+                    if (room.Judge(upload.Received + chunk) is { } reached)
+                        throw new BlindStoragePausedException(reached);
+                    await file.WriteAsync(buffer.AsMemory(0, read), linked.Token);
                 }
                 upload.Received += chunk;
             }
-            upload.LastTouched = DateTime.UtcNow;
+            upload.LastTouched = _time.GetUtcNow().UtcDateTime;
 
             if (upload.Received < upload.Total)
                 return new BlindSeedProgress(upload.SeedId, upload.Received, upload.Total, false);
 
             try
             {
+                // The apply's peak (the unpacked package, the new database, the staged media) is the seed's own work: the door's walk leaves it out until the apply is over.
+                using var applying = limits?.ExcludeFromDoor(BlindSeedCutover.DirOf(dataPath));
                 await ApplyAsync(upload, ct);
             }
             finally
             {
                 // Applied or refused, this upload is over: a refused package is not retried
                 // byte-for-byte, the sender starts a new seed.
-                _active = null;
-                TryDeleteTree(SeedDir(upload.SeedId));
+                EndUpload(upload);
             }
             return new BlindSeedProgress(upload.SeedId, upload.Total, upload.Total, true);
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // The wipe stopped the part that was arriving (its file is closed by here); the wipe removes what was staged.
+            throw new BlindSeedWipingException();
+        }
+        catch (BlindStoragePausedException) when (staging is not null)
+        {
+            // Held back by the node's own limit: what the seed staged is the very thing that would fill the disk, so it goes now (the file of the part is closed by here). The full
+            // node reads the 503 as a pause and sends the seed again from its start when it can.
+            EndUpload(staging);
+            logger.LogInformation("Blind seed {SeedId} was held back by the storage limit; the {Staged} bytes it had staged were removed", staging.SeedId, staging.Received);
+            throw;
         }
         finally
         {
@@ -259,6 +430,8 @@ public sealed partial class BlindSeedService(
 
     private Upload Admit(Guid seedId, long total, string sha256, BlindSeedAuthority authority)
     {
+        // An upload whose staging is gone (a wipe removed it) is over: it must not hold the node for an hour.
+        if (_active is { } gone && !File.Exists(gone.Path)) EndUpload(gone, deleteStaging: false);
         if (_active is { } active)
         {
             if (active.SeedId == seedId)
@@ -268,11 +441,10 @@ public sealed partial class BlindSeedService(
                     throw new BlindSeedRejectedException(BlindSeedRefusal.ResumeMismatch);
                 return active;
             }
-            if (DateTime.UtcNow - active.LastTouched < AbandonedAfter)
+            if (_time.GetUtcNow().UtcDateTime - active.LastTouched < AbandonedAfter)
                 throw new BlindSeedConflictException(active.SeedId);
             logger.LogWarning("Blind seed {SeedId} abandoned; a new seed {NewSeedId} replaces it", active.SeedId, seedId);
-            TryDeleteTree(SeedDir(active.SeedId));
-            _active = null;
+            EndUpload(active);
         }
 
         var dir = SeedDir(seedId);
@@ -286,7 +458,13 @@ public sealed partial class BlindSeedService(
 
         var path = Path.Combine(dir, "package.tar.gz");
         File.WriteAllBytes(path, []);
-        return _active = new Upload(seedId, total, sha256, authority, path);
+        var upload = _active = new Upload(seedId, total, sha256, authority, path, _time.GetUtcNow().UtcDateTime)
+        {
+            // Out of the door's walk for as long as the upload lives (and an idle one is dropped by the sweep): the seed judges itself, part by part.
+            Exclusion = limits?.ExcludeFromDoor(dir),
+        };
+        if (!_disposed) _sweep ??= _time.CreateTimer(static state => ((BlindSeedService)state!).RunSweep(), this, SweepEvery, SweepEvery);
+        return upload;
     }
 
     private string SeedDir(Guid seedId) => Path.Combine(BlindRoleStartup.TempDir(dataPath), $"seed-{seedId:N}");

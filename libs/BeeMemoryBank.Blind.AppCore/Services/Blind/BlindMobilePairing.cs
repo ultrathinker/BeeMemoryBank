@@ -3,6 +3,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Crypto;
 using Org.BouncyCastle.Crypto.Parameters;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
@@ -25,7 +26,8 @@ public sealed class BlindMobilePairing(
     SqliteBlindIdentityRecorder identity,
     BlindPhoneLog log)
 {
-    private static readonly SemaphoreSlim _identityGate = new(1, 1);
+    // One per account: a static gate was one lock for the whole process, so a slow secret store of one account held up every other account's start.
+    private readonly SemaphoreSlim _identityGate = new(1, 1);
     private readonly object _pairGate = new();
 
     public bool HasIdentity => state.NodeId != null;
@@ -76,7 +78,7 @@ public sealed class BlindMobilePairing(
             if (HasIdentity) return;
             displayName = displayName.Trim();
             if (displayName.Length is 0 or > BlindPhoneCode.MaxDisplayNameLength || displayName.Any(char.IsControl))
-                throw new ArgumentException($"A name of 1 to {BlindPhoneCode.MaxDisplayNameLength} characters without control characters is needed.", nameof(displayName));
+                throw BlindOwnSentence.Mark(new ArgumentException($"A name of 1 to {BlindPhoneCode.MaxDisplayNameLength} characters without control characters is needed.", nameof(displayName)));
 
             // Check if an identity is already recorded in the SQLite database
             var existing = await identity.GetRecordedAsync(ct);
@@ -90,7 +92,7 @@ public sealed class BlindMobilePairing(
                     (existing.PrivateKeyIV is { Length: > 0 }) ||
                     existing.CanGenerateEmbeddings)
                 {
-                    throw new InvalidOperationException(
+                    throw new BlindSentenceException(
                         $"Existing identity {existing.NodeId} in database is not a valid blind v=2 external-key row. Refusing to adopt invalid identity.");
                 }
 
@@ -110,10 +112,10 @@ public sealed class BlindMobilePairing(
                             var backupKey = keys.LoadBackupKey();
                             if (backupKey is null)
                             {
-                                throw new InvalidOperationException(
-                                    $"Existing identity {existing.NodeId}: Keystore seed matches but backup key is missing. " +
-                                    "The paired node holds the original backup key sealed under the DEK. " +
-                                    "Disconnect and re-pair to create a new backup key safely.");
+                                // The sentence is what the account's card and start error say (a head has no "Disconnect and wipe"): short enough to be said whole.
+                                throw new BlindSentenceException(
+                                    "This account's backup key is missing, though its Keystore seed is there. " +
+                                    "Remove this account from the accounts list and add it again to get a new one.");
                             }
 
                             try
@@ -160,8 +162,10 @@ public sealed class BlindMobilePairing(
                 // Do NOT delete or replace existing identity automatically.
                 // Do NOT clear keys.
                 // Preserve data and require explicit wipe.
-                throw new InvalidOperationException(
-                    $"Existing node identity {existing.NodeId} exists in database but Keystore seed is missing or mismatched. Disconnect and wipe required.");
+                // Said whole as the account's start error: what is wrong, and the way out a head really has (the account's list), never a button that no head has.
+                throw new BlindSentenceException(
+                    "This account's identity is in its database, but its Keystore seed is missing or does not match. " +
+                    "Remove this account from the accounts list and add it again.");
             }
 
             // No database row: create fresh identity.
@@ -253,7 +257,7 @@ public sealed class BlindMobilePairing(
     {
         lock (_pairGate)
         {
-            if (!HasIdentity) throw new InvalidOperationException("This phone has no blind identity.");
+            if (!HasIdentity) throw new BlindSentenceException("This phone has no blind identity.");
             var secret = BlindPairingSecret.New();
             try { keys.SavePairingSecret(secret); }
             finally { CryptographicOperations.ZeroMemory(secret); }
@@ -278,7 +282,7 @@ public sealed class BlindMobilePairing(
             if (secret is null)
                 return IsPaired
                     ? "This phone is already paired. To connect it to another computer, choose Re-pair first."
-                    : "This phone has no pairing secret. Disconnect and set it up again.";
+                    : "This phone has no pairing secret. Remove this account from the accounts list and add it again.";
 
             try
             {

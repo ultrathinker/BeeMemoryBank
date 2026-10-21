@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using BeeMemoryBank.BlindIos.Services;
+using BeeMemoryBank.BlindMobile.Services.Blind;
+using BeeMemoryBank.TestSupport;
 
 namespace BeeMemoryBank.BlindIos.Tests;
 
@@ -122,8 +124,56 @@ public class IosKeychainSecretStoreTests
 
         var clear = () => store.Clear();
 
-        clear.Should().Throw<AggregateException>().WithMessage("*identity-seed-v1*");
+        // fixed words and the status number: the item's name holds the account's id and is never said (fix round 3)
+        var thrown = clear.Should().Throw<AggregateException>().Which;
+        thrown.Message.Should().Contain("did not remove a secret of this copy").And.Contain("OSStatus -25291").And.NotContain("identity-seed-v1");
+        thrown.InnerExceptions.Should().ContainSingle().Which.Message.Should().NotContain("identity-seed-v1");
         keychain.Items.Keys.Should().Equal(IosKeychainSecretStore.IdentitySeedAccount);
+    }
+
+    [Fact]
+    public void TheLegacyAccount_KeepsThe26ItemNamesByteForByte_AndTheConstantsAreWhatTheContractSays()
+    {
+        // An upgrade moves nothing: the items of the 2.6 install are found where they were, under the names the old app gave them.
+        var legacy = new BlindAccountEntry(BlindAccountEntry.LegacyId, BlindAccountLayouts.Root, "My copy");
+        BlindAccountNames.KeychainAccount(legacy, BlindAccountNames.Role.IdentitySeed).Should().Be("identity-seed-v1").And.Be(IosKeychainSecretStore.IdentitySeedAccount);
+        BlindAccountNames.KeychainAccount(legacy, BlindAccountNames.Role.PairingSecret).Should().Be("pairing-secret-v1").And.Be(IosKeychainSecretStore.PairingSecretAccount);
+        BlindAccountNames.KeychainAccount(legacy, BlindAccountNames.Role.BackupKey).Should().Be("backup-key-v1").And.Be(IosKeychainSecretStore.BackupKeyAccount);
+        IosKeychainSecretStore.DefaultService.Should().Be("com.beememorybank.blind");
+
+        // A store made for the legacy entry and the one the 2.6 code made (no account at all) write the very same items.
+        var keychain = new FakeKeychain();
+        var secret = RandomNumberGenerator.GetBytes(32);
+        new IosKeychainSecretStoreFactory(keychain).For(legacy).SaveIdentitySeed(secret);
+        new IosKeychainSecretStore(keychain).LoadIdentitySeed().Should().Equal(secret);
+        keychain.Items.Keys.Should().Equal("identity-seed-v1");
+    }
+
+    [Fact]
+    public void ANewAccount_FilesItsItemsUnderItsOwnId_AndRemovingItDeletesThoseAndNoOthers()
+    {
+        var keychain = new FakeKeychain();
+        var factory = new IosKeychainSecretStoreFactory(keychain);
+        var legacy = new BlindAccountEntry(BlindAccountEntry.LegacyId, BlindAccountLayouts.Root, "My copy");
+        var a = new BlindAccountEntry("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", BlindAccountLayouts.Dir, "A");
+        var b = new BlindAccountEntry("b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", BlindAccountLayouts.Dir, "B");
+        foreach (var account in new[] { legacy, a, b })
+        {
+            var store = factory.For(account);
+            store.SaveIdentitySeed(RandomNumberGenerator.GetBytes(32));
+            store.SaveBackupKey(RandomNumberGenerator.GetBytes(32));
+            store.SavePairingSecret(RandomNumberGenerator.GetBytes(20));
+        }
+
+        keychain.Items.Keys.Should().BeEquivalentTo(
+            "identity-seed-v1", "backup-key-v1", "pairing-secret-v1",
+            a.Id + "/identity-seed-v1", a.Id + "/backup-key-v1", a.Id + "/pairing-secret-v1",
+            b.Id + "/identity-seed-v1", b.Id + "/backup-key-v1", b.Id + "/pairing-secret-v1");
+
+        factory.For(a).Clear();
+
+        keychain.Items.Keys.Should().NotContain(k => k.StartsWith(a.Id, StringComparison.Ordinal));
+        keychain.Items.Should().HaveCount(6, "the other accounts' items, account 1 among them, are untouched");
     }
 
     internal sealed class FakeKeychain : IIosKeychain
@@ -158,5 +208,38 @@ public class IosKeychainSecretStoreTests
             Deletes++;
             return Items.Remove(account) ? IosKeychainStatus.Success : IosKeychainStatus.ItemNotFound;
         }
+    }
+}
+
+/// <summary>The contract every head's secret store runs, over the iPhone's Keychain items (a fake Keychain below the real store logic): two accounts never see each other's secrets, clearing one leaves the other, a restart finds what was saved, and an item copied into another account's slot is refused.</summary>
+public sealed class IosKeychainSecretStoreFactoryContractTests : BlindSecretStoreContract
+{
+    private IosKeychainSecretStoreTests.FakeKeychain _keychain = new();
+
+    protected override IBlindSecretStoreFactory CreateFactory()
+    {
+        _keychain = new IosKeychainSecretStoreTests.FakeKeychain();
+        return new IosKeychainSecretStoreFactory(_keychain);
+    }
+
+    // The Keychain is what survives a restart; the store objects hold nothing.
+    protected override IBlindSecretStoreFactory Reopen() => new IosKeychainSecretStoreFactory(_keychain);
+
+    protected override void CopyBlob(BlindAccountEntry from, BlindAccountEntry to, BlindAccountNames.Role role) =>
+        _keychain.Items[BlindAccountNames.KeychainAccount(to, role)] = _keychain.Items[BlindAccountNames.KeychainAccount(from, role)].ToArray();
+}
+
+/// <summary>The contract every head's state store runs, over the iPhone's state files (<c>blind-state.json</c> in each account's folder).</summary>
+public sealed class IosBlindStateStoreFactoryContractTests : BlindStateStoreContract, IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "bmb-ios-state-" + Guid.NewGuid().ToString("N"));
+
+    protected override IBlindStateStoreFactory CreateFactory() => new IosBlindStateStoreFactory(_root);
+
+    protected override IBlindStateStoreFactory Reopen() => new IosBlindStateStoreFactory(_root);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 }

@@ -44,9 +44,10 @@ public sealed class VaultEncryptionPageTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_admin_page_has_a_database_encryption_card_that_leads_to_the_encryption_page()
+    public async Task The_admin_area_has_a_database_encryption_page_that_leads_to_the_encryption_page()
     {
-        var html = await GetAsync("/Admin");
+        (await GetAsync("/Admin")).Should().Contain("href=\"/Admin/StorageProtection\"", "the index lists it");
+        var html = await GetAsync("/Admin/StorageProtection");
 
         html.Should().Contain("Database encryption");
         html.Should().Contain("href=\"/VaultEncryption\"");

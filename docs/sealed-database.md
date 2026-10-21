@@ -67,7 +67,7 @@ sentence; the migration starts only when none is left.
 |---|---|
 | `vault_locked` | Unlock the node first: the master key is needed. |
 | `not_superadmin` | Only a superadmin (not an agent) can encrypt a node. |
-| `not_activated` | Activate the new sync format first (Admin > Metadata encryption; the page links to that card). A locked node can only relay sealed events, so the order is "activate, then encrypt". |
+| `not_activated` | Activate the new sync format first (Admin > Metadata encryption; the page links to that page of the Admin area). A locked node can only relay sealed events, so the order is "activate, then encrypt". |
 | `events_held` | Some received changes are still waiting for their keys. Let them finish. |
 | `rotation_pending` | A key rotation is not finished. Let it finish. |
 | `restore_running` | A restore or another maintenance task is running. |
@@ -242,7 +242,7 @@ that machine's own protections go. Which form you see depends on the node's **ro
 node counts as a *desktop* only when the desktop application started it (`BMB_HOST_ROLE=desktop`); every other start,
 a service, a headless `bmbd` or a container, is a *server* and gets the stricter checkbox.
 
-**Desktop: OS auto-unlock** (Windows DPAPI, macOS Keychain; Admin > Security). On an encrypted node the card and its
+**Desktop: OS auto-unlock** (Windows DPAPI, macOS Keychain; Admin > OS Auto-Unlock). On an encrypted node the page and its
 confirmation say:
 
 > Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without

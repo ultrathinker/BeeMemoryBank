@@ -29,15 +29,16 @@ public sealed class BlindAndroidLifecycleSourceTests
     [Fact]
     public void TheBackupService_HasOneTaskAndOneCancellationHandle_AStartWhileItRunsReplacesNothing()
     {
+        // The decisions moved out of the Android file into the portable core, one instance of it per service over ONE process-wide state (BlindManualBackupTests run them against fakes).
         var service = ClassOf("BlindBackupService");
+        var core = Source("Services", "Blind", "BlindManualBackup.cs");
 
-        service.Should().Contain("BlindSingleRun", "one task, one handle, coalesced starts");
-        service.Should().Contain("_run.TryStart(");
-        service.Should().NotContain("new CancellationTokenSource", "a start must not replace the handle of the running task");
-        service.Should().NotContain("Task.Run(", "an untracked task per start is the defect");
-        service.Should().NotContain("StopSelf(startId)", "the service stops for the latest start id, when its own task ends");
-        Regex.Matches(service, @"StopSelf\(").Count.Should().Be(1);
-        service.Should().Contain("_run.Cancel()", "OnDestroy reaches the one running task");
+        service.Should().Contain("_core!.OnStart(", "every start is the core's decision");
+        service.Should().NotContain("new CancellationTokenSource").And.NotContain("Task.Run(", "the service file starts no task");
+        Regex.Matches(service, @"StopSelf\(").Count.Should().Be(1, "the one stop is the core's StopAfter: for the latest start id, when its own task ends");
+        Regex.Matches(core, @"new CancellationTokenSource\(").Count.Should().Be(1, "one handle per run, made when the run is accepted");
+        Regex.Matches(core, @"Task\.Run\(").Count.Should().Be(1, "one task, started in one place (StartRun) and only for a Started delivery");
+        core.Should().Contain("_cts?.Cancel()", "OnDestroy reaches the one running task");
     }
 
     [Fact]
@@ -66,38 +67,54 @@ public sealed class BlindAndroidLifecycleSourceTests
         worker.Should().Contain("CancellationTokenSource _stop");
         worker.Should().Contain("override void OnStopped()");
         worker.Should().Contain("_stop.Cancel()");
-        worker.Should().NotContain("CancellationToken.None", "the round must be stoppable");
-        worker.Should().Contain("SyncOnceAsync(target, token)");
-        worker.Should().Contain("TryBegin(BlindActivity.Sync, _stop.Token)", "the wipe waits for the round and refuses a new one");
+        worker.Should().NotContain("CancellationToken.None", "the pass must be stoppable");
+        worker.Should().Contain("var token = _stop.Token;");
+        worker.Should().Contain("device.SyncScheduler.TickAsync(token)", "the device's scheduler runs the rounds, one account at a time, under this token");
     }
 
     [Fact]
-    public void EveryLongRunningEntryPoint_IsRegisteredInTheActivity_SoTheWipeCanWaitForIt()
+    public void EveryLongRunningEntryPoint_RunsItsJobThroughTheAccountsController_WhichRegistersItInTheAccountsActivity()
     {
-        ClassOf("BlindHeavyWorker").Should().Contain("TryBegin(BlindActivity.Heavy, _stop.Token)");
-        ClassOf("BlindHeavyWorker").Should().Contain("_stop.Cancel()");
-        ClassOf("BlindBackupService").Should().Contain("TryBegin(BlindActivity.BackupService, token)");
+        // The worker no longer registers a job itself: the controller of the account does (RequestSyncAsync -> BlindActivity.Sync; BlindHeavyWork.RunAsync -> BlindActivity.Heavy), which is what
+        // a removal of that account cancels and waits for (BlindActivityTests, BlindAccountRemovalTests in the AppCore tests). The head's entry points must go through them.
+        ClassOf("BlindHeavyWorker").Should().Contain("device.HeavyScheduler.TickAsync(token)").And.Contain("_stop.Cancel()");
+        ClassOf("BlindBackupService").Should().Contain("device.Accounts.For(accountId).RunHeavyAsync(forceBackup: true, token)");
         Source("Platforms", "Android", "BlindWork.cs").Should().NotContain("CancellationToken.None");
+        Source("Platforms", "Android", "BlindWork.cs").Should().NotContain("BlindPhoneState", "a worker never reads an account's state itself");
     }
 
     [Fact]
-    public void TheWipeOnThePage_GoesThroughTheControllersAsyncWipe_OffTheUiThread()
+    public void TheBackupService_NamesTheAccountItWorksFor_AndRefusesAnythingThatIsNotAnAccountId()
+    {
+        var service = ClassOf("BlindBackupService");
+
+        service.Should().Contain("intent.PutExtra(ExtraAccount, accountId)");
+        service.Should().Contain("BlindAccountEntry.IsValidId(accountId)", "the extra comes from an intent");
+        service.Should().Contain("RunningFor", "the page does not start the backup of another account while one runs");
+    }
+
+    [Fact]
+    public void TheRemovalOnThePage_GoesThroughTheHostsAsyncRemoval_OffTheUiThread_AfterTheSharedConfirmation()
     {
         var page = Source("Pages", "BlindHomePage.xaml.cs");
 
-        page.Should().Contain("Task.Run(() => _app.DisconnectAndWipeAsync())");
+        page.Should().Contain("BlindRemoveConfirmation.Build(account)", "the words of the confirmation are the shared ones");
+        page.Should().Contain("Task.Run(() => _device.Accounts.RemoveAsync(_accountId))");
+        page.Should().NotContain("DisconnectAndWipeAsync", "one account of several is removed, not wiped and restarted");
         page.Should().NotContain("BlindPhoneReset.WipeAndRestart(", "the synchronous wipe would block the UI thread while it waits for the work");
-        page.Should().Contain("catch (AggregateException)", "an incomplete wipe is noted, and reported with 'press it again'");
-        page.Should().Contain("Press Disconnect and wipe again to finish.");
+        page.Should().Contain("catch (AggregateException)", "an incomplete removal is noted, and reported with 'press it again'");
+        page.Should().Contain("Press Remove this account again to finish.");
     }
 
     [Fact]
-    public void AnAbortedWipe_PutsTheWorkManagerJobsBack_AndTheSyncWorkerIsVisibleInTheActivity()
+    public void TheLifecycleOfAnAccount_StopsOnlyThatAccountsBackup_NeverTheDevicesJobs()
     {
-        var lifecycle = Source("Platforms", "Android", "AndroidBlindLifecycle.cs");
+        var lifecycle = Source("Platforms", "Android", "AndroidDeviceConditions.cs");
 
-        lifecycle.Should().Contain("public void ResumeBackgroundWork() => BlindWorkScheduler.Ensure(Platform.AppContext);");
-        ClassOf("BlindSyncWorker").Should().Contain("BlindActivity.Sync", "the controller shows a registered sync round as \"Sync\"");
+        lifecycle.Should().Contain("class AndroidAccountLifecycle : IBlindAccountLifecycle");
+        lifecycle.Should().Contain("StopBackupService(BlindAccountEntry account) => BlindBackupService.StopFor(Platform.AppContext, account.Id);");
+        lifecycle.Should().NotContain("StopBackgroundWork", "the periodic jobs are the device's: one set for every account");
+        File.Exists(Path.Combine(AppFolder, "Platforms", "Android", "AndroidBlindLifecycle.cs")).Should().BeFalse("the single-account lifecycle (wipe and restart the process) is gone");
     }
 
     // ---- F-04: the page shows the controller's status and cannot throw ------------------------------------------------------------------
@@ -138,8 +155,8 @@ public sealed class BlindAndroidLifecycleSourceTests
         start.Should().BeGreaterThan(-1);
         var body = page[start..page.IndexOf("\n    }\n", start, StringComparison.Ordinal)];
 
-        body.Should().Contain("catch (Exception ex)");
-        body.Should().Contain("ShowProblem(ex)");
+        body.Should().Contain("catch (Exception)", "the failure is not kept: the page says a fixed sentence (BlindPageSentences), never the exception's text");
+        body.Should().Contain("ShowProblem()");
         page.Should().Contain("_timer.Tick += (_, _) => Refresh();");
         page.Should().Contain("_app.Changed += OnAppChanged");
         page.Should().Contain("_app.Changed -= OnAppChanged", "the page does not stay subscribed after it disappears");
@@ -148,12 +165,13 @@ public sealed class BlindAndroidLifecycleSourceTests
     [Fact]
     public void TheKeystoreBlobs_AreSplitByTheValidatingLayout_NotSlicedByHand()
     {
-        var keys = Source("Platforms", "Android", "KeystoreBlindPhoneKeys.cs");
+        var keys = Source("Platforms", "Android", "AndroidKeystoreKeyWrap.cs");
 
         keys.Should().Contain("BlindKeystoreBlobLayout.Split(blob)");
         keys.Should().Contain("BlindKeystoreBlobLayout.Join(");
         keys.Should().NotContain("blob[..IvLength]");
         keys.Should().NotContain("blob.Length - IvLength");
+        Source("Services", "Blind", "BlindKeystoreSecrets.cs").Should().NotContain("blob[..", "the store hands the whole blob to the wrap, which splits it with the layout");
     }
 
     [Fact]
@@ -162,14 +180,17 @@ public sealed class BlindAndroidLifecycleSourceTests
         // The HTTP stack's own message ("An error occurred while sending the request.") hides what failed; BlindRunReport.Reason adds the
         // inner causes. What it produces is tested with the shared code (BlindRunReportReasonTests); this holds that the Android worker uses it.
         var worker = ClassOf("BlindSyncWorker");
-        worker.Should().Contain("Sync failed: {BlindRunReport.Reason(ex)}");
-        worker.Should().NotContain("Sync failed: {ex.Message}");
+        // An account's round is logged by its controller ("Sync failed: {BlindRunReport.Reason(ex)}", BlindAppControllerTests); what the worker itself can fail on is the start of the device.
+        worker.Should().Contain("The sync pass failed: {BlindRunReport.Reason(ex)}");
+        worker.Should().NotContain("{ex.Message}");
     }
 
     [Fact]
     public void TheAppCore_IsComposedWithThePhonesDeviceName_SoThePageNeedsNoIdentityCodeOfItsOwn()
     {
-        Source("MauiProgram.cs").Should().Contain("DisplayNameFactory: () => DeviceInfo.Current.Name");
-        Source("Pages", "BlindHomePage.xaml.cs").Should().Contain("_app.InitializeAsync()");
+        Source("MauiProgram.cs").Should().Contain("displayNameFactory: () => DeviceInfo.Current.Name");
+        // The account host starts each account (it makes its identity); the page only shows what it finds and never makes one.
+        Source("Pages", "BlindHomePage.xaml.cs").Should().NotContain("InitializeAsync");
+        Source("Pages", "BlindHomePage.xaml.cs").Should().Contain("_device.StartAsync()");
     }
 }

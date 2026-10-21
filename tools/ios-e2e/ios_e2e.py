@@ -18,6 +18,10 @@ What it does, without touching the screen:
   5. waits for the first load and a sync (the app's state file in its container) and counts the notes in the app's database;
   6. with --note: writes a note on the PC and waits until the app holds one more (the app syncs each time it is started).
 
+Since 2.7 the app holds one copy per account and starts on the list of accounts. The end-to-end build is started with BMB_BLIND_E2E_FIRST_ACCOUNT=1 (this
+script does it): it then opens the page of its account and makes one, the pairing-code way, when there is none. Its files are in accounts/<id>/ of the app's folder
+(an upgraded 2.6 install is account 1 and keeps them in the folder itself); the script finds the folder by itself.
+
 Every step prints PASS/FAIL. Nothing is removed: the app stays installed with its data, the screenshots stay in --work.
 """
 import argparse
@@ -71,9 +75,22 @@ def container(sim):
     return os.path.join(data, 'Library', 'Application Support', 'BeeMemoryBankBlind')
 
 
+def account_dir(sim):
+    """The data folder of the copy under test. Since 2.7 the app holds one copy per account: an upgraded 2.6 install is account 1 and lives in the root; the account the
+    end-to-end build makes by itself (BMB_BLIND_E2E_FIRST_ACCOUNT) lives in accounts/<id>/. The one account there is is the one tested."""
+    root = container(sim)
+    if os.path.exists(os.path.join(root, 'blind-state.json')):
+        return root
+    try:
+        names = sorted(n for n in os.listdir(os.path.join(root, 'accounts')) if re.fullmatch(r'[0-9a-f]{32}', n))
+    except OSError:
+        return root
+    return os.path.join(root, 'accounts', names[0]) if names else root
+
+
 def state(sim):
     try:
-        with open(os.path.join(container(sim), 'blind-state.json')) as f:
+        with open(os.path.join(account_dir(sim), 'blind-state.json')) as f:
             return json.load(f).get('values', {})
     except (OSError, ValueError):
         return {}
@@ -81,7 +98,7 @@ def state(sim):
 
 def notes(sim):
     try:
-        db = sqlite3.connect('file:%s?mode=ro' % os.path.join(container(sim), 'beememorybank.db'), uri=True)
+        db = sqlite3.connect('file:%s?mode=ro' % os.path.join(account_dir(sim), 'beememorybank.db'), uri=True)
         try:
             return db.execute("SELECT COUNT(*) FROM tbl_article WHERE status = 'A'").fetchone()[0]
         finally:
@@ -127,7 +144,7 @@ class Device:
         """Starts the app with its console attached and reads the phone code it prints (an E2E build only).
         On iOS, .NET's Console writes to NSLog, not to stdout; OS_ACTIVITY_DT_MODE makes NSLog repeat it on stderr, which the console
         devicectl attaches carries (what Xcode does for its own console)."""
-        env = {'BMB_BLIND_E2E_PRINT_PHONE_CODE': '1', 'OS_ACTIVITY_DT_MODE': 'YES'}
+        env = {'BMB_BLIND_E2E_PRINT_PHONE_CODE': '1', 'BMB_BLIND_E2E_FIRST_ACCOUNT': '1', 'OS_ACTIVITY_DT_MODE': 'YES'}
         proc = subprocess.Popen(['xcrun', 'devicectl', 'device', 'process', 'launch', '--device', self.device, '--terminate-existing',
                                  '--console', '--environment-variables', json.dumps(env), BID],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -148,12 +165,24 @@ class Device:
                 proc.kill()
         return code
 
+    ROOT = 'Library/Application Support/BeeMemoryBankBlind/'
+
+    def account_folder(self):
+        """The data folder of the copy under test, relative to the container: the root for an upgraded 2.6 install (account 1), accounts/<id>/ for the account the end-to-end
+        build made by itself. The folder name is read from the listing devicectl gives of accounts/."""
+        r = self.ctl('info', 'files', '--domain-type', 'appDataContainer', '--domain-identifier', BID, '--subdirectory', self.ROOT + 'accounts')
+        ids = sorted(set(re.findall(r'\b[0-9a-f]{32}\b', r.stdout)))
+        return self.ROOT + 'accounts/' + ids[0] + '/' if ids else self.ROOT
+
     def fetch(self, name):
         """Copies one file of the copy's data folder out of the app's container; returns its local path or None."""
         local = os.path.join(self.work, 'device-' + name)
-        r = self.ctl('copy', 'from', '--domain-type', 'appDataContainer', '--domain-identifier', BID,
-                     '--source', 'Library/Application Support/BeeMemoryBankBlind/' + name, '--destination', local)
-        return local if r.returncode == 0 and os.path.exists(local) else None
+        for folder in (self.ROOT, self.account_folder()):
+            r = self.ctl('copy', 'from', '--domain-type', 'appDataContainer', '--domain-identifier', BID,
+                         '--source', folder + name, '--destination', local)
+            if r.returncode == 0 and os.path.exists(local):
+                return local
+        return None
 
     def state(self):
         path = self.fetch('blind-state.json')
@@ -220,7 +249,8 @@ def main():
     r = simctl('install', a.sim, a.app)
     if not check('the app installs', r.returncode == 0, r.stderr.strip()[-200:]):
         return 1
-    restart(a.sim)
+    # The first start opens the page of the account the build makes by itself (BMB_BLIND_E2E_FIRST_ACCOUNT): the start page is the list of accounts.
+    restart(a.sim, dict(os.environ, SIMCTL_CHILD_BMB_BLIND_E2E_FIRST_ACCOUNT='1'))
     time.sleep(15)
 
     # 2. the phone code, from the QR code on the screen
@@ -240,7 +270,7 @@ def main():
         return 1
 
     # 4. the call code, handed over at launch
-    env = dict(os.environ, SIMCTL_CHILD_BMB_BLIND_E2E_CALL_CODE=call)
+    env = dict(os.environ, SIMCTL_CHILD_BMB_BLIND_E2E_CALL_CODE=call, SIMCTL_CHILD_BMB_BLIND_E2E_FIRST_ACCOUNT='1')
     check('the app starts with the call code', restart(a.sim, env).returncode == 0)
     paired = wait_for(lambda: state(a.sim).get('bmb.blind.call_code', '').startswith('bmb-blind-call:'), 60)
     check('the app accepts the call code', bool(paired))
@@ -297,7 +327,7 @@ def on_device(a, key):
     code = None
     if not call:
         return 1
-    check('the app starts with the call code', phone.launch({'BMB_BLIND_E2E_CALL_CODE': call}).returncode == 0)
+    check('the app starts with the call code', phone.launch({'BMB_BLIND_E2E_CALL_CODE': call, 'BMB_BLIND_E2E_FIRST_ACCOUNT': '1'}).returncode == 0)
     check('the app accepts the call code',
           bool(wait_for(lambda: phone.state().get('bmb.blind.call_code', '').startswith('bmb-blind-call:'), 90, 10)))
     check('the first load finishes (allow "local network" on the iPhone if it asks)',

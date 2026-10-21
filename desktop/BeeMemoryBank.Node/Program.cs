@@ -399,7 +399,7 @@ public static class Program
             // always ends up in .runtime.json/node.status.json regardless.
             const int preferredFrontPort = 5310;
 
-            // Opening the node to the network is the profile's setting "Devices on my network" (Admin > Nodes), off by
+            // Opening the node to the network is the profile's setting "Devices on my network" (Admin > Devices on my network), off by
             // default; it is served by a second listener that can be opened and closed while the node runs (LanFrontListener).
             // BMB_HTTPS_ENABLED=1 is the older way, kept as an override: it makes the front itself add the HTTPS listener on
             // :5311 for this run, and the setting then has nothing to change. With neither, the front is byte-for-byte what it

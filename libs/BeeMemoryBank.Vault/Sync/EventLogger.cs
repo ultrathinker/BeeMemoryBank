@@ -144,7 +144,7 @@ public class EventLogger(
         return new RowVersion(lamportTs, identity.NodeId);
     }
 
-    public async Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry)
+    public async Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry, Guid? eventId = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
@@ -161,7 +161,7 @@ public class EventLogger(
             TlsTrust: entry.TlsTrust);
 
         await AppendEventAsync(identity, EventTypes.WhitelistAdd, null, lamportTs,
-            JsonSerializer.Serialize(payload));
+            JsonSerializer.Serialize(payload), eventId: eventId);
 
         return new RowVersion(lamportTs, identity.NodeId);
     }
@@ -418,12 +418,13 @@ public class EventLogger(
         long lamportTs,
         string payloadJson,
         string? entityId = null,
-        IDbTransaction? transaction = null)
+        IDbTransaction? transaction = null,
+        Guid? eventId = null)
     {
         var now = DateTime.UtcNow;
         var evt = new SyncEvent
         {
-            EventId = Guid.NewGuid(),
+            EventId = eventId ?? Guid.NewGuid(),
             NodeId = identity.NodeId,
             LamportTs = lamportTs,
             EventType = eventType,

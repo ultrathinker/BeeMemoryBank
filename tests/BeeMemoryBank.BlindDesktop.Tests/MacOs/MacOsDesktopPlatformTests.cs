@@ -2,7 +2,6 @@ using System.Runtime.Versioning;
 using BeeMemoryBank.BlindDesktop.MacOS;
 using BeeMemoryBank.BlindDesktop.Platform;
 using BeeMemoryBank.BlindMobile.Services.Blind;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.BlindDesktop.Tests.MacOs;
 
@@ -10,7 +9,7 @@ namespace BeeMemoryBank.BlindDesktop.Tests.MacOs;
 [SupportedOSPlatform("macos")]
 public sealed class MacOsDesktopPlatformTests
 {
-    private static MacOsDesktopPlatform NewPlatform(string folder) => new(folder, new InMemorySecrets());
+    private static MacOsDesktopPlatform NewPlatform(string folder) => new(folder, new InMemoryBlindSecretStoreFactory());
 
     [Fact]
     public void ThePlatform_SpeaksOfTheMenuBar_UsesTheTemplateIcon_AndKeepsItsLogOutOfAScratchRun()
@@ -40,28 +39,36 @@ public sealed class MacOsDesktopPlatformTests
     public void EverySeam_IsTheMacOsOne()
     {
         var platform = NewPlatform(TestFolders.New("mac-platform"));
-        var services = new ServiceCollection();
 
-        platform.AddSeams(services);
-        using var provider = services.BuildServiceProvider();
-
-        provider.GetRequiredService<IBlindPaths>().Should().BeOfType<MacOsBlindPaths>();
-        provider.GetRequiredService<IBlindStateStore>().Should().BeOfType<MacOsBlindStateStore>();
-        provider.GetRequiredService<IBlindAutostart>().Should().BeOfType<MacOsBlindAutostart>();
-        provider.GetRequiredService<IBlindSecretStore>().Should().BeOfType<InMemorySecrets>("the test's own store replaced the Keychain one");
+        platform.Paths.Should().BeOfType<MacOsBlindPaths>();
+        platform.StateStores.Should().BeOfType<MacOsBlindStateStoreFactory>();
+        platform.Autostart.Should().BeOfType<MacOsBlindAutostart>();
+        platform.DeviceConditions.Should().BeOfType<MacOsDeviceConditions>();
+        platform.SecretStores.Should().BeOfType<InMemoryBlindSecretStoreFactory>("the test's own factory replaced the Keychain one");
     }
 
     [Fact]
-    public void ARealRunWithoutAReplacement_RegistersTheKeychainStore_WithoutOpeningIt()
+    public void ARealRunWithoutAReplacement_HasTheKeychainFactory_WithoutOpeningIt()
     {
         var platform = new MacOsDesktopPlatform(TestFolders.New("mac-platform"));
-        var services = new ServiceCollection();
 
-        platform.AddSeams(services);
-        using var provider = services.BuildServiceProvider();
+        // Making the factory builds the Keychain adapter object; no Keychain call is made until a key is read or written.
+        platform.SecretStores.Should().BeOfType<MacOsSecretStoreFactory>();
+    }
 
-        // Resolving builds the adapter object; no Keychain call is made until a key is read or written.
-        provider.GetRequiredService<IBlindSecretStore>().Should().BeOfType<MacOsKeychainSecretStore>();
+    [Fact]
+    public void TheStateOfAccountOne_IsTheFileTheMacAppHasAlwaysWritten_AndANewAccountHasItsOwn()
+    {
+        var folder = TestFolders.New("mac-platform");
+        var platform = NewPlatform(folder);
+        var legacy = new BlindAccountEntry(BlindAccountEntry.LegacyId, BlindAccountLayouts.Root, "My copy");
+        var other = new BlindAccountEntry("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", BlindAccountLayouts.Dir, "A");
+
+        platform.StateStores.For(legacy).Set("k", "1");
+        platform.StateStores.For(other).Set("k", "2");
+
+        File.Exists(Path.Combine(platform.Paths.DataDirectory, "blind-state.json")).Should().BeTrue();
+        File.Exists(Path.Combine(platform.Paths.DataDirectory, "accounts", other.Id, "blind-state.json")).Should().BeTrue();
     }
 
     [Fact]
@@ -70,13 +77,7 @@ public sealed class MacOsDesktopPlatformTests
         var one = TestFolders.New("mac-platform");
         var two = TestFolders.New("mac-platform");
 
-        string LabelOf(string folder)
-        {
-            var services = new ServiceCollection();
-            NewPlatform(folder).AddSeams(services);
-            using var provider = services.BuildServiceProvider();
-            return provider.GetRequiredService<MacOsBlindAutostart>().Label;
-        }
+        string LabelOf(string folder) => ((MacOsBlindAutostart)NewPlatform(folder).Autostart).Label;
 
         var labelOne = LabelOf(one);
         var labelTwo = LabelOf(two);
@@ -123,8 +124,8 @@ public sealed class MacOsDesktopPlatformTests
         var items = NewPlatform(TestFolders.New("mac-platform")).SelfCheck();
 
         items.Should().OnlyContain(i => i.Ok, string.Join("; ", items.Where(i => !i.Ok).Select(i => i.Name + ": " + i.Detail)));
-        items.Select(i => i.Name).Should().Contain(["private folder", "activation socket", "seam IBlindPaths", "seam IBlindStateStore",
-            "seam IBlindAutostart", "login item"]);
+        items.Select(i => i.Name).Should().Contain(["private folder", "activation socket", "seam IBlindPaths", "seam IBlindStateStoreFactory",
+            "seam IBlindDeviceConditions", "seam IBlindAutostart", "login item"]);
     }
 
     [Fact]
@@ -149,19 +150,5 @@ public sealed class MacOsDesktopPlatformTests
         MacOsDesktopPlatform.FolderKey(a).Should().HaveLength(8).And.MatchRegex("^[0-9a-f]{8}$");
         MacOsDesktopPlatform.FolderKey(a).Should().Be(MacOsDesktopPlatform.FolderKey(a + "/"), "a trailing separator is the same folder");
         MacOsDesktopPlatform.FolderKey(a).Should().NotBe(MacOsDesktopPlatform.FolderKey(TestFolders.New("mac-platform")));
-    }
-
-    /// <summary>A key store in memory, so that the host's tests never touch a keychain.</summary>
-    private sealed class InMemorySecrets : IBlindSecretStore
-    {
-        private byte[]? _seed, _backup, _pairing;
-        public byte[]? LoadIdentitySeed() => _seed;
-        public void SaveIdentitySeed(byte[] seed) => _seed = seed;
-        public void SaveBackupKey(byte[] key) => _backup = key;
-        public byte[]? LoadBackupKey() => _backup;
-        public void SavePairingSecret(byte[] secret) => _pairing = secret;
-        public byte[]? LoadPairingSecret() => _pairing;
-        public void ClearPairingSecret() => _pairing = null;
-        public void Clear() => _seed = _backup = _pairing = null;
     }
 }

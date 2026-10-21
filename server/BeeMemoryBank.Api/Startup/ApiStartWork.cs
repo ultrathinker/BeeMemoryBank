@@ -122,7 +122,7 @@ internal static class ApiStartWork
                 continue;
             }
             await dekStateRepo.UpdateStateAsync(row.EventId, DekRotationState.Failed,
-                $"DEK rotation interrupted by process restart while in state {row.State}. The DB itself is consistent (single-tx atomic). Re-initiate or cancel from /Admin.");
+                $"DEK rotation interrupted by process restart while in state {row.State}. The DB itself is consistent (single-tx atomic). Re-initiate or cancel from /Admin/DekRotation.");
             startupLogger.LogWarning(
                 "Marked stuck DEK rotation {EventId} (was {OldState}) as Failed during startup recovery.",
                 row.EventId, row.State);

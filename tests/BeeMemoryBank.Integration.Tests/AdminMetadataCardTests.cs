@@ -9,7 +9,7 @@ namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// Admin → Metadata encryption (docs/design/step-a-spec.md 5.3, 5.4), through the real Web host in front of a real Api:
-/// the card explains the switch and asks for a fresh backup first; the switch is offered only after every device was
+/// the page explains the switch and asks for a fresh backup first; the switch is offered only after every device was
 /// asked; it is refused without the backup box; and once on, the card is one status line (AdminCardsTests has the three states of the node).
 /// </summary>
 public sealed class AdminMetadataCardTests : IAsyncLifetime
@@ -98,10 +98,10 @@ public sealed class AdminMetadataCardTests : IAsyncLifetime
         html.Should().Contain("1 change waits to be applied until their metadata key arrives.");
     }
 
-    /// <summary>The Admin page; after a post, with the cookies the post set (TempData carries the readiness report).</summary>
+    /// <summary>The Metadata encryption page; after a post, with the cookies the post set (TempData carries the readiness report).</summary>
     private async Task<string> AdminPageAsync(HttpResponseMessage? after = null)
     {
-        using var get = new HttpRequestMessage(HttpMethod.Get, "/Admin");
+        using var get = new HttpRequestMessage(HttpMethod.Get, "/Admin/MetadataEncryption");
         if (after is not null)
         {
             var session = string.Join("; ", _admin.DefaultRequestHeaders.GetValues("Cookie"));
@@ -115,14 +115,14 @@ public sealed class AdminMetadataCardTests : IAsyncLifetime
     private static string SetCookies(HttpResponseMessage response) =>
         response.Headers.TryGetValues("Set-Cookie", out var set) ? string.Join("; ", set.Select(c => c.Split(';')[0])) : "";
 
-    /// <summary>Posts a handler of the Admin page the way the browser does: the page's antiforgery token and cookie, then the session.</summary>
+    /// <summary>Posts a handler of the Metadata encryption page the way the browser does: the page's antiforgery token and cookie, then the session.</summary>
     private async Task<HttpResponseMessage> PostAdminAsync(string handler, Dictionary<string, string> fields)
     {
-        var page = await _admin.GetAsync("/Admin");
+        var page = await _admin.GetAsync("/Admin/MetadataEncryption");
         var html = await page.Content.ReadAsStringAsync();
         var session = string.Join("; ", _admin.DefaultRequestHeaders.GetValues("Cookie"));
         var body = new Dictionary<string, string>(fields) { ["__RequestVerificationToken"] = Token.Match(html).Groups[1].Value };
-        using var post = new HttpRequestMessage(HttpMethod.Post, $"/Admin?handler={handler}") { Content = new FormUrlEncodedContent(body) };
+        using var post = new HttpRequestMessage(HttpMethod.Post, $"/Admin/MetadataEncryption?handler={handler}") { Content = new FormUrlEncodedContent(body) };
         post.Headers.TryAddWithoutValidation("Cookie", session + "; " + SetCookies(page));
         return await _admin.SendAsync(post);
     }

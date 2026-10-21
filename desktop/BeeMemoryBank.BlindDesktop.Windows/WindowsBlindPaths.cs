@@ -1,4 +1,5 @@
 using BeeMemoryBank.BlindMobile.Services.Blind;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindDesktop.Windows;
 
@@ -34,7 +35,7 @@ public sealed class WindowsBlindPaths : IBlindPaths
     {
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         if (string.IsNullOrWhiteSpace(local))
-            throw new InvalidOperationException("Windows did not give this user a LocalApplicationData folder.");
+            throw new BlindSentenceException("Windows did not give this user a LocalApplicationData folder.");
         return Path.Combine(local, FolderName);
     }
 }

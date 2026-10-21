@@ -20,7 +20,7 @@ came from in `BeeMemoryBank.Api` (`Program.cs`, `Startup/ApiServices.cs`, `Start
 | 10 | `UseLoopbackForwardedHeaders()` | yes | |
 | 11 | `RunBlindNodeStartupTasksAsync` | **new**, derived | see below |
 | 12 | `RekeySwapResolver.CompleteFirstStart(dataPath)` | yes | the first start on a swapped-in vault succeeded |
-| 13 | `UseBlindNodePipeline()` | **new**, derived | ExceptionHandler -> PublicSurface -> RateLimit -> Maintenance |
+| 13 | `UseBlindNodePipeline()` | **new**, derived | ExceptionHandler -> PublicSurface -> RateLimit -> BlindUsage -> Maintenance |
 | 14 | `MapBlindNodeSurface()` | **new**, derived | `/health`, `/api/version`, sync, blind seed/node/replica/restore |
 
 ## Startup tasks (in this order)
@@ -28,7 +28,7 @@ came from in `BeeMemoryBank.Api` (`Program.cs`, `Startup/ApiServices.cs`, `Start
 1. `BlindSeedCutover.Recover` - a seed cutover a crash interrupted is finished or rolled back **before anything opens the database**.
 2. `MigrationRunner.RunMigrationsAsync` - needs no DEK; the full, byte-identical SQL set is embedded (since 2.6.2 the one baseline; a 2.6.x ledger is adopted, an older or unknown one is refused and the database is left unchanged - see ADR 0001 and `AGENTS.md`).
 3. `StoredEventRepair.RunAsync`.
-4. `BlindRoleStartup.RunAsync` - blind temp dir cleaned, `RefuseDekMaterial` (key slots / wrapped agent DEK / `os-auto-unlock.dat` / `update-unlock.dat` -> refuse to start), identity from the key file (`EnsureIdentityAsync`), the three secrets in clear (key file, TLS pfx, `blind/settings.json`) made owner-only where an older build left them with the folder's inherited Windows ACL (`RepairSecretPermissions`: repaired in place and logged, a failure is a warning, never a refusal), pending restores and rotations retried.
+4. `BlindRoleStartup.RunAsync` - blind temp dir cleaned, `RefuseDekMaterial` (key slots / wrapped agent DEK / `os-auto-unlock.dat` / `update-unlock.dat` -> refuse to start), `BMB_BLIND_MAX_STORED_BYTES` / `BMB_BLIND_MAX_TRAFFIC_PER_DAY` adopted into the local settings (nonsense and a traffic limit below 10 MB refuse the start), identity from the key file (`EnsureIdentityAsync`), the three secrets in clear (key file, TLS pfx, `blind/settings.json`) made owner-only where an older build left them with the folder's inherited Windows ACL (`RepairSecretPermissions`: repaired in place and logged, a failure is a warning, never a refusal), pending restores and rotations retried.
 5. `FolderBootstrapper.RunIfNeededAsync`.
 6. Lamport clock restored from the database.
 7. Crash-recovery sweeps: stuck restore rows -> Failed, leftover `beememorybank.db.standalone-staging` removed, stuck `Committing` DEK rotations originated here -> Failed, stale `Proposed` rows (> 24 h) -> Cancelled, orphan media files reconciled.
@@ -57,7 +57,7 @@ for the console and the CLI (internal key). Without `BMB_BLIND_HTTPS_PORT` the p
 
 `beememorybank.db` (+ `-wal`/`-shm`), the node key file (`FileNodeKey.FileName`), the TLS pfx, `.internal-key`
 (development only), `blind-tmp/` (cleaned at start; it also holds the format-2 packages a restore request builds and the
-writer's staging), backup settings and restic repository paths under `BlindPaths`, and since 2.6.0 the sealed baseline in
+writer's staging), backup settings, `blind/usage.json` and restic repository paths under `BlindPaths`, and since 2.6.0 the sealed baseline in
 `baselines/current/` with its row in `tbl_baseline`. No startup step touches the baseline: a switch of its files that a crash
 cut short (`baselines/incoming-<id>/` staged, the row already switched) is finished the first time the store is read, and
 left-over `incoming-*` / `retired-*` folders are removed then. A new image must open all of them unchanged; the compatibility fixture (a copy of a real node's

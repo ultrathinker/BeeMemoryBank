@@ -11,7 +11,14 @@
     </h2>
     <p class="text-muted" style="margin-bottom:18px;">
         A blind node keeps an encrypted copy of this network and makes backups, but never holds the
-        master key: it cannot read your notes. Titles, paths, tags and file names are visible to it.
+        master key: it cannot read your notes or open your files.
+    </p>
+    <p class="text-muted text-sm" id="blind-sees" style="margin-bottom:18px;">
+        <strong>What it can see.</strong> With metadata encryption on &mdash; the default for a network set up with 2.6.2 or later &mdash; a blind node sees
+        no titles, no paths, no folder, tag or file names and no shape of your tree: only that something changed (how many changes, how big, when,
+        and which of your devices made them), plus the names and addresses of your devices. On an older network where metadata encryption has not
+        been switched on yet (<a href="/Admin/MetadataEncryption">Admin &rsaquo; Metadata Encryption</a>), a blind node can still see titles, paths, tags and file names, but never the text
+        of a note or what is inside a file.
     </p>
 
     @if (Model.SuccessMessage != null)
@@ -45,6 +52,157 @@
         </sl-alert>
     }
 
+    @* Invite a friend's device (release 2.7). One-time invitation: not encrypted, said so. Until the owner confirms below, no vault content and no usable key is sent to the device; asking to join already sends this node the device's own data (id, public key, name, platform, version, its backup key), and the node keeps that key encrypted until the decision. *@
+    <h3 style="margin-bottom:12px;"><sl-icon name="envelope-plus"></sl-icon> Invite a blind copy</h3>
+    <div class="card" style="margin-bottom:24px;max-width:720px;" id="invite">
+        <p class="text-muted text-sm" style="margin-bottom:12px;">
+            Let a friend keep an encrypted copy of your network on their device. You send them one line (or a QR code); their app asks to join,
+            shows a short code, and you confirm that code here with your master password. Until you confirm, no vault content and no usable key of your memory bank is sent to their device.
+            Their app does send this node its own device id, public key, name, platform, version and its own backup key when it asks to join; this node keeps that backup key encrypted until you decide.
+            This is a <strong>one-time invitation</strong>, not an encrypted message: whoever has it while it is valid can ask to join,
+            which is why you confirm against the code your friend reads out to you.
+        </p>
+
+        @if (Model.InviteError is { } inviteError)
+        {
+            <sl-alert variant="danger" open role="alert" id="invite-error" style="margin-bottom:12px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @inviteError
+            </sl-alert>
+        }
+
+        @if (Model.Issued is { } issued)
+        {
+            <div id="invite-issued" data-expires="@issued.ExpiresAt.ToString("o")" style="margin-bottom:16px;">
+                <sl-alert variant="success" open style="margin-bottom:10px;">
+                    The invitation is ready. It works for one device, once, until <strong>@issued.ExpiresAt.ToLocalTime().ToString("t")</strong>
+                    (<span id="invite-countdown">@((issued.ExpiresAt - DateTime.UtcNow).TotalMinutes.ToString("0")) min</span> left).
+                </sl-alert>
+                <textarea id="invite-text" rows="5" readonly style="width:100%;font-family:monospace;font-size:0.8rem;">@issued.Text</textarea>
+                <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+                    <sl-button id="invite-copy" size="small" variant="primary"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy</sl-button>
+                    <span id="invite-copied" class="text-muted text-sm" hidden>Copied.</span>
+                </div>
+                @if (Model.IssuedQr is { } qr)
+                {
+                    <div style="margin-top:12px;">
+                        <img src="@qr" alt="QR code of the invitation" style="width:260px;height:260px;image-rendering:pixelated;background:#fff;padding:8px;" />
+                        <div class="text-muted text-sm">The same invitation as a QR code, for a phone camera.</div>
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(issued.Notice))
+                {
+                    <p class="text-muted text-sm" style="margin:10px 0 0;">@issued.Notice</p>
+                }
+                <p class="text-muted text-sm" style="margin:10px 0 0;">
+                    It is shown here once. Send it to your friend by a channel you trust (not a public one), and ask them to read you the code their app shows.
+                </p>
+            </div>
+        }
+
+        <form method="post" asp-page-handler="Invite" data-busy="long" data-busy-title="Checking this node's address and making the invitation">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <sl-input name="label" label="Who is it for? (your own note)" maxlength="64" value="@Model.InviteLabel" placeholder="For example: Anna's phone"></sl-input>
+                <sl-input name="sourceName" label="Name shown to your friend" maxlength="64" value="@Model.InviteSourceName" help-text="Your friend's app says: a copy of this person's Bee Memory Bank."></sl-input>
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:12px;">
+                <sl-input name="address" label="Address your friend's device will call" value="@Model.InviteAddress"
+                          help-text="This node's public https address. It is checked now: it must lead back to this very node."></sl-input>
+                <div>
+                    <label for="invite-lifetime" class="text-sm" style="display:block;margin-bottom:4px;">Valid for</label>
+                    <select id="invite-lifetime" name="lifetime" style="width:100%;padding:8px;">
+                        @foreach (var minutes in Model.InviteDefaults?.Lifetimes ?? [15, 30, 60])
+                        {
+                            <option value="@minutes" selected="@(minutes == Model.InviteLifetime)">@minutes minutes</option>
+                        }
+                    </select>
+                </div>
+            </div>
+            <sl-button type="submit" variant="primary" size="small" style="margin-top:12px;">
+                <sl-icon slot="prefix" name="envelope-plus"></sl-icon> Make invitation
+            </sl-button>
+        </form>
+
+        @foreach (var open in Model.OpenInvites)
+        {
+            <div class="article-meta" style="margin-top:10px;">
+                <span>Open invitation@(string.IsNullOrEmpty(open.Label) ? "" : " for " + open.Label)</span>
+                <span>valid until @open.ExpiresAt.ToLocalTime().ToString("t")</span>
+                <form method="post" asp-page-handler="WithdrawInvite" data-busy="short" style="display:inline;">
+                    <input type="hidden" name="inviteId" value="@open.InviteId" />
+                    <sl-button type="submit" size="small" variant="default">Withdraw</sl-button>
+                </form>
+            </div>
+        }
+    </div>
+
+    @if (Model.WaitingInvites.Any())
+    {
+        <h3 style="margin-bottom:12px;"><sl-icon name="hourglass-split"></sl-icon> Waiting for your confirmation</h3>
+        @foreach (var waiting in Model.WaitingInvites)
+        {
+            <div class="card" style="margin-bottom:12px;max-width:720px;" id="waiting-@waiting.InviteId">
+                <div class="article-meta">
+                    <span><strong>@(string.IsNullOrEmpty(waiting.Label) ? waiting.DeviceName : waiting.Label)</strong></span>
+                    @if (waiting.Kind == "server")
+                    {
+                        <span class="invite-kind-server"><sl-icon name="hdd-network"></sl-icon> Invited (server)</span>
+                    }
+                    <span>@(waiting.Kind == "server" ? "Server node" : "Device"): @waiting.DeviceName</span>
+                    <span>@(waiting.Platform is { Length: > 0 } platform ? platform : "platform unknown")@(waiting.AppVersion is { Length: > 0 } version ? " " + version : "")</span>
+                    <span>From @(waiting.SeenFrom ?? "an unknown address")</span>
+                    <span>Asked @(waiting.RedeemedAt?.ToLocalTime().ToString("g") ?? "")</span>
+                    @if (waiting.ConfirmDeadline is { } deadline)
+                    {
+                        <span>Answer by @deadline.ToLocalTime().ToString("g")</span>
+                    }
+                </div>
+                <div style="margin:12px 0;">
+                    <div class="text-muted text-sm">Ask your friend to read you the code @(waiting.Kind == "server" ? "that bmb blind join printed on their server" : "their app shows"). Confirm only if it is exactly this one:</div>
+                    <div class="invite-match-code" style="font-family:monospace;font-size:2rem;font-weight:700;letter-spacing:0.15em;">@waiting.MatchCode</div>
+                </div>
+                <form method="post" asp-page-handler="ConfirmInvite" data-busy="long" data-busy-title="Adding the blind copy" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                    <input type="hidden" name="inviteId" value="@waiting.InviteId" />
+                    <sl-input name="password" label="Your master password" type="password" required password-toggle autocomplete="off" style="min-width:260px;"></sl-input>
+                    <sl-button type="submit" variant="primary" size="small"><sl-icon slot="prefix" name="check2-circle"></sl-icon> The code matches: confirm</sl-button>
+                    @if (waiting.Kind == "server")
+                    {
+                        <div class="text-muted text-sm" style="flex-basis:100%;">Confirming also sends this server your memory bank's encrypted copy, as pasting its pair code on this page would. You will manage it (reseed, anchors, recovery).</div>
+                    }
+                </form>
+                <form method="post" asp-page-handler="RefuseInvite" data-busy="short" style="margin-top:8px;">
+                    <input type="hidden" name="inviteId" value="@waiting.InviteId" />
+                    <sl-button type="submit" size="small" variant="danger" outline><sl-icon slot="prefix" name="x-circle"></sl-icon> Refuse: this is not my friend</sl-button>
+                </form>
+            </div>
+        }
+    }
+    @if (Model.FinishingInvites.Any())
+    {
+        <div class="text-muted text-sm" style="margin:0 0 16px 0;max-width:720px;" id="invites-finishing">
+            Being added:
+            @foreach (var finishing in Model.FinishingInvites)
+            {
+                <span style="margin-right:12px;">@(string.IsNullOrEmpty(finishing.Label) ? finishing.DeviceName ?? "a device" : finishing.Label)@(finishing.Kind == "server" ? " (server)" : "")</span>
+            }
+            This node finishes it within a minute, or undoes it and says so here.
+        </div>
+    }
+    @if (Model.DecidedInvites.Any())
+    {
+        <div class="text-muted text-sm" style="margin:-12px 0 24px 0;max-width:720px;">
+            Lately:
+            @foreach (var decided in Model.DecidedInvites)
+            {
+                <span style="margin-right:12px;">@(string.IsNullOrEmpty(decided.Label) ? decided.DeviceName ?? "invitation" : decided.Label)@(decided.Kind == "server" ? " (server)" : "") (@decided.State)</span>
+            }
+        </div>
+    }
+
     <partial name="~/Pages/Shared/Admin/_AdminBlindNodes.cshtml" model="Model" />
 </div>
 </div>
+
+@section Scripts {
+    <script src="/js/pages/blind-invites.js" asp-append-version="true"></script>
+}

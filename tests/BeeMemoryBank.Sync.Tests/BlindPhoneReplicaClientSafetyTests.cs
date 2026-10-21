@@ -18,6 +18,21 @@ public sealed class BlindPhoneReplicaClientSafetyTests
         act.Should().Throw<InvalidDataException>();
     }
 
+    [Theory]
+    [InlineData("IOException", "IOException")]
+    [InlineData("System.Net.Http.HttpRequestException", "System.Net.Http.HttpRequestException")]
+    [InlineData("List`1", "List`1")]
+    [InlineData(@"C:\secret\x canary-123", "an error")]
+    [InlineData("two words", "an error")]
+    [InlineData("", "an error")]
+    [InlineData(null, "an error")]
+    public void TheBackOffSentence_RepeatsOnlyTheNameOfATypeThatWasRecorded_NeverWhatElseAFileHolds(string? recorded, string said) =>
+        BlindPhoneReplicaClient.SafeTypeName(recorded).Should().Be(said);
+
+    [Fact]
+    public void ABackOffSentenceOverLongAName_IsNotRepeated() =>
+        BlindPhoneReplicaClient.SafeTypeName(new string('A', 200)).Should().Be("an error");
+
     [Fact]
     public async Task ReadArchiveEntryAsync_RejectsAManifestOverItsMemoryLimit()
     {

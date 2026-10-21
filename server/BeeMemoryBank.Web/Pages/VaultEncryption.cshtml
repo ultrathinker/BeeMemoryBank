@@ -99,7 +99,7 @@
                                 <li data-blocker="@blocker.Code">
                                     @if (blocker.Code == "not_activated" && VaultEncryptionModel.SectionAt(blocker.Message) is var at and >= 0)
                                     {
-                                        @blocker.Message[..at]<a href="/Admin#card-metadata">@VaultEncryptionModel.ActivationSection</a>@blocker.Message[(at + VaultEncryptionModel.ActivationSection.Length)..]
+                                        @blocker.Message[..at]<a href="/Admin/MetadataEncryption">@VaultEncryptionModel.ActivationSection</a>@blocker.Message[(at + VaultEncryptionModel.ActivationSection.Length)..]
                                     }
                                     else
                                     {

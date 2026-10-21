@@ -5,48 +5,25 @@ using UserNotifications;
 namespace BeeMemoryBank.BlindIos.Platforms.iOS;
 
 /// <summary>
-/// Keeps the one pending "no contact with the node" notification of <see cref="BlindSilenceAlarm"/> in step with the copy: it is moved only
-/// when what it depends on changed (paired or not, the time of the last sync), so a screen that refreshes every few seconds does not keep
-/// pushing it away. Asks for permission once the copy is paired; without permission the screen says that no warning can come.
+/// Keeps the pending "no contact" notifications of <see cref="BlindSilenceAlarm"/> in step with the accounts, ONE per account. Every decision is portable and tested: <see cref="SilenceRequestBook"/>
+/// plans (only when what a notification depends on changed, so a screen that refreshes every few seconds does not keep pushing it away) and <see cref="SilenceReconciler"/> runs the whole read /
+/// withdraw / add of an update, and the look at the requests that fired, as ONE ordered queue - from the screens and from a background wake alike - so that a late withdrawal can never delete a newer
+/// add. This class only gives the reconciler the notification center and tells the screen whether alerts are allowed. Without permission the screen says that no warning can come.
 /// </summary>
 public sealed class IosSilenceNotifier
 {
-    private readonly object _gate = new();
-    private (bool Paired, DateTimeOffset? LastSync)? _planned;
-    private bool _asked;
+    private readonly SilenceReconciler _reconciler;
+
+    public IosSilenceNotifier() => _reconciler = new SilenceReconciler(new NativeCenter(this));
 
     /// <summary>Null until iOS has answered; then whether alerts are allowed.</summary>
     public bool? Allowed { get; private set; }
 
-    /// <summary>When the pending warning will be shown if nothing moves it again; null when none is pending.</summary>
-    public DateTimeOffset? NextWarning { get; private set; }
+    /// <summary>When the pending warning of the account will be shown if nothing moves it again; null when none is pending.</summary>
+    public DateTimeOffset? NextWarningOf(string accountId) => _reconciler.Book.ShowsAt(BlindSilenceAlarm.RequestIdFor(Entry(accountId)));
 
-    public void Update(BlindAppStatus status)
-    {
-        var key = (status.IsPaired, status.LastSyncAt);
-        lock (_gate)
-        {
-            if (_planned == key) return;
-            _planned = key;
-        }
-
-        var center = UNUserNotificationCenter.Current;
-        var notice = BlindSilenceAlarm.Plan(status, DateTimeOffset.UtcNow);
-        if (notice is null)
-        {
-            center.RemovePendingNotificationRequests([BlindSilenceAlarm.RequestId]);
-            NextWarning = null;
-            return;
-        }
-
-        AskOnce();
-        var content = new UNMutableNotificationContent { Title = notice.Title, Body = notice.Body, Sound = UNNotificationSound.Default };
-        var seconds = Math.Max(60, (notice.FireAt - DateTimeOffset.UtcNow).TotalSeconds);
-        var trigger = UNTimeIntervalNotificationTrigger.CreateTrigger(seconds, repeats: false);
-        // The same identifier replaces the pending one.
-        center.AddNotificationRequest(UNNotificationRequest.FromIdentifier(BlindSilenceAlarm.RequestId, content, trigger),
-            error => NextWarning = error is null ? DateTimeOffset.UtcNow.AddSeconds(seconds) : null);
-    }
+    /// <summary>Hands the snapshot to the ordered queue and returns at once; the work is done in its turn (a snapshot that waits is replaced by a newer one).</summary>
+    public void Update(BlindAccountsSnapshot snapshot) => _ = _reconciler.UpdateAsync(snapshot);
 
     /// <summary>Reads whether alerts are allowed (for the screen) without asking.</summary>
     public void Refresh() =>
@@ -58,25 +35,49 @@ public sealed class IosSilenceNotifier
                 _ => false,
             }));
 
-    private void AskOnce()
-    {
-        lock (_gate)
-        {
-            if (_asked) return;
-            _asked = true;
-        }
-        UNUserNotificationCenter.Current.RequestAuthorization(UNAuthorizationOptions.Alert | UNAuthorizationOptions.Sound,
-            (granted, _) => SetAllowed(granted));
-    }
-
     /// <summary>
-    /// iOS refuses to queue a notification of an app that may not show any: once alerts are allowed (now, or later in Settings) and none is
-    /// pending, the next <see cref="Update"/> plans it again instead of waiting for the next sync to change the plan.
+    /// iOS refuses to queue a notification of an app that may not show any: once alerts are allowed (now, or later in Settings) the reconciler,
+    /// in its own queue, plans again what is not pending and applies the newest snapshot at once - an add refused before the grant is made again by the grant itself.
     /// </summary>
     private void SetAllowed(bool? allowed)
     {
         Allowed = allowed;
-        if (allowed == true && NextWarning is null)
-            lock (_gate) _planned = null;
+        if (allowed == true) _ = _reconciler.AlertsAllowedAsync();
+    }
+
+    private static BlindAccountEntry Entry(string accountId) =>
+        accountId == BlindAccountEntry.LegacyId
+            ? new BlindAccountEntry(BlindAccountEntry.LegacyId, BlindAccountLayouts.Root, "")
+            : new BlindAccountEntry(accountId, BlindAccountLayouts.Dir, "");
+
+    /// <summary>The notification center of the phone, as tasks: each one ends when the system has answered. Nothing else is decided here.</summary>
+    private sealed class NativeCenter(IosSilenceNotifier owner) : ISilenceNotificationCenter
+    {
+        public Task<IReadOnlyList<string>> PendingIdsAsync()
+        {
+            var done = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            UNUserNotificationCenter.Current.GetPendingNotificationRequests(requests => done.TrySetResult(requests.Select(r => r.Identifier).ToList()));
+            return done.Task;
+        }
+
+        public async Task RemoveAsync(IReadOnlyList<string> requestIds)
+        {
+            UNUserNotificationCenter.Current.RemovePendingNotificationRequests([.. requestIds]);
+            // The call has no completion of its own: a read that comes back after it is the barrier that says the system has dealt with it before the next call is made.
+            await PendingIdsAsync().ConfigureAwait(false);
+        }
+
+        public Task<bool> AddAsync(SilenceAdd add, TimeSpan after)
+        {
+            var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var content = new UNMutableNotificationContent { Title = add.Notice.Title, Body = add.Notice.Body, Sound = UNNotificationSound.Default };
+            var trigger = UNTimeIntervalNotificationTrigger.CreateTrigger(after.TotalSeconds, repeats: false);
+            // The same identifier replaces the pending one.
+            UNUserNotificationCenter.Current.AddNotificationRequest(UNNotificationRequest.FromIdentifier(add.RequestId, content, trigger), error => done.TrySetResult(error is null));
+            return done.Task;
+        }
+
+        public void RequestPermission() =>
+            UNUserNotificationCenter.Current.RequestAuthorization(UNAuthorizationOptions.Alert | UNAuthorizationOptions.Sound, (granted, _) => owner.SetAllowed(granted));
     }
 }

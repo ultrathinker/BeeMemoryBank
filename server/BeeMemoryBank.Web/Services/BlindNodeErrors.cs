@@ -123,7 +123,7 @@ public static partial class BlindNodeErrors
     }
 
     private static BlindNodeError Other(string what, string action, HttpStatusCode status, ApiBody b) => BlindNodeError.Of(
-        $"{what} Something went wrong on this computer (error {(int)status}). {action} If it keeps failing, look at Admin → Diagnostics.",
+        $"{what} Something went wrong on this computer (error {(int)status}). {action} If it keeps failing, look at Admin → Search diagnostics.",
         b.Error);
 
     /// <summary>One pre-flight problem in plain words: the device, what is wrong, what to do.</summary>
@@ -131,16 +131,16 @@ public static partial class BlindNodeErrors
     {
         "unknown_protocol" =>
             $"The device '{p.Device}' has not been seen on the current version (sync protocol 3) for over {p.Days ?? 7} days. " +
-            "Update it to the latest version and open it once so it syncs, or remove it under Admin → Nodes.",
+            "Update it to the latest version and open it once so it syncs, or remove it under Admin → Trusted Nodes.",
         "old_protocol" =>
             $"The device '{p.Device}' runs an older version (sync protocol {p.Protocol}; the blind node needs 3). " +
-            "Update it to the latest version and open it once so it syncs, or remove it under Admin → Nodes.",
+            "Update it to the latest version and open it once so it syncs, or remove it under Admin → Trusted Nodes.",
         "not_superadmin" =>
             $"The device '{p.Device}' does not yet accept this computer as a superadmin. " +
-            $"On '{p.Device}' open Admin → Nodes and make this computer a superadmin.",
+            $"On '{p.Device}' open Admin → Trusted Nodes and make this computer a superadmin.",
         "refused" =>
             $"The device '{p.Device}' did not accept this computer's check: it may run an older version, or it no longer lists this computer. " +
-            "Update it to the latest version and open it once so it syncs; if that does not help, remove it under Admin → Nodes.",
+            "Update it to the latest version and open it once so it syncs; if that does not help, remove it under Admin → Trusted Nodes.",
         _ => p.Text ?? $"The device '{p.Device}' needs attention.",
     };
 

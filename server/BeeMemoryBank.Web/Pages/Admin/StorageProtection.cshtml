@@ -1,0 +1,47 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.StorageProtectionModel
+@{
+    // BMB-305: an encrypted node has nothing left to switch on here: this is the node's storage protection (its status and, on a server, whether it
+    // starts unlocked after a restart). A node whose database is still a plain file keeps "Database encryption" with its way to "Encrypt this node".
+    var storageProtected = Model.VaultStatus is { IsSealed: true };
+}
+
+@section About {
+    <p>
+        Bee Memory Bank can encrypt the database files of a node, page by page, so that a <strong>stolen disk, a copied data folder or a backup of it shows nothing</strong>: no title,
+        folder, tag, user name or activity line is readable in any file the node writes. The key is opened by your master password each time the node starts, and a locked node holds
+        no key in memory. A node that is set up today is encrypted from its first day.
+    </p>
+    <p>
+        A node set up by an earlier version may still keep its database as a plain file. No update encrypts it for you: you do it once, on purpose, from the encryption page. Encrypting
+        <strong>keeps no copy of the unencrypted database</strong>, so there is no way back from the node: take your own backup first if you may want one.
+    </p>
+    <p>
+        This protects the files, not a running, unlocked node. If you also switch on <a href="/Admin/OsAutoUnlock">OS auto-unlock</a>, the computer opens the vault by itself and a
+        stolen disk can be read again. On a server, the encryption page is also where you choose whether it opens by itself after a restart.
+    </p>
+}
+
+<div class="card mt-md" id="storage-protection" style="max-width:640px;">
+    <p class="text-muted text-sm" style="margin-bottom:12px;">
+        @if (Model.VaultStatus is null)
+        {
+            <text>The node did not say how its database is stored. Try again in a moment.</text>
+        }
+        else if (storageProtected)
+        {
+            <text>This node's database is encrypted.</text>
+        }
+        else
+        {
+            <text>This node's database is a plain file. You can encrypt it, so that a stolen disk or a copy of the data folder shows nothing.</text>
+        }
+        @if (Model.VaultRole == "server")
+        {
+            <text> Whether this server opens the vault by itself after a restart is set there too.</text>
+        }
+    </p>
+    <sl-button href="/VaultEncryption" variant="default" size="small">
+        <sl-icon slot="prefix" name="lock"></sl-icon> @(storageProtected ? "Storage protection" : "Database encryption")
+    </sl-button>
+</div>

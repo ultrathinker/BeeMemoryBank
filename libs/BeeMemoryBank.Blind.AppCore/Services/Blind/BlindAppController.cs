@@ -1,5 +1,6 @@
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
@@ -18,12 +19,14 @@ public sealed record BlindAppBackup(string Name, long Size);
 /// <param name="KeyStoreUnavailable">Set (a short reason without secrets) when the host's secret store did not answer - locked, access denied, blocked.
 /// <see cref="BackupKeyLost"/> and <see cref="AwaitingAnswer"/> are then not known and are reported false: a store that does not answer is not a lost key.</param>
 /// <param name="LastFailure">The failure the first load or backup is in now (the same error repeated counts up), or null.</param>
+/// <param name="SourceRefusedAt">When the source first refused this device and no contact has gone through since, or null. One refusal is not "removed by the owner": the copy asks again (<see cref="BlindSourceRemoval.Judge"/>).</param>
 public sealed record BlindAppStatus(Guid? NodeId, string? DisplayName, bool IsPaired, bool InitialLoadDone,
     DateTimeOffset? LastSyncAt, DateTimeOffset? LastBackupAt, BlindBackupSchedule Schedule, bool BackupKeyLost,
     string? ActiveJob, double? JobProgress, IReadOnlyList<BlindAppBackup> Backups,
     IReadOnlyList<BlindPhoneLog.Entry> RecentLog,
     string? Endpoint = null, bool AwaitingAnswer = false, string? StartError = null,
-    string? KeyStoreUnavailable = null, BlindAppFailure? LastFailure = null);
+    string? KeyStoreUnavailable = null, BlindAppFailure? LastFailure = null,
+    DateTimeOffset? SourceRefusedAt = null);
 
 /// <summary>How the last long job failed, for the screen: the error's own words, when, and how many times in a row.</summary>
 public sealed record BlindAppFailure(string Title, string Message, DateTimeOffset At, int Attempts);
@@ -73,8 +76,10 @@ public sealed class BlindAppController(
         }
         catch (Exception ex)
         {
-            _startError = ex.Message;
-            log.Add("start", $"Could not set the app up: {ex.Message}");
+            // The kind of failure, never the exception's message: what the app could not open is a database, a key or a file, and the message names it (a path, a key alias).
+            var said = BlindFailureText.Sentence(ex);
+            _startError = said;
+            log.Add("start", $"Could not set the app up: {said}");
         }
         RaiseChanged();
     }
@@ -123,18 +128,23 @@ public sealed class BlindAppController(
         HookProgress();
         await _gate.WaitAsync(ct);
         SetActive(state.InitialLoadDone ? "Backup" : "First load", null);
+        // Registered for the whole run, the line it writes to the log about its end included: "Disconnect and wipe" waits for this to be over, and a line written after the wipe had gone on
+        // would fail to delete the log or bring it back.
+        using var operation = activity?.TryBegin(BlindActivity.Heavy, ct);
         try
         {
-            var result = await heavy.RunAsync(forceBackup, ct);
-            // A failure was already written (or, being the same as the last one, deliberately not repeated) by the job itself.
-            if (heavy.LastFailure?.Result != result) BlindRunReport.Record(log, forceBackup ? "backup" : "run", result);
+            if (activity is not null && operation is null) return "The copy is being wiped; nothing was started.";
+            ct = operation?.Token ?? ct;
+            var result = await heavy.RunAsync(forceBackup, ct, operation);
+            // A failure was already written (or, being the same as the last one, deliberately not repeated) by the job itself, and so was a refusal of the source.
+            if (heavy.LastFailure?.Result != result && !BlindSourceRemoval.IsRefusalSentence(result)) BlindRunReport.Record(log, forceBackup ? "backup" : "run", result);
             return result;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // An error nobody planned for: the log is where the user can read it, the next slot tries again.
             BlindRunReport.RecordFailure(log, forceBackup ? "backup" : "run", ex);
-            return $"Stopped by an unexpected error: {BeeMemoryBank.Sync.FailureText.Say(ex)}";
+            return $"Stopped by an unexpected error: {BlindFailureText.Say(ex)}";
         }
         finally
         {
@@ -166,6 +176,8 @@ public sealed class BlindAppController(
             {
                 await sync.SyncOnceAsync(target, ct);
                 state.LastSyncAt = time.GetUtcNow();
+                // The source answered and accepted the device: a refusal it gave earlier was a passing one.
+                (services.GetService(typeof(IBlindSourceRemovalSink)) as IBlindSourceRemovalSink)?.SourceAnsweredThisDevice();
                 return "Synced.";
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -175,6 +187,24 @@ public sealed class BlindAppController(
             catch (BlindFeaturePendingException ex)
             {
                 return ex.Message;
+            }
+            catch (BlindPausedException ex)
+            {
+                // A limit or a switch says "not now": not a failure (nothing is logged as "Sync failed", LastFailure stays as it was) and not retried at once; the log says it once.
+                var paused = BlindPauseText.Job(ex.Pause, time.LocalTimeZone, time.GetUtcNow());
+                BlindRunReport.Record(log, "paused", paused);
+                return paused;
+            }
+            catch (HttpRequestException ex) when (BlindSourceRemoval.IsRefusal(ex) && services.GetService(typeof(IBlindSourceRemovalSink)) is IBlindSourceRemovalSink sink)
+            {
+                // The source answered 401 or 403 to a device it had accepted and synced. ONE refusal proves little (a proxy or a firewall in front of a healthy source can say no for a moment): it is
+                // remembered and the next round asks again at its normal rhythm. A SECOND one, on a later try within a day, is the source's decision: the host marks the account removed by its
+                // owner (its card says so, the scheduler leaves it alone) and the copy stays until the person removes it.
+                var outcome = sink.SourceRefusedThisDevice();
+                var said = BlindSourceRemoval.Sentence(outcome);
+                // A first refusal is not a problem of the contact (the screen's problem line reads the "sync" lines): it has a kind of its own.
+                BlindRunReport.Record(log, outcome == BlindRefusalOutcome.Removed ? "sync" : "refusal", said);
+                return said;
             }
             catch (Exception ex)
             {
@@ -241,24 +271,23 @@ public sealed class BlindAppController(
         try { awaiting = pairing.AwaitingAnswer; }
         catch (Exception ex) when (!IsFatal(ex)) { keyStoreProblem ??= ShortReason(ex); }
 
+        // What is stored is cleaned when it is READ as well (BlindFailureText.ForDisplay): the log file of an earlier version holds the raw message of the exception.
         var failure = heavy.LastFailure is { } f && (f.Title != "First load" || !state.InitialLoadDone)
-            ? new BlindAppFailure(f.Title, f.Message, f.At, f.Count)
+            ? new BlindAppFailure(f.Title, BlindFailureText.ForDisplay(f.Message), f.At, f.Count)
             : null;
         return new BlindAppStatus(state.NodeId, state.DisplayName, paired,
             state.InitialLoadDone, state.LastSyncAt, state.LastBackupAt, state.Schedule, keyLost,
             activeJob, progress,
             backups.Backups().Select(file => new BlindAppBackup(file.Name, file.Length)).ToList(), log.Latest(30),
             Endpoint: state.CallCode?.Address, AwaitingAnswer: awaiting, StartError: _startError,
-            KeyStoreUnavailable: keyStoreProblem, LastFailure: failure);
+            KeyStoreUnavailable: keyStoreProblem, LastFailure: failure, SourceRefusedAt: state.SourceRefusedAt);
     }
 
-    /// <summary>Type and short message of an exception, for a sentence on the screen: the store's own words, never a secret.</summary>
-    private static string ShortReason(Exception ex)
-    {
-        var message = (ex.Message ?? "").ReplaceLineEndings(" ").Trim();
-        if (message.Length > 120) message = message[..120] + "...";
-        return message.Length == 0 ? ex.GetType().Name : $"{ex.GetType().Name}: {message}";
-    }
+    /// <summary>
+    /// Why the secret store did not answer, for a sentence on the screen: the kind of failure (<see cref="BlindFailureText"/>), never the store's own message - a keystore or keychain
+    /// message names the alias of the key or the system's words about it.
+    /// </summary>
+    private static string ShortReason(Exception ex) => BlindFailureText.WithoutFullStop(BlindFailureText.Typed(ex));
 
     /// <summary>Tells the host that the screen is out of date. A handler that throws must not break the job or the call that raised the event.</summary>
     private void RaiseChanged()

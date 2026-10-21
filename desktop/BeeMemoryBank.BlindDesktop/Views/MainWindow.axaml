@@ -1,135 +1,295 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:BeeMemoryBank.BlindDesktop.ViewModels"
+        xmlns:views="using:BeeMemoryBank.BlindDesktop.Views"
         x:Class="BeeMemoryBank.BlindDesktop.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="Bee Memory Bank - blind copy"
-        Width="600" Height="780" MinWidth="460" MinHeight="480"
+        Width="1000" Height="780" MinWidth="760" MinHeight="520"
         WindowStartupLocation="CenterScreen">
 
+  <Window.Resources>
+    <views:PngBytesConverter x:Key="PngBytes" />
+  </Window.Resources>
+
   <Grid>
-  <ScrollViewer HorizontalScrollBarVisibility="Disabled">
-    <StackPanel Margin="20" Spacing="10">
+    <Grid ColumnDefinitions="300,*">
 
-      <!-- Who this is -->
-      <TextBlock Text="Bee Memory Bank - blind copy" FontSize="20" FontWeight="SemiBold" />
-      <TextBlock Text="{Binding IdentityText}" FontSize="16" />
-      <TextBlock Text="{Binding NodeText}" Opacity="0.7" TextWrapping="Wrap" />
-      <TextBlock Text="{Binding PairText}" TextWrapping="Wrap" />
+      <!-- ===== Left: the accounts of this device ===== -->
+      <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="16" Spacing="10">
+          <TextBlock Text="Bee Memory Bank" FontSize="20" FontWeight="SemiBold" />
+          <TextBlock Text="Encrypted copies of other people's Bee Memory Banks" Opacity="0.7" TextWrapping="Wrap" />
 
-      <Border IsVisible="{Binding HasStartError}" Background="#33CC4444" Padding="10" CornerRadius="4">
-        <TextBlock Text="{Binding StartErrorText}" TextWrapping="Wrap" />
-      </Border>
-      <Border IsVisible="{Binding HasKeyStoreNotice}" Background="#33D4A017" Padding="10" CornerRadius="4">
-        <TextBlock Text="{Binding KeyStoreNoticeText}" TextWrapping="Wrap" />
-      </Border>
-      <Border IsVisible="{Binding HasKeyLost}" Background="#33CC4444" Padding="10" CornerRadius="4">
-        <TextBlock Text="{Binding KeyLostText}" TextWrapping="Wrap" />
-      </Border>
+          <Border IsVisible="{Binding HasRegistryProblem}" Background="#33CC4444" Padding="10" CornerRadius="4">
+            <TextBlock Text="{Binding RegistryProblem}" TextWrapping="Wrap" />
+          </Border>
 
-      <!-- Pairing, step 1: this copy shows its code -->
-      <StackPanel IsVisible="{Binding ShowPairingCode}" Spacing="6">
-        <TextBlock Text="Step 1. On the computer, add this blind copy with this code" FontWeight="SemiBold" TextWrapping="Wrap" />
-        <Image x:Name="QrImage" Width="220" Height="220" HorizontalAlignment="Left" />
-        <TextBox Text="{Binding PairingCodeText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="90" />
-        <Button Content="Copy the code" Command="{Binding CopyPairingCodeCommand}" HorizontalAlignment="Left" />
-      </StackPanel>
-      <StackPanel IsVisible="{Binding !ShowPairingCode}" Spacing="6">
-        <TextBlock Text="{Binding PairingMessage}" TextWrapping="Wrap" />
-        <Button Content="Re-pair" Command="{Binding RePairCommand}" IsVisible="{Binding CanRePair}" HorizontalAlignment="Left" />
-      </StackPanel>
+          <TextBlock Text="{Binding DeviceLine}" Opacity="0.8" TextWrapping="Wrap" />
 
-      <!-- Pairing, step 2: the computer's answer -->
-      <StackPanel IsVisible="{Binding CanConnect}" Spacing="6">
-        <TextBlock Text="Step 2. Paste the code the computer shows back" FontWeight="SemiBold" TextWrapping="Wrap" />
-        <TextBox Text="{Binding CallCodeInput}" PlaceholderText="bmb-blind-call:?..." AcceptsReturn="False" />
-        <TextBlock Text="{Binding ConnectError}" IsVisible="{Binding HasConnectError}" Foreground="#CC4444" TextWrapping="Wrap" />
-        <Button Content="Connect" Command="{Binding ConnectCommand}" HorizontalAlignment="Left" />
-      </StackPanel>
+          <ListBox ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedRow, Mode=TwoWay}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:AccountRow">
+                <StackPanel Spacing="2" Margin="0,4">
+                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Text="{Binding State}" TextWrapping="Wrap" FontSize="12" />
+                  <TextBlock Text="{Binding Stored}" FontSize="12" Opacity="0.7" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
 
-      <Separator />
+          <Button Content="Add account" Command="{Binding AddAccountCommand}" HorizontalAlignment="Left" />
+          <TextBlock Text="{Binding AddHint}" IsVisible="{Binding HasAddHint}" TextWrapping="Wrap" Opacity="0.7" />
 
-      <!-- State -->
-      <TextBlock Text="{Binding LoadText}" TextWrapping="Wrap" />
-      <TextBlock Text="{Binding StoreText}" TextWrapping="Wrap" />
-      <TextBlock Text="{Binding SyncText}" />
-      <TextBlock Text="{Binding BackupText}" />
-      <StackPanel IsVisible="{Binding JobVisible}" Spacing="4">
-        <TextBlock Text="{Binding JobText}" />
-        <ProgressBar Minimum="0" Maximum="1" Value="{Binding JobProgress}" />
-      </StackPanel>
+          <!-- The list and the disk disagree: nothing was changed; each difference has one explicit action. -->
+          <ItemsControl ItemsSource="{Binding Repairs}" IsVisible="{Binding HasRepairs}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:RepairRow">
+                <Border Background="#33D4A017" Padding="10" CornerRadius="4" Margin="0,4">
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="{Binding Description}" TextWrapping="Wrap" />
+                    <Button Content="{Binding ActionText}" Command="{Binding Command}" HorizontalAlignment="Left" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
 
-      <StackPanel Orientation="Horizontal" Spacing="8">
-        <Button Content="Sync now" Command="{Binding SyncNowCommand}" />
-        <Button Content="Back up now" Command="{Binding BackupNowCommand}" />
-      </StackPanel>
-      <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" TextWrapping="Wrap" FontStyle="Italic" />
+          <Separator />
 
-      <Separator />
+          <!-- This device -->
+          <TextBlock Text="This device" FontWeight="SemiBold" />
+          <TextBlock Text="Over every account together. Empty means no limit; 0 pauses everything." Opacity="0.7" TextWrapping="Wrap" FontSize="12" />
+          <TextBlock Text="Stored on this computer (for example 5 GB)" FontSize="12" />
+          <TextBox Text="{Binding DeviceStoredText}" />
+          <TextBlock Text="Traffic a day (for example 500 MB)" FontSize="12" />
+          <TextBox Text="{Binding DeviceTrafficText}" />
+          <TextBlock Text="{Binding DeviceLimitsProblems}" IsVisible="{Binding HasDeviceLimitsProblems}" Foreground="#CC4444" TextWrapping="Wrap" />
+          <Button Content="Save device limits" Command="{Binding ApplyDeviceLimitsCommand}" HorizontalAlignment="Left" />
+          <Border IsVisible="{Binding HasDeviceUsageProblem}" Background="#33D4A017" Padding="10" CornerRadius="4">
+            <StackPanel Spacing="6">
+              <TextBlock Text="The device's own usage counts cannot be read, so its limits are not checked. Starting new counts keeps the damaged file aside." TextWrapping="Wrap" />
+              <Button Content="Start new counts" Command="{Binding RepairDeviceUsageCommand}" HorizontalAlignment="Left" />
+            </StackPanel>
+          </Border>
+          <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" TextWrapping="Wrap" FontStyle="Italic" />
 
-      <!-- Backups -->
-      <TextBlock Text="Backups" FontWeight="SemiBold" />
-      <StackPanel Orientation="Horizontal" Spacing="8">
-        <TextBlock Text="Make one on its own:" VerticalAlignment="Center" />
-        <ComboBox ItemsSource="{Binding ScheduleOptions}" SelectedIndex="{Binding ScheduleIndex}" MinWidth="110" />
-      </StackPanel>
-      <TextBlock Text="No backups on this computer yet." IsVisible="{Binding !HasBackups}" Opacity="0.7" />
-      <ItemsControl ItemsSource="{Binding Backups}" IsVisible="{Binding HasBackups}">
-        <ItemsControl.ItemTemplate>
-          <DataTemplate x:DataType="vm:BackupRow">
-            <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,2">
-              <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-              <TextBlock Grid.Column="1" Text="{Binding SizeText}" VerticalAlignment="Center" Margin="10,0" Opacity="0.7" />
-              <Button Grid.Column="2" Content="Save to..." Command="{Binding SaveCommand}" />
-            </Grid>
-          </DataTemplate>
-        </ItemsControl.ItemTemplate>
-      </ItemsControl>
+          <Separator />
 
-      <Separator />
+          <CheckBox Content="{Binding AutostartText}" IsChecked="{Binding AutostartOn}" IsEnabled="{Binding AutostartKnown}" />
+          <TextBlock Text="The start-up setting cannot be read on this computer." IsVisible="{Binding !AutostartKnown}" Opacity="0.7" TextWrapping="Wrap" />
 
-      <!-- Settings -->
-      <CheckBox Content="{Binding AutostartText}" IsChecked="{Binding AutostartOn}" IsEnabled="{Binding AutostartKnown}" />
-      <TextBlock Text="The start-up setting cannot be read on this computer." IsVisible="{Binding !AutostartKnown}" Opacity="0.7" />
-
-      <!-- Log -->
-      <TextBlock Text="Log" FontWeight="SemiBold" />
-      <TextBox Text="{Binding LogText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
-               FontFamily="Consolas, Menlo, monospace" FontSize="12" Height="180" />
-
-      <Separator />
-
-      <!-- Wipe -->
-      <Button Content="Disconnect and wipe..." Command="{Binding OpenWipeCommand}" IsVisible="{Binding !WipePanelOpen}" HorizontalAlignment="Left" />
-      <Border IsVisible="{Binding WipePanelOpen}" Background="#33CC4444" Padding="10" CornerRadius="4">
-        <StackPanel Spacing="8">
-          <TextBlock Text="{Binding WipePrompt}" TextWrapping="Wrap" />
-          <TextBox Text="{Binding WipeTyped}" />
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <Button Content="Wipe" Command="{Binding ConfirmWipeCommand}" />
-            <Button Content="Cancel" Command="{Binding CancelWipeCommand}" />
+          <StackPanel Spacing="6">
+            <Button Content="Quit" Command="{Binding QuitCommand}" HorizontalAlignment="Left" />
+            <TextBlock Text="{Binding CloseHintText}" Opacity="0.7" TextWrapping="Wrap" FontSize="12" />
           </StackPanel>
         </StackPanel>
-      </Border>
+      </ScrollViewer>
 
-      <Separator />
+      <!-- ===== Right: the Add page, or the selected account ===== -->
+      <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="20" Spacing="10">
 
-      <!-- Quit -->
-      <StackPanel Orientation="Horizontal" Spacing="10">
-        <Button Content="Quit" Command="{Binding QuitCommand}" />
-        <TextBlock Text="{Binding CloseHintText}" VerticalAlignment="Center" Opacity="0.7" TextWrapping="Wrap" />
+          <!-- Add account -->
+          <StackPanel IsVisible="{Binding ShowAdd}" Spacing="10">
+           <StackPanel Spacing="10" DataContext="{Binding Add}" x:DataType="vm:AddAccountViewModel">
+            <TextBlock Text="Add an account" FontSize="20" FontWeight="SemiBold" />
+            <TextBlock Text="Paste the invitation the owner of a Bee Memory Bank sent you. It works once and for a short time; this device keeps an encrypted copy that it cannot read."
+                       TextWrapping="Wrap" />
+            <TextBox Text="{Binding InviteText}" PlaceholderText="bmb-invite:?..." AcceptsReturn="False" TextWrapping="Wrap" MaxHeight="120"
+                     MaxLength="{x:Static vm:AddAccountViewModel.MaxPasteLength}" />
+            <Button Content="Paste" Command="{Binding PasteCommand}" HorizontalAlignment="Left" />
+
+            <Border IsVisible="{Binding HasPreview}" Padding="12" CornerRadius="4" Background="#22888888">
+              <StackPanel Spacing="4">
+                <TextBlock Text="{Binding PreviewDescription}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding PreviewLimits}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding PreviewValidity}" TextWrapping="Wrap" Opacity="0.8" />
+                <TextBlock Text="{Binding PreviewRefusal}" IsVisible="{Binding HasRefusal}" Foreground="#CC4444" TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+            <TextBlock Text="{Binding Error}" IsVisible="{Binding HasError}" Foreground="#CC4444" TextWrapping="Wrap" />
+            <Button Content="Add" Command="{Binding AddInvitationCommand}" HorizontalAlignment="Left" />
+
+            <Separator />
+
+            <TextBlock Text="Or pair with a code, the old way" FontWeight="SemiBold" />
+            <TextBlock Text="This computer shows a code; you give it to the computer that holds the data, and paste its answer on the next page." TextWrapping="Wrap" Opacity="0.8" />
+            <TextBox Text="{Binding NameText}" PlaceholderText="A name for this account (optional)" />
+            <Button Content="Add with a pairing code" Command="{Binding AddWithCodeCommand}" HorizontalAlignment="Left" />
+           </StackPanel>
+            <Button Content="Back to the accounts" Command="{Binding CloseAddCommand}" IsVisible="{Binding CanCloseAdd}" HorizontalAlignment="Left" />
+          </StackPanel>
+
+          <!-- The selected account -->
+          <ContentControl Content="{Binding Detail}" IsVisible="{Binding ShowDetail}">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:AccountDetailViewModel">
+                <StackPanel Spacing="10">
+
+                  <!-- Who this is, from the card -->
+                  <TextBlock Text="{Binding Name}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding SourceHost}" IsVisible="{Binding HasSourceHost}" Opacity="0.7" />
+                  <TextBlock Text="{Binding StateLine}" TextWrapping="Wrap" FontSize="15" />
+                  <TextBlock Text="{Binding Stored}" IsVisible="{Binding HasStored}" Opacity="0.8" />
+                  <TextBlock Text="{Binding Today}" IsVisible="{Binding HasToday}" Opacity="0.8" />
+                  <TextBlock Text="{Binding Average}" Opacity="0.8" />
+                  <TextBlock Text="{Binding LastSync}" Opacity="0.8" />
+
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Try again" Command="{Binding ReconnectCommand}" IsVisible="{Binding CanReconnect}" />
+                    <Button Content="Start new counts" Command="{Binding RepairUsageCommand}" IsVisible="{Binding CanRepairUsage}" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" TextWrapping="Wrap" FontStyle="Italic" />
+
+                  <!-- Today's panel (only while the account is active and its copy is up) -->
+                  <ContentControl Content="{Binding Panel}" IsVisible="{Binding HasPanel}">
+                    <ContentControl.ContentTemplate>
+                      <DataTemplate x:DataType="vm:AccountPanelViewModel">
+                        <StackPanel Spacing="10">
+                          <Separator />
+                          <TextBlock Text="{Binding IdentityText}" FontSize="16" />
+                          <TextBlock Text="{Binding NodeText}" Opacity="0.7" TextWrapping="Wrap" />
+                          <TextBlock Text="{Binding PairText}" TextWrapping="Wrap" />
+
+                          <Border IsVisible="{Binding HasStartError}" Background="#33CC4444" Padding="10" CornerRadius="4">
+                            <TextBlock Text="{Binding StartErrorText}" TextWrapping="Wrap" />
+                          </Border>
+                          <Border IsVisible="{Binding HasKeyStoreNotice}" Background="#33D4A017" Padding="10" CornerRadius="4">
+                            <TextBlock Text="{Binding KeyStoreNoticeText}" TextWrapping="Wrap" />
+                          </Border>
+                          <Border IsVisible="{Binding HasKeyLost}" Background="#33CC4444" Padding="10" CornerRadius="4">
+                            <TextBlock Text="{Binding KeyLostText}" TextWrapping="Wrap" />
+                          </Border>
+
+                          <!-- Pairing, step 1: this copy shows its code -->
+                          <StackPanel IsVisible="{Binding ShowPairingCode}" Spacing="6">
+                            <TextBlock Text="Step 1. On the computer, add this blind copy with this code" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <Image Source="{Binding PairingQrPng, Converter={StaticResource PngBytes}}" Width="220" Height="220" HorizontalAlignment="Left" />
+                            <TextBox Text="{Binding PairingCodeText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="90" />
+                            <Button Content="Copy the code" Command="{Binding CopyPairingCodeCommand}" HorizontalAlignment="Left" />
+                          </StackPanel>
+                          <StackPanel IsVisible="{Binding !ShowPairingCode}" Spacing="6">
+                            <TextBlock Text="{Binding PairingMessage}" TextWrapping="Wrap" />
+                            <Button Content="Re-pair" Command="{Binding RePairCommand}" IsVisible="{Binding CanRePair}" HorizontalAlignment="Left" />
+                          </StackPanel>
+
+                          <!-- Pairing, step 2: the computer's answer -->
+                          <StackPanel IsVisible="{Binding CanConnect}" Spacing="6">
+                            <TextBlock Text="Step 2. Paste the code the computer shows back" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBox Text="{Binding CallCodeInput}" PlaceholderText="bmb-blind-call:?..." AcceptsReturn="False" />
+                            <TextBlock Text="{Binding ConnectError}" IsVisible="{Binding HasConnectError}" Foreground="#CC4444" TextWrapping="Wrap" />
+                            <Button Content="Connect" Command="{Binding ConnectCommand}" HorizontalAlignment="Left" />
+                          </StackPanel>
+
+                          <Separator />
+
+                          <!-- State -->
+                          <TextBlock Text="{Binding LoadText}" TextWrapping="Wrap" />
+                          <TextBlock Text="{Binding StoreText}" TextWrapping="Wrap" />
+                          <TextBlock Text="{Binding SyncText}" />
+                          <TextBlock Text="{Binding BackupText}" />
+                          <StackPanel IsVisible="{Binding JobVisible}" Spacing="4">
+                            <TextBlock Text="{Binding JobText}" />
+                            <ProgressBar Minimum="0" Maximum="1" Value="{Binding JobProgress}" />
+                          </StackPanel>
+
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Sync now" Command="{Binding SyncNowCommand}" />
+                            <Button Content="Back up now" Command="{Binding BackupNowCommand}" />
+                          </StackPanel>
+                          <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" TextWrapping="Wrap" FontStyle="Italic" />
+
+                          <Separator />
+
+                          <!-- Backups -->
+                          <TextBlock Text="Backups" FontWeight="SemiBold" />
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Make one on its own:" VerticalAlignment="Center" />
+                            <ComboBox ItemsSource="{Binding ScheduleOptions}" SelectedIndex="{Binding ScheduleIndex}" MinWidth="110" />
+                          </StackPanel>
+                          <TextBlock Text="No backups of this account on this computer yet." IsVisible="{Binding !HasBackups}" Opacity="0.7" />
+                          <ItemsControl ItemsSource="{Binding Backups}" IsVisible="{Binding HasBackups}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="vm:BackupRow">
+                                <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,2">
+                                  <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                  <TextBlock Grid.Column="1" Text="{Binding SizeText}" VerticalAlignment="Center" Margin="10,0" Opacity="0.7" />
+                                  <Button Grid.Column="2" Content="Save to..." Command="{Binding SaveCommand}" />
+                                </Grid>
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+
+                          <!-- Log -->
+                          <TextBlock Text="Log" FontWeight="SemiBold" />
+                          <TextBox Text="{Binding LogText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                                   FontFamily="Consolas, Menlo, monospace" FontSize="12" Height="160" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ContentControl.ContentTemplate>
+                  </ContentControl>
+
+                  <Separator />
+
+                  <!-- Limits -->
+                  <TextBlock Text="Limits" FontWeight="SemiBold" />
+                  <TextBlock Text="Empty means no limit; 0 pauses the account. Sizes in MB or GB." Opacity="0.7" TextWrapping="Wrap" FontSize="12" />
+                  <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="6">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Stored on this computer" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding StoredText}" PlaceholderText="for example 2 GB" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Traffic a day" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding TrafficText}" PlaceholderText="for example 200 MB" />
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Requests a day" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding RequestsText}" PlaceholderText="for example 5000" />
+                  </Grid>
+                  <CheckBox Content="Only on Wi-Fi or other unmetered networks" IsChecked="{Binding UnmeteredOnly}" />
+                  <CheckBox Content="Pause on battery saver" IsChecked="{Binding PauseOnPowerSaving}" />
+                  <TextBlock Text="{Binding LimitsProblems}" IsVisible="{Binding HasLimitsProblems}" Foreground="#CC4444" TextWrapping="Wrap" />
+                  <Button Content="Save limits" Command="{Binding ApplyLimitsCommand}" HorizontalAlignment="Left" />
+
+                  <Separator />
+
+                  <!-- Pause, rename -->
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="{Binding PauseText}" Command="{Binding TogglePauseCommand}" />
+                  </StackPanel>
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBox Grid.Column="0" Text="{Binding RenameText}" />
+                    <Button Grid.Column="1" Content="Rename" Command="{Binding RenameCommand}" />
+                  </Grid>
+
+                  <Separator />
+
+                  <!-- Remove -->
+                  <Button Content="Remove this account..." Command="{Binding RemoveCommand}" IsVisible="{Binding !RemovePanelOpen}" HorizontalAlignment="Left" />
+                  <Border IsVisible="{Binding RemovePanelOpen}" Background="#33CC4444" Padding="10" CornerRadius="4">
+                    <StackPanel Spacing="8">
+                      <TextBlock Text="{Binding RemoveTitle}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding RemoveMessage}" TextWrapping="Wrap" />
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="{Binding RemoveConfirmText}" Command="{Binding ConfirmRemoveCommand}" />
+                        <Button Content="{Binding RemoveCancelText}" Command="{Binding CancelRemoveCommand}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
+
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+
+    <!-- A long operation is running (BMB-311): this pop-up covers the whole window, so nothing under it can be clicked a second time. -->
+    <Border IsVisible="{Binding IsBusy}" Background="#E6000000">
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" Width="380" Margin="20">
+        <TextBlock Text="{Binding BusyTitle}" FontSize="18" FontWeight="SemiBold" Foreground="White" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding BusyText}" Foreground="#D1D5DB" TextWrapping="Wrap" />
+        <ProgressBar IsIndeterminate="True" />
       </StackPanel>
-
-    </StackPanel>
-  </ScrollViewer>
-
-  <!-- A long operation is running (BMB-311): this pop-up covers the whole window, so nothing under it can be clicked a second time. -->
-  <Border IsVisible="{Binding IsBusy}" Background="#E6000000">
-    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" Width="380" Margin="20">
-      <TextBlock Text="{Binding BusyTitle}" FontSize="18" FontWeight="SemiBold" Foreground="White" TextWrapping="Wrap" />
-      <TextBlock Text="{Binding BusyText}" Foreground="#D1D5DB" TextWrapping="Wrap" />
-      <ProgressBar IsIndeterminate="True" />
-    </StackPanel>
-  </Border>
+    </Border>
   </Grid>
 </Window>

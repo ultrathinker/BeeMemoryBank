@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using BeeMemoryBank.Cli.Commands;
 using BeeMemoryBank.Core.Services;
@@ -70,6 +71,7 @@ public sealed class SealedCliTests : IDisposable
             (await session.UnlockAsync(Password)).Should().BeTrue();
             await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
             dek = session.GetMasterDek();
+            await AwaitPostUnlockCatchUps(session);
         }
         SqliteConnection.ClearAllPools();
 
@@ -85,12 +87,12 @@ public sealed class SealedCliTests : IDisposable
         try
         {
             var sealedPath = vaultPath + ".sealed-tmp";
-            await using (var image = File.OpenRead(vaultPath))
+            await using (var image = SwapStep(() => File.OpenRead(vaultPath)))
                 await PlainImageImporter.ToSealedFileAsync(image, image.Length, sealedPath, vaultKey, memoryCap: 256L << 20);
             foreach (var sidecar in new[] { "-wal", "-shm", "-journal" })
-                if (File.Exists(vaultPath + sidecar)) File.Delete(vaultPath + sidecar);
-            File.Delete(vaultPath);
-            File.Move(sealedPath, vaultPath);
+                if (File.Exists(vaultPath + sidecar)) SwapStep(() => File.Delete(vaultPath + sidecar));
+            SwapStep(() => File.Delete(vaultPath));
+            SwapStep(() => File.Move(sealedPath, vaultPath));
 
             using var sealedVault = new DbConnectionFactory(vaultPath, new InMemoryVaultKeySource(vaultKey, chatKey));
             var mirror = new UnlockMaterialMirror(sealedVault, boot, doors, wrappers, new BootStoreWriter(boot.Connections));
@@ -103,6 +105,44 @@ public sealed class SealedCliTests : IDisposable
             CryptographicOperations.ZeroMemory(chatKey);
             CryptographicOperations.ZeroMemory(dek);
             SqliteConnection.ClearAllPools();
+        }
+    }
+
+    /// <summary>
+    /// Waits out the fire-and-forget post-unlock catch-ups (DEK-rotation drain, legacy comment sealing, pending-restore retries,
+    /// recovery reconciliation, the legacy node-key migration). <c>UnlockAsync</c> detaches them as <c>Task.Run</c> and returns
+    /// immediately; each one opens its own scope and reads the vault database, and under load the sweep can still be running when
+    /// the hand-seal below deletes <c>beememorybank.db</c> - the checked-out connection then holds the file and the delete dies
+    /// with an IOException. Integration projects holding an InternalsVisibleTo just await <c>SessionService.PostUnlockCatchUp</c>;
+    /// this project has no grant, so the same awaitable is read by reflection, failing loudly if it moves rather than silently
+    /// skipping the wait.
+    /// </summary>
+    private static async Task AwaitPostUnlockCatchUps(SessionService session)
+    {
+        var awaitable = typeof(SessionService).GetProperty("PostUnlockCatchUp", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("SessionService.PostUnlockCatchUp is gone - update this helper.");
+        await (Task)(awaitable.GetValue(session) ?? throw new InvalidOperationException("SessionService.PostUnlockCatchUp was null."));
+    }
+
+    /// <summary>Runs one file operation of the seal swap with a short bounded retry on IOException: just after the connection pool
+    /// has let go of a vault file, Windows can still answer a delete or move with a sharing violation for a moment (a scanner or the
+    /// indexer opening the freshly written file). The budget is about 2 s; past it the last exception propagates, so a real holder
+    /// of the file still fails the test, with its own error.</summary>
+    private static void SwapStep(Action step)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { step(); return; }
+            catch (IOException) when (attempt < 20) { Thread.Sleep(100); }
+        }
+    }
+
+    private static T SwapStep<T>(Func<T> step)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return step(); }
+            catch (IOException) when (attempt < 20) { Thread.Sleep(100); }
         }
     }
 

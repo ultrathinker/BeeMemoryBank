@@ -25,7 +25,7 @@ public sealed class BlindEventLogger(ISyncTrigger syncTrigger) : IEventLogger
     public Task LogUpdateAsync(Article article, EncryptedArticleBody? body, string[] conceptTags, IDbTransaction? transaction = null) => Refused(EventTypes.ArticleUpdate);
     public Task<RowVersion> LogDeleteAsync(Guid articleId, IDbTransaction? transaction = null) => Refused<RowVersion>(EventTypes.ArticleDelete);
     public void SignalSync() => syncTrigger.Signal();
-    public Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry) => Refused<RowVersion>(EventTypes.WhitelistAdd);
+    public Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry, Guid? eventId = null) => Refused<RowVersion>(EventTypes.WhitelistAdd);
     public Task<RowVersion> LogWhitelistRevokeAsync(Guid nodeId) => Refused<RowVersion>(EventTypes.WhitelistRevoke);
     public Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null) => Refused<RowVersion>(EventTypes.WhitelistUpdate);
     public Task LogMasterPasswordChangedAsync(DateTime changedAt) => Refused(EventTypes.MasterPasswordChanged);

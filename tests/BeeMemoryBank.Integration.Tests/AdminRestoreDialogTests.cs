@@ -198,7 +198,7 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
         });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        WebUtility.UrlDecode(resp.Headers.Location!.OriginalString).Should().StartWith("/Admin?err=Unknown restore mode");
+        WebUtility.UrlDecode(resp.Headers.Location!.OriginalString).Should().StartWith("/Admin/Snapshots?err=Unknown restore mode");
         (await NodeIdAsync()).Should().Be(before);
     }
 
@@ -217,15 +217,15 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ARestoreWithAWrongPassword_ComesBackToTheAdminPageWithTheReason()
+    public async Task ARestoreWithAWrongPassword_ComesBackToTheSnapshotsPageWithTheReason()
     {
         var resp = await PostAdminAsync("RestoreSnapshot", new()
         {
             ["fileName"] = _snapshot, ["masterPassword"] = "wrong-password", ["createBackupFirst"] = "false", ["mode"] = "standalone"
         });
 
-        // Back at the card of the button, which says why (BMB-303).
-        WebUtility.UrlDecode(resp.Headers.Location!.OriginalString).Should().Be("/Admin?err=Invalid master password&card=card-snapshots#card-snapshots");
+        // Back at the page of the button, which says why in its message area (BMB-303).
+        WebUtility.UrlDecode(resp.Headers.Location!.OriginalString).Should().Be("/Admin/Snapshots?err=Invalid master password");
     }
 
     // ── the whole network, from the same dialog ─────────────────────────────────────────────────
@@ -268,7 +268,7 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
 
     private async Task<string> AdminPageAsync()
     {
-        var resp = await _admin.GetAsync("/Admin");
+        var resp = await _admin.GetAsync("/Admin/Snapshots");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         return await resp.Content.ReadAsStringAsync();
     }
@@ -285,14 +285,14 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
     private static string AntiforgeryCookies(HttpResponseMessage page) =>
         page.Headers.TryGetValues("Set-Cookie", out var set) ? string.Join("; ", set.Select(c => c.Split(';')[0])) : "";
 
-    /// <summary>Posts a handler of the Admin page the way the browser does: the page's antiforgery token and cookie, then the session.</summary>
+    /// <summary>Posts a handler of the Snapshots page the way the browser does: the page's antiforgery token and cookie, then the session.</summary>
     private async Task<HttpResponseMessage> PostAdminAsync(string handler, Dictionary<string, string> fields)
     {
-        var page = await _admin.GetAsync("/Admin");
+        var page = await _admin.GetAsync("/Admin/Snapshots");
         var html = await page.Content.ReadAsStringAsync();
         var session = string.Join("; ", _admin.DefaultRequestHeaders.GetValues("Cookie"));
         var body = new Dictionary<string, string>(fields) { ["__RequestVerificationToken"] = Token.Match(html).Groups[1].Value };
-        using var post = new HttpRequestMessage(HttpMethod.Post, $"/Admin?handler={handler}") { Content = new FormUrlEncodedContent(body) };
+        using var post = new HttpRequestMessage(HttpMethod.Post, $"/Admin/Snapshots?handler={handler}") { Content = new FormUrlEncodedContent(body) };
         post.Headers.TryAddWithoutValidation("Cookie", session + "; " + AntiforgeryCookies(page));
         return await _admin.SendAsync(post);
     }

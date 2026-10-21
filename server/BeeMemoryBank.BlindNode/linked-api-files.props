@@ -4,6 +4,7 @@
     <Compile Include="..\BeeMemoryBank.Api\Endpoints\BlindBackupEndpoints.cs" Link="Api\Endpoints\BlindBackupEndpoints.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Endpoints\BlindConsoleEndpoints.cs" Link="Api\Endpoints\BlindConsoleEndpoints.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Endpoints\BlindEndpoints.cs" Link="Api\Endpoints\BlindEndpoints.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Endpoints\BlindJoinEndpoints.cs" Link="Api\Endpoints\BlindJoinEndpoints.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Endpoints\BlindNodeEndpoints.cs" Link="Api\Endpoints\BlindNodeEndpoints.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Endpoints\BlindRestoreEndpoints.cs" Link="Api\Endpoints\BlindRestoreEndpoints.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Endpoints\BlindStatusEndpoints.cs" Link="Api\Endpoints\BlindStatusEndpoints.cs" />
@@ -14,6 +15,7 @@
     <Compile Include="..\BeeMemoryBank.Api\Helpers\InternalKeyEndpointFilter.cs" Link="Api\Helpers\InternalKeyEndpointFilter.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Helpers\RequireNonAgentFilter.cs" Link="Api\Helpers\RequireNonAgentFilter.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Helpers\SuperadminEndpointFilter.cs" Link="Api\Helpers\SuperadminEndpointFilter.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Middleware\BlindUsageMiddleware.cs" Link="Api\Middleware\BlindUsageMiddleware.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Middleware\InternalKeyMiddleware.cs" Link="Api\Middleware\InternalKeyMiddleware.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Middleware\MaintenanceMiddleware.cs" Link="Api\Middleware\MaintenanceMiddleware.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Middleware\PublicSurfaceMiddleware.cs" Link="Api\Middleware\PublicSurfaceMiddleware.cs" />
@@ -23,6 +25,8 @@
     <Compile Include="..\BeeMemoryBank.Api\Models\Responses.cs" Link="Api\Models\Responses.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Models\SyncModels.cs" Link="Api\Models\SyncModels.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindActivationObserver.cs" Link="Api\Services\Blind\BlindActivationObserver.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindJoinRecord.cs" Link="Api\Services\Blind\BlindJoinRecord.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindJoinService.cs" Link="Api\Services\Blind\BlindJoinService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindLogTrimmer.cs" Link="Api\Services\Blind\BlindLogTrimmer.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindPackageBuilder.cs" Link="Api\Services\Blind\BlindPackageBuilder.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Blind\BlindPackageV2Builder.cs" Link="Api\Services\Blind\BlindPackageV2Builder.cs" />
@@ -51,6 +55,12 @@
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindBackup\S3RecoverySetWriter.cs" Link="Api\Services\BlindBackup\S3RecoverySetWriter.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindConsole\BlindConsoleAuthService.cs" Link="Api\Services\BlindConsole\BlindConsoleAuthService.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindConsole\BlindWipeService.cs" Link="Api\Services\BlindConsole\BlindWipeService.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\BlindLimits\BlindBodyLimits.cs" Link="Api\Services\BlindLimits\BlindBodyLimits.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\BlindLimits\BlindLimitsStatusContributor.cs" Link="Api\Services\BlindLimits\BlindLimitsStatusContributor.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\BlindLimits\BlindNodeLimits.cs" Link="Api\Services\BlindLimits\BlindNodeLimits.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\BlindLimits\BlindStoredSize.cs" Link="Api\Services\BlindLimits\BlindStoredSize.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\BlindLimits\BlindUsageGuard.cs" Link="Api\Services\BlindLimits\BlindUsageGuard.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\BlindLimits\BlindUsageLedger.cs" Link="Api\Services\BlindLimits\BlindUsageLedger.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindStatus\BlindStatusBuilder.cs" Link="Api\Services\BlindStatus\BlindStatusBuilder.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindStatus\CoreBlindStatusContributor.cs" Link="Api\Services\BlindStatus\CoreBlindStatusContributor.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\BlindStatus\IBlindStatusContributor.cs" Link="Api\Services\BlindStatus\IBlindStatusContributor.cs" />
@@ -59,6 +69,7 @@
     <Compile Include="..\BeeMemoryBank.Api\Services\PublicHostValidator.cs" Link="Api\Services\PublicHostValidator.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\BlindRestoreCode.cs" Link="Api\Services\Recovery\BlindRestoreCode.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\BlindRestoreCodeService.cs" Link="Api\Services\Recovery\BlindRestoreCodeService.cs" />
+    <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\BlindRestoreCodeThrottle.cs" Link="Api\Services\Recovery\BlindRestoreCodeThrottle.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\ICurrentKeyFingerprintSource.cs" Link="Api\Services\Recovery\ICurrentKeyFingerprintSource.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\PeerOwnStanding.cs" Link="Api\Services\Recovery\PeerOwnStanding.cs" />
     <Compile Include="..\BeeMemoryBank.Api\Services\Recovery\RecoveryBlindStatusContributors.cs" Link="Api\Services\Recovery\RecoveryBlindStatusContributors.cs" />

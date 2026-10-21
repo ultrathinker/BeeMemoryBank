@@ -289,6 +289,21 @@ public class BlindPhoneFormat2Tests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_baseline_check_of_a_copy_that_holds_no_baseline_asks_nothing_and_says_so()
+    {
+        await PairBlindNodeAsync();
+        await ActivateAndReseedAsync();
+        var phone = await CreatePhoneAsync();
+        using var http = HubClient();
+        var asked = _hub.ReplicaQueries.Count;
+
+        (await phone.Replica.CheckBaselineAsync(http, phone.Target, Path.Combine(phone.Dir, "replica"), null, CancellationToken.None)).Should()
+            .Be(BlindBaselineCheck.NotAsked, "the first load is the way to get a baseline; nothing was sent, so no contact went through");
+
+        _hub.ReplicaQueries.Should().HaveCount(asked);
+    }
+
+    [Fact]
     public async Task A_newer_baseline_is_taken_with_have_and_what_it_covers_of_the_log_is_trimmed()
     {
         await PairBlindNodeAsync();
@@ -298,8 +313,8 @@ public class BlindPhoneFormat2Tests : IAsyncLifetime
         var work = Path.Combine(phone.Dir, "replica");
         await phone.Replica.FetchAndInstallAsync(http, phone.Target, work, progress: null, CancellationToken.None);
 
-        (await phone.Replica.UpdateBaselineAsync(http, phone.Target, work, null, CancellationToken.None)).Should()
-            .BeFalse("the hub's baseline is the one the copy holds: 304");
+        (await phone.Replica.CheckBaselineAsync(http, phone.Target, work, null, CancellationToken.None)).Should()
+            .Be(BlindBaselineCheck.Current, "the hub's baseline is the one the copy holds: 304, which is a contact that went through");
         _hub.ReplicaQueries.Should().Contain(q => q.Contains(first.Manifest.BaselineId.ToString()), "the copy asked with the id of its baseline");
 
         await WriteNoteAsync(MetadataCanaries.Ascii("second"));

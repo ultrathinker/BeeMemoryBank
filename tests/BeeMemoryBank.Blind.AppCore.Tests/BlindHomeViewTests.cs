@@ -16,7 +16,7 @@ public sealed class BlindHomeViewTests
         var view = BlindHomeView.Build(Status(keyStoreUnavailable: "KeyStoreException: key permanently invalidated"), pairingCode: null, backupRunning: false);
 
         view.KeyStoreText.Should().Contain("did not answer").And.Contain("key permanently invalidated");
-        view.KeyStoreText.Should().Contain("Disconnect and wipe", "the way out is named");
+        view.KeyStoreText.Should().Contain("remove this account from the accounts list and add it again", "the way out is named, and it is one a head has").And.NotContain("Disconnect and wipe");
         view.KeyStoreText.Should().Contain("no key is lost");
         view.KeyLostText.Should().BeNull("a store that does not answer is not a lost key");
         view.CanBackupNow.Should().BeFalse("a backup needs the key");
@@ -30,7 +30,7 @@ public sealed class BlindHomeViewTests
     {
         var view = BlindHomeView.Build(Status(backupKeyLost: true), pairingCode: null, backupRunning: false);
 
-        view.KeyLostText.Should().Be(BlindHomeView.KeyLostMessage).And.Contain("Disconnect and wipe");
+        view.KeyLostText.Should().Be(BlindHomeView.KeyLostMessage).And.Contain("Remove this account from the accounts list").And.NotContain("Disconnect and wipe");
         view.CanBackupNow.Should().BeFalse();
         view.KeyStoreText.Should().BeNull();
     }
@@ -40,7 +40,7 @@ public sealed class BlindHomeViewTests
     {
         var view = BlindHomeView.Build(Status(isPaired: false, startError: "database is locked"), pairingCode: null, backupRunning: false);
 
-        view.StartErrorText.Should().Contain("database is locked").And.Contain("Disconnect and wipe");
+        view.StartErrorText.Should().Contain("database is locked").And.Contain("remove this account from the accounts list").And.NotContain("Disconnect and wipe");
         view.PairingMessage.Should().Contain("could not be set up");
     }
 
@@ -116,9 +116,84 @@ public sealed class BlindHomeViewTests
     }
 
     [Fact]
-    public void AStatusThatCouldNotBeRead_HasASentenceWithTheWayOut()
+    public void AStatusThatCouldNotBeRead_HasASentenceWithTheWayOut_ToldByTheKindOfFailure_NeverByItsMessage()
     {
-        BlindHomeView.StatusFailedText(new IOException("disk gone")).Should().Contain("disk gone").And.Contain("Disconnect and wipe");
+        var text = BlindHomeView.StatusFailedText(new IOException("disk gone at /private/var/mobile/secret-path"));
+
+        text.Should().Contain("Could not read the state of the phone").And.Contain("storage of this device").And.Contain("remove this account from the accounts list").And.NotContain("Disconnect and wipe");
+        text.Should().NotContain("disk gone").And.NotContain("secret-path", "the message of a library exception is not the app's sentence");
+    }
+
+    [Fact]
+    public void AStatusFailureThatCameThroughTheHttpStack_NeverShowsTheAddressOrTheRedirectTarget()
+    {
+        const string canary = "https://canary-host.invalid/path?token=CANARY-TOKEN-1234";
+        foreach (var ex in new Exception[]
+                 {
+                     new HttpRequestException("Request to " + canary + " was redirected (302) to " + canary + "; redirects are not followed."),
+                     new InvalidOperationException("outer " + canary, new HttpRequestException(canary)),
+                     new AggregateException(new Exception("wrapper " + canary, new HttpRequestException(canary))),
+                 })
+        {
+            var text = BlindHomeView.StatusFailedText(ex);
+            text.Should().NotContain("CANARY").And.NotContain("canary-host").And.NotContain("token=", ex.GetType().Name);
+            text.Should().Contain("Could not read the state of the phone");
+        }
+    }
+
+    [Fact]
+    public void TheNewestProblem_IsAContactFailureAfterTheLastSync_OrTheLongJobsFailure()
+    {
+        var now = new DateTimeOffset(2026, 10, 8, 12, 0, 0, TimeSpan.Zero);
+        BlindPhoneLog.Entry Entry(DateTimeOffset at, string kind, string message) => new(at, kind, message);
+
+        BlindHomeView.ProblemText(Status() with { LastSyncAt = now }).Should().BeNull();
+        BlindHomeView.Build(Status() with { LastSyncAt = now }, null, false).Problem.Should().BeNull();
+
+        var old = Status() with { LastSyncAt = now, RecentLog = [Entry(now.AddMinutes(-10), "sync", "Sync failed: timeout")] };
+        BlindHomeView.ProblemText(old).Should().BeNull("a failure before the last good sync is over");
+
+        var refused = Status() with
+        {
+            LastSyncAt = now.AddHours(-1),
+            RecentLog =
+            [
+                Entry(now.AddMinutes(-1), "pin", "Refused 192.0.2.10:5610: it answered with another key than the one pinned when this phone was paired. Nothing was sent."),
+                Entry(now.AddMinutes(-2), "sync", "Sync failed: connection refused"),
+                Entry(now, "pairing", "something else"),
+            ],
+        };
+        BlindHomeView.ProblemText(refused).Should().Contain("another key than the one pinned");
+
+        // The refused key is logged a moment BEFORE the sync failure it causes: the cause is shown, not the generic TLS sentence.
+        var sameRound = Status() with
+        {
+            LastSyncAt = now.AddHours(-1),
+            RecentLog =
+            [
+                Entry(now.AddMilliseconds(18), "sync", "Sync failed: The SSL connection could not be established, see inner exception."),
+                Entry(now, "pin", "Refused 192.0.2.10:5610: it answered with another key than the one pinned when this phone was paired. Nothing was sent."),
+            ],
+        };
+        BlindHomeView.ProblemText(sameRound).Should().Contain("another key than the one pinned");
+        var later = Status() with
+        {
+            LastSyncAt = now.AddHours(-1),
+            RecentLog = [Entry(now.AddMinutes(5), "sync", "Sync failed: connection refused"), Entry(now, "pin", "Refused 192.0.2.10:5610: another key")],
+        };
+        BlindHomeView.ProblemText(later).Should().Contain("connection refused", "a refusal minutes earlier is another round");
+
+        var load = Status() with { LastFailure = new BlindAppFailure("First load", "401 Unauthorized", now, 3) };
+        var problem = BlindHomeView.Build(load, null, false).Problem;
+        problem.Should().Contain("First load failed").And.Contain("401").And.Contain("3 tries");
+    }
+
+    [Fact]
+    public void TheLimitsExplanations_AreTheSharedRecordsOwn_AndNameTheNumbersTheFormEnforces()
+    {
+        BlindLimitsForm.Explanation.Should().Contain("Leave a box empty for no limit").And.Contain("0 pauses")
+            .And.Contain($"{BlindLimitsForm.MinRequestsPerDay} requests").And.Contain(BlindSizeFormat.Format(BlindLimitsForm.MinTrafficPerDay)).And.Contain("15 minutes");
+        BlindDeviceLimitsForm.Explanation.Should().Contain("0 pauses the whole device").And.Contain(BlindSizeFormat.Format(BlindLimitsForm.MinTrafficPerDay));
     }
 
     private static BlindAppStatus Status(bool isPaired = true, bool backupKeyLost = false, string? keyStoreUnavailable = null,

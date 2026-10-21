@@ -2,7 +2,7 @@
 
   <!--
     The iPhone blind app's guards and the logic of its platform-free files. The app itself (net10.0-ios) builds only on a Mac with Xcode;
-    its files that do not touch iOS (Services/*.cs, and the two files it links from the desktop copies) are compiled here for net10.0 and
+    its files that do not touch iOS (Services/*.cs, and the file it links from the macOS adapters) are compiled here for net10.0 and
     tested on any OS. The boundary tests read the app's project file and the golden list everywhere, and the built .app where there is one.
   -->
 
@@ -19,12 +19,15 @@
 
   <ItemGroup>
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindIos\Services\*.cs" Link="App\%(Filename)%(Extension)" />
-    <Compile Include="..\..\desktop\BeeMemoryBank.BlindDesktop\Scheduling\BlindTimerScheduler.cs" Link="App\BlindTimerScheduler.cs" />
     <Compile Include="..\..\desktop\BeeMemoryBank.BlindDesktop.MacOS\Storage\MacOsBlindStateStore.cs" Link="App\MacOsBlindStateStore.cs" />
+    <!-- The one busy helper of the four MAUI apps, as the app links it: compiled here as it is so that a test can drive its real catch / display route with a hostile exception (Services/IosFailureSetup.cs
+         gives it the closed failure text). -->
+    <Compile Include="..\..\mobile\BeeMemoryBank.Mobile\Services\BusyAction.cs" Link="Shared\BusyAction.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.Maui.Controls" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
@@ -34,12 +37,19 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="FluentAssertions" />
+    <!-- BusyAction.cs has no usings of its own (the apps get them from UseMaui): only these namespaces, and only for it. -->
+    <Using Include="Microsoft.Maui.Controls" />
+    <Using Include="Microsoft.Maui.ApplicationModel" />
+    <Using Include="Microsoft.Maui.Dispatching" />
+    <Using Include="Microsoft.Maui.Graphics" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- The assembly-boundary scanner and the vault boundary (BMB-99): one source in tests/shared, linked into every project that proves the boundary. -->
     <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
     <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+    <!-- The contract every head's secret and state store runs (per-account names, isolation, a blob that does not open as another account). -->
+    <Compile Include="..\shared\BlindStoreContracts.cs" Link="Shared\BlindStoreContracts.cs" />
   </ItemGroup>
 
 </Project>

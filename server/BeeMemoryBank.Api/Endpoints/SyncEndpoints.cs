@@ -2,8 +2,10 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using BeeMemoryBank.Api.Helpers;
+using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.BlindLimits;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -223,6 +225,8 @@ public static class SyncEndpoints
             var contacts = httpCtx.RequestServices.GetService<PeerContactLog>();
             contacts?.NoteInbound(req.NodeId, DateTime.UtcNow, NetworkMapBuilder.CallerAddress(httpCtx.Connection.RemoteIpAddress));
             contacts?.NotePlatform(req.NodeId, NodePlatform.Normalize(req.Platform), req.InContainer);
+            // A device that signs in again has not left (it was re-paired, or its owner changed their mind): what it said when it left no longer holds.
+            contacts?.ClearLeft(req.NodeId);
             return Results.Ok(new SyncAuthResponse(token));
         }).WithTags("Sync");
 
@@ -238,6 +242,7 @@ public static class SyncEndpoints
             int limit = 1000) =>
         {
             if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
             // Clamp the caller-suppliable page size — a peer requesting an arbitrarily large
@@ -305,7 +310,7 @@ public static class SyncEndpoints
             // viaAgentName, entity_id — unsigned and overwritten or re-derived on every apply)
             // never leave the node. See SyncWire.
             return Results.Json(SyncWire.Strip(events), SyncWire.Options);
-        }).WithTags("Sync");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithTags("Sync");
 
         // ─── Snapshot for join ──────────────────────────────────────────────────
         app.MapGet("/api/sync/snapshot/for-join", async (
@@ -445,7 +450,9 @@ public static class SyncEndpoints
             long sequence,
             int? protocolVersion,
             string? capabilities,
-            string? appVersion) =>
+            string? appVersion,
+            string? paused,
+            string? pausedUntil) =>
         {
             if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
@@ -493,6 +500,10 @@ public static class SyncEndpoints
             // nothing has.
             if (capabilities is not null)
                 await whitelist.RecordCapabilitiesAsync(nodeId, MetadataCapabilities.Parse(capabilities), appVersion, DateTime.UtcNow);
+            // A blind copy stopped by its owner's limits says so (release 2.7: paused, pausedUntil - additive; an older copy sends neither and is not paused).
+            // Memory only, closed set of reasons, blind copies only: it is what turns "silent" into "paused" on the owner's page.
+            if (BlindNodeId.IsBlind(nodeId))
+                ctx.RequestServices.GetService<PeerContactLog>()?.NotePauseReport(nodeId, DateTime.UtcNow, paused, pausedUntil);
             return Results.Ok();
         }).WithTags("Sync");
 
@@ -544,6 +555,7 @@ public static class SyncEndpoints
             ILoggerFactory loggerFactory) =>
         {
             if (await AuthenticatePeerAsync(ctx, store) is not { } pusherId) return Results.Unauthorized();
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
             // `ctx.Request.ContentLength is > 10MB` is NOT a usable guard here:
@@ -670,7 +682,7 @@ public static class SyncEndpoints
                 }
             });
             return Results.Ok(new SyncApplyResult(applied, skipped, lastAppliedSeq, dropped, held));
-        }).WithTags("Sync");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithTags("Sync");
 
         // ─── Blob transport (protocol 2) ─────────────────────────────────────────
         // Events carry ciphertext_sha256; the bytes move through these three endpoints, always
@@ -684,16 +696,19 @@ public static class SyncEndpoints
             HttpContext ctx,
             SyncTokenStore store,
             IBlobRepository blobRepo,
-            BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
-            SyncBlobHashList req) =>
+            BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode) =>
         {
             if (await AuthenticatePeerAsync(ctx, store) is null) return Results.Unauthorized();
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
-            if (!ValidateHashList(req.Hashes, out var problem)) return problem;
+            // The body is read here, after the credential, and no further than its route's limit (never bound as a parameter: that would read it before anybody is known).
+            var (req, refusal) = await BlindBodyLimits.ReadJsonAsync<SyncBlobHashList>(ctx, BlindBodyLimits.HashList);
+            if (refusal is not null) return refusal;
+            if (!ValidateHashList(req!.Hashes, out var problem)) return problem;
 
             var have = await blobRepo.GetExistingAsync(req.Hashes);
             return Results.Ok(new SyncBlobMissing(req.Hashes.Where(h => !have.Contains(h)).Distinct().ToList()));
-        }).WithTags("Sync");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithTags("Sync");
 
         // Store these blobs. Each is stored under the hash its bytes actually have — a peer cannot
         // plant wrong content at an address an event will look up. Same request-size cap as the
@@ -707,6 +722,7 @@ public static class SyncEndpoints
             ILoggerFactory loggerFactory) =>
         {
             if (await AuthenticatePeerAsync(ctx, store) is not { } nodeId) return Results.Unauthorized();
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
 
             var maxBodyFeature = ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
@@ -754,7 +770,7 @@ public static class SyncEndpoints
                 stored++;
             }
             return Results.Ok(new SyncBlobStoreResult(stored, rejected));
-        }).WithTags("Sync");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithTags("Sync");
 
         // Give me these blobs. Bounded by the same byte budget as the event pull; the client keeps
         // asking for whatever it did not get back. POST rather than GET only because a page of
@@ -763,17 +779,19 @@ public static class SyncEndpoints
             HttpContext ctx,
             SyncTokenStore store,
             IBlobRepository blobRepo,
-            BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
-            SyncBlobHashList req) =>
+            BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode) =>
         {
             if (await AuthenticatePeerAsync(ctx, store) is null) return Results.Unauthorized();
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
             if (invisibleMode.IsInvisible) return Results.StatusCode(503);
-            if (!ValidateHashList(req.Hashes, out var problem)) return problem;
+            var (req, refusal) = await BlindBodyLimits.ReadJsonAsync<SyncBlobHashList>(ctx, BlindBodyLimits.HashList);
+            if (refusal is not null) return refusal;
+            if (!ValidateHashList(req!.Hashes, out var problem)) return problem;
 
             var blobs = await blobRepo.GetManyAsync(req.Hashes, PullResponseByteTarget);
             return Results.Ok(new SyncBlobBatch(
                 blobs.Select(b => new SyncBlob(b.Hash, Convert.ToBase64String(b.Data))).ToList()));
-        }).WithTags("Sync");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithTags("Sync");
 
         // ─── Sync status (for Web UI progress display) ─────────────────────────
         app.MapGet("/api/sync/status", async (

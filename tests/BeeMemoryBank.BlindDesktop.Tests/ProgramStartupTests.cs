@@ -83,9 +83,9 @@ public sealed class ProgramStartupTests
         var other = Start([], _ => throw new PlatformNotSupportedException("no adapters for this system"));
 
         io.Exit.Should().Be(1);
-        io.Log.Should().Contain("The data folder cannot be used.").And.Contain("the folder is read-only");
+        io.Log.Should().Contain("The data folder cannot be used.").And.Contain("IOException").And.NotContain("the folder is read-only", "a log keeps the type and the frames, never the message");
         other.Exit.Should().Be(1);
-        other.Log.Should().Contain("The app cannot run on this computer.").And.Contain("no adapters");
+        other.Log.Should().Contain("The app cannot run on this computer.").And.Contain("PlatformNotSupportedException").And.NotContain("no adapters");
         (io.UiStarts + other.UiStarts).Should().Be(0);
     }
 
@@ -193,7 +193,7 @@ public sealed class ProgramStartupTests
         var outcome = Start(["--data-dir", folder], PlatformSelector.Create, _ => throw new InvalidOperationException("the window system is gone"));
 
         outcome.Exit.Should().Be(1);
-        outcome.Log.Should().Contain("The app stopped unexpectedly.").And.Contain("the window system is gone");
+        outcome.Log.Should().Contain("The app stopped unexpectedly.").And.Contain("InvalidOperationException").And.NotContain("the window system is gone");
     }
 
     [Fact]
@@ -212,7 +212,10 @@ public sealed class ProgramStartupTests
     {
         public string Name => inner.Name;
         public IBlindPaths Paths => inner.Paths;
-        public void AddSeams(IServiceCollection services) => inner.AddSeams(services);
+        public IBlindSecretStoreFactory SecretStores => inner.SecretStores;
+        public IBlindStateStoreFactory StateStores => inner.StateStores;
+        public IBlindDeviceConditions DeviceConditions => inner.DeviceConditions;
+        public IBlindAutostart Autostart => inner.Autostart;
         public IInstanceGuard? TryAcquireInstance() => throw new UnauthorizedAccessException("Access to the path is denied.");
         public bool SignalRunningInstance() => false;
     }

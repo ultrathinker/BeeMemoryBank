@@ -1,0 +1,61 @@
+@page
+@using System.Text.Json
+@model BeeMemoryBank.Web.Pages.Admin.TagGraphModel
+
+@* Diagnostic / repair tool an admin rarely needs. *@
+@section About {
+    <p>
+        The system keeps a fast lookup of <strong>which tags appear together in your articles</strong>. That lookup powers the Graph view, the related-tags suggestions and tag search. It is updated
+        automatically whenever you tag or untag an article, including changes that arrive from another node by sync, and after a snapshot is restored.
+    </p>
+    <p>
+        <strong>Pressing the button is always safe.</strong> If everything is in sync (the normal case), it only verifies and returns in milliseconds. If something is off, it rebuilds the lookup
+        from scratch; no article or tag is changed. You usually never need to press it. Reasons you might: the Graph view shows fewer connections than you expect, you edited the database by hand,
+        or you simply want to confirm that everything is consistent.
+    </p>
+}
+
+<div style="max-width:640px;">
+    @if (Model.GraphEdgeStats != null)
+    {
+        var s = Model.GraphEdgeStats.Value;
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 24px;margin-bottom:16px;">
+            <div><span class="text-muted text-sm">Tags total</span><br><strong>@s.GetProperty("totalTags").GetInt64()</strong></div>
+            <div><span class="text-muted text-sm">Tags with connections</span><br><strong>@s.GetProperty("nodesWithEdges").GetInt64()</strong></div>
+            <div><span class="text-muted text-sm">Connections</span><br><strong>@s.GetProperty("totalEdgeRows").GetInt64()</strong></div>
+        </div>
+    }
+    else
+    {
+        <p class="text-muted text-sm" style="margin-bottom:16px;">The tag graph statistics are unavailable right now.</p>
+    }
+
+    @if (!string.IsNullOrEmpty(Model.GraphRebuildReport))
+    {
+        var graphDoc = JsonDocument.Parse(Model.GraphRebuildReport);
+        var graphR = graphDoc.RootElement;
+        var graphBefore = graphR.GetProperty("beforeEdgeRows").GetInt64();
+        var graphAfter = graphR.GetProperty("afterEdgeRows").GetInt64();
+        var graphExpected = graphR.GetProperty("expectedEdgeRows").GetInt64();
+        var graphConsistent = graphR.GetProperty("wasConsistent").GetBoolean();
+        var graphMs = graphR.GetProperty("durationMs").GetInt64();
+        @* The result sits next to the button that asked for it (BMB-303). *@
+        <sl-alert variant="@(graphConsistent ? "success" : "primary")" open closable style="margin-bottom:12px;" role="status">
+            <sl-icon slot="icon" name="@(graphConsistent ? "check-circle" : "arrow-repeat")"></sl-icon>
+            @if (graphConsistent)
+            {
+                <text>Tag graph integrity verified — everything is in sync (@graphBefore connections, checked in @graphMs ms).</text>
+            }
+            else
+            {
+                <text>Tag graph rebuilt: @graphBefore → @graphAfter connections (expected @graphExpected). Took @graphMs ms.</text>
+            }
+        </sl-alert>
+    }
+    <form method="post" asp-page-handler="RebuildGraph" data-busy="long" data-busy-title="Checking the graph" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <sl-button type="submit" variant="primary" size="small">
+            <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Verify and rebuild if needed
+        </sl-button>
+        <span class="text-muted text-sm" data-busy-note hidden role="status">Checking the tag graph...</span>
+    </form>
+</div>

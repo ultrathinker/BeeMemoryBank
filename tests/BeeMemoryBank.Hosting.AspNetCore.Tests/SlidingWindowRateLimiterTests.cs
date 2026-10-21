@@ -25,6 +25,185 @@ public class SlidingWindowRateLimiterTests
         limiter.TryAcquire("b").Should().BeTrue("one caller's budget must not consume another's");
     }
 
+    // ── a bound on the keys a stranger can create (the public invitation routes: one key per address) ──
+
+    [Fact]
+    public void ManyMoreDistinctKeysThanTheBound_NeverGrowTheTableBeyondIt()
+    {
+        var limiter = new SlidingWindowRateLimiter(10, TimeSpan.FromMinutes(10), maxKeys: 100);
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+
+        for (var i = 0; i < 5_000; i++) limiter.TryAcquire($"203.0.113.{i}", t0.AddMilliseconds(i));
+
+        limiter.KeyCount.Should().BeLessThanOrEqualTo(100);
+    }
+
+    [Fact]
+    public void AtTheBound_AKeyThatIsStillCounting_IsNeverForgotten_AndTheNewcomerIsRefused()
+    {
+        var limiter = new SlidingWindowRateLimiter(3, TimeSpan.FromMinutes(10), maxKeys: 10);
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < 10; i++) limiter.TryAcquire($"k{i}", t0.AddSeconds(i));   // every key has used one of its three attempts: partial, not banned
+
+        limiter.TryAcquire("newcomer", t0.AddSeconds(20)).Should().BeFalse("no key can be dropped without resetting somebody's budget, so the newcomer waits");
+
+        for (var i = 0; i < 10; i++) limiter.CountFor($"k{i}", t0.AddSeconds(20)).Should().Be(1, "nobody's partial budget was reset");
+        limiter.KeyCount.Should().Be(10);
+    }
+
+    [Fact]
+    public void AKeyWhoseWindowRanOut_IsTheOnlyKindThatMakesRoom()
+    {
+        var limiter = new SlidingWindowRateLimiter(3, TimeSpan.FromMinutes(10), maxKeys: 4);
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        limiter.TryAcquire("old1", t0);
+        limiter.TryAcquire("old2", t0);
+        limiter.TryAcquire("fresh1", t0.AddMinutes(9));
+        limiter.TryAcquire("fresh2", t0.AddMinutes(9));
+
+        limiter.TryAcquire("newcomer", t0.AddMinutes(11)).Should().BeTrue("old1 and old2 ran out their window, so they hold no room any more");
+
+        limiter.CountFor("fresh1", t0.AddMinutes(11)).Should().Be(1, "the keys that were still counting are untouched");
+        limiter.CountFor("fresh2", t0.AddMinutes(11)).Should().Be(1);
+        limiter.KeyCount.Should().BeLessThanOrEqualTo(4);
+    }
+
+    [Fact]
+    public void ALegitimateCallersPartialBudget_SurvivesAFloodOfNewKeys()
+    {
+        var limiter = new SlidingWindowRateLimiter(10, TimeSpan.FromMinutes(10), maxKeys: 50);
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < 6; i++) limiter.TryAcquire("friend", t0.AddSeconds(i));
+
+        for (var i = 0; i < 5_000; i++) limiter.TryAcquire($"flood{i}", t0.AddSeconds(10 + i % 100));
+
+        limiter.CountFor("friend", t0.AddSeconds(200)).Should().Be(6, "the flood did not reset the friend's six attempts");
+        for (var i = 0; i < 4; i++) limiter.TryAcquire("friend", t0.AddSeconds(200)).Should().BeTrue("and the friend still has four left");
+        limiter.TryAcquire("friend", t0.AddSeconds(200)).Should().BeFalse("and no more than the budget");
+        limiter.KeyCount.Should().BeLessThanOrEqualTo(50);
+    }
+
+    /// <summary>
+    /// The table is exactly bounded under concurrency: the capacity decision and the insertion are one step. A table one short of its bound, and sixteen newcomers released
+    /// at the same instant, many times over: if each could see the room and then insert, some round would end above the bound.
+    /// </summary>
+    [Fact]
+    public void NewcomersReleasedTogether_NeverMakeTheTableLargerThanItsBound()
+    {
+        const int bound = 50;
+        const int threads = 16;
+        var started = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var largest = 0;
+
+        for (var round = 0; round < 300; round++)
+        {
+            var limiter = new SlidingWindowRateLimiter(10, TimeSpan.FromMinutes(10), maxKeys: bound);
+            for (var i = 0; i < bound - 1; i++) limiter.TryAcquire($"known-{i}", started);
+            using var barrier = new Barrier(threads);
+
+            Parallel.For(0, threads, new ParallelOptions { MaxDegreeOfParallelism = threads }, i =>
+            {
+                barrier.SignalAndWait();
+                limiter.TryAcquire($"new-{round}-{i}", started);
+            });
+
+            largest = Math.Max(largest, limiter.KeyCount);
+        }
+
+        largest.Should().BeLessThanOrEqualTo(bound, "at no round did the burst of newcomers get past the bound");
+    }
+
+    [Fact]
+    public void ManyThreadsAddingDistinctKeys_NeverMakeTheTableLargerThanItsBound()
+    {
+        const int bound = 200;
+        var limiter = new SlidingWindowRateLimiter(10, TimeSpan.FromMinutes(10), maxKeys: bound);
+        var started = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+
+        Parallel.For(0, 200_000, new ParallelOptions { MaxDegreeOfParallelism = 16 },
+            i => limiter.TryAcquire($"caller-{i}", started));
+
+        limiter.KeyCount.Should().BeLessThanOrEqualTo(bound);
+    }
+
+    [Fact]
+    public void Refund_TakesBackTheNewestAttempt_AndDropsAKeyThatHasNone()
+    {
+        var limiter = new SlidingWindowRateLimiter(2, TimeSpan.FromMinutes(10), maxKeys: 10);
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        limiter.TryAcquire("a", t0);
+        limiter.TryAcquire("a", t0.AddSeconds(1));
+        limiter.TryAcquire("b", t0);
+
+        limiter.Refund("a");
+        limiter.Refund("b");
+
+        limiter.CountFor("a", t0.AddSeconds(2)).Should().Be(1);
+        limiter.KeyCount.Should().Be(1, "b has no attempt left, so it holds no room");
+        limiter.TryAcquire("a", t0.AddSeconds(3)).Should().BeTrue("the refunded attempt is available again");
+        limiter.Refund("nobody");   // nothing to take back, nothing to fail
+    }
+
+    [Fact]
+    public void ABannedKey_IsNeverForgottenToMakeRoom_AndANewKeyIsRefusedInstead()
+    {
+        var limiter = new SlidingWindowRateLimiter(1, TimeSpan.FromMinutes(10), maxKeys: 5);
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < 5; i++) limiter.TryAcquire($"banned{i}", t0).Should().BeTrue();   // each used its one attempt: all five are at their limit
+
+        limiter.TryAcquire("stranger", t0.AddSeconds(1)).Should().BeFalse("the table is full of banned keys: fail closed, do not free one of them");
+
+        for (var i = 0; i < 5; i++)
+            limiter.TryAcquire($"banned{i}", t0.AddSeconds(2)).Should().BeFalse("an eviction must not reset a ban");
+        limiter.KeyCount.Should().Be(5);
+    }
+
+    [Fact]
+    public void AfterTheWindow_TheBannedKeysFreeTheirRoom()
+    {
+        var limiter = new SlidingWindowRateLimiter(1, TimeSpan.FromMinutes(10), maxKeys: 3);
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < 3; i++) limiter.TryAcquire($"b{i}", t0);
+        limiter.TryAcquire("stranger", t0.AddSeconds(1)).Should().BeFalse();
+
+        limiter.TryAcquire("stranger", t0.AddMinutes(11)).Should().BeTrue("their window ran out, so they hold no room any more");
+    }
+
+    [Fact]
+    public void AKeyThatIsAlreadyKnown_IsNotRefusedBecauseTheTableIsFull()
+    {
+        var limiter = new SlidingWindowRateLimiter(3, TimeSpan.FromMinutes(10), maxKeys: 2);
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        limiter.TryAcquire("a", t0);
+        limiter.TryAcquire("b", t0);
+
+        limiter.TryAcquire("a", t0.AddSeconds(1)).Should().BeTrue("a known caller keeps its own budget");
+    }
+
+    [Fact]
+    public void WithoutABound_NothingChangesForTheOlderUsers()
+    {
+        var limiter = new SlidingWindowRateLimiter(1, TimeSpan.FromMinutes(10));
+
+        for (var i = 0; i < 2_000; i++) limiter.TryAcquire($"k{i}").Should().BeTrue();
+
+        limiter.KeyCount.Should().Be(2_000);
+        limiter.MaxKeys.Should().Be(0);
+    }
+
+    [Fact]
+    public void RetryAfter_SaysWhenTheOldestAttemptLeavesTheWindow()
+    {
+        var limiter = new SlidingWindowRateLimiter(2, TimeSpan.FromMinutes(10));
+        var t0 = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        limiter.TryAcquire("ip", t0);
+        limiter.TryAcquire("ip", t0.AddMinutes(1));
+        limiter.TryAcquire("ip", t0.AddMinutes(2)).Should().BeFalse();
+
+        limiter.RetryAfter("ip", t0.AddMinutes(2)).Should().Be(TimeSpan.FromMinutes(8));
+        limiter.RetryAfter("nobody", t0).Should().BeNull();
+    }
+
     [Fact]
     public void AttemptsFallOutOfTheWindow()
     {
@@ -141,6 +320,36 @@ public class RateLimitRouteClassificationTests
     [InlineData("RESETNODE")]
     public void TheAdminResetHandlerIsTheResetBudget(string handler)
         => RateLimitPath.Classify("/admin", [handler]).Should().Be(RateLimitedRoute.NodeReset);
+
+    /// <summary>
+    /// The Admin area has a page per block, and the wipe moved with its block to /Admin/ResetNode. Its budget moved with it: every POST to the page is the wipe,
+    /// whatever handler it names, in any spelling of the path the router resolves to the page.
+    /// </summary>
+    [Theory]
+    [InlineData("/Admin/ResetNode", "ResetNode")]
+    [InlineData("/admin/resetnode/", "ResetNode")]
+    [InlineData("//ADMIN//RESETNODE", "resetnode")]
+    [InlineData("/Admin/ResetNode", "SomethingElse")]
+    [InlineData("/Admin/ResetNode", null)]
+    public void ThePageOfTheNodeWipe_IsTheResetBudget_WhateverTheHandler(string rawPath, string? handler)
+        => RateLimitPath.Classify(RateLimitPath.Normalize(rawPath), handler is null ? null : [handler]).Should().Be(RateLimitedRoute.NodeReset);
+
+    [Fact]
+    public void ARepeatedHandlerParameterCannotEscapeTheResetBudgetOnItsOwnPage()
+    {
+        RateLimitPath.Classify("/admin/resetnode", ["anything", "ResetNode"]).Should().Be(RateLimitedRoute.NodeReset);
+        RateLimitPath.Classify("/admin/resetnodex", ["ResetNode"]).Should().Be(RateLimitedRoute.None);
+        RateLimitPath.Classify("/admin/resetnode/x", ["ResetNode"]).Should().Be(RateLimitedRoute.None);
+    }
+
+    /// <summary>The other pages of the Admin area post routine configuration and are not throttled.</summary>
+    [Theory]
+    [InlineData("/admin/snapshots", "DeleteSnapshot")]
+    [InlineData("/admin/masterpassword", "ChangeMasterPassword")]
+    [InlineData("/admin/dekrotation", "ProposeDekRotation")]
+    [InlineData("/admin/trustednodes", "RevokeNode")]
+    public void OtherPagesOfTheAdminAreaAreNotThrottled(string path, string handler)
+        => RateLimitPath.Classify(path, [handler]).Should().Be(RateLimitedRoute.None);
 
     /// <summary>
     /// The bypass: Razor dispatches on the FIRST handler value, so a request carrying the reset

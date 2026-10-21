@@ -51,9 +51,37 @@ public sealed class MacOsBlindHostOptions
     }
 }
 
+/// <summary>The seams of the macOS head for a device that holds several accounts: the stores are factories, one set of items per account.</summary>
+public sealed record MacOsBlindSeams(
+    MacOsBlindPaths Paths, IBlindSecretStoreFactory Secrets, IBlindStateStoreFactory States, IBlindDeviceConditions Conditions, IBlindAutostart Autostart);
+
 /// <summary>Registers the macOS implementations of the Blind.AppCore host seams.</summary>
 public static class MacOsBlindHostServices
 {
+    /// <summary>
+    /// The seams for the account host: per-account Keychain items (<see cref="MacOsSecretStoreFactory"/>) and state files (<see cref="MacOsBlindStateStoreFactory"/>), the device conditions
+    /// (Network.framework path, Low Power Mode) and the LaunchAgent. Nothing native is touched until a seam is first used.
+    /// </summary>
+    /// <param name="secrets">Replaces the Keychain factory (the tests of the host pass an in-memory one so that they never touch a keychain).</param>
+    public static MacOsBlindSeams CreateSeams(MacOsBlindHostOptions? options = null, IBlindSecretStoreFactory? secrets = null, IBlindDeviceConditions? conditions = null)
+    {
+        options ??= new MacOsBlindHostOptions();
+        var paths = options.Paths;
+        IBlindSecretStoreFactory secretFactory = secrets
+            ?? (options.KeychainBackend is { } backend ? new MacOsSecretStoreFactory(backend, options.KeychainService)
+                : options.KeychainFile is { } file ? new MacOsSecretStoreFactory(file, options.KeychainService)
+                : new MacOsSecretStoreFactory(options.KeychainService));
+        return new MacOsBlindSeams(
+            paths, secretFactory, new MacOsBlindStateStoreFactory(paths.DataDirectory), conditions ?? new MacOsDeviceConditions(),
+            new MacOsBlindAutostart(new MacOsBlindAutostartOptions
+            {
+                Label = options.AutostartLabel,
+                LaunchAgentsDirectory = options.LaunchAgentsDirectory,
+                ProgramArguments = options.AutostartProgramArguments,
+                LoadImmediately = options.LoadAutostartImmediately,
+            }));
+    }
+
     /// <summary>
     /// Registers, as singletons and only where the host has not registered its own, the seams that depend on macOS: <see cref="IBlindPaths"/>,
     /// <see cref="IBlindSecretStore"/> (Keychain), <see cref="IBlindStateStore"/> (atomic file) and <see cref="IBlindAutostart"/>

@@ -32,7 +32,7 @@ There is exactly one helper per UI technology. A new button uses it; it does not
 | Web, Razor forms | `server/BeeMemoryBank.Web/wwwroot/js/bmb-busy.js` | `<form method="post" data-busy="short">` or `data-busy="long" data-busy-title="Encrypting this node" data-busy-text="..."`. A form that cannot use it says why: `data-busy-exempt="reason"`. |
 | Web, scripts | the same file, `window.bmbBusy` | `bmbBusy.run(button, () => bmbBusy.request(url, init), { long, title, text, success, quiet, error, scope })`. `request` is `fetch` that throws an `Error` with the node's own message (and `status`, `body`) on a non-2xx answer. `bmbBusy.submit(form)` sends a form from a script. A send that cannot use it carries `// bmb-busy-exempt: reason` just above it (a streamed chat answer, a file dropped on a drop zone, a read). |
 | Desktop shell (Avalonia) | `desktop/BeeMemoryBank.Desktop/Views/BusyAction.cs` | `await BusyAction.RunAsync(owner, button, work, new BusyOptions { Long = true, Title = "...", ... })`. |
-| Blind desktop | `MainViewModel` busy state (`IsBusy`, `BusyTitle`, `BusyText`) and the overlay in `MainWindow.axaml` | A command's `CanExecute` includes `!IsBusy`; a job-driven command stays busy until the node reports the job over. |
+| Blind desktop | `MainViewModel` busy state (`IsBusy`, `BusyTitle`, `BusyText`, which follows the add page, the selected account's removal and its panel's jobs: `AddAccountViewModel`, `AccountDetailViewModel`, `AccountPanelViewModel`) and the overlay in `MainWindow.axaml` | A command's `CanExecute` includes `!IsBusy`; a job-driven command stays busy until the device loop reports the job over. |
 | Android and iPhone apps (MAUI) | `mobile/BeeMemoryBank.Mobile/Services/BusyAction.cs`, linked into `BlindMobile`, `BlindIos` and `FullIos` | `await BusyAction.RunAsync(this, work, new BusyOptions { Long = true, Title = "...", Message = "..." })`; `work` may take a `BusyProgress` to change the pop-up's text as it goes. A handler that cannot use it carries `// busy-exempt: reason` just above it (opening a page, copying to the clipboard). |
 | Blind node console page (`server/BeeMemoryBank.BlindConsole/wwwroot/index.html`) | the page's own `busy(button, work, { long, title, text, out })` | A standalone page, so a few lines of the same rule live in it. The buttons that start a job are also off while a job runs. |
 
@@ -75,7 +75,7 @@ Every key is per operation and per resource (a route value, the body, or the cal
 
 These already refuse a second request on their own and were left as they are: the backup jobs (409 from `BlindJobManager`), a restore in progress (`RestoreProgress.TryStart`), an update (single flight in `UpdateService`), compaction (`ConflictException`), "Encrypt this node" (`SealMigrationService`), a data-key change (409 on propose). `HeavyOperationLock` and `EventWriteGate` are unrelated: they keep two *different* operations off the same data; the gate keeps *one* operation from starting twice.
 
-The Web app turns the 409 into a plain sentence for "Add a blind node" and "Reseed" (`BlindNodeErrors`), so the card says "Adding a blind node is already running. Wait until it has finished." instead of a status code.
+The Web app turns the 409 into a plain sentence for "Add a blind node" and "Reseed" (`BlindNodeErrors`), so the page says "Adding a blind node is already running. Wait until it has finished." instead of a status code.
 
 ## The guard tests
 

@@ -4,7 +4,7 @@ using Avalonia.Platform;
 
 namespace BeeMemoryBank.BlindDesktop.Views;
 
-/// <summary>The tray icon and its menu: Open, Sync now, Back up now, Re-pair, Settings, Disconnect and wipe, Quit. A left click opens the window.</summary>
+/// <summary>The tray icon and its menu: Open, Sync now, Back up now (every account), Add account, Settings, Quit. A left click opens the window.</summary>
 public sealed class TrayController : IDisposable
 {
     private readonly TrayIcon _icon;
@@ -56,10 +56,8 @@ public sealed class TrayController : IDisposable
         menu.Items.Add(new NativeMenuItemSeparator());
         Add("Sync now", actions.SyncNow);
         Add("Back up now", actions.BackupNow);
-        Add("Re-pair...", actions.RePair);
+        Add("Add account...", actions.AddAccount);
         Add("Settings...", actions.OpenSettings);
-        menu.Items.Add(new NativeMenuItemSeparator());
-        Add("Disconnect and wipe...", actions.Wipe);
         menu.Items.Add(new NativeMenuItemSeparator());
         Add("Quit", actions.Quit);
         return menu;

@@ -22,7 +22,7 @@
 <div class="card" style="margin-bottom:24px;max-width:720px;" id="hubs">
     <p class="text-muted text-sm" style="margin-bottom:12px;">
         A blind copy (Windows, macOS, Android) calls a node; a full node you set up for it is a hub. Set one up under Admin,
-        Trusted Nodes, "Let blind copies call this node". A hub with a normal certificate is trusted by the system's list of
+        <a href="/Admin/TrustedNodes">Trusted Nodes</a>, "Let blind copies call this node". A hub with a normal certificate is trusted by the system's list of
         authorities; one with a pinned certificate only by its own key.
     </p>
     @if (Model.Hubs == null)
@@ -31,7 +31,7 @@
     }
     else if (Model.Hubs.Count == 0)
     {
-        <p class="text-muted" style="margin:0;">No hubs yet. <a href="/Admin">Set one up in Admin</a>.</p>
+        <p class="text-muted" style="margin:0;">No hubs yet. <a href="/Admin/TrustedNodes">Set one up in Admin</a>.</p>
     }
     else
     {
@@ -43,7 +43,7 @@
                 <sl-badge variant="primary" pill>@hub.TrustLabel</sl-badge>
             </div>
         }
-        <p class="text-sm" style="margin:8px 0 0;">Change or turn off a hub in <a href="/Admin">Admin</a>. A lost blind copy is revoked there too.</p>
+        <p class="text-sm" style="margin:8px 0 0;">Change or turn off a hub in <a href="/Admin/TrustedNodes">Admin</a>. A lost blind copy is revoked there too.</p>
     }
 </div>
 
@@ -66,7 +66,7 @@ else
                 <span class="article-id-badge">@node.NodeId</span>
                 <span>@(node.Address ?? "no address")</span>
                 <span>Protocol: @(node.Protocol?.ToString() ?? "unknown")</span>
-                <span>Last contact: @(node.LastContact?.ToLocalTime().ToString("g") ?? "never")@(node.Contact?.LastContactDirection is { } direction ? " (" + AdminModel.ContactDirectionWords(direction) + ")" : "")</span>
+                <span>Last contact: @(node.LastContact?.ToLocalTime().ToString("g") ?? "never")@(node.Contact?.LastContactDirection is { } direction ? " (" + BeeMemoryBank.Web.Pages.Admin.AdminText.ContactDirectionWords(direction) + ")" : "")</span>
                 @if (node.Contact?.LastPushAt is { } pushedAt)
                 {
                     <span>Changes delivered: @pushedAt.ToLocalTime().ToString("g")</span>
@@ -80,6 +80,25 @@ else
                     <span title="This node held no position for the blind node's log, and took the point where the log starts as its own.">Adopted checkpoint @adopted</span>
                 }
             </div>
+            @* What the owner of a copy or of a server blind node did (release 2.7): its limits told it to wait (it is not lost), or it was removed from the device (this PC revokes). *@
+            @if (node.Contact?.PausedText is { Length: > 0 } pausedText)
+            {
+                <sl-alert variant="neutral" open style="margin-top:8px;" class="blind-paused">
+                    <sl-icon slot="icon" name="pause-circle"></sl-icon>
+                    @pausedText. Nothing is wrong with it: its owner's limit holds it, and it goes on by itself as soon as the limit allows.
+                </sl-alert>
+            }
+            @if (node.Contact?.LeftAt is { } leftAt)
+            {
+                <sl-alert variant="warning" open style="margin-top:8px;" class="blind-left">
+                    <sl-icon slot="icon" name="box-arrow-right"></sl-icon>
+                    The owner of this device removed the copy from the device (@leftAt.ToLocalTime().ToString("g")). It stays in your network until you revoke it.
+                    <form method="post" asp-page-handler="Disconnect" data-busy="short" style="margin-top:8px;">
+                        <input type="hidden" name="nodeId" value="@node.NodeId" />
+                        <sl-button type="submit" size="small" variant="danger"><sl-icon slot="prefix" name="slash-circle"></sl-icon> Revoke</sl-button>
+                    </form>
+                </sl-alert>
+            }
             @* The banners are the alarms the Api judged for this node (BlindAlarmService): the same list the desktop app notifies from. *@
             @if (node.Alarms.Contains("old_protocol"))
             {

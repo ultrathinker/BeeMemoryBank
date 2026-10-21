@@ -31,6 +31,14 @@ public class MigrationRunner
     /// <summary>The number of the baseline: the highest migration of the old chain.</summary>
     public const int BaselineVersion = 40;
 
+    /// <summary>
+    /// The migrations after the baseline that only ADD something (a table, an index, a column): the structure of the baseline is still there once they ran, so a
+    /// database whose ledger has only these rows after the baseline's is judged against the baseline as before (<see cref="JudgeDatabase"/>), and a restore of a
+    /// backup with a missing index is still refused. A migration that changes or removes something of the baseline is not listed here.
+    /// 41 is <c>041_blind_invite.sql</c>; 42 is <c>042_blind_invite_server.sql</c> (two columns of that table, and its trigger made again).
+    /// </summary>
+    internal static readonly int[] AdditiveMigrations = [41, 42];
+
     /// <summary>The resource name of the baseline, which is also its ledger row's file name.</summary>
     public const string BaselineResourceName = LegacyMigrationChain.ResourcePrefix + "040_baseline.sql";
 
@@ -294,7 +302,8 @@ public class MigrationRunner
             case LedgerVerdict.Older: return MigrationRefusedException.Older();
             case LedgerVerdict.Unknown: return MigrationRefusedException.Unknown();
             case LedgerVerdict.Adopt: return LegacyChainAdoption.Judge(connection, ReadBaseline(assembly));
-            case LedgerVerdict.Current when connection.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_migration WHERE version <> @baseline", new { baseline = BaselineVersion }) == 0:
+            case LedgerVerdict.Current when connection.ExecuteScalar<long>(
+                $"SELECT COUNT(*) FROM tbl_migration WHERE version <> @baseline AND version NOT IN ({string.Join(", ", AdditiveMigrations)})", new { baseline = BaselineVersion }) == 0:
                 return LegacyChainAdoption.JudgeAsIs(connection, ReadBaseline(assembly));
             default: return null;
         }

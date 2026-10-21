@@ -281,7 +281,7 @@ public sealed class BlindPhoneServicesTests : IDisposable
 
         _heavy.LastFailure.Should().NotBeNull();
         _heavy.LastFailure!.Title.Should().Be("Baseline update");
-        _heavy.LastFailure.Message.Should().Contain("signature");
+        _heavy.LastFailure.Message.Should().Be("a package or file could not be read or verified", "the kind of failure, not the words of the exception that carried it");
         _runner.Backups().Should().ContainSingle("a failed update is not a reason to skip the backup that is due");
     }
 

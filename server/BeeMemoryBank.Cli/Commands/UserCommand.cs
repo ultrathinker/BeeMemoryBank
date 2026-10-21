@@ -111,7 +111,7 @@ public static class UserCommand
         await audit.LogAsync("user", result.UserId!.Value.ToString(), "user_password_recovery_reset", "cli",
             $"Password reset with a recovery key for user #{result.UserId} on the command line");
 
-        // Same node-local bookkeeping as the Admin -> Security card. A peer announcement is signed under the
+        // Same node-local bookkeeping as the Admin -> Master Password page. A peer announcement is signed under the
         // master key, which this process does not hold open, so the other nodes are not told from here.
         var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
         await nodeRepo.ClearMasterPasswordNoticeAsync();
@@ -121,7 +121,7 @@ public static class UserCommand
         var peers = await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetAllActiveAsync();
         if (peers.Count > 0)
             await output.WriteLineAsync(
-                $"Note: {peers.Count} other node(s) still accept the OLD password. Change it on each of them (Admin -> Security).");
+                $"Note: {peers.Count} other node(s) still accept the OLD password. Change it on each of them (Admin -> Master Password).");
         return 0;
     }
 

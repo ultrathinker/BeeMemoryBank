@@ -64,6 +64,7 @@ public class NetworkMapModelTests
     [InlineData("times_are_told_as_a_person_says_them")]
     [InlineData("an_address_is_told_as_scheme_host_and_port")]
     [InlineData("the_line_of_a_node_says_how_it_stands")]
+    [InlineData("a_paused_or_removed_copy_says_so")]
     [InlineData("what_this_node_knows_of_the_notes_on_a_node")]
     [InlineData("the_card_of_a_node_has_its_address_version_and_where_it_called_from")]
     [InlineData("a_node_without_an_address_says_it_calls_in")]

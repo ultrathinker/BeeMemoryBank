@@ -6,6 +6,7 @@ using BeeMemoryBank.BlindDesktop.Services;
 using BeeMemoryBank.BlindDesktop.ViewModels;
 using BeeMemoryBank.BlindDesktop.Views;
 using BeeMemoryBank.BlindMobile.Services.Blind;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.BlindDesktop;
 
@@ -37,10 +38,10 @@ public sealed class BlindDesktopShell : ITrayActions
         _instance = instance;
     }
 
-    /// <summary>Builds the window and the tray, opens the app and starts the scheduler. A normal start shows the window; <c>--minimized</c> starts in the tray, except on the very first run.</summary>
+    /// <summary>Builds the window and the tray, opens the app and starts the device loop. A normal start shows the window; <c>--minimized</c> starts in the tray, except on the very first run.</summary>
     public async Task StartAsync()
     {
-        var firstRun = !File.Exists(_platform.Paths.DatabasePath);
+        var firstRun = !File.Exists(_platform.Paths.DatabasePath) && !File.Exists(Path.Combine(_platform.Paths.DataDirectory, BlindAccountRegistry.FileName));
         _window = new MainWindow();
         _tray = new TrayController(_application, this, _platform.TrayIconAsset, _platform.TrayIconIsTemplate);
         _instance?.Listen(() => Dispatcher.UIThread.Post(Open));
@@ -51,44 +52,25 @@ public sealed class BlindDesktopShell : ITrayActions
 
     private async Task StartRuntimeAsync()
     {
-        var runtime = BlindDesktopRuntime.Create(_platform, () => _window, () => Dispatcher.UIThread.Post(ReturnToFirstRun));
+        var runtime = BlindDesktopRuntime.Create(_platform, () => _window);
         _runtime = runtime;
-        _viewModel = new MainViewModel(runtime.App, runtime.Scheduler, runtime.Autostart, QrCodePng.Create,
-            action => Dispatcher.UIThread.Post(action), ErrorLog.Write, _platform.StatusAreaName, runtime.Stats.GetAsync);
+        _viewModel = new MainViewModel(runtime.Accounts, runtime.WorkFor, runtime.Autostart, QrCodePng.Create,
+            action => Dispatcher.UIThread.Post(action), ErrorLog.Write, _platform.StatusAreaName, StoreOf(runtime), watch: runtime.Watch);
         _viewModel.QuitRequested += Quit;
         _window!.DataContext = _viewModel;
-        runtime.App.Changed += RequestTrayRefresh;
+        runtime.Accounts.Changed += RequestTrayRefresh;
 
         await runtime.StartAsync();
         await _viewModel.RefreshAsync();
         RequestTrayRefresh();
     }
 
-    /// <summary>After a successful wipe: a new composition over the now empty folder, which is the first-run state.</summary>
-    private void ReturnToFirstRun()
+    /// <summary>What an account's copy holds, for the store line of its panel; nothing when the account is not up (the line stays "unknown").</summary>
+    private static Func<string, CancellationToken, Task<BlindStoreInfo?>> StoreOf(BlindDesktopRuntime runtime) => async (id, ct) =>
     {
-        if (_quitting) return;
-        _ = ReturnToFirstRunAsync();
-    }
-
-    private async Task ReturnToFirstRunAsync()
-    {
-        try
-        {
-            var oldRuntime = _runtime;
-            _viewModel?.Dispose();
-            _window!.DataContext = null;
-            if (oldRuntime is not null) await oldRuntime.DisposeAsync();
-            await StartRuntimeAsync();
-            Open();
-        }
-        catch (Exception ex)
-        {
-            // The wipe itself succeeded; say that the fresh start did not, and let the next start of the app do it.
-            _tray?.SetToolTip("Wiped. Start the app again to set it up.");
-            ErrorLog.Write("Could not return to the first-run state", ex);
-        }
-    }
+        try { return await runtime.Accounts.ServicesFor(id).GetRequiredService<BlindStoreStats>().GetAsync(ct); }
+        catch (KeyNotFoundException) { return null; }
+    };
 
     private void RequestTrayRefresh()
     {
@@ -100,10 +82,10 @@ public sealed class BlindDesktopShell : ITrayActions
             if (runtime is null) return;
             try
             {
-                var status = runtime.App.GetStatus();
-                if (status.ActiveJob is { } job) runtime.Notifications.Show(job, status.JobProgress ?? 0);
-                else runtime.Notifications.Clear();
-                var text = TooltipFor(status, runtime.Notifications.Line);
+                // The lines follow the accounts: one that was removed takes its line with it.
+                var snapshot = runtime.Notifications.Reconcile(runtime.Accounts.GetSnapshot);
+                var view = BlindAccountsView.Build(snapshot, TimeZoneInfo.Local, DateTimeOffset.UtcNow);
+                var text = AccountsTooltip.For(view, runtime.Notifications.Line);
                 Dispatcher.UIThread.Post(() => ShowToolTip(text));
             }
             catch (Exception ex)
@@ -127,15 +109,6 @@ public sealed class BlindDesktopShell : ITrayActions
         }
     }
 
-    internal static string TooltipFor(BlindAppStatus status, string? jobLine)
-    {
-        const string name = "Bee Memory Bank - blind copy";
-        if (jobLine is not null) return $"{name}: {jobLine}";
-        if (status.StartError is not null) return $"{name}: needs attention - open to see";
-        if (!status.IsPaired) return $"{name}: not paired yet - open to pair";
-        return status.LastSyncAt is { } at ? $"{name}: last sync {at.ToLocalTime():dd.MM HH:mm}" : $"{name}: paired";
-    }
-
     // ---- tray menu ----------------------------------------------------------------------------------------------------------
 
     public void Open()
@@ -144,23 +117,33 @@ public sealed class BlindDesktopShell : ITrayActions
         _window?.ShowAndFocus();
     }
 
-    public void SyncNow() => _runtime?.Scheduler.RequestSync();
+    /// <summary>"Sync now" for every active account: the device loop runs them one at a time, the one that waited longest first.</summary>
+    public void SyncNow()
+    {
+        if (_runtime is not { } runtime) return;
+        foreach (var id in ActiveAccountIds(runtime, pairedOnly: false)) runtime.Scheduler.RequestSync(id);
+    }
 
-    public void BackupNow() => _runtime?.Scheduler.RequestBackup();
+    /// <summary>"Back up now" for every account that is paired.</summary>
+    public void BackupNow()
+    {
+        if (_runtime is not { } runtime) return;
+        foreach (var id in ActiveAccountIds(runtime, pairedOnly: true)) runtime.Scheduler.RequestBackup(id);
+    }
 
-    public void RePair()
+    public void AddAccount()
     {
         Open();
-        if (_viewModel?.RePairCommand is { } command && command.CanExecute(null)) command.Execute(null);
+        if (_viewModel?.AddAccountCommand is { } command && command.CanExecute(null)) command.Execute(null);
     }
 
     public void OpenSettings() => Open();
 
-    public void Wipe()
-    {
-        Open();
-        _viewModel?.OpenWipeCommand.Execute(null);
-    }
+    private static IEnumerable<string> ActiveAccountIds(BlindDesktopRuntime runtime, bool pairedOnly) =>
+        runtime.Accounts.GetSnapshot().Accounts
+            .Where(a => a.Entry.Phase == BlindAccountPhases.Active && a.Status is not null && (!pairedOnly || a.Status.IsPaired))
+            .Select(a => a.Entry.Id)
+            .ToList();
 
     /// <summary>Explicit Quit: pauses a running job, stops the scheduler, removes the tray icon and ends the process.</summary>
     public void Quit() => _ = QuitAsync();

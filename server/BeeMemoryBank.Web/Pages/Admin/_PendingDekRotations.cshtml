@@ -1,0 +1,40 @@
+@model List<BeeMemoryBank.Web.Models.PeerPendingDekRotationDto>
+@foreach (var pending in Model)
+{
+    // Use full event id (CSS-safe) for dialog id - avoids 8-char prefix collision
+    // and ArgumentOutOfRangeException on short ids. (R1 reviewers H-2 / LOW-4.)
+    var dlgId = "reject-dialog-" + pending.EventId.Replace("-", "");
+    // Format the rotation timestamp to local time + ISO short - raw "...T...Z" was
+    // confusing for non-technical admins. (Kilo R1 H-4.)
+    var rotationLocal = DateTime.TryParse(pending.RotationTs,
+        System.Globalization.CultureInfo.InvariantCulture,
+        System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+        out var rotUtc)
+        ? rotUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+        : pending.RotationTs;
+    <sl-alert variant="warning" open style="margin-bottom:20px;" role="alert" aria-live="polite" class="pending-dek-rotation">
+        <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
+        <div>
+            <strong style="word-break:break-word;">@pending.OriginatorDisplayName</strong>
+            rotated their DEK on @rotationLocal.
+            To stay in sync, apply the rotation on this node.
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px;">
+            <form data-busy="long" data-busy-title="Accepting the data-key change" method="post" asp-page-handler="PeerAcceptDekRotation" style="display:inline;">
+                <input type="hidden" name="eventId" value="@pending.EventId" />
+                <sl-button type="submit" variant="primary" size="small">Apply</sl-button>
+            </form>
+            <sl-button variant="danger" size="small" class="btn-open-dialog" data-dialog-id="@dlgId">
+                Reject &mdash; leave network
+            </sl-button>
+        </div>
+    </sl-alert>
+    <sl-dialog id="@dlgId" label="Reject DEK rotation?">
+        <p>Rejecting will permanently disconnect this node from the rotated network. Continue?</p>
+        <form data-busy="short" method="post" asp-page-handler="PeerRejectDekRotation" slot="footer" style="display:flex;gap:8px;justify-content:flex-end;">
+            <input type="hidden" name="eventId" value="@pending.EventId" />
+            <sl-button type="button" variant="default" autofocus data-dlg-cancel="@dlgId">Cancel</sl-button>
+            <sl-button type="submit" variant="danger">Reject rotation</sl-button>
+        </form>
+    </sl-dialog>
+}

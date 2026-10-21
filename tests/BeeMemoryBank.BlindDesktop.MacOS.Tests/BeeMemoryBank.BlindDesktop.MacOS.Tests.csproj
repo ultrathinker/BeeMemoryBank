@@ -31,6 +31,10 @@
     <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
     <!-- The throwaway keychain file of the Mac-only tests: one source, also used by BeeMemoryBank.Platforms.Apple.Tests. -->
     <Compile Include="..\shared\ThrowawayKeychain.cs" Link="Shared\ThrowawayKeychain.cs" />
+    <!-- An in-memory full node for the upgrade rehearsal (the desktop tests' own fake hub). -->
+    <Compile Include="..\BeeMemoryBank.BlindDesktop.Tests\DesktopFakeHub.cs" Link="Shared\DesktopFakeHub.cs" />
+    <!-- The contract every head's secret and state store runs (per-account names, isolation, a blob that does not open as another account). -->
+    <Compile Include="..\shared\BlindStoreContracts.cs" Link="Shared\BlindStoreContracts.cs" />
   </ItemGroup>
 
 </Project>

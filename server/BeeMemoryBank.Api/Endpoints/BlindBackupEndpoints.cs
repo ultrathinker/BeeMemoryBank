@@ -1,6 +1,7 @@
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services.BlindBackup;
+using BeeMemoryBank.Api.Services.BlindLimits;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -45,6 +46,19 @@ public static class BlindBackupEndpoints
             var s = store.Load();
             var passwordBefore = s.ResticPassword;
             Apply(dto, s);
+            // The node's own limits, parsed with the same rule the start uses (BlindNodeLimits).
+            // They travel as JSON values so the wire form can say "keep" (absent or null) and "clear"
+            // (an empty string) apart, like every other field of this partial update.
+            var storedLimit = BlindNodeLimits.ParseWire(dto.MaxStoredBytes);
+            if (storedLimit.Problem is { } storedProblem)
+                return Results.BadRequest(new ErrorResponse(storedProblem));
+            var trafficLimit = BlindNodeLimits.ParseWire(dto.MaxTrafficPerDay);
+            if (trafficLimit.Problem is { } trafficProblem)
+                return Results.BadRequest(new ErrorResponse(trafficProblem));
+            if (storedLimit.Sent) s.MaxStoredBytes = storedLimit.Value;
+            if (trafficLimit.Sent) s.MaxTrafficPerDay = trafficLimit.Value;
+            if (BlindNodeLimits.TrafficProblem(s.MaxTrafficPerDay) is { } limitProblem)
+                return Results.BadRequest(new ErrorResponse(limitProblem));
             // A repository is encrypted under the password it was created with; changing the setting would
             // not re-encrypt it (this node does not run `restic key passwd`), so every backup already made
             // would stop opening. It exists when a backup used this location (the marker) or, for a folder, when
@@ -220,6 +234,10 @@ public sealed class BlindBackupSettingsDto
     public bool? ScheduleEnabled { get; set; }
     public int? CheckSubsetPercent { get; set; }
     public string? ResticGoMemLimit { get; set; }
+    // The node's own limits (2.7): a number of bytes, a size text ("2 GB") or an empty string to clear
+    // (absent or null keeps the stored value; see the PUT handler and BlindNodeLimits.ParseWire).
+    public System.Text.Json.JsonElement? MaxStoredBytes { get; set; }
+    public System.Text.Json.JsonElement? MaxTrafficPerDay { get; set; }
     // No ResticBinary here on purpose: which executable the node runs is not something a console
     // session may change — a settable path is arbitrary code execution for whoever holds the
     // console password. The override stays a local settings-file edit.

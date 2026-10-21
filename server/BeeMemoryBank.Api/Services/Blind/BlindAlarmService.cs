@@ -29,6 +29,12 @@ public static class BlindAlarmKinds
     /// <see cref="BlindAlarmService.ServerNotifyAfter"/> on; the unreachable streak keeps its own <c>silent</c> alarm.
     /// </summary>
     public const string NotAnswering = "not_answering";
+
+    /// <summary>
+    /// A blind copy that would be <c>silent</c> told, within <see cref="BlindAlarmService.PausedFreshFor"/>, that its owner's limits or switch stop it:
+    /// it is not lost, it was told to wait. Replaces <c>silent</c> for that node; never a notification. <c>Since</c> is when it said the pause ends, if it did.
+    /// </summary>
+    public const string Paused = "paused";
 }
 
 /// <summary>
@@ -122,6 +128,9 @@ public sealed class BlindAlarmService
     /// calls it, and the cycle that just completed was the call.
     /// </summary>
     public static readonly TimeSpan CopyGrace = TimeSpan.FromHours(1);
+
+    /// <summary>A copy's report that its owner's limits stop it replaces <c>silent</c> for this long (<see cref="PeerPauseReport.Fresh"/>).</summary>
+    public static readonly TimeSpan PausedFreshFor = PeerPauseReport.Fresh;
 
     private readonly TimeProvider _time;
     private readonly InvisibleModeService? _invisible;
@@ -240,6 +249,10 @@ public sealed class BlindAlarmService
                 && now - failingSince >= ServerNotifyAfter)
                 alarms.Add(new BlindAlarm(BlindAlarmKinds.NotAnswering, node.NodeId, node.DisplayName, DateTime.SpecifyKind(failingSince, DateTimeKind.Utc),
                     Protocol: null, Notify: false, Banner: true));
+            // A blind copy that said, lately, that its owner's limits stop it is not silent: it was told to wait (release 2.7). It goes quiet on purpose, and a lost
+            // phone does not say so. The report is positive evidence, so it also answers the "held" and "streak" cases.
+            // (PeerContactView.Build already dropped a report older than PausedFreshFor.)
+            var paused = node.Contact is { PausedReason: not null };
             // A copy: only its calls to THIS PC are evidence (they are what LastProtocolSeenAt records).
             var copyQuiet = isCopy && node.ProtocolSeenAt is not null && now - quietSince > CopyNotifyAfter;
             // A copy cannot have called while this PC was off: until it has been awake for a while, it is not judged (see CopyGrace).
@@ -250,7 +263,9 @@ public sealed class BlindAlarmService
             // this PC restarts the streak, and the condition has not ended because of it. The desktop shell keeps an open episode for such an
             // alarm instead of ending it, so one outage is one episode however many times the PC sleeps; nothing else shows it.
             if (banner || notify || inStreak || held)
-                alarms.Add(new BlindAlarm(BlindAlarmKinds.Silent, node.NodeId, node.DisplayName, quietSince, Protocol: null, notify, banner));
+                alarms.Add(paused
+                    ? new BlindAlarm(BlindAlarmKinds.Paused, node.NodeId, node.DisplayName, node.Contact!.PausedUntil, Protocol: null, Notify: false, Banner: true)
+                    : new BlindAlarm(BlindAlarmKinds.Silent, node.NodeId, node.DisplayName, quietSince, Protocol: null, notify, banner));
         }
         return alarms;
     }

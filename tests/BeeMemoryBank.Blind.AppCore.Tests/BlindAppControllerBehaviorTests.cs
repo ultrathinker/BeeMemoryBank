@@ -2,6 +2,7 @@ using System.Buffers.Text;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Blind.AppCore.Tests;
@@ -11,7 +12,7 @@ namespace BeeMemoryBank.Blind.AppCore.Tests;
 /// the failure log, the status contents and the progress that reaches the status (review notes of stage 1).
 /// The heavy job's one-at-a-time lock is static, so every test that runs it is in this one class (xunit runs a class serially).
 /// </summary>
-public sealed class BlindAppControllerBehaviorTests
+public sealed partial class BlindAppControllerBehaviorTests
 {
     [Fact]
     public async Task Initialize_MakesTheIdentityWithTheHostsName_AndStatusShowsItAwaitingAnAnswer()
@@ -47,7 +48,7 @@ public sealed class BlindAppControllerBehaviorTests
         await second.Controller.InitializeAsync();
 
         var status = second.Controller.GetStatus();
-        status.StartError.Should().Contain("Disconnect and wipe required");
+        status.StartError.Should().Contain("Remove this account from the accounts list and add it again").And.NotContain("Disconnect and wipe", "no head has that button");
         second.Secrets.IdentitySeed.Should().BeNull("a missing key never mints a new one over existing data");
         status.RecentLog.Should().Contain(e => e.Kind == "start" && e.Message.Contains("Could not set the app up"));
     }
@@ -114,8 +115,9 @@ public sealed class BlindAppControllerBehaviorTests
 
     [Theory]
     [InlineData(typeof(HttpRequestException), "no answer")]   // a failure of a call to the other computer is told as its KIND, never by the words of the HTTP stack (BMB-306/307 fix2, T3)
-    [InlineData(typeof(InvalidOperationException), "link went down")]
-    [InlineData(typeof(NullReferenceException), "link went down")]
+    [InlineData(typeof(BlindSentenceException), "link went down")]   // a sentence this code threw on purpose is said
+    [InlineData(typeof(InvalidOperationException), "an unexpected problem (InvalidOperationException)")]   // the type proves nothing about the words
+    [InlineData(typeof(NullReferenceException), "an unexpected problem (NullReferenceException)")]   // the message of an exception that is not a sentence of this code is never said
     public async Task AFailedSync_IsLogged_WhateverTheExceptionType(Type exceptionType, string said)
     {
         var rig = new Rig();
@@ -209,6 +211,39 @@ public sealed class BlindAppControllerBehaviorTests
     }
 
     [Fact]
+    public async Task Wipe_WhileTheFirstLoadRuns_WaitsForTheLineTheRunWritesAboutItsEnd_AndTheLogDoesNotComeBack()
+    {
+        // The log gets a clock of its own, so that every call of it is one line written. From the moment the test arms the hold, the first line is the job's "First load finished." and the
+        // second is the CLOSING line the run writes about its end. The test holds exactly that second write, and at that point the controller's one activity operation must still be registered.
+        var logClock = new CountingLogClock();
+        var rig = new Rig(configure: services => services.AddSingleton(sp =>
+            new BlindPhoneLog(BlindPaths.Log(sp.GetRequiredService<IBlindPaths>().DataDirectory), logClock)));
+        await rig.Controller.InitializeAsync();
+        rig.Pair();
+        rig.Replica.IgnoreCancel = true;
+        var activity = rig.Provider.GetRequiredService<BlindActivity>();
+        var job = rig.Controller.RunHeavyAsync(false);
+        await rig.Replica.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var wipe = rig.Controller.DisconnectAndWipeAsync();
+        // The wipe cancelled the job, so the backup that follows the load is cut short and the run has a sentence for the log ("Backup paused ...").
+        var before = logClock.Calls;
+        logClock.HoldCall(before + 2);
+
+        rig.Replica.Finish.TrySetResult();
+        await logClock.Held.WaitAsync(TimeSpan.FromSeconds(10));
+        logClock.Calls.Should().Be(before + 2, "the held write is the second line the run writes after the load ended: the one about its end");
+        activity.ActiveCount.Should().Be(1, "the run is still registered while the line about its end is being written: before the fix its operation had ended before this line, so the wipe could delete the log first");
+        var early = async () => await wipe.WaitAsync(TimeSpan.FromMilliseconds(300));
+        await early.Should().ThrowAsync<TimeoutException>("the wipe waits for the run, closing line included");
+        logClock.Release();
+        await wipe.WaitAsync(TimeSpan.FromSeconds(20));
+        await job.WaitAsync(TimeSpan.FromSeconds(10));
+
+        File.Exists(BlindPaths.Log(rig.Dir)).Should().BeFalse("the run's closing line was written before the wipe was let in, so the wipe deleted it; it was not written to a log that was already gone");
+        rig.Secrets.IdentitySeed.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Wipe_WhileASyncRuns_CancelsItsToken_AndRefusesNewWorkUntilTheWipeIsOver()
     {
         var rig = new Rig();
@@ -280,7 +315,7 @@ public sealed class BlindAppControllerBehaviorTests
         var act = () => rig.Controller.GetStatus();
         var status = act.Should().NotThrow().Subject;
 
-        status.KeyStoreUnavailable.Should().Be("UnauthorizedAccessException: The keychain is locked.");
+        status.KeyStoreUnavailable.Should().Be("UnauthorizedAccessException: access was denied", "the kind of failure, not the store's own words");
         status.BackupKeyLost.Should().BeFalse("a store that does not answer is not a lost key: nobody is pushed towards a wipe");
         status.AwaitingAnswer.Should().BeFalse("not known, so not claimed");
         status.StartError.Should().BeNull();
@@ -298,12 +333,12 @@ public sealed class BlindAppControllerBehaviorTests
     {
         var rig = new Rig();
         await rig.Controller.InitializeAsync();
-        rig.Secrets.ReadFailure = new InvalidOperationException(new string('x', 400) + "\r\nsecond line");
+        rig.Secrets.ReadFailure = new BlindSentenceException(new string('x', 400) + "\r\nsecond line");
 
         var reason = rig.Controller.GetStatus().KeyStoreUnavailable!;
 
-        reason.Should().StartWith("InvalidOperationException: xxx").And.EndWith("...");
-        reason.Length.Should().BeLessThan(170);
+        reason.Should().StartWith("BlindSentenceException: xxx").And.EndWith("...");
+        reason.Length.Should().BeLessThan(195);
         reason.Should().NotContain("\n");
     }
 
@@ -399,7 +434,7 @@ public sealed class BlindAppControllerBehaviorTests
         private readonly ServiceProvider _services;
         public IServiceProvider Provider => _services;
 
-        public Rig(string? dir = null, IBlindBackupExporter? exporter = null)
+        public Rig(string? dir = null, IBlindBackupExporter? exporter = null, Action<IServiceCollection>? configure = null)
         {
             Dir = dir ?? Path.Combine(Path.GetTempPath(), "bmb-appcore-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Dir);
@@ -413,6 +448,7 @@ public sealed class BlindAppControllerBehaviorTests
             // The network side is replaced by fakes; everything else is the real composition.
             services.AddSingleton<IBlindReplicaSource>(Replica);
             services.AddSingleton<IBlindPhoneSync>(Sync);
+            configure?.Invoke(services);
             _services = services.BuildServiceProvider();
             Controller = _services.GetRequiredService<BlindAppController>();
         }
@@ -421,7 +457,11 @@ public sealed class BlindAppControllerBehaviorTests
         public void Pair()
         {
             var state = _services.GetRequiredService<BlindPhoneState>();
-            var secret = Secrets.PairingSecret ?? throw new InvalidOperationException("initialize first");
+            var secret = Secrets.PairingSecret ?? throw new InvalidOperationException(
+                "initialize first" +
+                $" (NodeId={state.NodeId?.ToString() ?? "none"}, seed={(Secrets.IdentitySeed is null ? "none" : "there")}, backupKey={(Secrets.BackupKey is null ? "none" : "there")}" +
+                $", callCode={(state.CallCode is null ? "none" : "there")}, startError={Controller.GetStatus().StartError ?? "none"}" +
+                $", log=[{string.Join(" | ", Controller.GetStatus().RecentLog.Select(l => l.Kind + ": " + l.Message))}])");
             var key = new byte[32];
             key[0] = 1;
             state.CallCode = BlindCallCode.Create("https://127.0.0.1:5610", Guid.NewGuid(), Base64Url.EncodeToString(new byte[32]), key, secret);
@@ -524,10 +564,42 @@ public sealed class BlindAppControllerBehaviorTests
         public Task<Stream> CreateAsync(string suggestedName, CancellationToken ct) => Task.FromResult<Stream>(new MemoryStream());
     }
 
+    /// <summary>The clock of a log of its own: counts its calls (one per line written) and can hold one of them until the test lets it go.</summary>
+    private sealed class CountingLogClock : TimeProvider
+    {
+        private readonly DateTimeOffset _now = new(2026, 10, 4, 12, 0, 0, TimeSpan.Zero);
+        private readonly ManualResetEventSlim _release = new(false);
+        private readonly TaskCompletionSource _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _calls;
+        private int _holdCall;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        /// <summary>Completes when the held call has come.</summary>
+        public Task Held => _held.Task;
+
+        /// <summary>The call with this number (the first is 1) waits until <see cref="Release"/>.</summary>
+        public void HoldCall(int number) => Volatile.Write(ref _holdCall, number);
+
+        public void Release() => _release.Set();
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            if (Interlocked.Increment(ref _calls) == Volatile.Read(ref _holdCall))
+            {
+                _held.TrySetResult();
+                _release.Wait(TimeSpan.FromSeconds(30));
+            }
+            return _now;
+        }
+    }
+
     private sealed class ManualClock : TimeProvider
     {
         private DateTimeOffset _now = new(2026, 10, 4, 12, 0, 0, TimeSpan.Zero);
+
         public override DateTimeOffset GetUtcNow() => _now;
+
         public void Advance(TimeSpan by) => _now += by;
     }
 }

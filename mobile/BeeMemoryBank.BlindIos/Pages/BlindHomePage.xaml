@@ -2,7 +2,7 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="BeeMemoryBank.BlindIos.Pages.BlindHomePage"
-             Title="Blind copy"
+             Title="Account"
              BackgroundColor="{StaticResource BackgroundColor}">
 
     <ScrollView>
@@ -15,8 +15,22 @@
             <Label x:Name="FailureLabel" IsVisible="False" TextColor="{StaticResource WarningColor}" LineBreakMode="WordWrap" />
             <Label x:Name="NoticeLabel" IsVisible="False" FontSize="12" LineBreakMode="WordWrap" />
 
-            <!-- State -->
+            <!-- The account: its one state line and its numbers, from the shared BlindAccountCard; pause, rename and the way back from a mistake -->
             <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="6">
+                    <Label x:Name="AccountStateLabel" AutomationId="BlindAccountState" FontAttributes="Bold" LineBreakMode="WordWrap" />
+                    <Label x:Name="AccountStoredLabel" FontSize="12" LineBreakMode="WordWrap" />
+                    <Label x:Name="AccountTodayLabel" FontSize="12" LineBreakMode="WordWrap" />
+                    <Label x:Name="AccountAverageLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Button x:Name="PauseButton" Text="Pause this account" Style="{StaticResource SecondaryButton}" Clicked="OnPauseClicked" />
+                    <Button x:Name="RenameButton" Text="Rename" Style="{StaticResource SecondaryButton}" Clicked="OnRenameClicked" />
+                    <Button x:Name="ReconnectButton" IsVisible="False" Text="Try the source again" Style="{StaticResource SecondaryButton}" Clicked="OnReconnectClicked" />
+                    <Button x:Name="RepairUsageButton" IsVisible="False" Text="Start new usage counts" Style="{StaticResource SecondaryButton}" Clicked="OnRepairUsageClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- State -->
+            <Frame x:Name="StateFrame" BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
                 <VerticalStackLayout Spacing="6">
                     <Label Text="State" FontAttributes="Bold" />
                     <Label x:Name="NameLabel" />
@@ -58,8 +72,32 @@
                 </VerticalStackLayout>
             </Frame>
 
+            <!-- Limits of this account: what it may keep and use, and the two switches that keep it off a data plan and off the battery -->
+            <Frame x:Name="LimitsFrame" BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Limits" FontAttributes="Bold" />
+                    <Label Text="Storage" FontSize="12" />
+                    <Entry x:Name="StoredLimitEntry" Placeholder="no limit, e.g. 2 GB" IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <Label Text="Traffic a day" FontSize="12" />
+                    <Entry x:Name="TrafficLimitEntry" Placeholder="no limit, e.g. 200 MB" IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <Label Text="Requests a day" FontSize="12" />
+                    <Entry x:Name="RequestsLimitEntry" Placeholder="no limit, e.g. 5000" Keyboard="Numeric" IsSpellCheckEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Switch x:Name="UnmeteredSwitch" Grid.Column="0" VerticalOptions="Center" />
+                        <Label Grid.Column="1" Text="Only on Wi-Fi or other unmetered networks" VerticalOptions="Center" LineBreakMode="WordWrap" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Switch x:Name="PowerSavingSwitch" Grid.Column="0" VerticalOptions="Center" />
+                        <Label Grid.Column="1" Text="Pause on battery saver (Low Power Mode)" VerticalOptions="Center" LineBreakMode="WordWrap" />
+                    </Grid>
+                    <Label x:Name="LimitsHintLabel" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Label x:Name="LimitsErrorLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
+                    <Button x:Name="SaveLimitsButton" Text="Save the limits" Style="{StaticResource PrimaryButton}" Clicked="OnSaveLimitsClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
             <!-- Backups -->
-            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+            <Frame x:Name="BackupsFrame" BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
                 <VerticalStackLayout Spacing="8">
                     <Label Text="Backups" FontAttributes="Bold" />
                     <Label Text="Encrypted with this iPhone's backup key; the computer can open them with the master password. A backup runs while the app is open, or when iOS grants it background time."
@@ -76,7 +114,7 @@
             </Frame>
 
             <!-- Log -->
-            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+            <Frame x:Name="LogFrame" BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
                 <VerticalStackLayout Spacing="6">
                     <Label Text="Log" FontAttributes="Bold" />
                     <Label x:Name="LogLabel" FontSize="11" LineBreakMode="WordWrap" />
@@ -86,10 +124,10 @@
             <!-- Danger -->
             <Frame BorderColor="{StaticResource ErrorColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
                 <VerticalStackLayout Spacing="8">
-                    <Label Text="Disconnect and wipe" FontAttributes="Bold" TextColor="{StaticResource ErrorColor}" />
-                    <Label Text="Deletes this copy, its backups on the iPhone and its keys. Revoke the iPhone on the computer too. Backups you saved elsewhere stay where you saved them."
+                    <Label Text="Remove this account" FontAttributes="Bold" TextColor="{StaticResource ErrorColor}" />
+                    <Label Text="Deletes this account's copy, its backups on the iPhone and its keys, and tells its source if this iPhone is online. The other accounts are not touched. Backups you saved elsewhere stay where you saved them."
                            FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
-                    <Button Text="Disconnect and wipe…" BackgroundColor="Transparent" TextColor="{StaticResource ErrorColor}" Clicked="OnWipeClicked" />
+                    <Button Text="Remove this account…" BackgroundColor="Transparent" TextColor="{StaticResource ErrorColor}" Clicked="OnRemoveClicked" />
                 </VerticalStackLayout>
             </Frame>
         </VerticalStackLayout>

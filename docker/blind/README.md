@@ -123,6 +123,21 @@ asks for the current one, counted like a sign-in) and signs the other browsers o
 
 `bmb blind backup now | list | verify [--full]`, `bmb blind jobs`, `bmb blind status`.
 
+### Join a full node with its invitation (2.7)
+
+The owner of the full node makes an invitation ("Invite a blind copy", a line that begins with `bmb-invite:`); you run one command on the machine of this node. The node must be running, with
+`BMB_PUBLIC_ADDRESS` set (the full node dials that address to send the data):
+
+```bash
+docker exec -i bmb-blind bmb blind join - --yes < invitation.txt      # the invitation from a file: not in `ps` or the shell history
+docker exec -it bmb-blind bmb blind join 'bmb-invite:?v=1&…'          # or typed: it shows who made it, asks, then prints the match code
+docker compose exec -T blind bmb blind join - --yes < invitation.txt  # from the folder of a compose file
+```
+
+Read the **match code** it prints out to the owner; they compare it with the one on their Blind nodes page and confirm. The command waits for the answer (`--no-wait` does not; `bmb blind join --status`
+shows it later; `--cancel` gives up). The old way - `bmb blind pair-code`, pasted on the full node's Blind nodes page - still works; a node does one of the two at a time. A full node older than 2.7 answers
+"upgrade the full node first". If the full node's answer gets lost (a dropped connection, a timeout) the node keeps its record and its secret: run the same command again with the same invitation, or look at `--status`; `--cancel` ends it. Details: [docs/blind-node/README.md](../../docs/blind-node/README.md#a-server-blind-node-joins-with-bmb-blind-join-invitation-27).
+
 ### Save a copy to…
 
 A one-off copy of the repository into another folder — a USB disk or a NAS share mounted into
@@ -132,6 +147,21 @@ that folder (created on first use with the source's chunker parameters, so repea
 incremental), under the same repository password, with `<folder>.recovery-set.json` next to it.
 Nothing is decrypted or exported in the clear. The destination must be outside the node's data
 folder and apart from the main repository.
+
+### Limits (2.7)
+
+The person who hosts the node can cap what it keeps and moves for the mesh. Both are optional, in `compose.yaml` under `environment:` or in the console's **Limits** section (there a size can be written as `500 MB` or `2 GB`):
+
+```yaml
+      - BMB_BLIND_MAX_STORED_BYTES=2147483648       # at most 2 GB stored (database, media files, sealed baselines)
+      - BMB_BLIND_MAX_TRAFFIC_PER_DAY=209715200     # at most 200 MB a day, counted over the node's local day
+```
+
+An empty or unset variable is no limit; `0` pauses that kind of transfer. A daily traffic limit below 10 MB (other than 0) is refused, and so is a value that is not a number: **the node does not start** with it. A variable that is set is applied again at every start, so a value changed in the console under it comes back; to keep a console value, leave the variable out.
+
+A reached limit - of either kind, reads as well as writes - answers the routes that carry the mesh's data (events, blobs, the seed, the replica and restore packages) with `503`, `X-BMB-Paused: disk|traffic` and `Retry-After` (the next local midnight for traffic, an hour for storage) and writes nothing; the identity, sign-in, status and console routes still answer. A current full node shows the node as *paused by the blind node's owner* and asks again at the named time; an older full node treats it as an ordinary failure and backs off. A node that is only busy with other transfers answers a one-minute `X-BMB-Paused: busy`, which a full node shows as busy and not as your pause. `bmb blind status` and the console show both limits, what the node holds and what it moved today.
+
+The limits are the host's agreement with the node's owner, not an operating-system quota: anything that can write the data volume can change the counts, and a request that is already admitted finishes, so a limit can be passed by what the requests in flight moved. The stored size includes what peers make the node stage, so a seed needs room for the old and the new data, and the volume itself needs about three times the package free. Wrong restore codes are counted per source address (five in five minutes, then `429`), never against the codes. This node has no app accounts and no device-wide limit. How exactly a cap holds (reservations, the 1 MiB minimum, the 256 KiB and 16 KiB small bodies, the lifetime of a request, the grace for a stuck one, the 200-character name of a restored computer): [docs/blind-node/README.md](../../docs/blind-node/README.md#limits-of-a-server-blind-node-27).
 
 ## CPU modes
 

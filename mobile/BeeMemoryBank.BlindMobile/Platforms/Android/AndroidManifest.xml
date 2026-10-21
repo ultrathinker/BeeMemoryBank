@@ -3,6 +3,8 @@
           xmlns:tools="http://schemas.android.com/tools"
           package="com.beememorybank.blind">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- ConnectivityManager.GetNetworkCapabilities: whether the active network is metered ("Only on Wi-Fi or other unmetered networks"). A normal permission: no prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />

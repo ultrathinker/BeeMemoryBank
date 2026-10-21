@@ -302,7 +302,9 @@ public class BlindRoleTests : IAsyncLifetime
         identity.NodeId.Should().Be(nodeId);
         using var check = blind.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
         (await check.QueryAsync<(int, string)>("SELECT version, filename FROM tbl_migration")).Should().Equal(
-            [(MigrationRunner.BaselineVersion, MigrationRunner.BaselineResourceName)], "the 39 old rows became the baseline's one");
+            [(MigrationRunner.BaselineVersion, MigrationRunner.BaselineResourceName), (41, "BeeMemoryBank.Storage.Migrations.041_blind_invite.sql"),
+                (42, "BeeMemoryBank.Storage.Migrations.042_blind_invite_server.sql")],
+            "the 39 old rows became the baseline's one, and the migrations after it ran");
         (await check.ExecuteScalarAsync<long>(
             "SELECT COUNT(*) FROM pragma_table_info('tbl_whitelist') WHERE name = 'last_protocol_version'")).Should().Be(1);
     }

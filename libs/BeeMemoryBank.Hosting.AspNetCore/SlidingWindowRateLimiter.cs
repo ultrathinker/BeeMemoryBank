@@ -24,6 +24,11 @@ public static class RateLimitPath
 {
     public const string LoginPath = "/login";
     public const string AdminPath = "/admin";
+
+    /// <summary>
+    /// The page of the node wipe. The Admin area has a page per block, and the wipe has its own (<c>/Admin/ResetNode</c>), whose only POST handler is the wipe.
+    /// </summary>
+    public const string AdminResetNodePath = "/admin/resetnode";
     public const string RecoverAccessPath = "/recoveraccess";
 
     /// <summary>
@@ -32,9 +37,14 @@ public static class RateLimitPath
     /// or give two vectors onto the same destructive action a budget each.
     ///
     /// <para>
-    /// The node wipe lives only on the superadmin-only Admin page, so an anonymous visitor cannot
+    /// The node wipe lives only on the superadmin-only Admin area, so an anonymous visitor cannot
     /// reach it; its budget is brute-force protection on the master password an already-signed-in
     /// caller must still supply.
+    /// </para>
+    /// <para>
+    /// Every POST to <see cref="AdminResetNodePath"/> is charged to the wipe budget, whatever handler it names: that page has no other POST handler, and a
+    /// request that names none or a wrong one is one more guess at nothing, which costs a guesser and nobody else. The address of the former single Admin
+    /// page stays classified with its handler (<see cref="AdminPath"/>), so a handler of that name added to that page one day starts throttled.
     /// </para>
     /// </summary>
     /// <param name="handlerValues">
@@ -47,6 +57,8 @@ public static class RateLimitPath
     {
         bool IsHandler(string name) =>
             handlerValues?.Any(v => string.Equals(v, name, StringComparison.OrdinalIgnoreCase)) == true;
+
+        if (normalizedPath == AdminResetNodePath) return RateLimitedRoute.NodeReset;
 
         if (normalizedPath == AdminPath)
             return IsHandler("ResetNode") ? RateLimitedRoute.NodeReset : RateLimitedRoute.None;
@@ -94,14 +106,32 @@ public static class RateLimitPath
 /// while the Web limiter keys on the actual remote client. Sharing one bucket would let one
 /// browser's failures throttle every MCP agent, and vice versa.
 /// </para>
+/// <para>
+/// <paramref name="maxKeys"/> (0 = no bound, what the older users of this class have) caps how many keys are counted at once, for a limiter whose keys a stranger
+/// chooses (the public invitation routes: one key per caller address, and an attacker has as many addresses as it can spoof or rent). The cap is exact: every NEW key
+/// is admitted to the table under one lock that decides the capacity and inserts, so any number of concurrent newcomers leaves at most <paramref name="maxKeys"/> keys.
+/// At the cap a newcomer is admitted only if keys whose window has run out can be dropped to make room (the only keys that are dropped: a key that is still counting is
+/// never forgotten, so no caller's partial budget and no ban is reset by pressure from others); if none can, the newcomer is refused (<see cref="TryAcquire"/> says no)
+/// until a window runs out. The trade-off, said plainly: while the table is full of keys that are still counting, callers with an address not in it are refused for up to
+/// one window - the price of never resetting anybody's budget; what fills the table is bounded by what the callers in front of this limiter let through (the public
+/// routes' process-wide budget, and <see cref="Refund"/> for attempts the budget turned away).
+/// </para>
 /// </summary>
-public sealed class SlidingWindowRateLimiter(int maxAttempts, TimeSpan window)
+public sealed class SlidingWindowRateLimiter(int maxAttempts, TimeSpan window, int maxKeys = 0)
 {
     private readonly ConcurrentDictionary<string, List<DateTime>> _attempts = new();
+    private readonly object _roomLock = new();
+    private DateTime _noRoomBefore = DateTime.MinValue;
     private int _requestCounter;
 
     public int MaxAttempts { get; } = maxAttempts;
     public TimeSpan Window { get; } = window;
+
+    /// <summary>The most keys counted at once; 0 when unbounded.</summary>
+    public int MaxKeys { get; } = maxKeys;
+
+    /// <summary>How many keys are counted now. Test/diagnostic helper.</summary>
+    public int KeyCount => _attempts.Count;
 
     /// <summary>
     /// Records an attempt against <paramref name="key"/> and reports whether it is allowed.
@@ -116,11 +146,15 @@ public sealed class SlidingWindowRateLimiter(int maxAttempts, TimeSpan window)
         bool allowed;
         while (true)
         {
-            var timestamps = _attempts.GetOrAdd(key, _ => new List<DateTime>());
+            if (!_attempts.TryGetValue(key, out var timestamps))
+            {
+                timestamps = AddKey(key, now);
+                if (timestamps is null) return false;   // the table is full of keys that are still counting: a newcomer waits
+            }
             lock (timestamps)
             {
-                // The periodic sweep evicts empty lists, so between GetOrAdd and this lock our
-                // brand-new list may already have been removed from the dictionary — recording an
+                // The periodic sweep evicts empty lists, so between the lookup and this lock our
+                // list may already have been removed from the dictionary — recording an
                 // attempt on it would write to an orphan nobody reads, silently granting a free
                 // attempt. Confirm we still hold the published list, and retry if not.
                 if (!_attempts.TryGetValue(key, out var current) || !ReferenceEquals(current, timestamps))
@@ -138,6 +172,38 @@ public sealed class SlidingWindowRateLimiter(int maxAttempts, TimeSpan window)
             Sweep(now);
 
         return allowed;
+    }
+
+    /// <summary>
+    /// Takes back the newest attempt recorded for <paramref name="key"/> - for an attempt that was counted here but then turned away by a limit in front of the work
+    /// (the process-wide budget of a public route): a request that was refused did not use the caller's budget, and refused traffic must not fill the table either, so a
+    /// key left with no attempt is dropped.
+    /// </summary>
+    public void Refund(string key)
+    {
+        if (!_attempts.TryGetValue(key, out var timestamps)) return;
+        lock (timestamps)
+        {
+            if (timestamps.Count > 0) timestamps.RemoveAt(timestamps.Count - 1);
+            if (timestamps.Count == 0) _attempts.TryRemove(new KeyValuePair<string, List<DateTime>>(key, timestamps));
+        }
+    }
+
+    /// <summary>
+    /// How long until <paramref name="key"/> is allowed again (the oldest attempt in its window leaving it), or null when the key is not counted - for a key refused
+    /// because the table is full of banned keys there is no such time, and the caller picks its own.
+    /// </summary>
+    public TimeSpan? RetryAfter(string key, DateTime? nowUtc = null)
+    {
+        if (!_attempts.TryGetValue(key, out var timestamps)) return null;
+        var now = nowUtc ?? DateTime.UtcNow;
+        lock (timestamps)
+        {
+            timestamps.RemoveAll(t => now - t > Window);
+            if (timestamps.Count < MaxAttempts || timestamps.Count == 0) return TimeSpan.Zero;
+            var wait = timestamps[0] + Window - now;
+            return wait < TimeSpan.Zero ? TimeSpan.Zero : wait;
+        }
     }
 
     /// <summary>
@@ -164,6 +230,32 @@ public sealed class SlidingWindowRateLimiter(int maxAttempts, TimeSpan window)
         {
             timestamps.RemoveAll(t => now - t > Window);
             return timestamps.Count;
+        }
+    }
+
+    // A key that is not in the table yet. Unbounded: as it always was. Bounded: the capacity decision and the insertion are ONE step under one lock - the only place a
+    // bounded limiter adds a key - so concurrent newcomers cannot all see room and all insert. At the cap only keys whose window has run out are dropped; null when
+    // that frees nothing (and not looked for again for a second, so a flood of newcomers does not make every one pay for a scan).
+    private List<DateTime>? AddKey(string key, DateTime now)
+    {
+        if (MaxKeys <= 0) return _attempts.GetOrAdd(key, _ => new List<DateTime>());
+
+        lock (_roomLock)
+        {
+            if (_attempts.TryGetValue(key, out var existing)) return existing;
+            if (_attempts.Count >= MaxKeys)
+            {
+                if (now < _noRoomBefore) return null;
+                Sweep(now);
+                if (_attempts.Count >= MaxKeys)
+                {
+                    _noRoomBefore = now + TimeSpan.FromSeconds(1);
+                    return null;
+                }
+            }
+            var created = new List<DateTime>();
+            _attempts[key] = created;
+            return created;
         }
     }
 

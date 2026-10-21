@@ -65,7 +65,8 @@ internal sealed class ProcessCommandRunner : ICommandRunner
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or PlatformNotSupportedException)
         {
-            return new CommandResult(-1, "", ex.Message, TimedOut: false);
+            // The type only: the message of a process failure names the program and its folder.
+            return new CommandResult(-1, "", ex.GetType().Name, TimedOut: false);
         }
     }
 }

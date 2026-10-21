@@ -139,6 +139,9 @@
         if (node.isSelf) return 'This node';
         var dir = DIRECTION[node.lastContactDirection] || '';
         var when = node.lastContactAt ? relativeTime(node.lastContactAt, nowMs) : null;
+        // A blind copy whose owner removed it from the device, or whose owner's limits told it to wait: said by this node in words of its own (a closed set).
+        if (node.leftAt) return 'Removed from the device by its owner — revoke it under Blind nodes';
+        if (node.pausedText) return node.pausedText + (when ? ' · last call ' + when : '');
         if (node.state === 'not_answering') {
             return 'Not answering since ' + relativeTime(node.notAnsweringSince, nowMs) + (node.notAnsweringReason ? ' \u2014 ' + node.notAnsweringReason : '');
         }

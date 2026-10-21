@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.Core.Services.BlindPhone;
 
@@ -59,6 +60,26 @@ public interface IBlindReplicaSource
     /// </summary>
     Task<bool> UpdateBaselineAsync(BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
         Task.FromResult(false);
+
+    /// <summary>
+    /// <see cref="UpdateBaselineAsync"/> that also says whether the source answered this device: "nothing newer" because the copy holds no baseline and nothing was asked is not the same as a
+    /// 304 from a source that accepted the device. The default knows only the first answer of the old method (installed or not), so a source that does not override this never reports a contact.
+    /// </summary>
+    async Task<BlindBaselineCheck> CheckBaselineAsync(BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
+        await UpdateBaselineAsync(target, workDirectory, progress, ct).ConfigureAwait(false) ? BlindBaselineCheck.Installed : BlindBaselineCheck.NotAsked;
+}
+
+/// <summary>What a check for a newer baseline came to (<see cref="IBlindReplicaSource.CheckBaselineAsync"/>).</summary>
+public enum BlindBaselineCheck
+{
+    /// <summary>Nothing was asked of the source: the copy holds no baseline yet (the first load is the way to get one), or the source knows no baselines.</summary>
+    NotAsked,
+
+    /// <summary>The source authenticated this device and answered "not modified": the copy holds the source's current baseline.</summary>
+    Current,
+
+    /// <summary>The source authenticated this device and a newer baseline was installed.</summary>
+    Installed,
 }
 
 /// <summary>
@@ -92,7 +113,7 @@ public interface IRecoverySetJsonSource
 
 /// <summary>A piece not wired to the phone yet (see the TODOs above).</summary>
 public sealed class BlindFeaturePendingException(string contractItem)
-    : InvalidOperationException($"Not available yet: waiting for {contractItem}.")
+    : InvalidOperationException($"Not available yet: waiting for {contractItem}."), IBlindOwnSentence
 {
     public string ContractItem { get; } = contractItem;
 }

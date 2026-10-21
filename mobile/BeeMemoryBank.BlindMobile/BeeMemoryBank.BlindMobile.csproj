@@ -63,6 +63,26 @@
          itself: no exclusion is needed (see the ordinary app's project for the story of the old engine's glibc library). -->
   </ItemGroup>
 
+  <!-- In-app QR scanning of an invitation (slice 11): Google Play services' code scanner, shown by Play services, so the app needs and asks for no CAMERA permission. OFF unless the build
+       says -p:BmbQrScanner=true. Why it is not on by default: the binding drags ML Kit's common library, Firebase's component registry and Google's DataTransport (the library ML Kit logs its
+       usage through) into an app whose PRIVACY.md says "no telemetry, no analytics"; whether anything is sent has to be seen on a phone first, and PRIVACY.md would name Google Play services.
+       Paste and the bmb-invite: link (the phone's Camera opens it) work without it. docs/blind-node/ACCOUNTS.md has the findings. -->
+  <PropertyGroup>
+    <BmbQrScanner Condition="'$(BmbQrScanner)' == ''">false</BmbQrScanner>
+    <DefineConstants Condition="'$(BmbQrScanner)' == 'true'">$(DefineConstants);BMB_QR_SCANNER</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(BmbQrScanner)' == 'true'">
+    <PackageReference Include="Xamarin.GooglePlayServices.Code.Scanner" />
+    <!-- Play services Base/Basement need AndroidX Fragment 1.9 (and Tracing 2.0 through it). Fragment 1.9 carries the Kotlin extensions itself, so the older fragment-ktx / tracing-ktx
+         bindings MAUI brings define the same classes twice and the dexer stops (Type androidx.fragment.app.FragmentKt is defined multiple times). Their 1.9 / 2.0 releases are the
+         empty successors: raised for this app only (the ordinary app has no Play services and keeps the central versions). -->
+    <PackageReference Include="Xamarin.AndroidX.Fragment.Ktx" VersionOverride="1.9.0" />
+    <PackageReference Include="Xamarin.AndroidX.Tracing.Tracing.Ktx" VersionOverride="2.0.0" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(BmbQrScanner)' != 'true'">
+    <Compile Remove="Platforms\Android\AndroidQrScanner.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- The shared libraries and the phone's client of a blind node. BeeMemoryBank.Vault is deliberately not referenced (the shared
          libraries cannot reference it), so the trimmed APK contains no master-key, session or content-crypto code. -->

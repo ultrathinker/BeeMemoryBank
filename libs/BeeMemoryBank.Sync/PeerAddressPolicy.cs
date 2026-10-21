@@ -28,8 +28,6 @@ public static class PeerAddressPolicy
         public bool Ok => Address is not null;
     }
 
-    private static readonly string[] MetadataHosts = ["metadata.google.internal", "metadata.goog", "instance-data"];
-
     /// <summary>
     /// What an address that arrives from OUTSIDE - a join request, a pair code, an import, a replicated event, the answer of a host to a join - may become when it
     /// is stored: its canonical form, or null when the policy refuses it or none was given (the row then keeps what it had, or has none). One rule at every boundary
@@ -97,15 +95,5 @@ public static class PeerAddressPolicy
         return authority.Contains('@');
     }
 
-    private static string? HostRefusal(Uri uri)
-    {
-        var host = uri.DnsSafeHost.TrimEnd('.');
-        if (host.Length == 0) return "That is not an address (for example https://example.com or http://192.168.1.20:5300).";
-        if (MetadataHosts.Contains(host, StringComparer.OrdinalIgnoreCase))
-            return "That name is a cloud metadata service, not a device.";
-
-        // The zone of an IPv6 literal ("%eth0") is not part of the address.
-        var literal = host.Contains('%') ? host[..host.IndexOf('%')] : host;
-        return IPAddress.TryParse(literal, out var ip) ? IpRefusal(ip) : null;
-    }
+    private static string? HostRefusal(Uri uri) => PeerNetworkRules.HostRefusal(uri.DnsSafeHost);
 }

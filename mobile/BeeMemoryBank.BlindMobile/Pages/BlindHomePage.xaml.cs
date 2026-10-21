@@ -6,18 +6,19 @@ using QRCoder;
 namespace BeeMemoryBank.BlindMobile.Pages;
 
 /// <summary>
-/// The blind node's only screen (plan section 10): state, the two pairing codes, backups (now, "Save
-/// to…", schedule), the log, and "Disconnect and wipe". There is no unlock: a blind copy has no
-/// master password.
+/// The page of ONE account (plan section 10, bound to one account's controller): state, the card of the account (what it is doing, what it used), its limits, the two pairing codes of the old way,
+/// backups (now, "Save to…", schedule), the log, and "Remove this account". There is no unlock: a blind copy has no master password.
 /// <para>The page holds no blind logic and never reads a key itself: it shows <see cref="BlindHomeView"/>, built from the status of the
-/// shared <see cref="IBlindAppController"/> (the same one the desktop hosts use), whose reads of the AndroidKeyStore cannot throw into the
-/// screen. Only what is Android's own stays here: WorkManager and service requests, the file picker, the clipboard, the QR picture. Every
-/// callback of the page is guarded: a failure becomes a sentence on the screen, never an unhandled exception on the UI thread.</para>
+/// shared <see cref="IBlindAppController"/> of its account (the same one the desktop hosts use), whose reads of the AndroidKeyStore cannot throw into the
+/// screen, and <see cref="BlindAccountCard"/>, whose sentences are the shared AppCore's. Only what is Android's own stays here: WorkManager and service requests, the file picker, the
+/// clipboard, the QR picture. Every callback of the page is guarded: a failure becomes a sentence on the screen, never an unhandled exception on the UI thread.</para>
 /// </summary>
 public partial class BlindHomePage : ContentPage
 {
     private static readonly BlindBackupSchedule[] Schedules = BlindHomeView.Schedules;
 
+    private readonly BlindDevice _device;
+    private readonly string _accountId;
     private readonly IBlindAppController _app;
     private readonly BlindHeavyWork _work;
     private readonly BlindActivity _activity;
@@ -30,19 +31,25 @@ public partial class BlindHomePage : ContentPage
     private IDispatcherTimer? _timer;
     private bool _applying;
     private bool _refreshPending;
+    private bool _closing;
+    private bool _limitsFilled;
     private string? _qrFor;
-    private string _wipeName = "";
     private DateTimeOffset _backupAskedAt = DateTimeOffset.MinValue;
     private BusyProgress? _busyProgress;   // the pop-up of the long operation now running, if any (the job's progress is shown in it too)
 
-    public BlindHomePage(IBlindAppController app, BlindHeavyWork work, BlindActivity activity, IBlindPaths paths, BlindStoreStats stats)
+    /// <param name="accountId">The account this page is about; it must be there (the caller handles <see cref="KeyNotFoundException"/>).</param>
+    public BlindHomePage(IServiceProvider services, string accountId)
     {
         InitializeComponent();
-        _app = app;
-        _work = work;
-        _activity = activity;
-        _paths = paths;
-        _stats = stats;
+        _device = services.GetRequiredService<BlindDevice>();
+        _accountId = accountId;
+        // The controller and the services of THIS account: one account's page never reaches another's.
+        _app = _device.Accounts.For(accountId);
+        var account = _device.Accounts.ServicesFor(accountId);
+        _work = account.GetRequiredService<BlindHeavyWork>();
+        _activity = account.GetRequiredService<BlindActivity>();
+        _paths = account.GetRequiredService<IBlindPaths>();
+        _stats = account.GetRequiredService<BlindStoreStats>();
         SchedulePicker.ItemsSource = new[] { "Off", "Daily", "Weekly" };
     }
 
@@ -54,8 +61,8 @@ public partial class BlindHomePage : ContentPage
             _work.Progress += OnJobProgress;
             _app.Changed += OnAppChanged;
 
-            // Opens the database and makes the identity; a failure is kept in the status (StartError), it is not thrown.
-            await _app.InitializeAsync();
+            // The account host started this account (it opened the database and made the identity; a failure is kept in the status as StartError): the page only shows it.
+            await _device.StartAsync();
             Refresh();
 
             if (_timer is null)
@@ -66,9 +73,9 @@ public partial class BlindHomePage : ContentPage
             }
             _timer.Start();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            ShowProblem(ex);
+            ShowProblem();
         }
     }
 
@@ -101,12 +108,13 @@ public partial class BlindHomePage : ContentPage
             var code = status.AwaitingAnswer ? _app.PairingCode() : null;
             var backupRunning = _activity.IsActive(BlindActivity.Heavy) || _activity.IsActive(BlindActivity.BackupService)
                 || DateTimeOffset.UtcNow - _backupAskedAt < TimeSpan.FromSeconds(10);
-            Show(BlindHomeView.Build(status, code, backupRunning, _store), status.DisplayName);
+            Show(BlindHomeView.Build(status, code, backupRunning, _store));
             ReadStoreSoon(status);
+            ShowAccount();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            ShowProblem(ex);
+            ShowProblem();
         }
     }
 
@@ -125,14 +133,82 @@ public partial class BlindHomePage : ContentPage
                 _readingStore = false;
                 _store = summary;
                 try { StoreLabel.Text = BlindHomeView.StoreText(summary, _app.GetStatus(), DateTimeOffset.UtcNow); }
-                catch (Exception ex) { ShowProblem(ex); }
+                catch (Exception) { ShowProblem(); }
             });
         });
     }
 
-    private void Show(BlindHomeView view, string? displayName)
+    /// <summary>The account's card (its state line and what it used, from the shared AppCore view), the pause button, and the parts of the page that only make sense for how this account was added.</summary>
+    private void ShowAccount()
     {
-        _wipeName = displayName ?? "";
+        var account = _device.Accounts.GetSnapshot().Accounts.FirstOrDefault(a => a.Entry.Id == _accountId);
+        if (account is null)
+        {
+            // Removed (here or by a repair): there is nothing left to show.
+            CloseSoon();
+            return;
+        }
+
+        var entry = account.Entry;
+        var card = BlindAccountCard.Build(account, TimeZoneInfo.Local, DateTimeOffset.UtcNow);
+        Title = entry.Name;
+        CardStateLabel.Text = card.State;
+        CardStateLabel.TextColor = ColourOf(card.Kind);
+        CardUsageLabel.Text = string.Join(Environment.NewLine, new[] { card.Stored, card.Today, card.Average }.Where(line => line.Length > 0));
+        CardUsageLabel.IsVisible = CardUsageLabel.Text.Length > 0;
+        ReconnectButton.IsVisible = entry.Phase == BlindAccountPhases.RemovedByOwner;
+        RepairUsageButton.IsVisible = card.CanRepairUsage;
+        PauseButton.Text = entry.PausedByUser ? "Resume this account" : "Pause this account";
+        PauseButton.IsEnabled = card.CanEdit;
+        SaveLimitsButton.IsEnabled = card.CanEdit;
+        RenameButton.IsEnabled = card.CanEdit;
+        RemoveButton.IsEnabled = entry.Phase != BlindAccountPhases.Deleting;
+
+        // An account added from an invitation never shows the codes of the old way; one that has not been confirmed has no copy yet, so no state or backups to show.
+        var invited = entry.InviteId is not null;
+        var live = entry.Phase == BlindAccountPhases.Active;
+        CodesFrame.IsVisible = !invited;
+        StateFrame.IsVisible = live;
+        BackupsFrame.IsVisible = live;
+
+        if (!_limitsFilled) FillLimitsForm(entry);
+    }
+
+    private static Color ColourOf(BlindCardKind kind) => Application.Current?.Resources.TryGetValue(kind switch
+    {
+        BlindCardKind.Ok => "SuccessColor",
+        BlindCardKind.Paused => "WarningColor",
+        BlindCardKind.Problem => "ErrorColor",
+        BlindCardKind.Removing => "SecondaryTextColor",
+        _ => "TextColor",
+    }, out var value) == true && value is Color colour ? colour : Colors.Gray;
+
+    /// <summary>The form as the account's limits are now. Filled once when the page opens and again after a save: never under the person's fingers.</summary>
+    private void FillLimitsForm(BlindAccountEntry entry)
+    {
+        var form = BlindLimitsForm.From(entry);
+        StoredEntry.Text = form.Stored;
+        TrafficEntry.Text = form.TrafficPerDay;
+        RequestsEntry.Text = form.RequestsPerDay;
+        UnmeteredSwitch.IsToggled = form.UnmeteredOnly;
+        BatterySwitch.IsToggled = form.PauseOnPowerSaving;
+        LimitsProblemLabel.IsVisible = false;
+        _limitsFilled = true;
+    }
+
+    private void CloseSoon()
+    {
+        if (_closing) return;
+        _closing = true;
+        MainThread.BeginInvokeOnMainThread(async () =>
+        {
+            try { await Navigation.PopAsync(); }
+            catch (Exception) { /* the page is already gone */ }
+        });
+    }
+
+    private void Show(BlindHomeView view)
+    {
         StatusErrorLabel.IsVisible = false;
         NameLabel.Text = view.Name;
         NodeLabel.Text = view.Node;
@@ -187,19 +263,19 @@ public partial class BlindHomePage : ContentPage
                 PhoneCodeImage.Source = null;
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             PhoneCodeImage.IsVisible = false;
-            PhoneCodeLabel.Text = $"The QR picture could not be made ({ex.Message}). Copy the code with the button below instead.";
+            PhoneCodeLabel.Text = BlindPageSentences.QrNotMade;
         }
     }
 
-    /// <summary>Even the status could not be read: say so with the way out, and keep the wipe button usable.</summary>
-    private void ShowProblem(Exception ex)
+    /// <summary>Even the status could not be read: a fixed sentence with the way out (never the exception's own text), and the remove button stays usable.</summary>
+    private void ShowProblem()
     {
         try
         {
-            StatusErrorLabel.Text = BlindHomeView.StatusFailedText(ex);
+            StatusErrorLabel.Text = BlindPageSentences.StatusUnreadable;
             StatusErrorLabel.IsVisible = true;
         }
         catch (Exception)
@@ -225,9 +301,9 @@ public partial class BlindHomePage : ContentPage
             JobProgress.Progress = progress;
             JobLabel.Text = $"{title}: {progress:P0}";
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            ShowProblem(ex);
+            ShowProblem();
         }
     });
 
@@ -238,9 +314,9 @@ public partial class BlindHomePage : ContentPage
         {
             if (_app.PairingCode() is { } code) await Clipboard.Default.SetTextAsync(code);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            await TellAsync("Copy this phone's code", ex.Message);
+            await TellAsync("Copy this phone's code", BlindPageSentences.CodeNotCopied);
         }
     }
 
@@ -257,15 +333,16 @@ public partial class BlindHomePage : ContentPage
             if (error == null)
             {
                 CallCodeEntry.Text = "";
+                // Paired: request the first load of THIS account without waiting for the next hourly slot.
+                _device.HeavyScheduler.RequestHeavy(_accountId);
 #if ANDROID
-                // Paired: request the first load without waiting for the next hourly slot.
                 Platforms.Android.BlindWorkScheduler.RunHeavyNow(Platform.AppContext);
 #endif
                 // Locked until the first load has ended, or failed, or was never started (the state says which), not until a clock runs out.
                 var outcome = await WaitForJobAsync(busy, ask, BlindActivity.Heavy);
                 if (outcome.Phase is BlindJobPhase.Failed or BlindJobPhase.Unreported)
                 {
-                    NoticeLabel.Text = outcome.Phase == BlindJobPhase.Failed ? $"The first load did not finish: {outcome.Message}" : outcome.Message;
+                    NoticeLabel.Text = BlindPageSentences.JobEnd(outcome, BlindJobWait.FirstLoad, finished: "", BlindPageSentences.FirstLoadNotFinished, ended: "");
                     NoticeLabel.IsVisible = true;
                 }
             }
@@ -330,9 +407,9 @@ public partial class BlindHomePage : ContentPage
                 return Task.CompletedTask;
             }, new BusyOptions { FailureTitle = "Re-pair" });
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            await TellAsync("Re-pair", ex.Message);
+            await TellAsync("Re-pair", BlindPageSentences.RePairNotStarted);
         }
     }
 
@@ -343,6 +420,8 @@ public partial class BlindHomePage : ContentPage
         await BusyAction.RunAsync(sender as Button, async busy =>
         {
             var ask = BlindJobWait.Ask(BlindJobWait.Sync, _app.GetStatus(), DateTimeOffset.UtcNow);
+            // This account first (the scheduler's plan), then the system's one-time job, which runs the pass for every account that is due.
+            _device.SyncScheduler.RequestSync(_accountId);
 #if ANDROID
             Platforms.Android.BlindWorkScheduler.SyncNow(Platform.AppContext);
 #endif
@@ -350,9 +429,10 @@ public partial class BlindHomePage : ContentPage
             NoticeLabel.IsVisible = true;
             Refresh();
             var outcome = await WaitForJobAsync(busy, ask, BlindActivity.Sync);
-            NoticeLabel.Text = outcome.Phase == BlindJobPhase.Finished
-                ? "Sync finished. The time of the last sync is above, what happened is in the log below."
-                : outcome.Message ?? "Sync ended. What happened is in the log below.";
+            NoticeLabel.Text = BlindPageSentences.JobEnd(outcome, BlindJobWait.Sync,
+                finished: "Sync finished. The time of the last sync is above, what happened is in the log below.",
+                failed: BlindPageSentences.SyncNotFinished,
+                ended: "Sync ended. What happened is in the log below.");
             Refresh();
         }, new BusyOptions
         {
@@ -372,18 +452,25 @@ public partial class BlindHomePage : ContentPage
             _backupAskedAt = DateTimeOffset.UtcNow;
             var ask = BlindJobWait.Ask(BlindJobWait.Backup, _app.GetStatus(), _backupAskedAt);
 #if ANDROID
-            Platforms.Android.BlindBackupService.Start(Platform.AppContext);
+            // One backup service, one long job on the device at a time. The account is reserved by the call that starts the service, before anything asynchronous happens, so a second account's
+            // request cannot slip in while the first is still starting and be merged into it: it is refused here, with the name of the account that holds the service.
+            if (!Platforms.Android.BlindBackupService.Start(Platform.AppContext, _accountId, out var refusal))
+            {
+                _backupAskedAt = DateTimeOffset.MinValue;
+                var holderName = _device.Accounts.GetSnapshot().Accounts.FirstOrDefault(a => a.Entry.Id == refusal.Holder)?.Entry.Name;
+                NoticeLabel.Text = BlindManualBackup.RefusalText(holderName, refusal.Stopping);
+                NoticeLabel.IsVisible = true;
+                return;
+            }
 #endif
             NoticeLabel.Text = "Backup asked for.";
             NoticeLabel.IsVisible = true;
             Refresh();
             var outcome = await WaitForJobAsync(busy, ask, BlindActivity.Heavy, BlindActivity.BackupService);
-            NoticeLabel.Text = outcome.Phase switch
-            {
-                BlindJobPhase.Finished => "Backup finished. The time of the last backup is above, what happened is in the log below.",
-                BlindJobPhase.Failed => $"The backup did not finish: {outcome.Message}",
-                _ => outcome.Message ?? "The backup ended. What happened is in the log below.",
-            };
+            NoticeLabel.Text = BlindPageSentences.JobEnd(outcome, BlindJobWait.Backup,
+                finished: "Backup finished. The time of the last backup is above, what happened is in the log below.",
+                failed: BlindPageSentences.BackupNotFinished,
+                ended: "The backup ended. What happened is in the log below.");
         }, new BusyOptions
         {
             Long = true,
@@ -429,34 +516,29 @@ public partial class BlindHomePage : ContentPage
         {
             if (!_applying && SchedulePicker.SelectedIndex >= 0) _app.SetSchedule(Schedules[SchedulePicker.SelectedIndex]);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            ShowProblem(ex);
+            ShowProblem();
         }
     }
 
-    private async void OnWipeClicked(object? sender, EventArgs e)
+    private async void OnRemoveClicked(object? sender, EventArgs e)
     {
         try
         {
-            var name = _wipeName;
-            var typed = await DisplayPromptAsync("Disconnect and wipe",
-                $"This deletes the blind copy from this phone. Type its name \"{name}\" to confirm.",
-                "Wipe", "Cancel");
-            if (typed == null) return;
-            if (typed.Trim() != name)
-            {
-                await DisplayAlertAsync("Disconnect and wipe", "The name does not match. Nothing was deleted.", "OK");
-                return;
-            }
-            // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up until the wipe has ended. Off the UI thread: the
-            // wipe waits (bounded) for a running sync, first load or backup to end before it deletes anything.
+            var account = _device.Accounts.GetSnapshot().Accounts.FirstOrDefault(a => a.Entry.Id == _accountId);
+            if (account is null) return;
+            var (title, question, remove, keep) = BlindRemoveConfirmation.Build(account);
+            if (!await DisplayAlertAsync(title, question, remove, keep)) return;
+
+            // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up until the removal has ended. Off the UI thread: the removal waits
+            // (bounded) for a running sync, first load or backup of THIS account to end before it deletes anything; the other accounts go on.
             var incomplete = false;
-            await BusyAction.RunAsync(sender as Button, async () =>
+            var removed = await BusyAction.RunAsync(sender as Button, async () =>
             {
                 try
                 {
-                    await Task.Run(() => _app.DisconnectAndWipeAsync());
+                    await Task.Run(() => _device.Accounts.RemoveAsync(_accountId));
                 }
                 catch (AggregateException)
                 {
@@ -466,25 +548,106 @@ public partial class BlindHomePage : ContentPage
             }, new BusyOptions
             {
                 Long = true,
-                Title = "Disconnecting and wiping",
-                Message = "Please wait. A running sync or backup is stopped first, then this copy, its backups and its keys are deleted.",
+                Title = "Removing the copy",
+                Message = "Please wait. A running sync or backup of this account is stopped first, then its copy, its backups and its keys are deleted.",
                 Result = (ok, text) =>
                 {
                     if (ok) return;
-                    // Not restarted over a half-wiped copy (or the work did not stop in time and nothing was deleted): say what is left and let
-                    // the user press it again.
-                    _ = TellAsync("Disconnect and wipe", incomplete
-                        ? $"{text}{System.Environment.NewLine}{System.Environment.NewLine}Press Disconnect and wipe again to finish."
-                        : $"Could not wipe: {text}");
+                    // Not everything is gone (the work did not stop in time and nothing was deleted, or a step failed): say what is left and let the user press it again.
+                    _ = TellAsync("Remove this account", incomplete
+                        ? $"{text}{System.Environment.NewLine}{System.Environment.NewLine}Press Remove this account again to finish."
+                        : $"Could not remove: {text}");
                 },
             });
-            Refresh();
+            if (removed) CloseSoon();
+            else Refresh();
         }
         catch (Exception ex)
         {
-            await TellAsync("Disconnect and wipe", $"Could not wipe: {ex.Message}");
+            await TellAsync("Remove this account", $"Could not remove: {BusyAction.Describe(ex)}");
             Refresh();
         }
+    }
+
+    private async void OnRenameClicked(object? sender, EventArgs e)
+    {
+        try
+        {
+            var current = _device.Accounts.GetSnapshot().Accounts.FirstOrDefault(a => a.Entry.Id == _accountId)?.Entry.Name ?? "";
+            var name = await DisplayPromptAsync("Rename", "What do you call this copy?", "Rename", "Cancel", initialValue: current, maxLength: BlindAccountEntry.MaxNameLength);
+            if (name is null) return;
+            await BusyAction.RunAsync(sender as Button, () =>
+            {
+                var refused = _device.Accounts.Rename(_accountId, name);
+                if (refused is not null) throw BlindPageSentences.Refusal(refused);
+                Refresh();
+                return Task.CompletedTask;
+            }, new BusyOptions { FailureTitle = "Rename" });
+        }
+        catch (Exception ex)
+        {
+            await TellAsync("Rename", BusyAction.Describe(ex));
+        }
+    }
+
+    private async void OnPauseClicked(object? sender, EventArgs e)
+    {
+        await BusyAction.RunAsync(sender as Button, () =>
+        {
+            var paused = _device.Accounts.GetSnapshot().Accounts.FirstOrDefault(a => a.Entry.Id == _accountId)?.Entry.PausedByUser == true;
+            var refused = _device.Accounts.SetPaused(_accountId, !paused);
+            if (refused is not null) throw BlindPageSentences.Refusal(refused);
+            Refresh();
+            return Task.CompletedTask;
+        }, new BusyOptions { FailureTitle = "Pause" });
+    }
+
+    private async void OnSaveLimitsClicked(object? sender, EventArgs e)
+    {
+        await BusyAction.RunAsync(sender as Button, () =>
+        {
+            // The form parses and checks what was typed ("2 GB", "200 MB", "5000"); an empty box is no limit and 0 is a pause. Its sentences say what to change.
+            var result = new BlindLimitsForm(StoredEntry.Text ?? "", TrafficEntry.Text ?? "", RequestsEntry.Text ?? "", UnmeteredSwitch.IsToggled, BatterySwitch.IsToggled).Validate();
+            if (!result.Ok)
+            {
+                LimitsProblemLabel.Text = string.Join(System.Environment.NewLine, result.Problems);
+                LimitsProblemLabel.IsVisible = true;
+                return Task.CompletedTask;
+            }
+            var refused = _device.Accounts.SetLimits(_accountId, result.Limits!) ?? _device.Accounts.SetSwitches(_accountId, UnmeteredSwitch.IsToggled, BatterySwitch.IsToggled);
+            LimitsProblemLabel.Text = refused;
+            LimitsProblemLabel.IsVisible = refused is not null;
+            if (refused is null)
+            {
+                _limitsFilled = false;
+                NoticeLabel.Text = "Limits saved.";
+                NoticeLabel.IsVisible = true;
+            }
+            Refresh();
+            return Task.CompletedTask;
+        }, new BusyOptions { FailureTitle = "Save limits" });
+    }
+
+    private async void OnReconnectClicked(object? sender, EventArgs e)
+    {
+        await BusyAction.RunAsync(sender as Button, () =>
+        {
+            var refused = _device.Accounts.Reconnect(_accountId);
+            if (refused is not null) throw BlindPageSentences.Refusal(refused);
+            Refresh();
+            return Task.CompletedTask;
+        }, new BusyOptions { FailureTitle = "Try again" });
+    }
+
+    private async void OnRepairUsageClicked(object? sender, EventArgs e)
+    {
+        await BusyAction.RunAsync(sender as Button, () =>
+        {
+            var refused = _device.Accounts.StartNewUsageLedger(_accountId);
+            if (refused is not null) throw BlindPageSentences.Refusal(refused);
+            Refresh();
+            return Task.CompletedTask;
+        }, new BusyOptions { FailureTitle = "Start new counts" });
     }
 
     private async Task TellAsync(string title, string message)

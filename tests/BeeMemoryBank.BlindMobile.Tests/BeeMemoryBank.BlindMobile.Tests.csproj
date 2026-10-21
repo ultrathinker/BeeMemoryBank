@@ -21,10 +21,37 @@
   <ItemGroup>
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\PreferencesBlindStore.cs" Link="Shared\PreferencesBlindStore.cs" />
     <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Platforms\Android\BlindWorkPlan.cs" Link="Shared\BlindWorkPlan.cs" />
+    <!-- The parts of the Android head that have no Android type in them (the per-account secret store over a platform key seam, the device object and its two schedulers, the
+         link inbox, the probes behind the phone's conditions): compiled here and run on any OS, over software keys and in-memory preferences. The Android-only parts are one
+         small class each (AndroidKeystoreKeyWrap, AndroidDeviceConditions, the WorkManager file). -->
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindKeystoreSecrets.cs" Link="Shared\BlindKeystoreSecrets.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindDevice.cs" Link="Shared\BlindDevice.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindDeviceConditionsProbe.cs" Link="Shared\BlindDeviceConditionsProbe.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindInviteLinks.cs" Link="Shared\BlindInviteLinks.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\IBlindQrScanner.cs" Link="Shared\IBlindQrScanner.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindInviteInput.cs" Link="Shared\BlindInviteInput.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindManualBackup.cs" Link="Shared\BlindManualBackup.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.Mobile\Services\BusyAction.cs" Link="Shared\BusyAction.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindFailureSetup.cs" Link="Shared\BlindFailureSetup.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindNotificationText.cs" Link="Shared\BlindNotificationText.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.BlindMobile\Services\Blind\BlindPageSentences.cs" Link="Shared\BlindPageSentences.cs" />
+    <!-- The contract every head runs over its own secret and state stores, and the platform facts. -->
+    <Compile Include="..\shared\BlindStoreContracts.cs" Link="Shared\BlindStoreContracts.cs" />
+    <Compile Include="..\shared\PlatformFacts.cs" Link="Shared\PlatformFacts.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BusyAction.cs, the one busy helper of the four MAUI apps, is compiled here as it is (it has no usings of its own: the apps get them from UseMaui) so that a test can drive its real catch / display route
+         with a hostile exception. Only these namespaces, and only for it. -->
+    <Using Include="Microsoft.Maui.Controls" />
+    <Using Include="Microsoft.Maui.ApplicationModel" />
+    <Using Include="Microsoft.Maui.Dispatching" />
+    <Using Include="Microsoft.Maui.Graphics" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.Maui.Controls" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

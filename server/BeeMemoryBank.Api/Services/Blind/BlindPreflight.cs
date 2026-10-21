@@ -91,7 +91,7 @@ public sealed class BlindPreflight(
             if (!standing.CallerIsSuperadmin)
             {
                 problems.Add($"\"{peer.DisplayName}\" does not see this PC as superadmin: promote this PC on \"{peer.DisplayName}\" " +
-                             "(Admin → Nodes → superadmin) and try again.");
+                             "(Admin → Trusted Nodes → superadmin) and try again.");
                 details.Add(new BlindPreflightProblem(BlindPreflightProblem.NotSuperadmin, peer.DisplayName));
             }
         }

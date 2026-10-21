@@ -140,7 +140,7 @@ Add to your Claude Code settings (`~/.claude/settings.json`) or Cursor MCP confi
 }
 ```
 
-The bearer token is created in the Web UI under **Admin > Agents** and is shown once at creation time.
+The bearer token is created in the Web UI on your **Profile** page and is shown once at creation time (**Admin → Agents** lists every user's agents and revokes them).
 
 ### Available Tools
 
@@ -246,6 +246,7 @@ Nothing else to download: the search model is inside the image.
   one release line put `BMB_VERSION=2.4` into `.env`. Data migrations only go forward: to go back to an older version,
   restore the snapshot you made before updating. **From a version before 2.6, update to 2.6.1 first, then to the current
   one:** the current version refuses a database older than 2.6 (and leaves it unchanged, with a message that says so).
+  **2.7 raises the database schema to 42:** update the blind nodes of a network together with its full nodes (a 2.6 blind node refuses a seed from a 2.7 node and says to upgrade it first).
 - **Back up:** Admin → Snapshots, and a copy of the data while the node is stopped:
   `docker compose stop && docker compose cp bmb:/app/data ./bmb-data-copy && docker compose start`.
 - **AI assistants on this computer:** uncomment the two marked lines in the compose file, see
@@ -291,6 +292,7 @@ Every release page also carries these downloads:
 
 A blind copy is paired with a node in two steps shown in its window: it shows a code, the node (the full app or the web page "Blind nodes")
 answers with a call code, and you paste that back. The first load starts right after pairing and does not wait for the charger or a particular network.
+**Several memory banks in one app (2.7).** The Android, Windows, macOS and iPhone blind apps hold the encrypted copies of several memory banks, one **account** each (a friend's, a family member's, your own). A copy you already have becomes account 1 in place, with no limits. A new account is added from a **one-time invitation**: the person who runs the memory bank makes it on their full node (Admin → Blind nodes, the **Blind nodes** button, **Invite a blind copy**), the friend pastes the line into **Add account** (on a phone, opening the `bmb-invite:` link works too, and the phone's Camera app opens the QR code), and the owner confirms the short code both screens show, with the master password. The invitation is a one-time code, not an encrypted message, and no content of the memory bank reaches the device before that confirmation (the device's identity and the key for its own backup reach the full node when it asks). Each account has its own limits (how much it may store, how much it may transfer and how many requests it may make a day, "only on Wi-Fi or other unmetered networks", "pause on battery saver") and the device has limits of its own; a reached limit pauses the copy calmly instead of failing, and the owner's page says "paused" and not "silent". A server blind node (Docker) still serves one memory bank per container (run one container for each), has no app accounts, and can be given two limits by its owner, `BMB_BLIND_MAX_STORED_BYTES` and `BMB_BLIND_MAX_TRAFFIC_PER_DAY` (empty means no limit, 0 pauses; a reached limit is a pause that a current full node shows as "paused by the blind node's owner") ([docs/blind-node/README.md](docs/blind-node/README.md#limits-of-a-server-blind-node-27)). A friend's server node joins with the same kind of invitation by one command on its machine, `bmb blind join <invitation>` (it prints a match code to read out; the pair code of the old way still works): [docs/blind-node/README.md](docs/blind-node/README.md#a-server-blind-node-joins-with-bmb-blind-join-invitation-27). See [docs/blind-node/ACCOUNTS.md](docs/blind-node/ACCOUNTS.md) and, for what the invitation does and does not protect, [SECURITY.md](SECURITY.md#blind-copy-invitations-and-accounts-27).
 Where each app keeps its data and what it sends over the network: [PRIVACY.md](PRIVACY.md).
 
 ### iPhone blind app (source-only for now)
@@ -363,7 +365,7 @@ It checks for updates on its own and offers "Restart to update" when a new relea
 **Check for updates...** in the tray checks right away and shows the progress. If an update cannot be applied the app keeps running and the reason is in `logs/velopack.log`. Data
 is kept in `%LOCALAPPDATA%\BeeMemoryBankData` and survives updates and uninstall.
 
-The app answers this computer only. To let other devices on your own network in, open **Admin → Nodes**:
+The app answers this computer only. To let other devices on your own network in, open **Admin → Devices on my network** or **Admin → Connect a device**:
 **Devices on my network** (off by default) serves the node over HTTPS on port 5311 and announces it on the
 network, so another computer can find it and a phone can open it; **Connect a device** opens a 15-minute
 door and shows a join code that a phone, or another computer's first-run page, pastes to join without
@@ -670,10 +672,10 @@ In Development mode `BMB_INTERNAL_KEY` is not required — both processes auto-g
 
 1. Open `http://localhost:5301` (or your HTTPS domain).
 2. **Log in.** If you initialized via CLI (`bmb init --name "X"`), the login is `X` and the password is the master password. If via the Web Setup form, the login is whatever you typed there.
-3. **AI agent token** (optional): Admin → Agents → Create. Copy the bearer token (shown **once**).
+3. **AI agent token** (optional): Profile → Agents → Create. Copy the bearer token (shown **once**).
 4. **MCP in your AI client** (Claude Code / Cursor / Windsurf): add `bee-memory-bank` with `Authorization: Bearer bee_xxxxx`.
 5. **Add a second node** (optional): on the other machine, after `dotnet publish`, run `bmb join --remote https://first-node --name "OtherNode" --data ./data` (it asks for the master password without echo; `--password-stdin` reads it from a pipe). The new node downloads a signed snapshot over TLS, verifies it, and joins the sync mesh. If anything fails, `bmb join` says why, exits non-zero and rolls the new node back, so it can be run again (with a new join code if you used `--code`: a code is spent by the first attempt). A failed join also asks the other computer to forget the new node (`POST /api/join/abort`, from 2.5.1). If that computer is older, or a reverse proxy in front of it does not forward the route, it keeps a never-synced member row: the message names it, and it should be revoked on that computer's Admin page because it holds back compaction. If the process itself is killed half-way, delete the new node's data folder and start over.
-6. **Keep a recovery key** (recommended): Admin → Security → **Issue new recovery key**, and store it offline. If the administrator password is ever forgotten, the Sign In page's **Forgot your password? Use a recovery key** sets a new one (or `bmb user reset-password --user NAME --recovery-key-stdin`). See [docs/account-recovery.md](docs/account-recovery.md).
+6. **Keep a recovery key** (recommended): Admin → Recovery key → **Issue new recovery key**, and store it offline. If the administrator password is ever forgotten, the Sign In page's **Forgot your password? Use a recovery key** sets a new one (or `bmb user reset-password --user NAME --recovery-key-stdin`). See [docs/account-recovery.md](docs/account-recovery.md).
 
 #### HTTPS Reverse Proxy
 
@@ -772,7 +774,7 @@ To add a second node (e.g., a VPS) to sync with your first:
 ./publish/cli/bmb join --remote https://first-node.example.com --name "VPS-Node" --data /var/lib/beememorybank
 ```
 
-For a computer on your own network, use the join code that the other computer shows under **Admin → Nodes → Connect a device**
+For a computer on your own network, use the join code that the other computer shows under **Admin → Connect a device**
 instead of an address: `bmb join --code "bmb-join:?a=..." --name "Laptop" --data ...`. The code
 carries the address, a one-time token and the pin of that computer's certificate, so nothing has to be trusted first.
 

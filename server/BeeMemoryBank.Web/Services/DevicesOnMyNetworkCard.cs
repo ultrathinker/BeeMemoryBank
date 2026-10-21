@@ -1,6 +1,6 @@
 namespace BeeMemoryBank.Web.Services;
 
-/// <summary>Which card the Admin &gt; Nodes page shows for "Devices on my network".</summary>
+/// <summary>Which card the Admin &gt; Devices on my network page shows.</summary>
 public enum DevicesCardKind
 {
     /// <summary>Not a desktop node (Docker, a standalone Api+Web): there is nothing to switch, the card says what decides instead.</summary>

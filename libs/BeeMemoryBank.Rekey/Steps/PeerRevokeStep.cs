@@ -9,6 +9,8 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// profiles, and each blind node is paired again with a fresh code (the report page says so).
 /// <para>Each revoke takes a version above every other in the copy, so no whitelist event that predates the re-key
 /// can bring a peer back. Notes list the peers for the report: <c>revoked:&lt;node id&gt; &lt;name&gt;</c>.</para>
+/// <para>The invitations this node made to blind copies (<c>tbl_blind_invite</c>, release 2.7) go with the peers they would have added: they are about who may
+/// join, and a redeemed one holds the device's backup key under the old master key, which no longer opens.</para>
 /// </summary>
 public sealed class PeerRevokeStep : IRekeyStep
 {
@@ -35,9 +37,11 @@ public sealed class PeerRevokeStep : IRekeyStep
             notes.Add($"revoked:{(Guid.TryParse(p.NodeId, out var g) ? g.ToString() : p.NodeId)} {p.Name}");
         }
 
+        var invitations = await db.ExecuteAsync("DELETE FROM tbl_blind_invite", transaction: tx);
+
         tx.Commit();
         ctx.Progress.Report(Name, 1, 1);
-        return new RekeyStepResult(Name, new Dictionary<string, long> { ["tbl_whitelist"] = peers.Count }, notes);
+        return new RekeyStepResult(Name, new Dictionary<string, long> { ["tbl_whitelist"] = peers.Count, ["tbl_blind_invite"] = invitations }, notes);
     }
 
     public async Task<IReadOnlyList<RekeyProblem>> VerifyAsync(RekeyContext ctx)
@@ -45,6 +49,9 @@ public sealed class PeerRevokeStep : IRekeyStep
         var active = (await ctx.Main.QueryAsync<string>(
             "SELECT node_id FROM tbl_whitelist WHERE status <> 'R' AND node_id <> @self COLLATE NOCASE",
             new { self = ctx.NodeId.ToString() })).ToList();
-        return active.Select(n => new RekeyProblem("tbl_whitelist", n, "a peer is still trusted")).ToList();
+        var problems = active.Select(n => new RekeyProblem("tbl_whitelist", n, "a peer is still trusted")).ToList();
+        var left = await ctx.Main.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_blind_invite");
+        if (left > 0) problems.Add(new RekeyProblem("tbl_blind_invite", "(rows)", "an invitation to a blind copy is still there"));
+        return problems;
     }
 }

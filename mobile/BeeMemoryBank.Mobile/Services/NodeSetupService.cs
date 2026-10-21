@@ -109,9 +109,9 @@ public class NodeSetupService
                 return $"The other computer was told and no longer lists this phone ('{name}').";
             return rowCertain
                 ? $"The other computer still lists this phone ('{name}') as a member that has never synced: revoke it there " +
-                  "(Admin page, Nodes), or it holds back compaction of that computer's event log."
+                  "(Admin -> Trusted Nodes), or it holds back compaction of that computer's event log."
                 : $"If the other computer recorded this phone ('{name}') before the connection failed, it lists it as a member that has never synced: " +
-                  "revoke it there (Admin page, Nodes), or it holds back compaction of that computer's event log.";
+                  "revoke it there (Admin -> Trusted Nodes), or it holds back compaction of that computer's event log.";
         }
 
         HttpResponseMessage response;

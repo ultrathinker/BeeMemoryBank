@@ -77,7 +77,8 @@ public partial class ApiClient(HttpClient http)
         var resp = await http.PostAsJsonAsync("/api/init/reset",
             new { masterPassword }, JsonOpts);
         if (resp.IsSuccessStatusCode) return (true, null);
-        var err = await resp.Content.ReadAsStringAsync();
+        // The API's own sentence ({"error":"Invalid master password"}), not its JSON: it is shown to the person who typed the password.
+        var err = await ReadErrorAsync(resp) ?? await resp.Content.ReadAsStringAsync();
         return (false, err);
     }
 

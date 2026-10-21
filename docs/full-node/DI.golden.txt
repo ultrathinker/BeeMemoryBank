@@ -17,6 +17,8 @@ Singleton BeeMemoryBank.Api.Services.BlindBackup.RecoverySetWriter => BeeMemoryB
 Singleton BeeMemoryBank.Api.Services.BlindBackup.ResticRepositoryLock => BeeMemoryBank.Api.Services.BlindBackup.ResticRepositoryLock
 Singleton BeeMemoryBank.Api.Services.BlindConsole.BlindConsoleAuthService => factory
 Singleton BeeMemoryBank.Api.Services.BlindConsole.BlindWipeService => factory
+Singleton BeeMemoryBank.Api.Services.BlindInviteRateLimits => BeeMemoryBank.Api.Services.BlindInviteRateLimits
+Singleton BeeMemoryBank.Api.Services.BlindInviteService => BeeMemoryBank.Api.Services.BlindInviteService
 Singleton BeeMemoryBank.Api.Services.BlindNodeManager => BeeMemoryBank.Api.Services.BlindNodeManager
 Scoped BeeMemoryBank.Api.Services.BlindPackageBuilder => BeeMemoryBank.Api.Services.BlindPackageBuilder
 Singleton BeeMemoryBank.Api.Services.BlindPhone.BlindPhonePairingService => BeeMemoryBank.Api.Services.BlindPhone.BlindPhonePairingService
@@ -48,6 +50,7 @@ Transient BeeMemoryBank.Api.Services.OpenRouterClient => factory
 Singleton BeeMemoryBank.Api.Services.ProtectedUnlockCache => BeeMemoryBank.Api.Services.ProtectedUnlockCache
 Singleton BeeMemoryBank.Api.Services.Recovery.BlindRestoreClient => BeeMemoryBank.Api.Services.Recovery.BlindRestoreClient
 Scoped BeeMemoryBank.Api.Services.Recovery.BlindRestoreCodeService => BeeMemoryBank.Api.Services.Recovery.BlindRestoreCodeService
+Singleton BeeMemoryBank.Api.Services.Recovery.BlindRestoreCodeThrottle => BeeMemoryBank.Api.Services.Recovery.BlindRestoreCodeThrottle
 Singleton BeeMemoryBank.Api.Services.Recovery.IBackupFileRestoreSource => BeeMemoryBank.Api.Services.BlindPhone.AndroidBackupRestoreSource
 Scoped BeeMemoryBank.Api.Services.Recovery.ICurrentKeyFingerprintSource => BeeMemoryBank.Api.Services.Recovery.SessionKeyFingerprintSource
 Singleton BeeMemoryBank.Api.Services.Recovery.IRecoveryHost => BeeMemoryBank.Api.Services.Recovery.CurrentRecoveryHost
@@ -77,6 +80,7 @@ Scoped BeeMemoryBank.Core.Interfaces.IArticleChunkEmbeddingRepository => BeeMemo
 Scoped BeeMemoryBank.Core.Interfaces.IArticleRepository => BeeMemoryBank.Storage.Sqlite.ArticleRepository
 Scoped BeeMemoryBank.Core.Interfaces.IArticleVersionRepository => BeeMemoryBank.Storage.Sqlite.ArticleVersionRepository
 Scoped BeeMemoryBank.Core.Interfaces.IAuditLogRepository => BeeMemoryBank.Storage.Sqlite.AuditLogRepository
+Scoped BeeMemoryBank.Core.Interfaces.IBlindInviteRepository => BeeMemoryBank.Storage.Sqlite.BlindInviteRepository
 Scoped BeeMemoryBank.Core.Interfaces.IBlobRepository => BeeMemoryBank.Storage.Sqlite.BlobRepository
 Scoped BeeMemoryBank.Core.Interfaces.ICommentRepository => BeeMemoryBank.Storage.Sqlite.CommentRepository
 Scoped BeeMemoryBank.Core.Interfaces.IConceptTagRepository => BeeMemoryBank.Storage.Sqlite.ConceptTagRepository
@@ -269,6 +273,7 @@ Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Servi
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.BlindBackup.BlindBackupScheduleService
 Singleton Microsoft.Extensions.Hosting.IHostedService => factory
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.BlindAlarmStarter
+Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.BlindInviteSweeper
 Singleton Microsoft.Extensions.Hosting.IHostedService => ModelContextProtocol.AspNetCore.IdleTrackingBackgroundService
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Vault.Sealed.UnlockMaterialWatcher
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Vault.Sealed.RelayMaintenance
@@ -278,6 +283,7 @@ BeeMemoryBank.Api.Services.AuditLogPruningHostedService
 BeeMemoryBank.Api.Services.BaselineScheduler
 BeeMemoryBank.Api.Services.BlindAlarmStarter
 BeeMemoryBank.Api.Services.BlindBackup.BlindBackupScheduleService
+BeeMemoryBank.Api.Services.BlindInviteSweeper
 BeeMemoryBank.Api.Services.BlindReplicaPackageCache
 BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor
 BeeMemoryBank.Api.Services.DownloadCleanupHostedService

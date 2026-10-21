@@ -69,7 +69,8 @@ public sealed class BlindPhoneResetTests
         var act = () => BlindPhoneReset.Wipe(t.Provider, t.Dir, Delete);
 
         var failure = act.Should().Throw<AggregateException>().Which;
-        failure.InnerExceptions.Should().ContainSingle().Which.Message.Should().Contain("locked");
+        failure.InnerExceptions.Should().ContainSingle().Which.Message.Should().Be("removing blind-backups: a file or the storage of this device could not be read or written",
+            "the step and the KIND of failure: the message of an I/O failure carries the path of the file or a library's words (\"simulated: a backup file is locked\" is not said)");
         failure.Message.Should().Contain("blind-backups", "the screen tells what is left");
         Directory.Exists(BlindPaths.Backups(t.Dir)).Should().BeTrue("that one could not be removed");
         var backups = BlindPaths.Backups(t.Dir);

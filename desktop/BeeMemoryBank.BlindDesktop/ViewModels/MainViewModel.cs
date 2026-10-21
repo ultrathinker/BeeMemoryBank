@@ -1,130 +1,139 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows.Input;
 using BeeMemoryBank.BlindDesktop.Scheduling;
 using BeeMemoryBank.BlindMobile.Services.Blind;
-using BeeMemoryBank.Core.Services.BlindPhone;
 
 namespace BeeMemoryBank.BlindDesktop.ViewModels;
 
-/// <summary>One finished backup in the list, with its own "Save to..." command.</summary>
-public sealed class BackupRow(string name, long size, ICommand save)
+/// <summary>One account in the list on the left: the fields of its <see cref="BlindAccountCard"/>, which the card builds and this row only shows.</summary>
+public sealed class AccountRow : ObservableObject
 {
-    public string Name { get; } = name;
-    public string SizeText { get; } = $"{size / 1024} KiB";
-    public ICommand SaveCommand { get; } = save;
+    private string _name = "";
+    private string _sourceHost = "";
+    private string _state = "";
+    private BlindCardKind _kind;
+    private string _stored = "";
+
+    public AccountRow(string id) => Id = id;
+
+    public string Id { get; }
+    public string Name { get => _name; private set => Set(ref _name, value); }
+    public string SourceHost { get => _sourceHost; private set => Set(ref _sourceHost, value); }
+
+    /// <summary>The one state line: "Synced 4 min ago", "Paused: daily traffic limit reached (200 MB). Resumes at 00:00." ...</summary>
+    public string State { get => _state; private set => Set(ref _state, value); }
+
+    /// <summary>For a colour or an icon; never the words.</summary>
+    public BlindCardKind Kind { get => _kind; private set => Set(ref _kind, value); }
+
+    public string Stored { get => _stored; private set => Set(ref _stored, value); }
+
+    internal void Update(BlindAccountCard card)
+    {
+        Name = card.Name;
+        SourceHost = card.SourceHost;
+        State = card.State;
+        Kind = card.Kind;
+        Stored = card.Stored;
+    }
+}
+
+/// <summary>One thing the list of accounts and the disk disagree on, with the one explicit action that settles it (never taken on its own).</summary>
+public sealed class RepairRow(string description, string actionText, ICommand command)
+{
+    public string Description { get; } = description;
+    public string ActionText { get; } = actionText;
+    public ICommand Command { get; } = command;
 }
 
 /// <summary>
-/// What the window shows, mirroring the Android blind home page: identity and pairing code (text and QR), the field for the
-/// computer's answer, the paired endpoint, first load / last sync / last backup, why a job waits, the running job and its progress,
-/// "Sync now" / "Back up now", the schedule, the backups with "Save to...", the last 30 log lines, Re-pair, "Disconnect and wipe"
-/// with a typed-name confirmation, and the autostart choice. It holds no blind logic: every action goes to <see cref="IBlindAppController"/>
-/// or the scheduler's requests, and every text comes from <see cref="BlindAppStatus"/>.
+/// What the window shows of the DEVICE: the list of accounts on the left (cards from <see cref="BlindAccountsView"/>), the account that is selected on the right
+/// (<see cref="AccountDetailViewModel"/>: today's panel plus Limits), "Add account" with its paste box (<see cref="AddAccountViewModel"/>), the device's own limits, the repair
+/// states with their explicit actions, and the autostart choice. It is a thin adapter: the sentences are the view records' (<see cref="BlindAccountsView"/>,
+/// <see cref="BlindAccountCard"/>, <see cref="BlindInvitationPreview"/>, <see cref="BlindLimitsForm"/>, <see cref="BlindRemoveConfirmation"/>), every action is a call on
+/// <see cref="IBlindAccountsController"/> or on the device loop's requests, and nothing here decides a rule.
 /// </summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
-    public static readonly string[] ScheduleNames = ["Off", "Daily", "Weekly"];
-    private static readonly BlindBackupSchedule[] Schedules = [BlindBackupSchedule.Off, BlindBackupSchedule.Daily, BlindBackupSchedule.Weekly];
-
-    private readonly IBlindAppController _app;
-    private readonly IBlindWorkRequests _work;
+    private readonly IBlindAccountsController _accounts;
+    private readonly Func<string, IBlindWorkRequests> _workFor;
     private readonly IBlindAutostart _autostart;
     private readonly Func<string, byte[]> _qr;
     private readonly Action<Action> _post;
-    private readonly TimeProvider _time;
-    private int _refreshPending;
     private readonly Action<string, Exception>? _problem;
-    private bool _applying;
-    private string? _qrFor;
-    private string? _displayName;
+    private readonly Func<string, CancellationToken, Task<BlindStoreInfo?>>? _store;
+    private readonly TimeProvider _time;
+    private readonly TimeZoneInfo _zone;
+    private readonly BlindInvitationWatch? _watch;
+    private int _refreshPending;
+    private readonly object _readGate = new();
+    private readonly object _applyGate = new();
+    private long _readSeq;
+    private long _shownSeq;
     private bool _disposed;
+    private readonly object _watchGate = new();
+    private bool _windowHidden = true;
+    private bool _applying;
 
-    private string _identityText = "";
-    private string _nodeText = "";
-    private string _pairText = "";
-    private string _loadText = "";
-    private string _storeText = "";
-    private static readonly TimeSpan StoreEvery = TimeSpan.FromSeconds(15);
-    private readonly Func<CancellationToken, Task<BlindStoreInfo?>>? _storeSource;
-    private BlindStoreInfo? _storeSummary;
-    private DateTimeOffset _storeAt = DateTimeOffset.MinValue;
-    private bool _readingStore;
-    private string _syncText = "";
-    private string _backupText = "";
-    private string _jobText = "";
-    private bool _jobVisible;
-    private double _jobProgress;
-    private bool _showPairingCode;
-    private string? _pairingCodeText;
-    private byte[]? _pairingQrPng;
-    private string _pairingMessage = "";
-    private string _callCodeInput = "";
-    private string? _connectError;
-    private bool _canRePair;
-    private bool _canConnect;
-    private bool _canSyncNow;
-    private bool _canBackupNow;
-    private int _scheduleIndex = 2;
-    private string _logText = "";
+    private string? _selectedId;
+    private AccountRow? _selectedRow;
+    private AccountDetailViewModel? _detail;
+    private bool _addOpen;
+    private string _deviceLine = "";
+    private bool _canAdd;
+    private string _addHint = "";
+    private string? _registryProblem;
+    private string? _deviceUsageProblem;
+    private IReadOnlyList<RepairRow> _repairs = [];
+    private string _repairKey = "";
+    private string _deviceStoredText = "";
+    private string _deviceTrafficText = "";
+    private string? _deviceLimitsProblems;
+    private bool _deviceLimitsDirty;
     private string? _notice;
-    private string? _keyLostText;
-    private string? _startErrorText;
-    private string? _keyStoreNoticeText;
     private bool _autostartOn;
     private bool _autostartKnown = true;
-    private bool _wipePanelOpen;
-    private string _wipeTyped = "";
-    private bool _wipeBusy;
-    private bool _busy;
-    private string _busyTitle = "";
-    private string _busyText = "";
-    private bool _busyByJob;
-    private BlindJobAsk? _busyAsk;
-    private string _busyBaseText = "";
-    private BlindAppStatus? _lastStatus;
-    private bool _isPaired;
-    private IReadOnlyList<BackupRow> _backups = [];
 
+    /// <param name="workFor">The work requests of one account (<c>BlindDesktopRuntime.WorkFor</c>): "Sync now", "Back up now", the first load.</param>
     /// <param name="qr">Makes the PNG of a pairing code; in the app it is the QR library, in tests anything.</param>
     /// <param name="post">Runs an action on the UI thread; the default runs it at once (tests).</param>
     /// <param name="problem">Where a failed command or refresh is written besides the notice on the screen (the error log); tests pass nothing.</param>
     /// <param name="statusArea">What the platform calls the place of the app's icon in the window's own words: "tray" or "menu bar".</param>
-    /// <param name="store">What the copy holds (docs/design/step-a-spec.md 10.2), asked now and then off the UI thread for the store line; none means the line stays "unknown".</param>
-    /// <param name="time">The clock of the pop-up's waiting for a job (the system clock; a test moves its own).</param>
-    public MainViewModel(IBlindAppController app, IBlindWorkRequests work, IBlindAutostart autostart,
+    /// <param name="store">What an account's copy holds, asked now and then off the UI thread for the store line of its panel.</param>
+    /// <param name="watch">Asks about invitations that wait for their owner every 15 seconds while the window is open; none in a test that has no hub.</param>
+    public MainViewModel(IBlindAccountsController accounts, Func<string, IBlindWorkRequests> workFor, IBlindAutostart autostart,
         Func<string, byte[]> qr, Action<Action>? post = null, Action<string, Exception>? problem = null, string statusArea = "tray",
-        Func<CancellationToken, Task<BlindStoreInfo?>>? store = null, TimeProvider? time = null)
+        Func<string, CancellationToken, Task<BlindStoreInfo?>>? store = null, TimeProvider? time = null, TimeZoneInfo? zone = null,
+        BlindInvitationWatch? watch = null)
     {
-        _time = time ?? TimeProvider.System;
-        _storeSource = store;
-        StatusArea = statusArea;
-        _problem = problem;
-        _app = app;
-        _work = work;
+        _accounts = accounts;
+        _workFor = workFor;
         _autostart = autostart;
         _qr = qr;
         _post = post ?? (action => action());
+        _problem = problem;
+        _store = store;
+        _time = time ?? TimeProvider.System;
+        _zone = zone ?? TimeZoneInfo.Local;
+        _watch = watch;
+        StatusArea = statusArea;
 
-        // Every command runs on the UI thread: a failure becomes a notice, it never escapes into the UI loop.
+        Add = new AddAccountViewModel(accounts, _time, problem);
+        Add.Added += OnAdded;
+        Add.PropertyChanged += OnChildChanged;
+
         Action<Exception> failed = CommandFailed;
-        // While a long operation runs (IsBusy) no command can be started a second time: the pop-up covers the window and the commands are off.
-        ConnectCommand = new RelayCommand(Connect, () => _canConnect && !_busy, failed);
-        SyncNowCommand = new RelayCommand(SyncNow, () => _canSyncNow && !_busy, failed);
-        BackupNowCommand = new RelayCommand(BackupNow, () => _canBackupNow && !_busy, failed);
-        RePairCommand = new RelayCommand(RePair, () => _canRePair && !_busy, failed);
-        // busy-exempt: copies the code to the clipboard, nothing is sent and nothing waits
-        CopyPairingCodeCommand = new RelayCommand(() => { if (_pairingCodeText is { } code) CopyRequested?.Invoke(code); },
-            () => _pairingCodeText is not null, failed);
-        // busy-exempt: only opens the confirmation panel, nothing is sent and nothing waits
-        OpenWipeCommand = new RelayCommand(() => { WipeTyped = ""; WipePanelOpen = true; }, onError: failed);
-        CancelWipeCommand = new RelayCommand(() => { WipePanelOpen = false; WipeTyped = ""; }, () => !_wipeBusy, failed);
+        // busy-exempt: only opens the Add page, nothing is sent and nothing waits
+        AddAccountCommand = new RelayCommand(OpenAdd, () => _canAdd, failed);
+        // busy-exempt: only closes the Add page
+        CloseAddCommand = new RelayCommand(() => { AddOpen = false; Add.Clear(); }, onError: failed);
+        RepairDeviceUsageCommand = new RelayCommand(RepairDeviceUsage, () => _deviceUsageProblem is not null && !IsBusy, failed);
+        ApplyDeviceLimitsCommand = new RelayCommand(ApplyDeviceLimits, () => _registryProblem is null && !IsBusy, failed);
         // busy-exempt: leaving the app is the person's own way out and starts nothing
         QuitCommand = new RelayCommand(() => QuitRequested?.Invoke(), onError: failed);
-        ConfirmWipeCommand = new RelayCommand(() => _ = WipeAsync(), CanConfirmWipe, failed);
-        _all = new[] { ConnectCommand, SyncNowCommand, BackupNowCommand, RePairCommand, ConfirmWipeCommand, CancelWipeCommand }.Cast<RelayCommand>().ToArray();
 
-        _app.Changed += RequestRefresh;
-        _work.UserJobReported += OnUserJobReported;
+        _accounts.Changed += RequestRefresh;
     }
 
     /// <summary>"tray" on Windows, "menu bar" on macOS.</summary>
@@ -136,87 +145,104 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>What closing the window does.</summary>
     public string CloseHintText => $"Closing this window keeps the app running in the {StatusArea}.";
 
-    /// <summary>Raised when the user asks to copy the pairing code; the window puts it on the clipboard.</summary>
-    public event Action<string>? CopyRequested;
-
     /// <summary>Raised by the Quit button; the shell ends the app (closing the window only hides it).</summary>
     public event Action? QuitRequested;
 
-    public ICommand ConnectCommand { get; }
-    public ICommand SyncNowCommand { get; }
-    public ICommand BackupNowCommand { get; }
-    public ICommand RePairCommand { get; }
-    public ICommand CopyPairingCodeCommand { get; }
-    public ICommand OpenWipeCommand { get; }
-    public ICommand CancelWipeCommand { get; }
-    public ICommand ConfirmWipeCommand { get; }
+    /// <summary>Raised when the person asks to copy an account's pairing code; the window puts it on the clipboard.</summary>
+    public event Action<string>? CopyRequested;
+
+    public ICommand AddAccountCommand { get; }
+    public ICommand CloseAddCommand { get; }
+    public ICommand RepairDeviceUsageCommand { get; }
+    public ICommand ApplyDeviceLimitsCommand { get; }
     public ICommand QuitCommand { get; }
 
-    public string IdentityText { get => _identityText; private set => Set(ref _identityText, value); }
-    public string NodeText { get => _nodeText; private set => Set(ref _nodeText, value); }
-    public string PairText { get => _pairText; private set => Set(ref _pairText, value); }
-    public string LoadText { get => _loadText; private set => Set(ref _loadText, value); }
+    /// <summary>The "Add account" page; its paste box is where an invitation goes.</summary>
+    public AddAccountViewModel Add { get; }
 
-    /// <summary>The restore point's age, the changes since it and the bytes stored; never a note count (docs/design/step-a-spec.md 10.2).</summary>
-    public string StoreText { get => _storeText; private set => Set(ref _storeText, value); }
-    public string SyncText { get => _syncText; private set => Set(ref _syncText, value); }
-    public string BackupText { get => _backupText; private set => Set(ref _backupText, value); }
-    public string JobText { get => _jobText; private set => Set(ref _jobText, value); }
-    public bool JobVisible { get => _jobVisible; private set => Set(ref _jobVisible, value); }
+    public ObservableCollection<AccountRow> Rows { get; } = [];
 
-    /// <summary>0..1 for a progress bar.</summary>
-    public double JobProgress { get => _jobProgress; private set => Set(ref _jobProgress, value); }
-
-    public bool ShowPairingCode { get => _showPairingCode; private set => Set(ref _showPairingCode, value); }
-    public string? PairingCodeText { get => _pairingCodeText; private set => Set(ref _pairingCodeText, value); }
-    public byte[]? PairingQrPng { get => _pairingQrPng; private set => Set(ref _pairingQrPng, value); }
-
-    /// <summary>The sentence shown instead of the code: paired and used up, or why the app could not set itself up.</summary>
-    public string PairingMessage { get => _pairingMessage; private set => Set(ref _pairingMessage, value); }
-
-    /// <summary>The computer's answer typed or pasted by the user.</summary>
-    public string CallCodeInput
+    /// <summary>The account selected in the list; setting it shows that account on the right.</summary>
+    public AccountRow? SelectedRow
     {
-        get => _callCodeInput;
-        set { if (Set(ref _callCodeInput, value)) ConnectError = null; }
-    }
-
-    public string? ConnectError { get => _connectError; private set { if (Set(ref _connectError, value)) Raise(nameof(HasConnectError)); } }
-    public bool HasConnectError => !string.IsNullOrEmpty(_connectError);
-
-    public bool CanRePair { get => _canRePair; private set { if (Set(ref _canRePair, value)) ((RelayCommand)RePairCommand).RaiseCanExecuteChanged(); } }
-    public bool CanConnect { get => _canConnect; private set { if (Set(ref _canConnect, value)) ((RelayCommand)ConnectCommand).RaiseCanExecuteChanged(); } }
-    public bool CanSyncNow { get => _canSyncNow; private set { if (Set(ref _canSyncNow, value)) ((RelayCommand)SyncNowCommand).RaiseCanExecuteChanged(); } }
-    public bool CanBackupNow { get => _canBackupNow; private set { if (Set(ref _canBackupNow, value)) ((RelayCommand)BackupNowCommand).RaiseCanExecuteChanged(); } }
-
-    public bool IsPaired { get => _isPaired; private set => Set(ref _isPaired, value); }
-
-    public IReadOnlyList<string> ScheduleOptions => ScheduleNames;
-
-    public int ScheduleIndex
-    {
-        get => _scheduleIndex;
+        get => _selectedRow;
         set
         {
-            if (value < 0 || value >= Schedules.Length || !Set(ref _scheduleIndex, value)) return;
-            if (!_applying) _app.SetSchedule(Schedules[value]);
+            if (_applying || value is null || value.Id == _selectedId) return;
+            AddOpen = false;
+            Select(value.Id);
         }
     }
 
-    public IReadOnlyList<BackupRow> Backups { get => _backups; private set { if (Set(ref _backups, value)) Raise(nameof(HasBackups)); } }
-    public bool HasBackups => _backups.Count > 0;
-    public string LogText { get => _logText; private set => Set(ref _logText, value); }
+    /// <summary>The selected account; null when there is none.</summary>
+    public AccountDetailViewModel? Detail { get => _detail; private set { if (Set(ref _detail, value)) RaisePages(); } }
 
-    /// <summary>The line under the buttons: what the last action did.</summary>
+    /// <summary>The person pressed "Add account" (or there is nothing else to show).</summary>
+    public bool AddOpen { get => _addOpen; private set { if (Set(ref _addOpen, value)) RaisePages(); } }
+
+    /// <summary>The right-hand side is the Add page: the person asked for it, or there is no account to show.</summary>
+    public bool ShowAdd => _registryProblem is null && (_addOpen || _detail is null);
+
+    public bool ShowDetail => _registryProblem is null && !ShowAdd && _detail is not null;
+
+    /// <summary>"Back" on the Add page is only offered when there is an account to go back to.</summary>
+    public bool CanCloseAdd => _detail is not null;
+
+    /// <summary>"3 accounts - 3.1 GB stored - today 41 MB".</summary>
+    public string DeviceLine { get => _deviceLine; private set => Set(ref _deviceLine, value); }
+
+    public bool CanAdd { get => _canAdd; private set { if (Set(ref _canAdd, value)) ((RelayCommand)AddAccountCommand).RaiseCanExecuteChanged(); } }
+
+    /// <summary>Why "Add account" is off, or empty.</summary>
+    public string AddHint { get => _addHint; private set { if (Set(ref _addHint, value)) Raise(nameof(HasAddHint)); } }
+
+    public bool HasAddHint => !string.IsNullOrEmpty(_addHint);
+
+    /// <summary>The sentence the app opens on when the list of accounts is damaged: nothing is touched then.</summary>
+    public string? RegistryProblem
+    {
+        get => _registryProblem;
+        private set
+        {
+            if (!Set(ref _registryProblem, value)) return;
+            Raise(nameof(HasRegistryProblem));
+            RaisePages();
+        }
+    }
+
+    public bool HasRegistryProblem => _registryProblem is not null;
+
+    /// <summary>What the list of accounts and the disk disagree on, each with the action that settles it.</summary>
+    public IReadOnlyList<RepairRow> Repairs { get => _repairs; private set { if (Set(ref _repairs, value)) Raise(nameof(HasRepairs)); } }
+
+    public bool HasRepairs => _repairs.Count > 0;
+
+    /// <summary>Set when the device's own usage counts cannot be read or trusted.</summary>
+    public string? DeviceUsageProblem
+    {
+        get => _deviceUsageProblem;
+        private set
+        {
+            if (!Set(ref _deviceUsageProblem, value)) return;
+            Raise(nameof(HasDeviceUsageProblem));
+            ((RelayCommand)RepairDeviceUsageCommand).RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool HasDeviceUsageProblem => _deviceUsageProblem is not null;
+
+    public string DeviceStoredText { get => _deviceStoredText; set { if (Set(ref _deviceStoredText, value) && !_applying) _deviceLimitsDirty = true; } }
+    public string DeviceTrafficText { get => _deviceTrafficText; set { if (Set(ref _deviceTrafficText, value) && !_applying) _deviceLimitsDirty = true; } }
+
+    /// <summary>The sentences that say what to change in the device limits, one per line; null when the form is fine.</summary>
+    public string? DeviceLimitsProblems { get => _deviceLimitsProblems; private set { if (Set(ref _deviceLimitsProblems, value)) Raise(nameof(HasDeviceLimitsProblems)); } }
+
+    public bool HasDeviceLimitsProblems => !string.IsNullOrEmpty(_deviceLimitsProblems);
+
+    /// <summary>The line under the list: what the last device-wide action did.</summary>
     public string? Notice { get => _notice; private set { if (Set(ref _notice, value)) Raise(nameof(HasNotice)); } }
-    public bool HasNotice => !string.IsNullOrEmpty(_notice);
 
-    public string? KeyLostText { get => _keyLostText; private set { if (Set(ref _keyLostText, value)) Raise(nameof(HasKeyLost)); } }
-    public bool HasKeyLost => _keyLostText is not null;
-    public string? KeyStoreNoticeText { get => _keyStoreNoticeText; private set { if (Set(ref _keyStoreNoticeText, value)) Raise(nameof(HasKeyStoreNotice)); } }
-    public bool HasKeyStoreNotice => _keyStoreNoticeText is not null;
-    public string? StartErrorText { get => _startErrorText; private set { if (Set(ref _startErrorText, value)) Raise(nameof(HasStartError)); } }
-    public bool HasStartError => _startErrorText is not null;
+    public bool HasNotice => !string.IsNullOrEmpty(_notice);
 
     /// <summary>The "start with the computer" choice; setting it writes the OS entry (and reports a failure in <see cref="Notice"/>).</summary>
     public bool AutostartOn
@@ -230,7 +256,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 try { _autostart.SetEnabled(value); }
                 catch (Exception ex)
                 {
-                    Notice = $"Could not change the start-up setting: {ex.Message}";
+                    Notice = FailureNotice.Say("Could not change the start-up setting", ex);
+                    _problem?.Invoke("Changing the start-up setting failed", ex);
                     Raise(); // the box goes back to what it was
                     return;
                 }
@@ -241,352 +268,329 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public bool AutostartKnown { get => _autostartKnown; private set => Set(ref _autostartKnown, value); }
 
-    public bool WipePanelOpen { get => _wipePanelOpen; private set => Set(ref _wipePanelOpen, value); }
-    public string WipePrompt => $"This deletes the blind copy from this computer, with its keys, its data and its backups. Type its name \"{_displayName}\" to confirm.";
+    // ---- the pop-up of a long operation (the add, the removal, a job the person asked for) --------------------------------------------------------
 
-    public string WipeTyped
+    /// <summary>A long operation is running (BMB-311): the window shows a "please wait" pop-up over everything, and no command can be started a second time until it ends.</summary>
+    public bool IsBusy => Add.IsBusy || _detail?.AnyBusy == true;
+
+    public string BusyTitle => Add.IsBusy ? "Adding the account" : _detail?.AnyBusyTitle ?? "";
+
+    public string BusyText => Add.IsBusy ? "Please wait. The invitation is checked with the owner's computer; this can take a moment." : _detail?.AnyBusyText ?? "";
+
+    // ---- window life -------------------------------------------------------------------------------------------------------------------------
+
+    /// <summary>The window appeared: asks about waiting invitations every 15 seconds while it stays open, and reads the accounts at once.</summary>
+    public void OnWindowShown()
     {
-        get => _wipeTyped;
-        set
+        if (_disposed) return;
+        lock (_watchGate) _windowHidden = false;
+        StartWatch();
+        _ = RefreshAsync();
+    }
+
+    /// <summary>The window was hidden: the watch ends (the device loop asks at its own passes), and nothing that is still on its way (a read of the accounts, an add) starts it again.</summary>
+    public void OnWindowHidden()
+    {
+        if (_disposed || _watch is null) return;
+        lock (_watchGate)
         {
-            if (Set(ref _wipeTyped, value)) ((RelayCommand)ConfirmWipeCommand).RaiseCanExecuteChanged();
-        }
-    }
-
-    public bool WipeBusy { get => _wipeBusy; private set => Set(ref _wipeBusy, value); }
-
-    /// <summary>
-    /// A long operation (connect with its first load, sync, backup, save, wipe) is running (BMB-311): the window shows a "please wait"
-    /// pop-up over everything, and no command can be started a second time until it ends.
-    /// </summary>
-    public bool IsBusy { get => _busy; private set => Set(ref _busy, value); }
-
-    /// <summary>The pop-up's headline.</summary>
-    public string BusyTitle { get => _busyTitle; private set => Set(ref _busyTitle, value); }
-
-    /// <summary>The pop-up's line: what is being waited for, then the running job's own progress.</summary>
-    public string BusyText { get => _busyText; private set => Set(ref _busyText, value); }
-
-    private RelayCommand[] _all = [];
-
-    // ask: the pop-up ends with the job the user asked the scheduler for, judged by the state of the app (BlindJobWait, the model of the phones); with none its
-    // owner ends it.
-    private void BeginBusy(string title, string text, BlindJobAsk? ask = null)
-    {
-        BusyTitle = title;
-        BusyText = text;
-        _busyBaseText = text;
-        _busyByJob = ask is not null;
-        _busyAsk = ask;
-        IsBusy = true;
-        foreach (var command in _all) command.RaiseCanExecuteChanged();
-    }
-
-    private void EndBusy()
-    {
-        if (!_busy) return;
-        IsBusy = false;
-        foreach (var command in _all) command.RaiseCanExecuteChanged();
-        foreach (var row in _backups) (row.SaveCommand as RelayCommand)?.RaiseCanExecuteChanged();
-    }
-
-    /// <summary>Starts the long operation <paramref name="ask"/> asks for; when asking itself fails the pop-up does not stay up.</summary>
-    private void AskFor(string title, string text, string kind, Action ask)
-    {
-        // The marks the job will leave are noted now, from the last status that was shown (the UI thread does not read the database).
-        BeginBusy(title, text, new BlindJobAsk(kind, _time.GetUtcNow(), _lastStatus?.LastSyncAt, _lastStatus?.LastBackupAt));
-        try { ask(); }
-        catch
-        {
-            EndBusy();
-            throw;
+            _windowHidden = true;
+            _ = _watch.StopAsync();
         }
     }
 
     /// <summary>
-    /// The pop-up follows the job the user asked for by the STATE of the app, the one model of the phones (<see cref="BlindJobWait.Judge"/>): it ends when the job's
-    /// own mark appears (the first load is done, the time of the last sync or backup moved) or its failure is recorded, and never by a clock while the job runs
-    /// (BMB-311 fix round) or while it is queued behind another one: a job that is asked for and has not started holds the lock, the pop-up and the commands, for the
-    /// queue's grace (two minutes). Only a job that never started and left no mark for longer than that is reported as such. Another job that runs meanwhile (a
-    /// scheduled backup) is NOT the job asked for: it is said to run first, and does not end the wait.
+    /// The one place the watch is started. The window starts out hidden (an app launched into the tray has never shown it) and the watch runs only while it is shown, so that no ask of the hub is made on
+    /// behalf of a screen nobody sees - the device loop asks at its own passes.
     /// </summary>
-    private void UpdateBusyFrom(BlindAppStatus status)
+    private void StartWatch()
     {
-        if (!_busy || !_busyByJob || _busyAsk is not { } ask) return;
-        var now = _time.GetUtcNow();
-        var outcome = BlindJobWait.Judge(ask, status, running: false, now);
-        switch (outcome.Phase)
+        if (_watch is null) return;
+        lock (_watchGate)
         {
-            case BlindJobPhase.Running:
-                var progress = status.JobProgress is { } p ? $"{status.ActiveJob}: {p:P0}" : status.ActiveJob!;
-                BusyText = now - ask.At > BlindJobWait.StillRunningAfter ? $"{progress} - {BlindJobWait.StillRunningText}" : progress;
-                return;
-            case BlindJobPhase.Queued:
-                BusyText = status.ActiveJob is { } first ? $"{first} is running first; this job starts after it. {_busyBaseText}" : _busyBaseText;
-                return;
-            default:   // Finished, Failed, Unreported
-                if (outcome.Message is { } said) Notice = said;
-                EndBusy();
-                return;
+            if (!_windowHidden) _watch.Start();
         }
     }
-    /// <summary>Reads the status again (off the UI thread) and shows it.</summary>
+
+    // ---- refresh -----------------------------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Reads the accounts again (off the UI thread) and shows them. Reads are numbered in the order they are made, and a read is not shown over one that was made after it: refreshes overlap (the host
+    /// raises a change for every step of an add or a removal), and the one that read first may be the one that comes back last - it would bring back an account that was removed since.
+    /// </summary>
     public async Task RefreshAsync()
     {
         if (_disposed) return;
-        BlindAppStatus status;
+        BlindAccountsSnapshot snapshot;
+        long read = 0;
         try
         {
-            status = await Task.Run(_app.GetStatus);
+            snapshot = await Task.Run(() =>
+            {
+                lock (_readGate)
+                {
+                    read = ++_readSeq;
+                    return _accounts.GetSnapshot();
+                }
+            });
         }
         catch (Exception ex) when (!IsFatal(ex))
         {
-            Notice = $"Could not read the status: {ex.Message}";
-            _problem?.Invoke("Reading the status failed", ex);
+            Notice = FailureNotice.Say("Could not read the accounts", ex);
+            _problem?.Invoke("Reading the accounts failed", ex);
             return;
         }
         if (_disposed) return;
         try
         {
-            Apply(status);
+            lock (_applyGate)
+            {
+                if (read > _shownSeq)
+                {
+                    _shownSeq = read;
+                    Apply(snapshot);
+                }
+            }
         }
         catch (Exception ex) when (!IsFatal(ex))
         {
-            // Showing a status is not worth ending the app for: say so, and show the next one.
-            Notice = $"Could not show the status: {ex.Message}";
-            _problem?.Invoke("Showing the status failed", ex);
+            // Showing the accounts is not worth ending the app for: say so, and show the next read.
+            Notice = FailureNotice.Say("Could not show the accounts", ex);
+            _problem?.Invoke("Showing the accounts failed", ex);
         }
+        if (_detail is { } detail && !_disposed) await detail.RefreshPanelAsync();
     }
 
-    private void CommandFailed(Exception ex)
+    private void Apply(BlindAccountsSnapshot snapshot)
     {
-        Notice = $"That did not work: {ex.Message}";
-        _problem?.Invoke("A command failed", ex);
-    }
-
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _disposed = true;
-        _app.Changed -= RequestRefresh;
-        _work.UserJobReported -= OnUserJobReported;
-    }
-
-    private void Apply(BlindAppStatus status)
-    {
+        var view = BlindAccountsView.Build(snapshot, _zone, _time.GetUtcNow());
         _applying = true;
         try
         {
-            _displayName = status.DisplayName;
-            Raise(nameof(WipePrompt));
-            IdentityText = status.DisplayName ?? "(no name)";
-            NodeText = status.NodeId is { } id ? $"Node {id}" : "No identity";
-            IsPaired = status.IsPaired;
-            PairText = status.IsPaired
-                ? $"Calls {status.Endpoint}"
-                : "Not paired yet: do steps 1 and 2 below.";
-            LoadText = LoadTextFor(status);
-            StoreText = BlindHomeView.StoreText(_storeSummary, status, DateTimeOffset.UtcNow);
-            ReadStoreSoon(status);
-            SyncText = $"Last sync: {When(status.LastSyncAt)}";
-            BackupText = $"Last backup: {When(status.LastBackupAt)}";
+            DeviceLine = view.DeviceLine;
+            CanAdd = view.CanAdd;
+            AddHint = view.AddHint;
+            RegistryProblem = view.Problem;
+            DeviceUsageProblem = view.DeviceUsageProblem;
+            ApplyRepairs(view.Repairs ?? []);
 
-            _lastStatus = status;
-            UpdateBusyFrom(status);
-            JobVisible = status.ActiveJob is not null;
-            JobText = status.ActiveJob is null ? ""
-                : status.JobProgress is { } p ? $"{status.ActiveJob}: {p:P0}" : status.ActiveJob;
-            JobProgress = status.JobProgress ?? 0;
+            // The list: the same row objects for the same account (a selection must survive a refresh), in the order of the cards.
+            var byId = Rows.ToDictionary(r => r.Id, StringComparer.Ordinal);
+            var ordered = new List<AccountRow>();
+            foreach (var card in view.Cards)
+            {
+                if (!byId.Remove(card.Id, out var row)) row = new AccountRow(card.Id);
+                row.Update(card);
+                ordered.Add(row);
+            }
+            if (!Rows.SequenceEqual(ordered))
+            {
+                Rows.Clear();
+                foreach (var row in ordered) Rows.Add(row);
+            }
 
-            ScheduleIndex = Math.Max(0, Array.IndexOf(Schedules, status.Schedule));
+            if (!_deviceLimitsDirty)
+            {
+                var form = BlindDeviceLimitsForm.From(snapshot.Device);
+                DeviceStoredText = form.Stored;
+                DeviceTrafficText = form.TrafficPerDay;
+            }
 
-            Backups = status.Backups.Select(b => new BackupRow(b.Name, b.Size,
-                new RelayCommand(() => _ = SaveBackupAsync(b.Name), () => !_busy, CommandFailed))).ToList();
-            LogText = string.Join("\n", status.RecentLog.Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.Message}"));
-
-            KeyLostText = status.BackupKeyLost
-                ? "The backup key of this copy is gone from this computer's key store. The paired computer keeps a sealed copy of it, so a new key is never made silently: choose Disconnect and wipe, then pair again."
-                : null;
-            // The secret store did not answer (locked, access denied, busy): that is NOT a lost key and nothing here asks for a wipe.
-            KeyStoreNoticeText = status.KeyStoreUnavailable is { } storeProblem
-                ? $"The key store of this computer did not answer ({storeProblem}). Nothing was changed and no key is lost. Try again in a moment; if it stays, check that the computer is unlocked and that this app may use its key store."
-                : null;
-            StartErrorText = status.StartError is { } error
-                ? $"Could not set the app up: {error} Close the app and open it again; if this stays, choose Disconnect and wipe."
-                : null;
-
-            ApplyPairing(status);
-
-            // A job that runs (a scheduled backup, the one the user asked for) holds the commands that start another: the same rule as the phones' buttons.
-            CanSyncNow = status.IsPaired && status.InitialLoadDone && status.ActiveJob is null;
-            CanBackupNow = status.IsPaired && !status.BackupKeyLost && status.ActiveJob is null;
-            ((RelayCommand)CancelWipeCommand).RaiseCanExecuteChanged();
-            ((RelayCommand)ConfirmWipeCommand).RaiseCanExecuteChanged();
-
-            var autostart = ReadAutostart();
-            AutostartKnown = autostart is not null;
-            AutostartOn = autostart == true;
+            SettleSelection(snapshot);
+            ReadAutostart();
         }
         finally
         {
             _applying = false;
         }
+        RaisePages();
+        StartWatchIfSomethingWaits(snapshot);
     }
 
-    /// <summary>Asks for what the copy holds now and then, off the UI thread; the line shows the last answer.</summary>
-    private void ReadStoreSoon(BlindAppStatus status)
+    /// <summary>Keeps the selected account when it is still there, otherwise the first one; builds the detail for it and shows its snapshot.</summary>
+    private void SettleSelection(BlindAccountsSnapshot snapshot)
     {
-        if (_storeSource is null || _readingStore || DateTimeOffset.UtcNow - _storeAt < StoreEvery) return;
-        if (!status.InitialLoadDone) { _storeSummary = null; return; }
-        _readingStore = true;
-        _storeAt = DateTimeOffset.UtcNow;
-        _ = Task.Run(async () =>
-        {
-            var summary = await _storeSource(CancellationToken.None);
-            _post(() =>
-            {
-                _readingStore = false;
-                _storeSummary = summary;
-                try { StoreText = BlindHomeView.StoreText(summary, _app.GetStatus(), DateTimeOffset.UtcNow); }
-                catch (Exception ex) { CommandFailed(ex); }
-            });
-        });
-    }
+        var ids = snapshot.Accounts.Select(a => a.Entry.Id).ToList();
+        if (_selectedId is null || !ids.Contains(_selectedId)) _selectedId = ids.FirstOrDefault();
+        SelectedRowSilently(Rows.FirstOrDefault(r => r.Id == _selectedId));
 
-    private void ApplyPairing(BlindAppStatus status)
-    {
-        var code = status.AwaitingAnswer ? _app.PairingCode() : null;
-        ShowPairingCode = code is not null;
-        PairingCodeText = code;
-        if (code != _qrFor)
+        if (_selectedId is null)
         {
-            // The picture is a convenience: the text of the code is on the screen too. A QR library that fails must not take the rest of
-            // the screen with it (the answer field has to stay usable), and it is tried once per code, not on every refresh.
-            _qrFor = code;
-            try
-            {
-                PairingQrPng = code is null ? null : _qr(code);
-            }
-            catch (Exception ex) when (!IsFatal(ex))
-            {
-                PairingQrPng = null;
-                Notice = $"The QR picture could not be made ({ex.Message}). Copy the code below instead.";
-                _problem?.Invoke("Making the QR picture failed", ex);
-            }
+            DropDetail();
+            return;
         }
-
-        PairingMessage = code is not null ? ""
-            : status.KeyStoreUnavailable is not null ? "The pairing code cannot be shown while the key store of this computer does not answer."
-            : status.StartError is not null ? "The app could not set itself up; see the message below."
-            : status.IsPaired ? "Paired. The code was used up; to connect to another computer, choose Re-pair."
-            : "No identity. Choose Disconnect and wipe, then set the app up again.";
-
-        CanConnect = code is not null;
-        CanRePair = code is null && status.IsPaired;
-        ((RelayCommand)CopyPairingCodeCommand).RaiseCanExecuteChanged();
+        if (_detail is null || _detail.Id != _selectedId) MakeDetail(_selectedId);
+        _detail!.Apply(snapshot.Accounts.First(a => a.Entry.Id == _selectedId));
     }
 
-    private bool? ReadAutostart()
+    private void SelectedRowSilently(AccountRow? row)
     {
-        try { return _autostart.IsEnabled; }
-        catch (Exception) { return null; }
+        if (ReferenceEquals(_selectedRow, row)) return;
+        _selectedRow = row;
+        Raise(nameof(SelectedRow));
     }
 
-    private void Connect()
+    private void Select(string id)
     {
-        var error = _app.AcceptCallCode(CallCodeInput ?? "");
-        ConnectError = error;
-        if (error is null)
-        {
-            CallCodeInput = "";
-            Notice = "Paired. The first load starts now.";
-            // A long operation (BMB-311): the first copy of the data is loaded; the pop-up stays until that job is over.
-            AskFor("Connecting", "Please wait. The first copy of the data is being loaded; this can take a while. You can close the window: the job goes on.", BlindJobWait.FirstLoad, _work.RequestHeavy);
-        }
+        _selectedId = id;
         _ = RefreshAsync();
     }
 
-    private void RePair()
+    private void MakeDetail(string id)
     {
-        try
-        {
-            _app.StartRePair();
-            Notice = "A new code was made. The current connection stays until the computer's new answer is accepted.";
-        }
-        catch (Exception ex)
-        {
-            Notice = $"Could not start re-pairing: {ex.Message}";
-        }
+        DropDetail();
+        var detail = new AccountDetailViewModel(_accounts, id, _workFor(id), _qr, _post, _problem, _store, _time, _zone);
+        detail.Removed += OnRemoved;
+        detail.CopyRequested += OnCopyRequested;
+        detail.PropertyChanged += OnChildChanged;
+        Detail = detail;
+    }
+
+    private void DropDetail()
+    {
+        if (_detail is not { } old) return;
+        old.Removed -= OnRemoved;
+        old.CopyRequested -= OnCopyRequested;
+        old.PropertyChanged -= OnChildChanged;
+        Detail = null;
+        old.Dispose();
+    }
+
+    private void OnAdded(string id)
+    {
+        AddOpen = false;
+        _selectedId = id;
+        StartWatch();
         _ = RefreshAsync();
     }
 
-    private void SyncNow()
+    private void OnCopyRequested(string text) => CopyRequested?.Invoke(text);
+
+    private void OnRemoved()
     {
-        AskFor("Syncing", "Please wait while this computer syncs. You can close the window: the job goes on.", BlindJobWait.Sync, _work.RequestSync);
-        Notice = "Sync asked for.";
+        // The removed account is no longer in the list: the next read selects another (or the Add page, when it was the last).
+        _selectedId = null;
+        _ = RefreshAsync();
     }
 
-    private void BackupNow()
+    private void OnChildChanged(object? sender, PropertyChangedEventArgs e)
     {
-        AskFor("Backing up", "Please wait while the backup is made. You can close the window: the job goes on.", BlindJobWait.Backup, _work.RequestBackup);
-        Notice = "Backup asked for.";
+        // The busy state of the add page, or of the selected account (its own, or its panel's): the pop-up follows them.
+        if (e.PropertyName is nameof(AddAccountViewModel.IsBusy) or nameof(AccountDetailViewModel.AnyBusy) or nameof(AccountDetailViewModel.AnyBusyTitle)
+            or nameof(AccountDetailViewModel.AnyBusyText))
+            RaiseBusy();
     }
 
-    private async Task SaveBackupAsync(string name)
+    private void RaiseBusy()
     {
-        // A long operation (BMB-311): the pop-up stays until the file is saved (or the place was not chosen).
-        BeginBusy("Saving the backup", "Please wait while the backup is copied to the place you chose.");
+        Raise(nameof(IsBusy));
+        Raise(nameof(BusyTitle));
+        Raise(nameof(BusyText));
+    }
+
+    private void RaisePages()
+    {
+        Raise(nameof(ShowAdd));
+        Raise(nameof(ShowDetail));
+        Raise(nameof(CanCloseAdd));
+        RaiseBusy();
+    }
+
+    private void StartWatchIfSomethingWaits(BlindAccountsSnapshot snapshot)
+    {
+        if (_watch is null || _watch.IsRunning) return;
+        if (snapshot.Accounts.Any(a => a.Entry.Phase is BlindAccountPhases.Pending or BlindAccountPhases.AwaitingConfirmation)) StartWatch();
+    }
+
+    // ---- repairs -----------------------------------------------------------------------------------------------------------------------------
+
+    private void ApplyRepairs(IReadOnlyList<BlindRepairIssue> issues)
+    {
+        var key = string.Join("\n", issues.Select(i => i.Kind + "|" + i.AccountId + "|" + i.Description));
+        if (key == _repairKey) return;
+        _repairKey = key;
+        var rows = new List<RepairRow>();
+        foreach (var issue in issues)
+        {
+            var captured = issue;
+            if (issue.CanAdopt)
+                rows.Add(new RepairRow(issue.Description, "Add it to the list", new RelayCommand(() => _ = RepairAsync(captured), () => !IsBusy, CommandFailed)));
+            else if (issue.CanForget)
+                rows.Add(new RepairRow(issue.Description, "Forget it", new RelayCommand(() => _ = RepairAsync(captured), () => !IsBusy, CommandFailed)));
+            else
+                // busy-exempt: no action at all, a link needs a person
+                rows.Add(new RepairRow(issue.Description, "", new RelayCommand(() => { }, () => false)));
+        }
+        Repairs = rows;
+    }
+
+    private async Task RepairAsync(BlindRepairIssue issue)
+    {
         try
         {
-            var bytes = await _app.ExportBackupAsync(name);
-            Notice = $"Saved {name} ({bytes / 1024} KiB) to the chosen place.";
+            string? refusal = issue.Kind switch
+            {
+                BlindRepairKinds.LegacyRootNotListed => await _accounts.AdoptLegacyRootAsync(),
+                BlindRepairKinds.FolderNotListed => await _accounts.AdoptFolderAsync(issue.AccountId ?? ""),
+                BlindRepairKinds.FolderMissing => await _accounts.ForgetMissingAccountAsync(issue.AccountId ?? ""),
+                _ => "Nothing the app can do settles this one: it needs a person.",
+            };
+            Notice = refusal ?? "Done.";
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (!IsFatal(ex))
         {
-            Notice = "Nothing was saved.";
-        }
-        catch (Exception ex)
-        {
-            Notice = $"Could not save the backup: {ex.Message}";
-        }
-        finally
-        {
-            EndBusy();
+            CommandFailed(ex);
         }
         await RefreshAsync();
     }
 
-    private bool CanConfirmWipe() =>
-        !_wipeBusy && _displayName is not null && string.Equals(_wipeTyped.Trim(), _displayName, StringComparison.Ordinal);
+    // ---- device-wide commands ----------------------------------------------------------------------------------------------------------------
 
-    private async Task WipeAsync()
+    private void OpenAdd()
     {
-        if (!CanConfirmWipe()) return;
-        WipeBusy = true;
-        BeginBusy("Disconnecting and wiping", "Please wait. A running sync or backup is stopped first, then this copy, its keys and its backups are deleted.");
-        ((RelayCommand)ConfirmWipeCommand).RaiseCanExecuteChanged();
-        ((RelayCommand)CancelWipeCommand).RaiseCanExecuteChanged();
-        try
+        Add.Clear();
+        AddOpen = true;
+    }
+
+    private void RepairDeviceUsage()
+    {
+        Notice = _accounts.StartNewDeviceUsageLedger() ?? "New counts started. The damaged file is kept aside.";
+        _ = RefreshAsync();
+    }
+
+    private void ApplyDeviceLimits()
+    {
+        var (limits, problems) = new BlindDeviceLimitsForm(DeviceStoredText, DeviceTrafficText).Validate();
+        if (limits is null)
         {
-            await Task.Run(() => _app.DisconnectAndWipeAsync());
-            // The host has returned to its first-run state and replaced this view model.
+            DeviceLimitsProblems = string.Join("\n", problems);
+            return;
         }
-        catch (AggregateException ex)
+        var refusal = _accounts.SetDeviceLimits(limits);
+        if (refusal is not null)
         {
-            // Not restarted over a half-wiped copy: say what is left and let the user press it again.
-            Notice = $"{ex.Message} Press Disconnect and wipe again to finish.";
+            DeviceLimitsProblems = refusal;
+            return;
         }
-        catch (Exception ex)
-        {
-            Notice = $"Could not wipe: {ex.Message}";
-        }
-        finally
-        {
-            WipeBusy = false;
-            EndBusy();
-            ((RelayCommand)ConfirmWipeCommand).RaiseCanExecuteChanged();
-            ((RelayCommand)CancelWipeCommand).RaiseCanExecuteChanged();
-        }
+        DeviceLimitsProblems = null;
+        _deviceLimitsDirty = false;
+        Notice = "Device limits saved.";
+        _ = RefreshAsync();
+    }
+
+    private void ReadAutostart()
+    {
+        bool? autostart;
+        try { autostart = _autostart.IsEnabled; }
+        catch (Exception) { autostart = null; }
+        AutostartKnown = autostart is not null;
+        AutostartOn = autostart == true;
+    }
+
+    private void CommandFailed(Exception ex)
+    {
+        Notice = FailureNotice.Say("That did not work", ex);
+        _problem?.Invoke("A command failed", ex);
     }
 
     private void RequestRefresh()
@@ -599,53 +603,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         });
     }
 
-    private void OnUserJobReported(string sentence) => _post(() =>
-    {
-        Notice = sentence;
-        if (_busyByJob) EndBusy();
-    });
-
     private static bool IsFatal(Exception ex) =>
         ex is OutOfMemoryException or AccessViolationException or StackOverflowException or ThreadAbortException;
 
-    /// <summary>
-    /// What the first load is doing: not started because not paired, running with progress, a real failure with its retry time, or about to start.
-    /// </summary>
-    private string LoadTextFor(BlindAppStatus status)
+    public void Dispose()
     {
-        if (status.InitialLoadDone) return "First load: done.";
-        if (!status.IsPaired) return "First load: starts after pairing.";
-        if (status.ActiveJob == "First load")
-            return status.JobProgress is { } progress ? $"First load: running ({progress:P0})." : "First load: running.";
-        if (status.LastFailure is { Title: "First load" } failure) return FailedLoadText(failure);
-        return "First load: starting.";
+        if (_disposed) return;
+        _disposed = true;
+        _accounts.Changed -= RequestRefresh;
+        Add.Added -= OnAdded;
+        Add.PropertyChanged -= OnChildChanged;
+        DropDetail();
     }
-
-    private string FailedLoadText(BlindAppFailure failure)
-    {
-        var text = $"First load: the last try failed - {Reason(failure.Message)}";
-        if (failure.Attempts > 1) text += $" ({failure.Attempts} tries in a row)";
-        if (_work.FirstLoadRetry is { } retry)
-        {
-            text += $" Next try at {retry.NextAt.ToLocalTime():HH:mm:ss}";
-            text += retry.AtCeiling ? $"; it keeps trying every {Math.Max(1, (int)retry.Every.TotalMinutes)} minutes until it works." : ".";
-        }
-        else
-        {
-            text += " It tries again soon.";
-        }
-        return text;
-    }
-
-    /// <summary>The error in one short line; a 401 right after pairing is the normal case and is said so (the computer has not heard of this device yet).</summary>
-    private static string Reason(string message)
-    {
-        var text = message.ReplaceLineEndings(" ").Trim();
-        if (text.Length > 140) text = text[..140] + "...";
-        if (text.Contains("401", StringComparison.Ordinal))
-            text += " The computer has probably not heard of this device yet; that is normal for a short time after pairing.";
-        return text;
-    }
-
-    private static string When(DateTimeOffset? at) => at is { } t ? t.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : "never";
 }

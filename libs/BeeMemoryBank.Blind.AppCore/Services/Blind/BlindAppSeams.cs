@@ -52,7 +52,25 @@ public interface IBlindBackupExporter { Task<Stream> CreateAsync(string suggeste
 /// identity is made (null: "Blind copy").
 /// </summary>
 public sealed record BlindAppOptions(string DataDirectory, string DatabasePath, TimeProvider? TimeProvider = null,
-    Func<string>? DisplayNameFactory = null);
+    Func<string>? DisplayNameFactory = null)
+{
+    // Init properties, not constructor parameters: a head calls the constructor above, and a parameter of a new type there would put that type in the
+    // head's own metadata (the heads' reference tests name every AppCore type a head may touch).
+
+    /// <summary>The lock for a long job (first load, backup) that every account's runtime of this device shares; null gives the composition a gate of its own (a copy with one account).</summary>
+    public BlindDeviceGate? DeviceGate { get; init; }
+
+    /// <summary>The id of the account this runtime is, and the name its card shows (read when asked): what the device's gate records when this account's long job holds it. Null for a copy with one account.</summary>
+    public string? DeviceOwnerId { get; init; }
+
+    public Func<string>? DeviceOwnerName { get; init; }
+
+    /// <summary>
+    /// Tests only: the handler at the bottom of the account's HTTP pipeline, in place of the pinned or public-CA socket handler. Everything above it
+    /// (https only, the origin check, no redirect, maintenance detection) is the real pipeline.
+    /// </summary>
+    public Func<HttpMessageHandler>? PrimaryHandlerFactory { get; init; }
+}
 
 internal sealed class BlindAppPaths(string dataDirectory, string databasePath) : IBlindPaths
 {

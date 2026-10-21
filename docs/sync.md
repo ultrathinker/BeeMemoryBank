@@ -19,7 +19,7 @@ superadmin (or to a legacy pre-user-table `password` slot), hands back the wrapp
 copy of the whitelist. There is no invite token and no approval step — the password is the whole
 gate.
 
-**A node that joins with the master password is a superadmin** (owner's decision, BMB-42).
+**A node that joins with the master password is a superadmin** (a deliberate decision).
 `JoinEndpoints` creates the entry with `is_superadmin = 1`, and every join flow (web, CLI, phone)
 records the node it joined through the same way — one rule, `JoinAuthority`. `EventApplier` checks
 the flag before applying `whitelist_add`, `whitelist_revoke`, `whitelist_update`, `hard_delete`,
@@ -182,7 +182,7 @@ Implementation: `SyncClient` uses `GetAllEventSequenceNumbers()` instead of filt
 
 A node can enable Invisible Mode to hide itself from sync partners. When invisible, the node rejects every incoming sync call (503) and its own sync loop makes none, so its partners see it as not answering.
 
-Since 2.6.2 the switch is in **Admin > Invisible Mode** (superadmin only), no longer in the sync status of the header; while it is on, the sync icon of the header carries a badge and the status says so with a link to that card. `GET`/`POST /api/sync/invisible` are unchanged.
+Since 2.6.2 the switch is in **Admin > Invisible Mode** (superadmin only), no longer in the sync status of the header; while it is on, the sync icon of the header carries a badge and the status says so with a link to that page. `GET`/`POST /api/sync/invisible` are unchanged.
 
 Controlled by `InvisibleModeService` (`libs/BeeMemoryBank.Core/Services/InvisibleModeService.cs`). Use cases include:
 - **Maintenance:** operate without triggering sync alerts on partner nodes
@@ -266,7 +266,7 @@ GET /api/sync/network        (superadmin, internal key; the Web proxy route is /
 }
 ```
 
-The page the header's **Sync Status** title opens (`/Network`) draws this: this node and the nodes of the whitelist on a circle (one in the middle, two on a line, three a triangle, four or more a circle), an arrow for each call. A node carries the fields of the delivery status plus `kind` (`full`: has an address and is called; `device`: has none, a phone or a node behind a NAT, it calls in; `blind`: a blind copy), `platform` (`windows`, `macos`, `linux`, `android`, `ios`), `inContainer`, the version and protocol it last showed, its address as `scheme`, `host` and `port` (never a path, a query or credentials), `seenFrom` (where its last call came from, as this node's server saw it), and for this node alone `notes`, `folders` and `changes`.
+The page the header's **Sync Status** title opens (`/Network`) draws this: this node and the nodes of the whitelist on a circle (one in the middle, two on a line, three a triangle, four or more a circle), an arrow for each call. A node carries the fields of the delivery status plus `kind` (`full`: has an address and is called; `device`: has none, a phone or a node behind a NAT, it calls in; `blind`: a blind copy), `platform` (`windows`, `macos`, `linux`, `android`, `ios`), `inContainer`, the version and protocol it last showed, its address as `scheme`, `host` and `port` (never a path, a query or credentials), `seenFrom` (where its last call came from, as this node's server saw it), and for this node alone `notes`, `folders` and `changes`. A blind copy also carries `pausedText` ("Paused by the device's owner: daily traffic limit (until 21:00 UTC)", while its report that its limits stop it is fresh) and `leftAt` (its owner removed it from the device); the card says so in place of "quiet" (see "Paused, and removed by the device's owner" below).
 
 **What is measured and what is expected.** A call is one direction: `from` calls `to`, at the address of `to`. This node can measure only the calls it is one end of: the ones it makes (`observed`, state `answering`, `not_answering` or `unknown`, with since when and why a failing call fails) and the ones it receives (`observed`, state `heard` within the time a call is expected in, `stale` after it). The calls between two other nodes are given as `expected`, by the rule of the network - every node calls every node that has an address, and a blind node calls only where nobody can call it - and are never drawn as seen.
 
@@ -732,7 +732,7 @@ that it does.
 
 The full Android app (2.6.x) syncs through the same `SyncClient` as every node, so it needs nothing of its own for encrypted metadata: it declares protocol 3 until
 it has applied the activation and 4 after, always with `metadata-envelope-v1`, and sends its version (the repo `VERSION`, as `AssemblyInformationalVersion`) at
-authenticate and in `report-position`. The node shows it on the readiness report of the Metadata card (Admin) next to what the phone last declared. After the
+authenticate and in `report-position`. The node shows it on the readiness report of the Metadata encryption page (Admin) next to what the phone last declared. After the
 activation the phone opens sealed events with the keys of its unlock, and keeps what it cannot open yet while it is locked, like any full node (see "Held events"
 below). `AndroidFullAppWiringTests` keeps the app wired to the shared composition (`AddSync()`), since the app itself cannot be built by a test project.
 
@@ -757,7 +757,7 @@ absent peers, not wrong addresses.
   contact log "answered". It now throws `PeerIncompatibleException` ("it runs an older version (protocol 3) than this device syncs with: upgrade it"), which reaches
   `PeerFailures`, the contact log and the check of a peer like any other failure, is paused with a growing pause (one warning per streak) and is asked again at
   once when the peer is changed or checked.
-- The contact log (BMB-313) shows the same sentence as the reason a node "is not answering": "no sync server at this address: it answered 404 Not Found".
+- The contact log shows the same sentence as the reason a node "is not answering": "no sync server at this address: it answered 404 Not Found".
 - The Android app's background status reads "error: Laptop: no sync server at this address: it answered 404 Not Found" where it used to read "ok (applied 0)";
   Sync now on the Status page says the same in its pop-up.
 
@@ -820,7 +820,9 @@ the node's LAN status, the blind job detail and the web pages' error lines use `
 `FailureText.Story`: the whole text of a failure of local work (a disk, a database, a file), and only the kind of failure for HTTP, socket, TLS, JSON, timeout and the
 typed peer refusals, told apart by the type of the exception. `NetworkFailureTextArchitectureTests` reads the networking projects and fails for an exception's message
 inside a log call, in a status member, or in the text a person reads, unless the place is listed with the reason it is local work. `ExceptionTextSitesInventoryTests` (`docs/design/exception-text-sites.golden.txt`) lists every file that
-uses an exception's message and fails when a new one appears, and nothing may read a `ReasonPhrase`.
+uses an exception's message and fails when a new one appears, and nothing may read a `ReasonPhrase`. The blind apps' shared core has the same rule in one formatter, `BlindFailureText`: it is applied where a
+failure is *recorded* (the log line, the stored last failure, the job outcome, a card's problem), and what an earlier version stored is not shown when it is read back (a stored line without the stamp of this version keeps its time and kind and shows a fixed sentence)
+([blind-node/FAILURE-TEXT.md](blind-node/FAILURE-TEXT.md), which also says what this rule does not cover: a head's own catch, a log that is explicitly diagnostic).
 
 ### Sending and receiving sealed events
 
@@ -904,7 +906,7 @@ An operator guide. The switch is **one way**: there is no off switch.
    longer use: revoke it, it then no longer counts.
 3. **Take a fresh backup of this node and keep it offline if you want one.** It holds your titles in clear. There is no way back from the node:
    the switch cannot be undone, and the node never restores a backup that is not encrypted (2.6.2).
-4. **Switch it on**: on the Admin card tick "I took a fresh backup", enter the master password and confirm; or
+4. **Switch it on**: on the Admin → Metadata encryption page tick "I took a fresh backup", enter the master password and confirm; or
    `bmb sync activate --yes` (it asks for the master password, or reads it with `--password-stdin`). The API is
    `POST /api/sync/activation` `{ "password": ... }`: superadmin, never an agent; the password is checked, the vault is
    not unlocked by it; 409 lists the blockers. This node creates key generation 1, writes the activation, declares
@@ -923,6 +925,202 @@ reach copies made before it. Old backups and snapshots of full nodes, restic sna
 its first encrypted baseline, and a blind node's database kept aside by an earlier reseed (listed as `legacy_copies` in
 its status) still hold titles in clear: delete them, or keep them as carefully as the backup of step 3, once the
 network runs encrypted. A full node's own database keeps titles in clear by design (it shows and searches them).
+
+## Invitations to a blind copy (2.7)
+
+A blind copy on a friend's device (Android, iPhone, Windows, macOS) is added by an **invitation** the owner makes on the full node the copy will call
+(the *hub*, ADR 0007), instead of the two codes that pairing a phone needs. It is a **one-time invitation, not an encrypted message**: the only thing the
+owner and the friend share is the string, so a key inside it would protect nothing. What protects it:
+
+- it expires (15, 30 or 60 minutes; 30 by default) by the hub's clock, and the first redemption burns it (one conditional `UPDATE`, exactly one winner);
+- it names the hub's identity key and how to trust its TLS endpoint (the pin, or the system's certificate chain), so a device calls only the node the owner meant;
+- it carries no vault password, no master key and no reusable sync token (it does carry the hub's public key and a one-time secret);
+- **no content and no usable key of the mesh reaches the device before the owner confirms.** The device shows a six-character *match code*, the owner's page shows the same code, the friend
+  reads it out, and the owner confirms with the master password. What the hub already has by then is what the device sent when it asked: its identity and the key for its own backup (see "What the hub keeps").
+
+### The string
+
+`bmb-invite:?v=1&a=<https origin>&n=<hub node id>&t=pin|public-ca&s=<pin, pin mode only>&k=<hub Ed25519 key>&i=<invite id>&x=<secret>&e=<expiry, unix seconds>&d=<name shown>&g=<signature>`
+
+Keys, ids, the pin, the secret and the signature are base64url (invite id 16 bytes, secret 32, signature 64). The parser (`BlindInvitation.TryParse`, `libs/BeeMemoryBank.Core/Models`) is as
+strict as the call code's: an unknown version or trust mode, an unknown or repeated field, a wrong length, a control character, an address that is not `https://host[:port]`
+or names a place a node may not call (`PeerNetworkRules`), a pin next to `public-ca`, a hub that is a blind node, or a `g` that is **missing** or does not verify refuses the whole
+string. A string is at most 2 048 characters.
+
+**`g` is required, and it is what binds the address to the hub's key.** It is the hub's Ed25519 signature, by the key `k` of the same string, over the label `bmb-invite-v1` (which
+carries the version) and every other field in a fixed order: address, hub node id, trust, pin, hub key, invitation id, the SHA-256 of the secret (a signature over the secret itself
+would be a second place it travels to; the hash of 32 random bytes tells nobody the secret), expiry and name (`BlindInvitation.SigningInput`). A device that gets a string with any of
+them changed, cut, or spliced from two refuses it before it sends anything. What `g` does **not** say is who made the string: anyone can write a whole invitation of their own, with
+their own hub and key, and a device that takes it joins *their* mesh - and gives them nothing of the owner's invitation, whose secret was never in their string. That is the limit of a
+one-time capability that is not an encrypted message, and it is why the friend should paste only what the owner sent. The device's identity probe of the address (`GET
+/api/sync/identity` must answer the invitation's node id and key) is a **sanity check** that the computer at that address is the one meant; it is `g`, not the probe, that ties the
+address to the key, and TLS (the pin, or the system's chain for the name) that tells the device it is talking to that address.
+
+The hub **always** signs: `BlindInviteService.IssueAsync` makes the invitation through `BlindInvitation.CreateSigned`, which verifies its own signature against the key it names, and a
+node that cannot sign (the identity key is not available in this mode, or the signer signs with another key) issues nothing, writes no row and says so (503 "This node cannot sign an
+invitation with its identity key now"). `BlindInvitation.ToString()` is **redacted** (`...&x=<redacted>`): the framework formats an object by it wherever it is interpolated, logged or
+put in an exception. `ToWireText()` is the one formatter that writes the secret, used for the API's answer and the QR code and nowhere else.
+
+### The match code
+
+`SHA-256("bmb-invite-match-v1" | inviteId | nodeId | publicKey)`, the first 30 bits in Crockford base32, written `K7F-2QX`. The inputs are fixed-size and joined as they
+are: the label in UTF-8, the 16 id bytes, the node id as its 36-character lower-case text in UTF-8, the 32 key bytes. Both sides compute it; neither sends it as proof.
+
+### The routes
+
+| Route | Who | What |
+|---|---|---|
+| `POST /api/blind-nodes/invites` | owner (internal key, superadmin) | make an invitation: label, name shown, lifetime, address; the node first calls its own address like a blind copy will (`HubTrustProbe`: system chain first, else the key it presents; with `BMB_PUBLIC_TLS_SPKI` set it must match) and the answer must be *this* node (id and key). A failed probe names the reason and makes nothing; an address that is a literal of this machine, a link-local or a cloud-metadata address is refused at once. At most 20 open invitations (the cap is enforced by the insert itself, so concurrent requests cannot pass it). The answer carries `Cache-Control: no-store` and `Pragma: no-cache`: it holds the one-time string. |
+| `GET /api/blind-nodes/invites` / `.../defaults` | owner | the list (never the secret, never a key; the match code once a device redeemed) / what the form starts from (`BMB_PUBLIC_ADDRESS`, this node's name) |
+| `POST /api/blind-nodes/invites/{id}/confirm` | owner | master password again, single-flight; the pre-flight (`BlindPreflight`), then the row becomes `confirming`, then the enrolment of a paired phone: `whitelist_add` of a plain peer (display name: the owner's label, else "<device> (invited)", cut to the 64 characters a peer's name may have) and the backup key sealed as `android-backup:<id>`, signed by this node, then the row becomes `confirmed`. Confirming an invitation that is already confirmed is the same success (a lost answer, a double click) |
+| `POST /api/blind-nodes/invites/{id}/refuse`, `DELETE .../{id}` | owner | refuse a redemption / withdraw an invitation nobody redeemed. All six management routes are internal key + superadmin + **not an agent** (an agent owned by a superadmin is refused with 403); a test walks the endpoint table and calls every route under the group with an agent's key |
+| `POST /api/sync/invite/redeem` | the device, no credential but the invitation | strict JSON body, at most 8 KB: `inviteId, secret, nodeId, publicKey, displayName, platform, appVersion, protocol, proof` and **exactly one of** `backupKey` (an app copy) or `pairCode` (a server blind node, see "A server blind node joins"). 202 `{state:"awaiting", matchCode, sourceName, confirmBy}`; 410 `invite_not_valid` for everything that is not a valid invitation (unknown, expired, used by another device, withdrawn, a wrong secret: one answer); 409 `device_known_under_other_key`; 400 for a body or proof that is not right; 429; 503 `locked` |
+| `POST /api/sync/invite/status` | the device | `inviteId, nodeId, at, signature` → `{state: awaiting | confirmed | refused | expired}`; 410 for anything else. The answer carries the HTTP `Date` header: the device compares it with its own clock before it reads a 410 as "not valid" (a device more than 5 minutes off says so on its card and asks again, instead of concluding) |
+
+The two public routes are under `/api/sync/`, so no documented proxy recipe changes (`docs/internet-access.md`), and each is listed in `PublicSurface`. They answer 404 on a
+node older than 2.7.
+
+`proof` is the device's Ed25519 signature, with the key it registers, over `bmb-invite-redeem-v1\n{inviteId}\n{hubNodeId}\n{nodeId}\n{publicKey}\n{SHA-256(backupKey)}` (ids and
+keys base64url, node ids in lower-case `D` form): nobody can enrol another device's key, and naming the hub stops a redemption from being replayed at another node. The
+status signature covers `bmb-invite-status-v1\n{inviteId}\n{nodeId}\n{at}`; `at` (unix seconds) must be within 10 minutes of the hub's clock. The proof is checked before
+any row is read, so a bad proof says nothing about which invitations exist.
+
+### A server blind node joins (2.7, `bmb blind join`)
+
+A server blind node (Docker, service) redeems an invitation too, but it has no backup key to send and it must be seeded by the full node, so it sends **its pair code** (`BMBBLIND1.` + base64url JSON,
+at most 1 500 characters) in the optional member `pairCode` INSTEAD OF `backupKey`; exactly one of the two is present. The proof is the node's signature over
+`bmb-invite-redeem-server-v1\n{inviteId}\n{hubNodeId}\n{nodeId}\n{publicKey}\n{SHA-256(UTF-8 of the pair code)}` - a label of its own, so a signature made for one kind of redemption can never be read as the other's.
+The hub refuses (400, nothing written) a pair code that is not a blind pair code or that names another node id or key than the one that signed. The code goes into the row under the master DEK
+(AES-GCM, AAD `bmb-invite-pair-code-v1:{inviteId}`, column `pair_code_enc`, row `kind = 'server'`; migration 042), and the same trigger that clears the backup key clears it in every final state. A repeat of the
+redemption by the same node replaces the stored code (the node may have begun again with a fresh one); a node that asks as the other kind gets the generic 410. The node writes its own record and keeps its pairing secret before it sends the request (the hub commits a redemption before it answers, and the answer can get lost), so a lost answer is resolved by the same redemption again - answered by the same answer - or by the node's signed status question, never by a second redemption.
+
+**How the body evolves.** A member is added only as an optional one; the invitation text stays `v=1` and the sync protocol number is not bumped (an invitation is a bearer capability and carries no feature list).
+A hub that does not know a member refuses the WHOLE body: that is how a full node older than this feature "refuses cleanly", and why a sender of the new member reads 400 (or 404 from a pre-2.7 hub) as
+"upgrade the full node first". A change in what a member MEANS is not an addition: it needs a new invitation version.
+
+The owner's Confirm for such a row does not enrol a device. After the pre-flight (nothing is written; an active peer under that id, or a pair code that no longer opens, is a 409 and the row stays `redeemed`) the row
+becomes `confirming`, and then `BlindNodeManager.AddAsync` runs with the stored code: identity check, pre-flight, `whitelist_add` (with the node's pin), the seed, the push position. Then the row becomes
+`confirmed`. A seed that fails leaves the row `confirming` with a 409 that names the KIND of failure; the reconciler repeats the step every minute. The repeat is safe: a node that already got the seed (the push
+position is newer than the row's `confirming_at`) is not seeded again, and a node that is in the whitelist but whose code is spent (the seed was applied, the answer was lost) is reached through the trust the
+seed gave this computer (a reseed). An undo (the owner's 72 hours ran out, the pre-flight fails) revokes the active entry of that node, which only this confirmation could have put there. The pair code's
+secret lives 73 hours on the node (the owner's 72 and one more), is cleared when the node learns that the join was refused or expired, and is spent by the seed.
+
+The old pairing and this one exclude each other: `POST /api/blind-nodes/` with a pair code of a node whose server invitation waits (`redeemed` or `confirming`) is refused with 409 ("confirm or refuse the
+invitation instead"), and the node itself refuses to show its pair code while its join waits, and to join when it already holds a seed.
+
+### What the hub keeps
+
+`tbl_blind_invite` (migrations 041 and 042): local to the node, **never replicated, never in a join snapshot, a blind package or a baseline** (`SnapshotTables.Replicated` is an
+allow-list; a snapshot empties it). The secret is stored only as its SHA-256 and compared in constant time. The device's backup key (the owner may need it to restore
+from the device's backup) arrives with the redemption and waits **encrypted under the master DEK** (AES-GCM, bound to the invitation's id) until the owner decides;
+a trigger on the table clears it in every final state, whatever code moved the row, so a redemption needs an unlocked node (503 `locked` otherwise; the app retries
+until the invitation expires). If the master key changes between the redemption and the confirmation, the stored key no longer opens: the owner refuses and makes a
+new invitation.
+
+State machine: `issued → redeemed → confirming → confirmed | refused | expired`, and `issued → expired` (ran out, or withdrawn). An issued invitation lives for its
+lifetime; a redemption waits 72 hours for the owner; rows in a final state are deleted after 30 days. A repeat of the same redemption by the same device (its answer was
+lost) gets the same 202 and writes nothing, but only while the row is still `redeemed` and its 72-hour window is open; after that the device uses the signed status request (below). The audit log gets a line for each step (issued, redeemed, confirmed, refused, withdrawn, expired, and `invite_confirm_undone`)
+and, bounded to 30 per 10 minutes, for refused redemptions - never a secret, a key, a pin or the string itself.
+
+**The confirmation survives a crash.** A device must never be a peer of the network for an invitation the owner did not complete, and the enrolment (`whitelist_add`,
+then the seal) cannot be one transaction: it writes to the event log and to the mesh. So the row says what is going on. It becomes `confirming` **before** the first write
+that makes the device a peer, and `confirmed` **after** the last. With the state the row records the **identity of the enrolment**: the id the `whitelist_add` is logged
+under (`enroll_event_id`, derived from the invitation's id, so it is the same on every attempt). An active peer for a device therefore exists only while its row is
+`confirming` or `confirmed`, and after any interruption the event log itself says how far the enrolment got. A crash or an error in between leaves `confirming`, and one
+method, "pre-flight, then finish" (`PreflightAndFinishAsync`), takes it up again - for the reconciler (at start and every minute) **and** for the owner pressing Confirm on
+a row that is already confirming, so the two cannot disagree. Finishing runs the same idempotent steps: an entry that is already an active peer is left as it is; if the
+`whitelist_add` of this invitation is already in the log (a crash between the log and the local row) the retry takes its version for the local row and does **not** log a
+second add; the seal is last-writer-wins per name; then the row becomes `confirmed`. When it cannot finish - the owner's 72 hours have run out, the pre-flight now fails,
+the stored key no longer opens, the device's id belongs to another key, the owner revoked the device meanwhile - it **undoes** the enrolment, **by that identity**:
+if the add exists in the log, a matching `whitelist_revoke` is logged (first, like every whitelist write) - also when the local row was never written, because the add may
+already have reached other nodes - and the local row is revoked if it still carries that add; if the log has no such event nothing was published and nothing is revoked. An
+entry the invitation did not add is never touched: a peer that was already there (the enrolment skipped it), or an entry another flow wrote after the add (a local version
+newer than the add: the device was revoked, or revoked and added again). Then the row ends `expired` or `refused` with its staging key cleared. The seal
+`android-backup:<id>` stays, as a disconnected paired phone's does: the protocol has no event that withdraws a sealed secret, and it holds the device's own backup key under
+the master key. The clock is read again immediately before each transition (before `confirming`, and before `confirmed`: a confirmation that outlasts the owner's time is
+undone, not confirmed on a stale clock). A `confirming` row cannot be refused, withdrawn or expired by the sweep.
+
+**A locked node.** While the node is locked it authenticates nobody and serves nothing - the device sees the generic locked outcome (503 `locked`) on redeem and status - so
+a `confirming` row (or any row) gives no access during the lock, however long it lasts; the reconciler needs the master key and runs at the first moment the node is unlocked
+and usable (the sweeper's pass at start, then every minute). Until it has decided a `confirming` row, the status route answers `awaiting` for it - never `expired` while the peer
+may still be active - and after the pass it answers `confirmed` or `expired`/`refused` truthfully. The 72-hour limit is therefore enforced by the reconciler at the first usable
+moment, not by a clock running while the node is closed.
+
+**Limits of the public routes.** In front of the body, the JSON and the signature check, a request is admitted by one of two lanes, decided from the first bytes of its body
+(at most 1 KB is read; the `inviteId` member is looked for with a scan, not a parse).
+
+- *The general lane*, for everything that does not name an invitation that is open now: the caller's own budget first - redeeming 10 per 10 minutes, status 60 per 10 minutes
+  **per caller**, which is the connection's address, an IPv6 address by its /64 (one subscriber owns millions of addresses of it) - then the **process-wide budget** of the
+  route: redeem 30 at once then 3 per second, status 100 then 20 per second (leave 30, 3 per second), and at most 16 / 32 / 16 requests being served at the same moment. A
+  refusal is 429 (the rate) or 503 (busy) with `Retry-After`. The callers are remembered in a table of at most 10 000, and the bound is exact (the capacity decision and the
+  insertion are one step). At the cap a newcomer is admitted only if callers whose 10-minute window has run out can be dropped; a caller that is still counting is **never**
+  forgotten to make room, so nobody's partial budget and no ban is reset by pressure from others - the trade-off is that while the table is full of callers still counting, an
+  unknown address is refused (429) until a window runs out. What can fill the table is bounded by what the shared budget lets through: a request the shared budget turns away
+  gives its attempt back (it neither uses the caller's budget nor stays in the table).
+- *The reserved lane*, for a request that names an invitation that is open now (issued and not run out, or redeemed or confirming and the owner's time not run out; at most 20
+  of them; the set is refreshed on every change of a row and at start): a small budget **per invitation and route** - redeem 10 at once then one per two seconds, 4 at a time;
+  status 30 then 2 per second, 4 at a time - and nothing else: not the per-caller table and not the general budget. A flood of requests that name ids that do not exist (all
+  an attacker can send) therefore cannot starve the friend who holds a real invitation. Naming an open id is not a privilege: the id alone opens nothing (the secret, or the
+  device's signature, is still needed) and a flood naming one id is bounded by that id's own small budget.
+
+Wrong master passwords at a confirmation are limited to 5 per 5 minutes. The caller's address is the connection's: behind a reverse proxy it is the real client only where the
+deployment declared the proxy in `BMB_TRUSTED_PROXIES`; otherwise every caller shares the proxy's address and its budget (a forwarded address from an undeclared sender is
+ignored).
+
+**For the device's app: a lost redeem answer.** The answer of `POST /api/sync/invite/redeem` is replayed (the same 202) only while the row is still `redeemed`. Once the owner
+has moved it to `confirming` or `confirmed`, a repeated redeem gets the generic not-valid answer (410). So an app that did not receive its 202 must not rely on redeem retry
+forever: when a redeem retry answers 410 it falls back to its signed status request (`POST /api/sync/invite/status`), which answers `awaiting` / `confirmed` / `refused` /
+`expired` for the device that redeemed (and 410 for anything else, including a device whose clock is more than ten minutes off).
+
+**A refusal costs what an acceptance of the same kind costs.** An unknown invitation is hashed and compared in constant time like a known one (against a fixed hash), and a
+status request for an unknown invitation is verified like one for a known invitation (against a fixed key that signed nothing), so the time to answer does not say which
+invitations exist.
+
+### Paused, and removed by the device's owner
+
+A blind copy whose owner's limits (a daily traffic or request limit, a storage limit) or switch stop it goes quiet on purpose, and quiet looks like "silent" (a lost
+phone, a dead battery). So the copy says so, with two **additive** query fields on `POST /api/sync/report-position` (the open node's handler and the closed sealed node's
+relay, which answers the same route):
+
+`...&paused=<reason>&pausedUntil=<time>`
+
+- `paused` is one of `traffic`, `requests`, `disk`, `device-traffic`, `device-disk`, `paused-by-you`; any other word is read as `other` (a closed set: nothing a peer
+  writes reaches a screen as it came). A copy sends nothing while the reason is the network or the battery: the person said not to use that network.
+- `pausedUntil` is an ISO 8601 time. The apps send it in UTC (`2026-10-22T00:00:00Z`) and the hub tells it in UTC; a time with the device's own offset
+  (`2026-10-22T00:00:00+03:00`) would let the hub say "00:00 device time", but no app of this release sends one.
+  A time that is not an instant, more than a day in the past or more than a week ahead is left out; the pause stays.
+- Only a **blind copy** is shown as paused (the fields of any other peer are ignored). A report without `paused` ends the pause, so a copy from before 2.7 is never paused.
+- It is kept in `PeerContactLog` (memory only: a restart forgets it, like the platform and the version) and counts for **7 days** from the report
+  (`PeerPauseReport.Fresh`); then the copy is judged on its contact again.
+
+The hub words it itself: *"Paused by the device's owner: daily traffic limit (until 21:00 UTC)"*, on the Blind nodes page and on the network map's card of the
+node (`pausedText` of `DeliveryNodeStatus` / `NetworkNode`). `BlindAlarmService` has a kind `paused`: while the last report is fresh it **replaces `silent`** for that node
+(a banner, never a notification); every other alarm (an old protocol, a stale baseline) is judged as before.
+
+**A server blind node's own cap is different.** A listening server blind node can be paused by the person who hosts it. Its data routes answer `503` with `X-BMB-Paused: disk` or `X-BMB-Paused: traffic`, a short JSON reason and `Retry-After` (one hour for storage; the next local midnight for traffic). A node whose room is only held by other transfers in flight answers `X-BMB-Paused: busy` with a `Retry-After` of a minute: that is not a limit anybody set, and the card says *"Busy with other transfers right now; asked again in about a minute"*, not that the owner paused it. A current full node turns that answer from a push into a `PeerPausedException`: it records one pause episode, retries at the named time or within an hour, does not grow its unreachable-peer back-off, and words the card *"Paused by the blind node's owner: storage limit"* or *"daily traffic limit"*. The peer answered, so this is neither an alarm nor a notification. An older full node sees an ordinary 503 and backs off normally. How the node's two limits hold (reservations, the lifetime of a request, the stored size of a seed, the per-address limit on wrong restore codes) is recorded in [docs/blind-node/README.md](blind-node/README.md#limits-of-a-server-blind-node-27).
+
+`POST /api/sync/leave` (a blind copy's sync token; listed in `PublicSurface`; a full-node route, the blind host does not answer it) is the device's goodbye when its owner
+removes the copy from the device. The hub notes it in memory and writes one audit line, and the Blind nodes page and the network map say *"removed from the device by its
+owner"* with a **Revoke** button: the hub cannot revoke by itself, only an event of a superadmin can. 204 for a blind copy, repeated or not; 401 without a token;
+404 for a peer that is not blind. A device that signs in again has not left (the note is cleared).
+
+### What the device does
+
+The app side is `BlindAccountHost` (`libs/BeeMemoryBank.Blind.AppCore`, `docs/blind-node/ACCOUNTS.md`, "Adding an account from an invitation"): it reads the string, makes the account's own identity, **probes
+`GET /api/sync/identity` before it sends any secret** (the node id and the key must be the invitation's, through the client the invitation's trust selects), redeems, shows the
+match code and asks the status every 15 seconds while its screen is open and at its scheduler's passes after that. On `confirmed` it keeps a call code built from the invitation, so
+that the first load, the pull and the backups are the old pairing's. A 429 or a 503 is waited out (`Retry-After`, a growing back-off bounded by the invitation), a 410 ends the
+add with one sentence, a 404 says the node is older than 2.7 and never falls back to the old way by itself. A 401 or 403 to a sync round, a first load, a baseline update or a backup is remembered once (with its time, in the account's own state) and the account goes on asking at its normal rhythm, saying "The source refused this device once; asking again."; a **second** one that comes after at least one normal retry interval (15 minutes, not in the same burst) and within 24 hours is shown as
+"removed by the owner" and not retried (the copy and its keys stay until the person removes the account; Reconnect, in the apps worded "Try again", puts a healthy copy back, for example after a proxy or firewall in front of the source refused twice). A contact that goes through (a finished sync round, a finished first load, a baseline check the node answered with 304 or a newer baseline) forgets the first refusal, a refusal that reaches an account already removed is not remembered, and one older than 24 hours is a first one again; removing the account sends `POST /api/sync/leave` first.
+
+### Older nodes, and the schema number
+
+No sync protocol changes. Migration 041 (the invitations) and migration 042 (the kind of an invitation and a server node's encrypted pair code, both additive) follow the 2.6.2 baseline, so a 2.7 node's snapshots, join archives and blind packages carry schema version **42**:
+a 2.6.x node asked to join from one, or a 2.6.x server blind node asked to take a seed from a 2.7 hub, answers "upgrade this node first" (`SchemaMismatch`). Update
+the blind nodes of a network together with its full nodes. Nothing else of a 2.6 node changes: it still receives the `whitelist_add` and the seal of a device
+confirmed here, and the old pairing with two codes stays.
+
+**A server node's join and older nodes.** The redeem request gained one optional member, `pairCode`; the strict reader of a full node that knows the invitation routes but not this member refuses the whole request (400, nothing read or written), and a pre-2.7 full node has no invitation routes (404). A 2.7 server blind node reads 400, 404 and 405 from the redemption as one case and says "upgrade the full node first"; it never falls back to the old pairing by itself. A 2.6.x server blind node has no `bmb blind join` and, below schema 42, refuses the seed of a 2.7 hub (`SchemaMismatch`) however it was attached, so it is updated together with the hub. Migration 042 changes nothing a peer sees: the columns are on the invitation table, which is never synced and is in no snapshot, package or baseline.
 
 ## Recent hardening (2026-09)
 

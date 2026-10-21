@@ -1,0 +1,84 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.OsAutoUnlockModel
+@{
+    // The node runs on the machine it is served from, so the platform is this process's own.
+    var isMac = OperatingSystem.IsMacOS();
+    var os = BeeMemoryBank.Web.Pages.Admin.OsAutoUnlockModel.OsName;
+}
+
+@section About {
+    <p>
+        Normally a node starts <em>locked</em> and waits for someone to type the master password. OS auto-unlock lets this node unlock <strong>itself</strong> at startup, with no
+        password prompt, using a secret that the operating system keeps for this @os user account (@(isMac ? "the macOS Keychain" : "Windows DPAPI")). It is meant for a server node that
+        runs unattended and has to come back by itself after a restart or a power cut.
+    </p>
+    <p class="admin-warning">
+        <strong>The price: anyone who can use this @os account can open the vault without a password.</strong> And since the key then sits next to the data, a stolen disk is only as safe
+        as that account (and as disk encryption, if you use it). Turn it on only on a machine you trust and control physically. Turning it off takes effect at the next start: the vault
+        asks for the password again.
+    </p>
+    <p>
+        On a node whose database is encrypted (<a href="/Admin/StorageProtection">Storage protection</a>), auto-unlock still means the computer opens your notes at start without your
+        password. On a server, the way to turn it on is the checkbox on the encryption page, so this page only shows it, and lets you turn it off.
+    </p>
+}
+
+@if (!Model.OsAutoUnlockSupported)
+{
+    <div class="card mt-md" id="os-auto-unlock-unsupported" style="max-width:640px;">
+        <p class="text-muted text-sm" style="margin:0;">
+            This computer has no secret store this node can use for auto-unlock (it is offered with the Windows and macOS apps), so there is nothing to switch here.
+        </p>
+    </div>
+}
+else if (!Model.Offered)
+{
+    <div class="card mt-md" id="os-auto-unlock-server" style="max-width:640px;">
+        <p class="text-muted text-sm" style="margin:0 0 12px;">
+            This node is a server: auto-unlock is turned on from the encryption page, not here. It is not on now.
+        </p>
+        <sl-button href="/VaultEncryption" variant="default" size="small">
+            <sl-icon slot="prefix" name="lock"></sl-icon> Open the encryption page
+        </sl-button>
+    </div>
+}
+else
+{
+    <div class="card mt-md" style="max-width:640px;">
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Anyone with access to this @os user account will be able to open the
+            vault without a password</strong> once this is enabled. Only enable it on a machine
+            you trust and control physically.
+            @if (Model.VaultStatus is { IsSealed: true })
+            {
+                <div id="os-auto-unlock-sealed-warning" style="margin-top:8px;">
+                    Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without your password.
+                    If someone gets this computer or its disk, their protection rests only on your @os account password
+                    (and on disk encryption, if you use it).
+                </div>
+            }
+        </sl-alert>
+
+        @if (Model.OsAutoUnlockEnabled)
+        {
+            <sl-badge variant="success" pill style="margin-bottom:12px;">enabled</sl-badge>
+            <form data-busy="short" method="post" asp-page-handler="DisableAutoUnlock">
+                <sl-button type="submit" variant="danger" size="small" class="btn-confirm-click"
+                           data-confirm="Disable OS auto-unlock? The vault will require a password on next unlock.">
+                    <sl-icon slot="prefix" name="key"></sl-icon> Disable auto-unlock
+                </sl-button>
+            </form>
+        }
+        else
+        {
+            <sl-badge variant="neutral" pill style="margin-bottom:12px;">not configured</sl-badge>
+            <form data-busy="short" method="post" asp-page-handler="EnableAutoUnlock">
+                <sl-button type="submit" variant="primary" size="small" class="btn-confirm-click"
+                           data-confirm="Enable OS auto-unlock? Anyone with access to this @os account will be able to open the vault without a password.@(Model.VaultStatus is { IsSealed: true } ? " Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without your password. If someone gets this computer or its disk, their protection rests only on your " + os + " account password (and on disk encryption, if you use it)." : "")">
+                    <sl-icon slot="prefix" name="key"></sl-icon> Enable auto-unlock
+                </sl-button>
+            </form>
+        }
+    </div>
+}

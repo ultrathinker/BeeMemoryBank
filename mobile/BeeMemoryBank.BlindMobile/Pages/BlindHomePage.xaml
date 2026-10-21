@@ -8,14 +8,24 @@
     <ScrollView>
         <VerticalStackLayout Padding="20" Spacing="16" MaximumWidthRequest="520">
 
-            <!-- What went wrong, when the screen could not be filled; the way out is always Disconnect and wipe at the bottom -->
+            <!-- What went wrong, when the screen could not be filled; the way out is always Remove this account at the bottom -->
             <Label x:Name="StatusErrorLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap" />
             <Label x:Name="StartErrorLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap" />
             <Label x:Name="KeyStoreLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
             <Label x:Name="NoticeLabel" IsVisible="False" FontSize="12" LineBreakMode="WordWrap" />
 
-            <!-- State -->
+            <!-- The account in one line: what it is doing, or why it is not, and what it used (the sentences are the shared card's) -->
             <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="4">
+                    <Label x:Name="CardStateLabel" LineBreakMode="WordWrap" />
+                    <Label x:Name="CardUsageLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Button x:Name="ReconnectButton" Text="Try again" IsVisible="False" Clicked="OnReconnectClicked" />
+                    <Button x:Name="RepairUsageButton" Text="Start new counts" IsVisible="False" Clicked="OnRepairUsageClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- State -->
+            <Frame x:Name="StateFrame" BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
                 <VerticalStackLayout Spacing="6">
                     <Label Text="State" FontAttributes="Bold" />
                     <Label x:Name="NameLabel" />
@@ -31,8 +41,34 @@
                 </VerticalStackLayout>
             </Frame>
 
-            <!-- Codes -->
+            <!-- Limits: what this copy may use up on this phone -->
             <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Limits" FontAttributes="Bold" />
+                    <Label Text="An empty box is no limit; 0 pauses the account."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Label Text="Storage" FontSize="12" />
+                    <Entry x:Name="StoredEntry" Placeholder="for example 2 GB" IsSpellCheckEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <Label Text="Traffic a day" FontSize="12" />
+                    <Entry x:Name="TrafficEntry" Placeholder="for example 200 MB" IsSpellCheckEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <Label Text="Requests a day" FontSize="12" />
+                    <Entry x:Name="RequestsEntry" Placeholder="for example 5000" Keyboard="Numeric" IsSpellCheckEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <HorizontalStackLayout Spacing="8">
+                        <Switch x:Name="UnmeteredSwitch" VerticalOptions="Center" />
+                        <Label Text="Only on Wi-Fi or other unmetered networks" VerticalOptions="Center" LineBreakMode="WordWrap" />
+                    </HorizontalStackLayout>
+                    <HorizontalStackLayout Spacing="8">
+                        <Switch x:Name="BatterySwitch" VerticalOptions="Center" />
+                        <Label Text="Pause on battery saver" VerticalOptions="Center" />
+                    </HorizontalStackLayout>
+                    <Label x:Name="LimitsProblemLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
+                    <Button x:Name="SaveLimitsButton" Text="Save limits" Clicked="OnSaveLimitsClicked" />
+                    <Button x:Name="PauseButton" Text="Pause this account" Clicked="OnPauseClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- Codes: the old way of pairing, for an account that was added with a pairing code. An account from an invitation has none. -->
+            <Frame x:Name="CodesFrame" BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
                 <VerticalStackLayout Spacing="8">
                     <Label Text="1. Add this phone on the computer" FontAttributes="Bold" />
                     <Label Text="On the Windows computer, open Blind nodes, choose Add Android blind copy, and scan or paste this code. It carries this phone's key and a one-time secret; show it only to your own computer."
@@ -51,7 +87,7 @@
             </Frame>
 
             <!-- Backups -->
-            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+            <Frame x:Name="BackupsFrame" BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
                 <VerticalStackLayout Spacing="8">
                     <Label Text="Backups" FontAttributes="Bold" />
                     <Label Text="Encrypted with this phone's backup key; the computer can open them with the master password."
@@ -75,13 +111,14 @@
                 </VerticalStackLayout>
             </Frame>
 
-            <!-- Danger -->
+            <!-- This account: its name, and taking it off this phone -->
             <Frame BorderColor="{StaticResource ErrorColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
                 <VerticalStackLayout Spacing="8">
-                    <Label Text="Disconnect and wipe" FontAttributes="Bold" TextColor="{StaticResource ErrorColor}" />
-                    <Label Text="Deletes this copy, its backups on the phone and its keys. Revoke the phone on the computer too. Backups you saved elsewhere stay where you saved them."
+                    <Label Text="This account" FontAttributes="Bold" />
+                    <Button x:Name="RenameButton" Text="Rename…" Clicked="OnRenameClicked" />
+                    <Label Text="Remove deletes this copy, its backups on the phone and its keys. The computer is told if the phone is online; revoke the phone on the computer too. Backups you saved elsewhere stay where you saved them."
                            FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
-                    <Button Text="Disconnect and wipe…" BackgroundColor="Transparent" TextColor="{StaticResource ErrorColor}" Clicked="OnWipeClicked" />
+                    <Button x:Name="RemoveButton" Text="Remove this account…" BackgroundColor="Transparent" TextColor="{StaticResource ErrorColor}" Clicked="OnRemoveClicked" />
                 </VerticalStackLayout>
             </Frame>
         </VerticalStackLayout>

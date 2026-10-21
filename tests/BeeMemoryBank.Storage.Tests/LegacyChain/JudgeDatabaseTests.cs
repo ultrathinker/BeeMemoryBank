@@ -22,7 +22,13 @@ public class JudgeDatabaseTests : SquashTestBase
         return refusal;
     }
 
-    private async Task<string> BaselineLedgerDbAsync() => await CurrentSchemaDbAsync(NewDbPath());
+    // The ledger of a 2.6.2 .. 2.6.4 backup: the baseline's row alone. (The schema is the program's today, 041's table included - an extra the judge tolerates.)
+    private async Task<string> BaselineLedgerDbAsync()
+    {
+        var path = await CurrentSchemaDbAsync(NewDbPath());
+        SetLedger(path, [(MigrationRunner.BaselineVersion, BaselineName)]);
+        return path;
+    }
 
     private async Task<string> LegacyLedgerDbAsync()
     {

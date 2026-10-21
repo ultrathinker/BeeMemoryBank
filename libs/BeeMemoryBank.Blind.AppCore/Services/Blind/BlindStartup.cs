@@ -23,4 +23,29 @@ public sealed class BlindStartup(Func<CancellationToken, Task> initialize)
             return _run = Task.Run(() => initialize(CancellationToken.None));
         }
     }
+
+    /// <summary>
+    /// Waits, for at most <paramref name="timeout"/>, for a run that is under way to end however it ends (a run is never started here). A caller that gave up waiting (a cancelled
+    /// start) leaves the run going, and the services under it must not be disposed beneath it: whoever ends an account settles this first. True when no run is under way any more (it ended,
+    /// by success or by failure, or there was none); false when it is still going after the timeout: the services must then be left alone.
+    /// </summary>
+    internal async Task<bool> SettleAsync(TimeSpan timeout)
+    {
+        Task? run;
+        lock (_gate) run = _run;
+        if (run is null || run.IsCompleted) return true;
+        try
+        {
+            await run.WaitAsync(timeout).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return true; // it failed: it has ended
+        }
+    }
 }

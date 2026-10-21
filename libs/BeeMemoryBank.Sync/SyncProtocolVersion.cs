@@ -41,7 +41,7 @@ public static class SyncProtocolVersion
         hostProtocol >= Metadata.EventClasses.SealedProtocol
             ? null
             : $"Cannot join: the other computer does not encrypt its metadata yet (it speaks protocol {hostProtocol}), and a new node joins only a node that does. " +
-              "Switch metadata encryption on there first (Admin page, \"Metadata encryption\"), then join again.";
+              "Switch metadata encryption on there first (Admin -> Metadata encryption), then join again.";
 
     /// <summary>Event protocol versions this build can apply: 1-3 as before, and 4 on every node, activated or not.</summary>
     public static bool CanApply(int eventProtocolVersion) => eventProtocolVersion is 1 or 2 or 3 or 4;

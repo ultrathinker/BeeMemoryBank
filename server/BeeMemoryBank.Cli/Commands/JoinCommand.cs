@@ -547,7 +547,7 @@ public static class JoinCommand
         (rowCertain
             ? $"The other computer still lists this node ('{displayName}', {nodeId}) as a member that has never synced: revoke it "
             : $"If the other computer recorded this node ('{displayName}', {nodeId}) before the connection failed, it lists it as a member that has never synced: revoke it ")
-        + "there (Admin page, Nodes), or it holds back compaction of that computer's event log.";
+        + "there (Admin -> Trusted Nodes), or it holds back compaction of that computer's event log.";
 
     /// <summary>The node's data folder as the provider resolved it (a re-key swap can redirect it): where media goes.</summary>
     private static string DataDirOf(IServiceProvider services) =>

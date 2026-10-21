@@ -71,6 +71,7 @@ internal sealed class SealedRelayHost : IAsyncDisposable
         builder.Logging.ClearProviders();
         builder.Services.AddBootStore(host.Dir);
         builder.Services.AddSingleton<SyncTokenStore>();
+        builder.Services.AddSingleton<PeerContactLog>();   // what a copy says in its position report (release 2.7: it is paused), kept in memory
         builder.Services.AddSingleton<SyncEndpoints.SyncChallengeRateLimiter>();
         builder.Services.AddSingleton<RelayWriteLock>();
         builder.Services.AddSingleton(new SealedRelayLimits(() => host.FreeBytes));

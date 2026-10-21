@@ -1,0 +1,143 @@
+@page
+@using System.Text.Json
+@model BeeMemoryBank.Web.Pages.Admin.SoftwareUpdatesModel
+
+@section About {
+    <p>
+        This shows the version this node runs and takes an update through its steps, one button at a time: <strong>check</strong> whether a newer version exists,
+        <strong>download</strong> it, <strong>apply</strong> it. An update is only trusted if it comes with a signed release manifest: the node checks the signature
+        against the release keys built into it, and checks the downloaded file against the hash the manifest declares. Until a feed is configured, you paste the
+        manifest and its signature into the check dialog by hand.
+    </p>
+    <p>
+        Applying first checks that it is safe to (maintenance mode, a restore, a key rotation or another heavy operation in progress blocks it, and the page names which), takes a backup of this node
+        and then installs the new version, which restarts the node. Take your own snapshot first if this node holds the only copy of anything
+        (<a href="/Admin/Snapshots">Snapshots</a>). If a step fails, the page says why; <em>Reset state</em> returns it to idle so that you can start again.
+    </p>
+    <p>
+        A Docker install is updated by pulling the new image (<code>docker compose pull &amp;&amp; docker compose up -d</code>, see the deployment guide), not from here.
+    </p>
+}
+
+<div class="card mt-md" style="max-width:640px;">
+    <p style="margin:0 0 12px;">
+        Current version: <strong>v@(Model.CurrentVersion ?? "unknown")</strong>
+    </p>
+
+    @if (Model.UpdateStatus is { } st)
+    {
+        var step = st.TryGetProperty("currentStep", out var cs) && cs.ValueKind == JsonValueKind.String ? cs.GetString() : "Idle";
+        var availableVersion = st.TryGetProperty("availableVersion", out var av) && av.ValueKind == JsonValueKind.String ? av.GetString() : null;
+        var percentageComplete = st.TryGetProperty("percentageComplete", out var pc) && pc.ValueKind == JsonValueKind.Number ? pc.GetInt32() : 0;
+        var statusMessage = st.TryGetProperty("statusMessage", out var sm) && sm.ValueKind == JsonValueKind.String ? sm.GetString() : null;
+        var errorMessage = st.TryGetProperty("errorMessage", out var em) && em.ValueKind == JsonValueKind.String ? em.GetString() : null;
+        var isUpdating = step == "Checking" || step == "Downloading" || step == "Applying";
+
+        List<string> blockedGates = new();
+        if (st.TryGetProperty("blockedGates", out var bg) && bg.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in bg.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                    blockedGates.Add(item.GetString()!);
+            }
+        }
+
+        <div style="margin-bottom:16px;">
+            <strong>State:</strong> <sl-badge id="update-state-badge" variant="@(step == "Failed" ? "danger" : (step == "Completed" ? "success" : (step == "Idle" ? "neutral" : "primary")))">@step</sl-badge>
+        </div>
+
+        @if (percentageComplete > 0 && percentageComplete <= 100)
+        {
+            <div style="margin-bottom:16px;">
+                <sl-progress-bar value="@percentageComplete" style="margin-top:8px;"></sl-progress-bar>
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(statusMessage))
+        {
+            <p class="text-muted" style="margin-top:4px;margin-bottom:12px;">@statusMessage</p>
+        }
+
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <sl-alert variant="danger" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                <strong>Error:</strong> @errorMessage
+            </sl-alert>
+        }
+
+        @if (blockedGates.Count > 0)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
+                <strong>Blocked by safety gates:</strong>
+                <ul style="margin:4px 0 0 16px;padding:0;">
+                    @foreach (var gate in blockedGates)
+                    {
+                        <li>@gate</li>
+                    }
+                </ul>
+            </sl-alert>
+        }
+
+        <!-- Action buttons based on state -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;" @(isUpdating ? "data-is-updating=\"true\"" : "")>
+            @if (step == "Idle")
+            {
+                <sl-button variant="default" size="small" id="btn-open-check-update">
+                    <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Check for updates
+                </sl-button>
+            }
+            else if (step == "UpdateAvailable")
+            {
+                <form data-busy="long" data-busy-title="Downloading the update" method="post" asp-page-handler="DownloadUpdate" style="display:inline;">
+                    <input type="hidden" name="manifestJson" value="@Model.CheckedManifestJson" />
+                    <sl-button type="submit" variant="primary" size="small" id="btn-download-update">
+                        <sl-icon slot="prefix" name="download"></sl-icon> Download update
+                    </sl-button>
+                </form>
+            }
+            else if (step == "ReadyToApply")
+            {
+                <form data-busy="long" data-busy-title="Applying the update" method="post" asp-page-handler="ApplyUpdate" style="display:inline;"
+                      class="form-confirm" data-confirm="Apply update to v@(availableVersion)?&#10;&#10;The server will fetch the new version, rebuild, and restart.&#10;&#10;Continue?">
+                    <sl-button type="submit" variant="success" size="small" id="btn-apply-update">
+                        <sl-icon slot="prefix" name="play-fill"></sl-icon> Apply update
+                    </sl-button>
+                </form>
+            }
+            else if (step == "Failed" || step == "Completed")
+            {
+                <form data-busy="short" method="post" asp-page-handler="ResetUpdate" style="display:inline;">
+                    <sl-button type="submit" variant="warning" size="small" id="btn-reset-update">
+                        <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Reset state
+                    </sl-button>
+                </form>
+            }
+        </div>
+    }
+    else
+    {
+        <p class="text-muted text-sm" style="margin:0;">The state of the updater is unavailable right now.</p>
+    }
+</div>
+
+<!-- Check for updates dialog -->
+<sl-dialog id="dlg-check-update" label="Check for Updates">
+    <form data-busy="short" method="post" asp-page-handler="CheckUpdate">
+        <p class="text-muted text-sm" style="margin-bottom:16px;">
+            Checking for updates requires a signed manifest. Since no feed is configured, you can paste manifest JSON and its Base64 signature below, or leave them empty to perform a dummy check (which will fail and allow you to test the Reset action).
+        </p>
+        <div style="margin-bottom:16px;">
+            <sl-textarea name="manifestJson" label="Manifest JSON" placeholder='e.g. {"schemaVersion": 1, ...}'></sl-textarea>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input name="manifestSignatureBase64" label="Manifest Signature (Base64)" placeholder="e.g. AAAA..."></sl-input>
+        </div>
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-check-update">Cancel</sl-button>
+        <sl-button type="submit" slot="footer" variant="primary">
+            <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Check
+        </sl-button>
+    </form>
+</sl-dialog>

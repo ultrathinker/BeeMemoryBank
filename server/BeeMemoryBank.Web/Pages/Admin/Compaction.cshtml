@@ -1,0 +1,154 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.CompactionModel
+
+@section About {
+    <p>
+        Every operation on this node (create an article, rename a folder, add a tag, delete) is written as a numbered event into a journal, and nodes synchronise by
+        exchanging those events: if another node is at operation #500 and this one is at #1800, it pulls events 501&ndash;1800 to catch up. The journal only grows (25,000
+        events a year for an active user), and a node that joins the network would have to replay all of it.
+    </p>
+    <p>
+        <strong>Compaction</strong> cuts off the old part of the journal and replaces it with one signed snapshot of the state at that point. Nothing is lost
+        semantically: <em>current state = snapshot + the operations after it</em>. It keeps the 1,500 most recent events, so it does nothing while there are fewer.
+        It also leaves a tamper-proof marker in the journal (the compaction history below), and a snapshot file in the snapshots folder.
+    </p>
+    <p>
+        It is <strong>refused</strong> when it would cut a device off: if an active device is more than 1,500 events behind, or a trusted device has never synced.
+        Wait for that device to sync, or revoke it on <a href="/Admin/TrustedNodes">Trusted Nodes</a>. A device that falls behind the cut later (offline for weeks) will need to
+        <em>wipe and rejoin</em>: it fetches the snapshot instead of catching up through the journal. Compaction runs only when you press the button, never by itself;
+        once a month, or when the log passes 5&ndash;10 thousand events, is plenty for a personal knowledge base. It cannot be undone.
+    </p>
+}
+
+@if (Model.CompactionPreview != null)
+{
+    var p = Model.CompactionPreview;
+    <div class="card" style="margin-bottom:16px;">
+        <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:16px;margin-bottom:16px;">
+            <div>
+                <div class="text-muted text-sm">Events in log</div>
+                <div style="font-size:1.4rem;font-weight:600;">@p.TotalEvents</div>
+            </div>
+            <div>
+                <div class="text-muted text-sm">Peers online</div>
+                <div style="font-size:1.4rem;font-weight:600;">@p.ActivePeerCount</div>
+            </div>
+        </div>
+
+        @if (p.PeerPositions != null && p.PeerPositions.Count > 0)
+        {
+            <div style="margin-bottom:16px;">
+                <div class="text-muted text-sm" style="margin-bottom:4px;">Peers status:</div>
+                @foreach (var peer in p.PeerPositions)
+                {
+                    var behind = peer.LastSequenceNum < 0 ? -1 : p.HeadSeq - peer.LastSequenceNum;
+                    <div style="font-size:0.85rem;">
+                        <code>@peer.NodeId</code> —
+                        @if (behind < 0)
+                        {
+                            <span>never synced</span>
+                        }
+                        else if (behind == 0)
+                        {
+                            <span>fully synced</span>
+                            @* The position this peer last read or was sent (the one compaction judges by), not a contact time: BMB-313 *@
+                            <span>, events last delivered @AdminText.RelativeTime(peer.UpdatedAt)</span>
+                        }
+                        else
+                        {
+                            <span>@behind operation(s) behind</span>
+                            <span>, events last delivered @AdminText.RelativeTime(peer.UpdatedAt)</span>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @if (p.Warnings != null && p.Warnings.Count > 0)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>Warnings:</strong>
+                <ul style="margin:8px 0 0 20px;">
+                    @foreach (var w in p.Warnings) { <li>@w</li> }
+                </ul>
+            </sl-alert>
+        }
+
+        @if (p.CanCompact)
+        {
+            <sl-alert variant="primary" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="info-circle"></sl-icon>
+                <strong>Ready to compact.</strong>
+                <div style="margin-top:8px;font-size:0.9rem;">
+                    <div>Will delete the oldest <strong>@p.EventsToDelete</strong> events and replace them with one signed snapshot.</div>
+                    <div>Will keep <strong>@p.EventsRemaining</strong> of the most recent events as a tail for continued sync.</div>
+                    <div class="text-muted" style="margin-top:6px;">@(p.ActivePeerCount > 0
+                        ? "Safe: every active peer has already received all the events we're about to delete."
+                        : "No active peers — safe to compact.")</div>
+                </div>
+            </sl-alert>
+
+            <form data-busy="long" data-busy-title="Compacting the event log" method="post" asp-page-handler="Compact" style="display:inline;"
+                  class="form-confirm" data-confirm="Compact event log?&#10;&#10;Will delete the oldest @p.EventsToDelete events (kept as one signed snapshot).&#10;Will keep @p.EventsRemaining of the most recent events for continued sync.&#10;&#10;Continue?">
+                <sl-button type="submit" variant="warning">
+                    <sl-icon slot="prefix" name="archive"></sl-icon>
+                    Compact now (delete @p.EventsToDelete events)
+                </sl-button>
+            </form>
+        }
+        else
+        {
+            <sl-alert variant="neutral" open>
+                <sl-icon slot="icon" name="info-circle"></sl-icon>
+                @p.Reason
+            </sl-alert>
+        }
+    </div>
+}
+else
+{
+    <sl-alert variant="warning" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Could not load compaction preview.
+    </sl-alert>
+}
+
+@if (Model.SnapshotCheckpoints != null && Model.SnapshotCheckpoints.Count > 0)
+{
+    <details>
+        <summary style="cursor:pointer;padding:8px;"><strong>Compaction history</strong> (@Model.SnapshotCheckpoints.Count checkpoints)</summary>
+        <div class="card" style="padding:0;overflow:hidden;margin-top:8px;">
+            <table class="version-table">
+                <thead>
+                    <tr>
+                        <th>Sequence</th>
+                        <th>CP</th>
+                        <th>Events removed</th>
+                        <th>Snapshot</th>
+                        <th>Created at</th>
+                        <th>Chain</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var cp in Model.SnapshotCheckpoints)
+                {
+                    var payload = cp.Payload;
+                    var cpSeq = payload.TryGetProperty("cp_seq", out var cps) ? cps.GetInt64() : 0;
+                    var evRemoved = payload.TryGetProperty("events_removed", out var er) ? er.GetInt32() : 0;
+                    var snapFile = payload.TryGetProperty("snapshot_file_name", out var sf) ? sf.GetString() : null;
+                    var prevHash = payload.TryGetProperty("prev_checkpoint_sha256", out var ph) ? ph.GetString() : null;
+                    <tr>
+                        <td>@cp.SequenceNum</td>
+                        <td>@cpSeq</td>
+                        <td>@evRemoved</td>
+                        <td><code style="font-size:0.8rem;">@snapFile</code></td>
+                        <td>@cp.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>@(prevHash != null ? $"→ {prevHash[..Math.Min(8, prevHash.Length)]}…" : "(first)")</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    </details>
+}

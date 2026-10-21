@@ -102,6 +102,41 @@ public sealed class HeadlessSelfCheckTests
         output2.Should().Contain("FAIL " + PlatformSelector.Create(folder).Name + " items").And.Contain("InvalidOperationException");
     }
 
+    private const string Canary = "CANARY-secret-token-42";
+
+    /// <summary>An exception of a library or an OS call: its message names a file, an address with a token, a key alias.</summary>
+    private static IOException Hostile() => new($"Could not open C:\\Users\\someone\\{Canary}\\identity.key for https://hub.example/x?token={Canary}", new UnauthorizedAccessException($"inner {Canary}"));
+
+    [Fact]
+    public void AnExceptionThatComesOutOfACheck_IsToldByItsTypeAndFrames_NeverByItsMessage()
+    {
+        var folder = TestFolders.New("selfcheck");
+        var real = PlatformSelector.Create(folder);
+
+        var (exit, output) = Run(new MisbehavingPlatform(real) { PlatformItemsFailure = Hostile() }, Check(folder));
+        var (exit2, output2) = Run(new MisbehavingPlatform(real) { PathsFailure = Hostile() }, Check(folder));
+
+        exit.Should().Be(1);
+        output.Should().Contain("FAIL " + real.Name + " items").And.Contain("IOException").And.Contain("inner UnauthorizedAccessException");
+        output.Should().NotContain(Canary).And.NotContain("Could not open").And.NotContain("identity.key").And.NotContain("hub.example");
+        exit2.Should().Be(1);
+        output2.Should().Contain("FAIL data folder").And.Contain("IOException");
+        output2.Should().NotContain(Canary, "every check that throws is told the same way, the composition's as well");
+    }
+
+    [Fact]
+    public void AFindingOfTheCheckItself_IsShownInItsOwnWords_AndNamesNoFolder()
+    {
+        var missing = Path.Combine(TestFolders.New("selfcheck"), "folder-" + Canary);
+        var platform = new MisbehavingPlatform(PlatformSelector.Create(TestFolders.New("selfcheck"))) { FolderOverride = missing };
+
+        var (exit, output) = Run(platform, Check(missing));
+
+        exit.Should().Be(1);
+        output.Should().Contain("FAIL data folder: the data folder does not exist");
+        output.Should().NotContain(Canary, "a finding says what is wrong, not where");
+    }
+
     [Fact]
     public void TheSecondStart_IsRefusedByTheRunningCopy_AndItsSignalIsAccepted()
     {
@@ -193,14 +228,16 @@ public sealed class HeadlessSelfCheckTests
         public string? FolderOverride { get; init; }
         public IReadOnlyList<SelfCheckItem>? PlatformItems { get; init; }
         public bool PlatformItemsThrow { get; init; }
+        public Exception? PlatformItemsFailure { get; init; }
+        public Exception? PathsFailure { get; init; }
 
         public string Name => inner.Name;
-        public IBlindPaths Paths => FolderOverride is null ? inner.Paths : new FixedPaths(FolderOverride);
+        public IBlindPaths Paths => PathsFailure is { } failure ? throw failure : FolderOverride is null ? inner.Paths : new FixedPaths(FolderOverride);
 
-        public void AddSeams(IServiceCollection services)
-        {
-            inner.AddSeams(services);
-        }
+        public IBlindSecretStoreFactory SecretStores => inner.SecretStores;
+        public IBlindStateStoreFactory StateStores => inner.StateStores;
+        public IBlindDeviceConditions DeviceConditions => inner.DeviceConditions;
+        public IBlindAutostart Autostart => inner.Autostart;
 
         public IInstanceGuard? TryAcquireInstance()
         {
@@ -213,7 +250,10 @@ public sealed class HeadlessSelfCheckTests
 
         public bool SignalRunningInstance() => SignalRejected ? false : SignalAcceptedButLost || AlwaysGrantLock || inner.SignalRunningInstance();
 
-        public IReadOnlyList<SelfCheckItem> SelfCheck() => PlatformItemsThrow ? throw new InvalidOperationException("the platform's own check blew up") : PlatformItems ?? [];
+        public IReadOnlyList<SelfCheckItem> SelfCheck() =>
+            PlatformItemsFailure is { } failure ? throw failure
+            : PlatformItemsThrow ? throw new InvalidOperationException("the platform's own check blew up")
+            : PlatformItems ?? [];
     }
 
     /// <summary>A guard that takes the lock and never hears a signal.</summary>

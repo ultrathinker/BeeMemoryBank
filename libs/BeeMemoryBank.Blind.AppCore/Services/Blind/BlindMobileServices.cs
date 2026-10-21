@@ -41,8 +41,23 @@ public static partial class BlindMobileServices
         services.TryAddSingleton(options.TimeProvider ?? TimeProvider.System);
         services.TryAddSingleton(options);
         services.TryAddSingleton<IBlindPaths>(new BlindAppPaths(dataDir, dbPath));
+        // One long job at a time on the device: the host's gate when it runs several accounts, otherwise this composition's own.
+        services.TryAddSingleton(options.DeviceGate ?? new BlindDeviceGate());
         // What the copy is doing now (sync, first load, backup): the wipe stops it and waits for it (BlindPhoneReset).
         services.TryAddSingleton<BlindActivity>();
+
+        // Limits and metering (every request of the copy is counted, and a limit or a switch can pause it). A composition with no registry has no policy: nothing is ever paused,
+        // but what the copy uses is still counted (its usage file is in its own folder). The host's account registry supplies the policy, the device-wide usage and the
+        // device's conditions before this runs; TryAdd keeps theirs.
+        services.TryAddSingleton<IBlindAccountPolicySource>(NoLimitsPolicySource.Instance);
+        services.TryAddSingleton<IBlindDeviceConditions>(UnknownBlindDeviceConditions.Instance);
+        services.TryAddSingleton(sp => new BlindDeviceUsage(sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new BlindUsageLedger(BlindPaths.Usage(dataDir), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new BlindStoredBytes(() => StoredRoots(dataDir, dbPath), sp.GetRequiredService<TimeProvider>(), dataDir, null));
+        services.AddSingleton(sp => new BlindLimitGuard(
+            sp.GetRequiredService<IBlindAccountPolicySource>(), sp.GetRequiredService<BlindUsageLedger>(), sp.GetRequiredService<BlindStoredBytes>(),
+            sp.GetRequiredService<BlindDeviceUsage>(), sp.GetRequiredService<IBlindDeviceConditions>()));
+        services.AddSingleton(sp => new BlindMeteringTap(sp.GetRequiredService<BlindUsageLedger>(), sp.GetRequiredService<BlindLimitGuard>()));
 
         // Minimal SQLite infrastructure and blind-specific repositories:
         services.AddSingleton(_ => new DbConnectionFactory(dbPath));
@@ -110,7 +125,8 @@ public static partial class BlindMobileServices
             host => BlindRunReport.Record(sp.GetRequiredService<BlindPhoneLog>(), "pin",
                 $"Refused {host}: it answered with another key than the one pinned when this phone was paired. Nothing was sent."),
             host => BlindRunReport.Record(sp.GetRequiredService<BlindPhoneLog>(), "certificate",
-                $"Refused {host}: its certificate is not valid (expired, issued for another name, self-signed or from an authority this device does not trust). Nothing was sent.")));
+                $"Refused {host}: its certificate is not valid (expired, issued for another name, self-signed or from an authority this device does not trust). Nothing was sent."),
+            primaryHandlerOverride: options.PrimaryHandlerFactory) { Metering = sp.GetRequiredService<BlindMeteringTap>() });
         services.AddSingleton<IHttpClientFactory>(sp => sp.GetRequiredService<BlindHttpClientProvider>());
         services.AddTransient<HttpClient>(sp => sp.GetRequiredService<BlindHttpClientProvider>().GetClient());
 
@@ -129,11 +145,29 @@ public static partial class BlindMobileServices
                 sp.GetRequiredService<DbConnectionFactory>(),
                 sp.GetRequiredService<INodeIdentityRepository>(),
                 sp.GetRequiredService<INodeAuthSigner>(), sp.GetRequiredService<IBlindPaths>().DataDirectory, sp.GetRequiredService<IBlindPaths>().DatabasePath,
-                sp.GetRequiredService<ILogger<BlindPhoneReplicaClient>>(), scopes: sp.GetRequiredService<IServiceScopeFactory>()))
+                sp.GetRequiredService<ILogger<BlindPhoneReplicaClient>>(), scopes: sp.GetRequiredService<IServiceScopeFactory>())
+            {
+                // A first load or a baseline update: the archive, its extraction and the installed copy are on disk together at the peak (3 times the archive).
+                BeforeArchiveDownload = length => sp.GetRequiredService<BlindLimitGuard>().AdmitPackage(length, BlindPackageFootprint.Install),
+                AfterBatch = () => sp.GetRequiredService<BlindStoredBytes>().Invalidate(),
+            })
             .AddSingleton<IBlindReplicaSource, BlindReplicaSource>()
-            .AddSingleton<BlindPhonePullClient>()
+            .AddSingleton(sp => new BlindPhonePullClient(
+                sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<INodeAuthSigner>(), sp.GetRequiredService<ILogger<BlindPhonePullClient>>())
+            {
+                // Every persisted batch (a blob, a hundred events, the end of a page) tells the stored-bytes meter: the next admission walks the folders again.
+                AfterBatch = () => sp.GetRequiredService<BlindStoredBytes>().Invalidate(),
+            })
             .AddSingleton<IBlindPhonePullClient>(sp => sp.GetRequiredService<BlindPhonePullClient>())
-            .AddSingleton<IBlindPhoneSync, BlindPhoneSync>()
+            .AddSingleton<BlindPauseReporter>()
+            .AddSingleton<IBlindPhoneSync>(sp => new BlindPhoneSync(
+                sp.GetRequiredService<IBlindPhonePullClient>(), sp.GetRequiredService<BlindHttpClientProvider>(), sp.GetRequiredService<BlindPhoneState>())
+            {
+                Guard = sp.GetRequiredService<BlindLimitGuard>(),
+                Reporter = sp.GetRequiredService<BlindPauseReporter>(),
+                Usage = sp.GetRequiredService<BlindUsageLedger>(),
+                Stored = sp.GetRequiredService<BlindStoredBytes>(),
+            })
             // A backup's body: the listening node's current signed package (fetched pinned and verified, not
             // installed), its signature and the phone's own logged events. Its header: the recovery set of
             // the phone's database. Both are the libraries' code; nothing of the format is rebuilt here.
@@ -141,7 +175,11 @@ public static partial class BlindMobileServices
                 sp.GetRequiredService<BlindPhoneReplicaClient>(),
                 sp.GetRequiredService<BlindHttpClientProvider>(),
                 sp.GetRequiredService<BlindPhoneState>(),
-                BlindPaths.Replica(sp.GetRequiredService<IBlindPaths>().DataDirectory)))
+                BlindPaths.Replica(sp.GetRequiredService<IBlindPaths>().DataDirectory))
+            {
+                // A backup: the archive, the extraction that checks it, the body and the encrypted file (4 times the archive: the same factor the package source asks the volume for).
+                BeforeArchive = length => sp.GetRequiredService<BlindLimitGuard>().AdmitPackage(length, BlindPackageFootprint.Backup),
+            })
             .AddSingleton<IBlindPackageSource>(sp => new BlindPhonePackageSource(
                 sp.GetRequiredService<IBlindVerifiedPackageFetcher>(),
                 sp.GetRequiredService<IServiceScopeFactory>()))
@@ -154,18 +192,42 @@ public static partial class BlindMobileServices
                 sp.GetRequiredService<IBlindPackageSource>(),
                 sp.GetRequiredService<IRecoverySetJsonSource>(),
                 sp.GetRequiredService<BlindPhoneLog>(),
-                BlindPaths.Backups(sp.GetRequiredService<IBlindPaths>().DataDirectory), sp.GetRequiredService<TimeProvider>()))
+                BlindPaths.Backups(sp.GetRequiredService<IBlindPaths>().DataDirectory), sp.GetRequiredService<TimeProvider>())
+            {
+                AfterStep = () => sp.GetRequiredService<BlindStoredBytes>().Invalidate(),
+            })
             .AddSingleton(sp => new BlindHeavyWork(
                 sp.GetRequiredService<BlindPhoneState>(),
                 sp.GetRequiredService<IBlindReplicaSource>(),
                 sp.GetRequiredService<BlindPhoneBackupRunner>(),
                 sp.GetRequiredService<BlindPhoneLog>(),
                 BlindPaths.Replica(sp.GetRequiredService<IBlindPaths>().DataDirectory), sp.GetRequiredService<TimeProvider>(),
-                sp.GetRequiredService<BlindActivity>()));
+                sp.GetRequiredService<BlindActivity>())
+            {
+                DeviceGate = sp.GetRequiredService<BlindDeviceGate>(),
+                GateOwnerId = options.DeviceOwnerId,
+                GateOwnerName = options.DeviceOwnerName,
+                Guard = sp.GetRequiredService<BlindLimitGuard>(),
+                Reporter = sp.GetRequiredService<BlindPauseReporter>(),
+                Usage = sp.GetRequiredService<BlindUsageLedger>(),
+                Stored = sp.GetRequiredService<BlindStoredBytes>(),
+                RemovalSink = sp.GetService<IBlindSourceRemovalSink>(),
+            });
 
         services.AddSingleton<BlindAppController>();
         services.AddSingleton<IBlindAppController>(sp => sp.GetRequiredService<BlindAppController>());
         return services;
+    }
+
+    /// <summary>
+    /// What the copy owns on disk, for its stored bytes: the files and folders a wipe would delete (backups, replica work folder with a partial download, media, log, baselines, usage file,
+    /// the database with its sidecars and the replica candidates), and nothing else. The data folder of the account that lives in the app's root also holds the other accounts
+    /// (<c>accounts/</c>) and things that are not ours.
+    /// </summary>
+    internal static IEnumerable<string> StoredRoots(string dataDir, string dbPath)
+    {
+        foreach (var path in BlindPhoneReset.OwnedPaths(dataDir)) yield return path;
+        foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" }) yield return dbPath + suffix;
     }
 
     /// <summary>Hook H5 (spec 15.2), track 3: <c>BlindMobileServices.Metadata.cs</c> (activation observer, store stats).</summary>

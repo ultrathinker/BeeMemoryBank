@@ -39,10 +39,6 @@ public class NetworkFailureTextArchitectureTests
     [
         new("libs/BeeMemoryBank.Sync/PendingEmbeddingProcessor.cs", "Embedding model is unavailable",
             "the embedding model is a file this node loads from its own disk; no peer is involved"),
-        new("libs/BeeMemoryBank.Blind.AppCore/Core/Services/BlindPhone/BlindPhoneBackupRunner.cs", "Backup failed:",
-            "an IOException, InvalidDataException or UnauthorizedAccessException of the phone's own backup files; the backup makes no call to another device"),
-        new("libs/BeeMemoryBank.Blind.AppCore/Services/Blind/BlindAppController.cs", "Could not set the app up",
-            "the app's own start: its files and its database on the phone"),
         new("server/BeeMemoryBank.Api/Services/Blind/BaselineProducer.cs", "Older produced baselines could not be removed",
             "an IOException or UnauthorizedAccessException on this node's own baseline folder"),
         new("server/BeeMemoryBank.Api/Services/Blind/BaselineScheduler.cs", "Baseline scheduler tick failed",
@@ -147,7 +143,8 @@ public class NetworkFailureTextArchitectureTests
         var lan = Read("server/BeeMemoryBank.Web/Services/NodeLanClient.cs");
         lan.Should().Contain("FailureText.Say(ex)").And.NotContain("ex.Message");
         var busy = Read("mobile/BeeMemoryBank.Mobile/Services/BusyAction.cs");
-        busy.Should().Contain("FailureText.Story(ex)");
+        // The generic helper's default is the one mechanism; a blind head swaps in its own closed formatter through Describer (MauiProgram of the blind apps), never an exception's message.
+        busy.Should().Contain("(Describer ?? BeeMemoryBank.Sync.FailureText.Story)(ex)");
         Regex.IsMatch(busy, @"\b(?:ex|e|inner)\.Message\b").Should().BeFalse("the generic busy helper reads no exception's message itself: FailureText.Story tells the kinds apart by type");
     }
 }

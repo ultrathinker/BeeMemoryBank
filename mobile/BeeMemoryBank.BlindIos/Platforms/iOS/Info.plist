@@ -36,8 +36,10 @@
 	<!-- iOS asks before an app may reach a device on the local network; the node a copy calls is often one. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>The blind copy calls the computer or server that holds your memory bank. When that node is on your home network, the copy needs to reach it there.</string>
-	<!-- The computer shows its answer as a QR code of a bmb-blind-call: link: the Camera opens it in this app, which then connects as if
-	     the code had been pasted (the code is only accepted when it was made for this phone's own pairing secret). -->
+	<!-- Two links open this app, both from a QR code the system Camera reads (no scanner of the app's own, so no camera permission):
+	     bmb-blind-call: is the computer's answer to this phone's pairing code; it connects as if the code had been pasted (the code is only
+	     accepted when it was made for one of this phone's own pairing secrets). bmb-invite: is a one-time invitation from the owner of a
+	     memory bank; it opens the Add account page with the invitation read and previewed, and nothing is added until the person presses Add. -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -46,6 +48,14 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>bmb-blind-call</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.beememorybank.blind.invitation</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>bmb-invite</string>
 			</array>
 		</dict>
 	</array>

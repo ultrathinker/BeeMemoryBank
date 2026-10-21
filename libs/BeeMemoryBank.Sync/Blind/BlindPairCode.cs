@@ -7,7 +7,8 @@ namespace BeeMemoryBank.Sync.Blind;
 /// <summary>
 /// The pair code a blind node prints (plan 4.1): everything the PC needs to trust it without any
 /// third party — its NodeId and public key, where to reach it, the pin of its self-signed TLS key,
-/// and a one-time secret (15 minutes) that authorizes the first seed.
+/// and a one-time secret that authorizes the first seed. The secret of a code that is SHOWN (<see cref="Lifetime"/>) lives 15 minutes; the secret of a code a
+/// join (<c>bmb blind join</c>) hands to a full node lives as long as the join, about 73 hours (the full node's 72-hour confirmation window and an hour to spare).
 ///
 /// <para>Text form: <c>BMBBLIND1.</c> + base64url(JSON). Copied by hand between two screens, so it
 /// must survive a clipboard and a messenger unchanged.</para>

@@ -51,6 +51,12 @@ app.UseMiddleware<BeeMemoryBank.Api.Middleware.PublicSurfaceMiddleware>();
 // Rate limiting for sensitive endpoints (unlock, join) — brute-force protection
 app.UseMiddleware<BeeMemoryBank.Api.Middleware.RateLimitMiddleware>();
 
+// A blind node's own limits (2.7): what it may store and move for the mesh — after RateLimit and
+// before Maintenance, as in the blind host's own pipeline (BlindNodePipeline). Not a role switch
+// read at runtime: a full node never registers the guard, and the middleware passes everything through.
+if (app.Services.GetRequiredService<INodeRole>().IsBlind)
+    app.UseMiddleware<BeeMemoryBank.Api.Middleware.BlindUsageMiddleware>();
+
 // Maintenance mode — blocks all requests except snapshot restore and session unlock
 app.UseMiddleware<BeeMemoryBank.Api.Middleware.MaintenanceMiddleware>();
 
@@ -146,6 +152,9 @@ app.MapSyncEndpoints();
 app.MapSyncActivationEndpoints(); // Step A: readiness and the metadata activation (full nodes only)
 app.MapBlindReplicaEndpoint();
 app.MapBlindNodeManagementEndpoints();
+app.MapBlindInviteManagementEndpoints();
+app.MapBlindInvitePublicEndpoints();
+app.MapBlindLeaveEndpoint();
 app.MapBlindPhonePairingEndpoints();
 app.MapSnapshotEndpoints();
     app.MapDekRotationEndpoints();

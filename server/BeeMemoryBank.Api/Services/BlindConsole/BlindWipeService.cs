@@ -45,7 +45,10 @@ public sealed class BlindWipeService(
     FileNodeKey identityKey,
     SyncScheduler syncScheduler,
     string dataPath,
-    ILogger<BlindWipeService> logger)
+    ILogger<BlindWipeService> logger,
+    // Optional: the join service is part of the blind role only. A wipe takes it like the other quiesced writers (see the barrier below).
+    BlindJoinService? join = null,
+    BlindSeedService? seeds = null)
 {
     // restic gets SIGKILL on cancel and a 10 s bounded wait; a minute covers that with margin.
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(60);
@@ -69,6 +72,34 @@ public sealed class BlindWipeService(
             logger.LogWarning(ex, "Failed to write wipe-audit.log (continuing with the wipe)");
         }
         logger.LogWarning("BLIND WIPE initiated: node {NodeId} \"{Name}\" by {By}", identity.NodeId, identity.DisplayName, initiatedBy);
+
+        // A seed that is being received is stopped and one that is being applied is awaited, before anything else is quiesced (the apply needs the event gate and the heavy-operation
+        // lock, which this wipe takes next): its authority was checked before this wipe and it must not adopt into the emptied node. None starts until the wipe is over.
+        IDisposable? seedBarrier = null;
+        if (seeds is not null)
+        {
+            try
+            {
+                seedBarrier = await seeds.QuiesceAsync(DrainTimeout, ct);
+            }
+            catch (TimeoutException)
+            {
+                throw new BlindWipeRefusedException(
+                    $"a seed is being applied and did not finish within {DrainTimeout.TotalSeconds:0} s — nothing was wiped; try again when it is done");
+            }
+        }
+        try
+        {
+            await WipeBehindSeedBarrierAsync(identity, ct);
+        }
+        finally
+        {
+            seedBarrier?.Dispose();
+        }
+    }
+
+    private async Task WipeBehindSeedBarrierAsync(NodeIdentity identity, CancellationToken ct)
+    {
 
         // Closed and drained before anything is touched; a job that will not stop fails the
         // wipe instead of racing it (it may still be reading the settings or the database).
@@ -97,8 +128,23 @@ public sealed class BlindWipeService(
             maintenance.Enter("Wiping the blind node…");
             // (No session to lock: a blind node never holds a master key, so there is no session to clear.)
             await HeavyOperationLock.Instance.WaitAsync(ct);
+            IDisposable? joinBarrier = null;
             try
             {
+                // 0. a join that waits for a full node (a probe, a redemption, a status question) is cancelled and awaited, and no new one starts until the wipe is over: it would
+                //    otherwise come back from the full node after the deletes and write its record and its pairing state into the node the wipe has just emptied.
+                if (join is not null)
+                {
+                    try
+                    {
+                        joinBarrier = await join.QuiesceAsync(DrainTimeout, ct);
+                    }
+                    catch (TimeoutException)
+                    {
+                        throw new BlindWipeRefusedException(
+                            $"a join did not stop within {DrainTimeout.TotalSeconds:0} s — nothing was wiped; try again");
+                    }
+                }
                 using var syncPaused = await syncScheduler.PauseAsync(ct);
                 using var drained = connFactory.BeginQuiesce();
                 try
@@ -118,6 +164,7 @@ public sealed class BlindWipeService(
             }
             finally
             {
+                joinBarrier?.Dispose();
                 jobs.EndWipe();
                 HeavyOperationLock.Instance.Release();
                 maintenance.Exit();
@@ -247,11 +294,14 @@ public sealed class BlindWipeService(
         using var closed = settings.CloseAndDelete();
         // Every temp file of an interrupted save (settings, job history, console): a torn
         // settings save leaves the restic and S3 secrets in settings.json.tmp.
-        foreach (var name in new[] { "jobs.json", "cpu-mode" })
+        foreach (var name in new[] { "jobs.json", "cpu-mode", "join.json" })
             TryDeleteOne(Path.Combine(blindDir, name));
         TryDeleteFiles(blindDir, "*.tmp");
         TryDeleteDirContents(Path.Combine(blindDir, "stage"));
         TryDeleteDirContents(Path.Combine(blindDir, "restic-cache"));
+        // What a peer made the node stage - a seed that was arriving in parts, an unpacked package, a replica package - is disposable (every start empties it) and, since the stored
+        // cap counts it, a wiped node must not stay paused by it. blind-cutover is NOT touched: its old database is the way back from an interrupted switch.
+        TryDeleteDirContents(BlindRoleStartup.TempDir(dataPath));
 
         // console.json survives on purpose: the console password is local to this box (never mesh
         // data) and keeping it means the operator who just wiped the node can still log in to

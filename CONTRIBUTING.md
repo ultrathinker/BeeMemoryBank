@@ -70,26 +70,17 @@ dotnet run --project server/BeeMemoryBank.Web
 ```
 BeeMemoryBank/
 ├── server/
-│   ├── BeeMemoryBank.Api/     REST API backend (minimal APIs, port 5300)
-│   ├── BeeMemoryBank.Web/     Razor Pages frontend (proxies to Api, port 5301)
-│   └── BeeMemoryBank.Cli/     CLI tool
-├── libs/
-│   ├── BeeMemoryBank.Core/    Business logic, services, models, interfaces
-│   ├── BeeMemoryBank.Crypto/  AES-256-GCM, Argon2id, Ed25519, key management
-│   ├── BeeMemoryBank.Storage/ SQLite repositories (Dapper), migrations
-│   └── BeeMemoryBank.Sync/    Multi-node synchronization
-├── mobile/
-│   └── BeeMemoryBank.Mobile/  .NET MAUI Android app
-├── tests/                      xUnit test projects
-│   ├── BeeMemoryBank.Core.Tests/
-│   ├── BeeMemoryBank.Crypto.Tests/
-│   ├── BeeMemoryBank.Storage.Tests/
-│   ├── BeeMemoryBank.Sync.Tests/
-│   ├── BeeMemoryBank.Cli.Tests/
-│   ├── BeeMemoryBank.Integration.Tests/
-│   └── BeeMemoryBank.Migrator.Tests/
-└── tools/
-    └── BeeMemoryBank.Migrator/ Database migration tool
+│   ├── BeeMemoryBank.Api/          REST API backend (minimal APIs, port 5300)
+│   ├── BeeMemoryBank.Web/          Razor Pages frontend (proxies to Api, port 5301)
+│   ├── BeeMemoryBank.Cli/          `bmb` command-line tool
+│   └── BeeMemoryBank.BlindNode/    the blind node's own host (+ BlindCli, BlindConsole)
+├── libs/                           Core, Crypto, Storage, Sync, Vault, Search, Embeddings, Hosting,
+│                                   Blind.AppCore, Blind.PhoneClient and the other shared libraries
+├── desktop/                        Windows/macOS tray app, the node it supervises, the blind-copy desktop app
+├── mobile/                         .NET MAUI apps (Android, iPhone; full and blind) and the Maestro tests
+├── tests/                          xUnit test projects, one per library or program (BeeMemoryBank.*.Tests)
+├── tools/                          Migrator, ReleaseTool, SeedGen, Updater, blind-link, blind-e2e, ios-e2e ...
+└── docs/                           architecture, sync, blind node, ADRs
 ```
 
 ## Code Style
@@ -112,7 +103,7 @@ The project uses these conventions (enforced via `Directory.Build.props` and `.e
 - Models live in `libs/BeeMemoryBank.Core/Models/`
 - API endpoints are minimal APIs (`MapGroup`/`MapGet`/`MapPost`) in `server/BeeMemoryBank.Api/Endpoints/`
 - Request/Response records in `server/BeeMemoryBank.Api/Models/Requests.cs` and `Responses.cs`
-- Migrations are embedded SQL files in `libs/BeeMemoryBank.Storage/Migrations/NNN_name.sql`: today only `040_baseline.sql` (the whole schema), so a new migration is `041_name.sql`; the baseline is generated, never edited (see `AGENTS.md`)
+- Migrations are embedded SQL files in `libs/BeeMemoryBank.Storage/Migrations/NNN_name.sql`: `040_baseline.sql` (the whole schema, generated, never edited: see `AGENTS.md`) `041_blind_invite.sql` (the invitations to a blind copy, 2.7) and `042_blind_invite_server.sql` (the kind of an invitation and a server node's pair code, 2.7), so a new migration is `043_name.sql`; the squash tests keep the migrations after the baseline out of their comparisons with the old chain (`SchemaDump`), and `PostBaselineTests` checks them
 - UI uses [Shoelace 2](https://shoelace.style/) web components
 - Every script and stylesheet a Razor page names carries `asp-append-version="true"`: the address becomes `file.js?v=<hash of the content>`, so a changed file is a new address and a browser cannot keep the copy of an older version (there is no version number to raise by hand). The Web host sends `Cache-Control: public, max-age=31536000, immutable` for `?v=` addresses and `no-cache` (revalidate, a 304 when unchanged) for any other script or style, such as a file a script loads itself. `StaticAssetCachingTests` fails for a page tag without it
 - All code, comments, and UI text must be in English

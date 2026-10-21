@@ -98,7 +98,7 @@ public sealed class RecoveryAccessState
     /// <summary>
     /// Tells the mesh this node's master password changed, if there is a mesh and the vault is open.
     /// Returns false (and announces nothing) when the vault is locked — the caller then keeps the
-    /// change pending. Mirrors the Admin → Security card (KeyEndpoints /change-password): the same
+    /// change pending. Mirrors the Admin → Master Password page (KeyEndpoints /change-password): the same
     /// event, the same "changed at" instant on both sides so an echo does not raise the banner here.
     /// </summary>
     public static async Task<bool> TryAnnounceAsync(

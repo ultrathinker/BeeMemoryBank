@@ -231,10 +231,12 @@ public sealed class RestoreWizardPageTests(RestoreSourceFixture source) : IAsync
         var admin = await WebLogin.LoginAsync(_web, "admin", RestoreSourceFixture.Password);
         var session = admin.DefaultRequestHeaders.GetValues("Cookie").Single();
 
-        var adminPage = await (await admin.GetAsync("/Admin")).Content.ReadAsStringAsync();
+        var index = await (await admin.GetAsync("/Admin")).Content.ReadAsStringAsync();
+        index.Should().Contain("id=\"restored-devices-notice\"", "the index says that a restore left a device waiting").And.Contain("href=\"/Admin/RestoredDevices\"");
+        var adminPage = await (await admin.GetAsync("/Admin/RestoredDevices")).Content.ReadAsStringAsync();
         adminPage.Should().Contain("Restored devices awaiting confirmation").And.Contain("Kitchen tablet");
 
-        var confirm = await PostPairsAsync(admin, "/Admin", "ConfirmRestoredPeer", [new("nodeId", phone.ToString())], session);
+        var confirm = await PostPairsAsync(admin, "/Admin/RestoredDevices", "ConfirmRestoredPeer", [new("nodeId", phone.ToString())], session);
 
         confirm.StatusCode.Should().Be(HttpStatusCode.Redirect);
         (await ActivePeersAsync()).Should().Contain(phone);

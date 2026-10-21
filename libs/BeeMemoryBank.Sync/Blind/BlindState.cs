@@ -33,7 +33,7 @@ public sealed class BlindState(IDbConnectionFactory factory)
 
     /// <summary>
     /// The one-time secret of the current pair code (plan 4.1). Stored as issued: the console shows
-    /// the code again until it expires, and the value is worthless after 15 minutes or one seed.
+    /// the code again until it expires, and the value is worthless after its lifetime (15 minutes for a shown code, about 73 hours for the code of a join) or one seed.
     /// </summary>
     public async Task SetPairingSecretAsync(string secret, DateTime expiresAt)
     {

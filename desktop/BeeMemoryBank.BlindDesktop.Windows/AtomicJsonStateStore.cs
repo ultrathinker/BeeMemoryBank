@@ -136,7 +136,7 @@ public sealed class AtomicJsonStateStore : IBlindStateStore
                 if (attempt >= ReadAttempts)
                 {
                     if (ex is IOException) throw;
-                    throw new IOException("The state file cannot be read at the moment (access denied).", ex);
+                    throw new BlindFileSentenceException("The state file cannot be read at the moment (access denied).", ex);
                 }
                 if (_readRetryDelay > TimeSpan.Zero) Thread.Sleep(_readRetryDelay);
             }

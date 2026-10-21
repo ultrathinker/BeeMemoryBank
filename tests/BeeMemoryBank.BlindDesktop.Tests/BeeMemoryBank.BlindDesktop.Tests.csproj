@@ -70,6 +70,8 @@
     <!-- The assembly-boundary scanner and the vault boundary: one source in tests/shared, linked into every project that proves the boundary. -->
     <Compile Include="..\shared\AssemblyBoundaryScanner.cs" Link="Shared\AssemblyBoundaryScanner.cs" />
     <Compile Include="..\shared\VaultBoundary.cs" Link="Shared\VaultBoundary.cs" />
+    <!-- The contract every head's secret and state store runs (per-account names, isolation, a blob that does not open as another account). -->
+    <Compile Include="..\shared\BlindStoreContracts.cs" Link="Shared\BlindStoreContracts.cs" />
     <!-- The receive-only guard of the Android tests: the repositories EventApplier needs are named by the composition class and by nobody else. -->
     <Compile Include="..\BeeMemoryBank.BlindMobile.Tests\BoundaryScanner.cs" Link="Shared\BoundaryScanner.cs" />
     <Compile Include="..\BeeMemoryBank.BlindMobile.Tests\ReceiveOnlyTypes.cs" Link="Shared\ReceiveOnlyTypes.cs" />

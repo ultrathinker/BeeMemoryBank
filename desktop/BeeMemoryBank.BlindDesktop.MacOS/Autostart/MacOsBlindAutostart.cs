@@ -1,6 +1,7 @@
 using System.Text;
 using BeeMemoryBank.BlindDesktop.MacOS.Interop;
 using BeeMemoryBank.BlindMobile.Services.Blind;
+using BeeMemoryBank.Sync.Blind;
 using BeeMemoryBank.Platforms.Apple.LaunchAgents;
 
 namespace BeeMemoryBank.BlindDesktop.MacOS;
@@ -187,10 +188,11 @@ public sealed class MacOsBlindAutostart : IBlindAutostart
     private IReadOnlyList<string> ResolveProgram()
     {
         var program = ProgramArguments;
-        if (program.Count == 0) throw new InvalidOperationException("There is no program to start at login.");
+        if (program.Count == 0) throw new BlindSentenceException("There is no program to start at login.");
         var refusal = ProgramLocationPolicy.Refusal(program[0], _tempPath, _links);
-        if (refusal is not null) throw new InvalidOperationException(refusal);
-        if (!_fileExists(program[0])) throw new InvalidOperationException($"The program '{program[0]}' does not exist, so it cannot be a login item.");
+        // The policy's sentences are marked as this code's own; one that names a place (a build or temporary folder) is not said by BlindFailureText, whatever the mark.
+        if (refusal is not null) throw new BlindSentenceException(refusal);
+        if (!_fileExists(program[0])) throw new BlindSentenceException("The program to start at login does not exist, so it cannot be a login item.");
         return program;
     }
 
@@ -234,7 +236,7 @@ public sealed class MacOsBlindAutostart : IBlindAutostart
 
     private static IReadOnlyList<string> DefaultProgramArguments()
     {
-        var process = Environment.ProcessPath ?? throw new InvalidOperationException("The path of the running app is not known.");
+        var process = Environment.ProcessPath ?? throw new BlindSentenceException("The path of the running app is not known.");
         // Started as "dotnet App.dll": launchd must start dotnet with the dll, not the dll.
         if (string.Equals(Path.GetFileNameWithoutExtension(process), "dotnet", StringComparison.OrdinalIgnoreCase) &&
             Environment.GetCommandLineArgs() is { Length: > 0 } args && args[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase))

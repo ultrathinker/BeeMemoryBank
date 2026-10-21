@@ -291,12 +291,12 @@ public static class JoinEndpoints
                         statusCode: 409);
                 if (DateTime.UtcNow - existing.CreatedAt > JoinAttemptGate.AbortWindow)
                     return Results.Json(
-                        new ErrorResponse("This node was recorded too long ago to be the join being aborted; revoke it from the Admin page if it is not wanted"),
+                        new ErrorResponse("This node was recorded too long ago to be the join being aborted; revoke it under Admin -> Trusted Nodes if it is not wanted"),
                         statusCode: 409);
                 // Never synced in either direction: nothing was served to it (the push position compaction reads) and nothing was pulled from it.
                 if (await pushPositionRepo.GetAsync(req.NodeId) != null || await syncPositionRepo.GetAsync(req.NodeId) != null)
                     return Results.Json(
-                        new ErrorResponse("This node has already synced and is a member; revoke it from the Admin page if it is not wanted"),
+                        new ErrorResponse("This node has already synced and is a member; revoke it under Admin -> Trusted Nodes if it is not wanted"),
                         statusCode: 409);
 
                 // Signing the revoke needs the master DEK, which is only in memory while the vault is unlocked (as for the join).

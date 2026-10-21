@@ -95,20 +95,22 @@ internal static class BlobTransport
     /// the corresponding event then fails with <see cref="BlobMissingException"/> in the applier
     /// and goes through the normal retry/quarantine path.
     /// </summary>
+    /// <param name="afterBlob">Called after each blob is stored (a host that keeps count of what it holds learns that a batch was persisted); null for none.</param>
     public static async Task FetchForAsync(
         HttpClient http, string baseUrl, string token, IReadOnlyList<SyncEvent> events,
-        IBlobRepository blobRepo, ILogger logger, CancellationToken ct)
+        IBlobRepository blobRepo, ILogger logger, CancellationToken ct, Action? afterBlob = null)
     {
-        await FetchHashesAsync(http, baseUrl, token, BlobReferences.Collect(events), blobRepo, logger, ct);
+        await FetchHashesAsync(http, baseUrl, token, BlobReferences.Collect(events), blobRepo, logger, ct, afterBlob);
     }
 
     /// <summary>
     /// The same fetch for a list of hashes no event names: the blobs of a baseline (<c>blobs.txt</c>), which a phone gets from the
     /// node that serves the baseline before it adopts it (docs/design/step-a-spec.md 13.3). Returns how many of them are still missing.
     /// </summary>
+    /// <param name="afterBlob">Called after each blob is stored; null for none.</param>
     public static async Task<int> FetchHashesAsync(
         HttpClient http, string baseUrl, string token, IReadOnlyCollection<string> referenced,
-        IBlobRepository blobRepo, ILogger logger, CancellationToken ct)
+        IBlobRepository blobRepo, ILogger logger, CancellationToken ct, Action? afterBlob = null)
     {
         if (referenced.Count == 0) return 0;
 
@@ -158,6 +160,7 @@ internal static class BlobTransport
                         continue;
                     }
                     await blobRepo.StoreAsync(blob.Data);
+                    afterBlob?.Invoke();
                     pending.Remove(blob.Hash);
                     fetched++;
                     progressed = true;
@@ -186,6 +189,7 @@ internal static class BlobTransport
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
         req.Content = JsonContent.Create(new HashListDto(hashes.ToList()), options: JsonOpts);
         using var resp = await http.SendAsync(req, ct);
+        PeerPausedException.ThrowIfPaused(resp);
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<MissingDto>(JsonOpts, ct);
         return body?.Missing ?? [];
@@ -211,6 +215,7 @@ internal static class BlobTransport
         using var resp = await http.SendAsync(req, ct);
         if (resp.StatusCode != System.Net.HttpStatusCode.RequestEntityTooLarge)
         {
+            PeerPausedException.ThrowIfPaused(resp);
             resp.EnsureSuccessStatusCode();
             return;
         }
@@ -235,6 +240,7 @@ internal static class BlobTransport
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
         req.Content = JsonContent.Create(new HashListDto(hashes.ToList()), options: JsonOpts);
         using var resp = await http.SendAsync(req, ct);
+        PeerPausedException.ThrowIfPaused(resp);
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<BlobBatchDto>(JsonOpts, ct);
         var result = new List<StoredBlob>(body?.Blobs.Count ?? 0);

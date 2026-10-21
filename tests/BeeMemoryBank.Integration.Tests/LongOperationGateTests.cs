@@ -140,6 +140,7 @@ public sealed class LongOperationGateTests : IAsyncLifetime
             ["POST /api/blind-nodes"] = "blind-add",
             ["POST /api/blind-nodes/{nodeId:guid}/reseed"] = "blind-reseed:{nodeId}",
             ["POST /api/blind-nodes/android"] = "blind-phone-pair",
+            ["POST /api/blind-nodes/invites/{inviteId}/confirm"] = "blind-invite-confirm",
             ["POST /api/snapshots"] = "snapshot-create",
             ["POST /api/snapshots/restore"] = "snapshot-restore",
             ["POST /api/snapshots/restore-network"] = "snapshot-restore",

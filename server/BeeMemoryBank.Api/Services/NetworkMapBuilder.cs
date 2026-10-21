@@ -86,7 +86,8 @@ public static class NetworkMapBuilder
             row.NodeId, status.DisplayName, IsSelf: false, kind, peer.Contact.Platform, peer.Contact.InContainer == true, row.LastAppVersion, row.LastProtocolVersion,
             address.Scheme, address.Host, address.Port, status.State, status.Online, status.LastContactAt, status.LastContactDirection, status.LastPushAt,
             status.UnsyncedCount, status.IsSynced, status.LastPushedSeq, status.HeadSeq, status.NotAnsweringSince, status.NotAnsweringReason,
-            peer.Contact.InboundFrom, row.IsSuperadmin, row.CanGenerateEmbeddings, row.EffectiveTlsTrust, Utc(row.CreatedAt));
+            peer.Contact.InboundFrom, row.IsSuperadmin, row.CanGenerateEmbeddings, row.EffectiveTlsTrust, Utc(row.CreatedAt),
+            PausedText: status.PausedText, LeftAt: status.LeftAt);
     }
 
     /// <summary>

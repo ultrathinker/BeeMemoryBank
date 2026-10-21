@@ -1,5 +1,6 @@
 using System.Security.Authentication;
 using BeeMemoryBank.BlindMobile.Services.Blind;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
@@ -27,18 +28,21 @@ public sealed class BlindRunReportReasonTests
     }
 
     [Fact]
-    public void APlainException_IsItsMessage_AndARepeatedOrEmptyInnerMessageIsNotRepeated()
+    public void ALocalException_IsItsKind_NeverItsMessageNorTheMessageOfAnythingInsideIt()
     {
-        BlindRunReport.Reason(new IOException("link went down")).Should().Be("link went down");
-        BlindRunReport.Reason(new IOException("same", new IOException("same", new IOException("")))).Should().Be("same");
+        BlindRunReport.Reason(new IOException("link went down")).Should().Be("a file or the storage of this device could not be read or written");
+        BlindRunReport.Reason(new IOException("same", new IOException("same", new IOException("")))).Should().Be("a file or the storage of this device could not be read or written");
+        BlindRunReport.Reason(new BlindSentenceException("The blind phone identity has not been recorded.")).Should().Be("The blind phone identity has not been recorded.");
+        BlindRunReport.Reason(new InvalidOperationException("The blind phone identity has not been recorded.")).Should().Be("an unexpected problem (InvalidOperationException)", "an exception this code did not mark is not a sentence of this code");
     }
 
     [Fact]
-    public void ALongChain_IsCut_AndLinesAreJoined()
+    public void ALongSentenceOfThisCode_IsCut_AndLinesAreJoined_AndWhatAnUnknownExceptionHoldsIsNotSaid()
     {
-        var deep = new Exception("a\nb", new Exception(new string('x', 600)));
-        var reason = BlindRunReport.Reason(deep);
-        reason.Should().StartWith("a b (Exception: xxx").And.EndWith("...");
-        reason.Length.Should().BeLessThanOrEqualTo(403);
+        var reason = BlindRunReport.Reason(new BlindSentenceException("a\nb " + new string('x', 600)));
+        reason.Should().StartWith("a b xxx").And.EndWith("...");
+        reason.Length.Should().BeLessThanOrEqualTo(BlindFailureText.MaxSentence + 3);
+
+        BlindRunReport.Reason(new Exception("a\nb", new Exception(new string('x', 600)))).Should().Be("an unexpected problem (Exception)");
     }
 }

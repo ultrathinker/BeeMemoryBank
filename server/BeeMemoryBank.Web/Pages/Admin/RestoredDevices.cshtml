@@ -1,0 +1,40 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.RestoredDevicesModel
+
+@section About {
+    <p>
+        When you restore a snapshot, this node gets back the list of devices it trusted at that moment. For each device it asks for proof: an integrity anchor,
+        signed under your master key, that names the device and its key. A device with that proof comes back switched on. A device without it comes back
+        <strong>switched off</strong>: it cannot sign in with its key, sync or write anything here until you decide about it.
+    </p>
+    <p>
+        This page lists those devices. <strong>Confirm the ones you recognise</strong> (they are yours, and you know their names and addresses): they sync with
+        this node again. A confirmed device does not get superadmin rights back by itself; if it should have them, promote it on
+        <a href="/Admin/TrustedNodes">Trusted Nodes</a>. For a device you do not recognise, do nothing here: it stays off, and it can join again by
+        being paired from scratch.
+    </p>
+    <p>The list is empty unless a restore left devices waiting.</p>
+}
+
+@if (Model.RestoredPeers.Count == 0)
+{
+    <div class="card" id="restored-devices-empty" style="text-align:center;padding:40px;">
+        <sl-icon name="shield-check" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+        <p class="text-muted" style="margin:0;">No device is waiting for your confirmation.</p>
+    </div>
+}
+else
+{
+    <div class="card" id="restored-peers">
+        @foreach (var peer in Model.RestoredPeers)
+        {
+            <div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap;">
+                <span style="flex:1;min-width:200px;"><strong>@peer.DisplayName</strong> <code style="font-size:0.78rem;">@peer.NodeId</code> @peer.ApiAddress</span>
+                <form data-busy="short" method="post" asp-page-handler="ConfirmRestoredPeer" style="display:inline;">
+                    <input type="hidden" name="nodeId" value="@peer.NodeId" />
+                    <sl-button size="small" type="submit">Confirm</sl-button>
+                </form>
+            </div>
+        }
+    </div>
+}

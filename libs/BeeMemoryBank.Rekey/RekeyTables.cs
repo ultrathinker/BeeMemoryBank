@@ -48,6 +48,10 @@ public static class RekeyTables
             // (local_cut). A full node holds none; cleared with the log all the same.
             "tbl_baseline", "tbl_baseline_blob",
         ]),
+        // PeerRevokeStep (L): the invitations to blind copies this node made (migration 041) and the redemptions waiting for its owner. They are about who
+        // may join, and a re-keyed node revokes every peer; a redeemed one also holds the device's backup key sealed under the OLD master key, which nothing
+        // can open any more (and the D1 check would find it). The owner invites again.
+        (TableFate.Cleared, ["tbl_blind_invite"]),
         // KeyMaterialStep (L): the sentinel and identity key, the owner's slot (others removed), agents' wrapped
         // DEKs, node data keys (retired-master-dek:* removed; chat re-wrapped by ChatRekeyStep), rotation chain columns.
         (TableFate.KeyMaterial,

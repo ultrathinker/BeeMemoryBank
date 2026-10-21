@@ -290,6 +290,14 @@ public class JoinWithSnapshotTests : IAsyncLifetime
                 new { version, name, at = DateTime.UtcNow.ToString("o") });
     }
 
+    /// <summary>The ledger of a 2.6.2 to 2.6.4 node: the baseline's one row, no migration after it (2.7 adds 041 and 042).</summary>
+    private static async Task MakeLedgerThatOfA262NodeAsync(DbConnectionFactory factory)
+    {
+        using var conn = factory.CreateConnection();
+        await conn.ExecuteAsync("DROP TRIGGER IF EXISTS trg_migration_ledger_guard");
+        await conn.ExecuteAsync("DELETE FROM tbl_migration WHERE version > @baseline", new { baseline = MigrationRunner.BaselineVersion });
+    }
+
     private static async Task<int> MigrationVersionOfAsync(string snapshotPath)
     {
         await using var fs = File.OpenRead(snapshotPath);
@@ -318,13 +326,14 @@ public class JoinWithSnapshotTests : IAsyncLifetime
 
         using var conn = _joinerFactory.CreateConnection();
         (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_article")).Should().Be(1);
-        (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(1, "the joiner's own ledger is not replaced by the snapshot's");
+        (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(3, "the joiner's own ledger (the baseline, 041 and 042) is not replaced by the snapshot's");
     }
 
     [Fact]
     public async Task A_snapshot_of_a_2_6_2_node_joins_a_2_6_1_node()
     {
         await MakeLedgerThatOfA261NodeAsync(_joinerFactory);
+        await MakeLedgerThatOfA262NodeAsync(_producerFactory);
         await InsertProducerFolderAndArticleAsync();
         var info = await _producerSnapshot.CreateAsync(filterSecrets: true, sign: true, cpSequenceNum: 10);
         var path = _producerSnapshot.GetSnapshotPath(info.FileName);
@@ -335,6 +344,21 @@ public class JoinWithSnapshotTests : IAsyncLifetime
         using var conn = _joinerFactory.CreateConnection();
         (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_article")).Should().Be(1);
         (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(39, "the joiner's ledger is its own");
+    }
+
+    /// <summary>Release 2.7 added 041 and 042, so its snapshots carry schema 42: a node that stops at 40 (2.6.1 to 2.6.4) is told to upgrade first, as for any newer schema.</summary>
+    [Fact]
+    public async Task A_snapshot_of_a_2_7_node_is_refused_by_a_node_that_stops_at_schema_40()
+    {
+        await MakeLedgerThatOfA261NodeAsync(_joinerFactory);
+        await InsertProducerFolderAndArticleAsync();
+        var info = await _producerSnapshot.CreateAsync(filterSecrets: true, sign: true, cpSequenceNum: 10);
+        var path = _producerSnapshot.GetSnapshotPath(info.FileName);
+        (await MigrationVersionOfAsync(path)).Should().Be(42, "041 and 042 are the migrations after the baseline");
+
+        var act = async () => await _joinerSnapshot.RestoreForJoinAsync(path, await File.ReadAllBytesAsync($"{path}.sig"), _producerPubKey);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*schema version 42*this node is on version 40*Upgrade this node first*");
     }
 
     private async Task InsertProducerFolderAndArticleAsync()

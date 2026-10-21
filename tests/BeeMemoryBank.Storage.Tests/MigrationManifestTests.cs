@@ -6,7 +6,7 @@ namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
 /// The embedded migrations as the ledger sees them: logical names and bytes, pinned in docs/migrations.golden.txt.
-/// Since 2.6.2 there is one, the baseline (BMB-314). The ledger row of a database carries its resource name, and the runner
+/// Since 2.6.2 there is the baseline (BMB-314), and since 2.7 the first migrations after it (041, the invitations to a blind copy, and 042, a server blind node as the one invited). The ledger row of a database carries its resource name, and the runner
 /// refuses a ledger it does not recognise, so a rename, a lost resource or a changed byte (for example when code moves between
 /// assemblies, BMB-99) must fail here, not on a live node's volume.
 /// Regenerate after an INTENDED new migration with BMB_UPDATE_GOLDEN=1.
@@ -23,7 +23,7 @@ public class MigrationManifestTests
     }
 
     [Fact]
-    public void TheEmbeddedMigrationsAreTheBaseline()
+    public void TheEmbeddedMigrationsAreTheBaselineAndTheOnesAfterIt()
     {
         var assembly = typeof(MigrationRunner).Assembly;
         var lines = assembly.GetManifestResourceNames()
@@ -37,7 +37,7 @@ public class MigrationManifestTests
                 return n + " " + Convert.ToHexString(SHA256.HashData(ms.ToArray())).ToLowerInvariant();
             })
             .ToList();
-        lines.Should().HaveCount(1, "the baseline is the only migration of the public tree");
+        lines.Should().HaveCount(3, "the baseline, 041_blind_invite.sql and 042_blind_invite_server.sql");
         var actual = string.Join("\n", lines) + "\n";
 
         var path = Path.Combine(RepoRoot(), "docs", "migrations.golden.txt");

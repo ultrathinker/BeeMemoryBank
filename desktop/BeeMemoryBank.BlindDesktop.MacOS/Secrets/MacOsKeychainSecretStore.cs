@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Platforms.Apple.Keychain;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindDesktop.MacOS;
 
@@ -14,7 +15,12 @@ public enum BlindSecretStoreFailure
     Corrupt,
 }
 
-public sealed class BlindSecretStoreException : IOException
+/// <summary>
+/// A failure of the Keychain in a sentence THIS CODE wrote for the person: which secret by its kind ("the identity seed", "the backup key"), the system's status number, the fixed advice. It carries the
+/// mark of <see cref="IBlindOwnSentence"/>, so the key-store line of a card says it as it is (<c>BlindFailureText.Say</c> passes on only marked sentences, and not one that names a place). That is why a
+/// message built here never holds the Keychain item's name (it contains the account id and a <c>/</c>), a path, or a secret.
+/// </summary>
+public sealed class BlindSecretStoreException : IOException, IBlindOwnSentence
 {
     public BlindSecretStoreFailure Failure { get; }
     /// <summary>The macOS OSStatus for <see cref="BlindSecretStoreFailure.Os"/>, otherwise 0.</summary>
@@ -57,8 +63,12 @@ public sealed class MacOsKeychainSecretStore : IBlindSecretStore, IDisposable
     private const int DigestLength = 32;
     private static readonly byte[] Domain = "bmb-blind-keychain-item-v1\0"u8.ToArray();
 
+    private static readonly BlindAccountEntry LegacyAccount = new(BlindAccountEntry.LegacyId, BlindAccountLayouts.Root, "My copy");
+
     private readonly IKeychainBackend _backend;
     private readonly string _service;
+    private readonly BlindAccountEntry _account;
+    private readonly bool _ownsBackend;
     private readonly object _gate = new();
 
     /// <summary>The user's default (login) keychain.</summary>
@@ -70,28 +80,46 @@ public sealed class MacOsKeychainSecretStore : IBlindSecretStore, IDisposable
         : this(new SecurityFrameworkKeychain(keychainFilePath, allowUserInteraction: false), service) { }
 
     internal MacOsKeychainSecretStore(IKeychainBackend backend, string service = DefaultService)
+        : this(backend, service, LegacyAccount, ownsBackend: true) { }
+
+    /// <param name="account">Whose secrets these are: the Keychain account names come from <see cref="BlindAccountNames.KeychainAccount"/> (the legacy account keeps <c>identity-seed-v1</c> ... unchanged,
+    /// any other has <c>&lt;id&gt;/identity-seed-v1</c>), and the item's integrity digest binds that name, so an item moved to another account's name is refused.</param>
+    /// <param name="ownsBackend">False when the backend is shared with other stores (the per-account factory): <see cref="Dispose"/> then leaves it open.</param>
+    internal MacOsKeychainSecretStore(IKeychainBackend backend, string service, BlindAccountEntry account, bool ownsBackend)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentException.ThrowIfNullOrWhiteSpace(service);
+        ArgumentNullException.ThrowIfNull(account);
         _backend = backend;
         _service = service;
+        _account = account;
+        _ownsBackend = ownsBackend;
     }
 
-    public void SaveIdentitySeed(byte[] seed) => Save(IdentitySeedAccount, "identity seed", seed);
-    public byte[]? LoadIdentitySeed() => Load(IdentitySeedAccount);
-    public void SaveBackupKey(byte[] key) => Save(BackupKeyAccount, "backup key", key);
-    public byte[]? LoadBackupKey() => Load(BackupKeyAccount);
-    public void SavePairingSecret(byte[] secret) => Save(PairingSecretAccount, "pairing secret", secret);
-    public byte[]? LoadPairingSecret() => Load(PairingSecretAccount);
-    public void ClearPairingSecret() => Delete(PairingSecretAccount);
+    private string IdentitySeedName => BlindAccountNames.KeychainAccount(_account, BlindAccountNames.Role.IdentitySeed);
+    private string PairingSecretName => BlindAccountNames.KeychainAccount(_account, BlindAccountNames.Role.PairingSecret);
+    private string BackupKeyName => BlindAccountNames.KeychainAccount(_account, BlindAccountNames.Role.BackupKey);
+
+    // What a sentence about a secret calls it: the kind, never the name of its Keychain item (that holds the account id and a "/").
+    private const string IdentitySeedKind = "identity seed";
+    private const string PairingSecretKind = "pairing secret";
+    private const string BackupKeyKind = "backup key";
+
+    public void SaveIdentitySeed(byte[] seed) => Save(IdentitySeedName, IdentitySeedKind, seed);
+    public byte[]? LoadIdentitySeed() => Load(IdentitySeedName, IdentitySeedKind);
+    public void SaveBackupKey(byte[] key) => Save(BackupKeyName, BackupKeyKind, key);
+    public byte[]? LoadBackupKey() => Load(BackupKeyName, BackupKeyKind);
+    public void SavePairingSecret(byte[] secret) => Save(PairingSecretName, PairingSecretKind, secret);
+    public byte[]? LoadPairingSecret() => Load(PairingSecretName, PairingSecretKind);
+    public void ClearPairingSecret() => Delete(PairingSecretName, PairingSecretKind);
 
     /// <summary>Forgets every secret. Every account is tried; failures are reported together once all were tried.</summary>
     public void Clear()
     {
         var failures = new List<Exception>();
-        foreach (var account in new[] { IdentitySeedAccount, PairingSecretAccount, BackupKeyAccount })
+        foreach (var (account, kind) in new[] { (IdentitySeedName, IdentitySeedKind), (PairingSecretName, PairingSecretKind), (BackupKeyName, BackupKeyKind) })
         {
-            try { Delete(account); }
+            try { Delete(account, kind); }
             catch (BlindSecretStoreException ex) { failures.Add(ex); }
         }
         if (failures.Count > 0)
@@ -101,7 +129,7 @@ public sealed class MacOsKeychainSecretStore : IBlindSecretStore, IDisposable
 
     public void Dispose()
     {
-        if (_backend is IDisposable disposable) disposable.Dispose();
+        if (_ownsBackend && _backend is IDisposable disposable) disposable.Dispose();
     }
 
     private void Save(string account, string what, byte[] secret)
@@ -126,17 +154,17 @@ public sealed class MacOsKeychainSecretStore : IBlindSecretStore, IDisposable
         }
     }
 
-    private byte[]? Load(string account)
+    private byte[]? Load(string account, string kind)
     {
         byte[]? item;
         int status;
         lock (_gate) status = _backend.Copy(_service, account, out item);
         if (status == KeychainStatus.ItemNotFound) return null;
         if (status != KeychainStatus.Success || item is null)
-            throw OsFailure($"The Keychain item '{account}' could not be read", status);
+            throw OsFailure($"The {kind} could not be read from the Keychain", status);
         try
         {
-            return Open(account, item);
+            return Open(account, item, kind);
         }
         finally
         {
@@ -144,17 +172,19 @@ public sealed class MacOsKeychainSecretStore : IBlindSecretStore, IDisposable
         }
     }
 
-    private void Delete(string account)
+    private void Delete(string account, string kind)
     {
         int status;
         lock (_gate) status = _backend.Delete(_service, account);
         if (status is KeychainStatus.Success or KeychainStatus.ItemNotFound) return;
-        throw OsFailure($"The Keychain item '{account}' could not be removed", status);
+        throw OsFailure($"The {kind} could not be removed from the Keychain", status);
     }
 
     private BlindSecretStoreException OsFailure(string what, int status)
     {
+        // The system's own words for the status (a fixed phrase of the Security framework); one that names a place is left out, the number stays.
         var detail = _backend.Describe(status);
+        if (BlindFailureText.LooksLikeALocation(detail)) detail = "";
         return new BlindSecretStoreException(BlindSecretStoreFailure.Os,
             $"{what} (Keychain status {status}{(detail.Length > 0 ? ": " + detail : "")}).", status);
     }
@@ -187,10 +217,11 @@ public sealed class MacOsKeychainSecretStore : IBlindSecretStore, IDisposable
         return item;
     }
 
-    internal static byte[] Open(string account, byte[] item)
+    /// <param name="kind">What a failure sentence calls the secret ("backup key"); never the item's name.</param>
+    internal static byte[] Open(string account, byte[] item, string kind = "secret")
     {
         if (item.Length < 1 + DigestLength || item[0] != EnvelopeVersion)
-            throw Corrupt(account);
+            throw Corrupt(kind);
         var secret = item.AsSpan(1 + DigestLength).ToArray();
         var expected = Digest(account, secret);
         var intact = CryptographicOperations.FixedTimeEquals(expected, item.AsSpan(1, DigestLength));
@@ -198,13 +229,13 @@ public sealed class MacOsKeychainSecretStore : IBlindSecretStore, IDisposable
         if (!intact)
         {
             CryptographicOperations.ZeroMemory(secret);
-            throw Corrupt(account);
+            throw Corrupt(kind);
         }
         return secret;
     }
 
-    private static BlindSecretStoreException Corrupt(string account) =>
+    private static BlindSecretStoreException Corrupt(string kind) =>
         new(BlindSecretStoreFailure.Corrupt,
-            // Short on purpose: the screen shows at most about 120 characters of a key store problem, and the advice must be in them.
-            $"Keychain item '{account}' was altered outside the app and is not used; wipe and pair again.");
+            // Short on purpose: the card shows one short line of a key store problem, and the advice must be in it. The kind of secret, not the name of its item; the way out a head really has.
+            $"The {kind} in the Keychain was altered outside the app and is not used; remove this account and add it again.");
 }

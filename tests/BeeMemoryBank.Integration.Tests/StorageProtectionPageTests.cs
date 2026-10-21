@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-305, the third state of the node: its database is encrypted. There is nothing left to switch on, so the Admin card and its page are the node's
+/// BMB-305, the third state of the node: its database is encrypted. There is nothing left to switch on, so the Admin page and the encryption page are the node's
 /// storage protection - the status and, on a server, whether it starts unlocked after a restart - and no "Encrypt this node" is offered. Through the real Web
 /// host in front of a real Api over a sealed data folder (the open node and the node with metadata encryption on are in <see cref="AdminCardsTests"/>).
 /// </summary>
@@ -43,16 +43,17 @@ public sealed class StorageProtectionPageTests(SealedNodeTemplate template) : IC
     }
 
     [Fact]
-    public async Task The_admin_card_of_an_encrypted_node_is_its_storage_protection_and_offers_no_encryption()
+    public async Task The_admin_page_of_an_encrypted_node_is_its_storage_protection_and_offers_no_encryption()
     {
         (await _apiClient.GetFromJsonAsync<System.Text.Json.JsonElement>("/api/vault/status")).GetProperty("mode").GetString().Should().Be("sealed");
 
-        var admin = await GetAsync("/Admin");
+        var admin = await GetAsync("/Admin/StorageProtection");
 
-        var card = Regex.Match(admin, "<h3 id=\"card-database-encryption\".*?</div>", RegexOptions.Singleline).Value;
+        var card = Regex.Match(admin, "<div class=\"card mt-md\" id=\"storage-protection\".*?</div>", RegexOptions.Singleline).Value;
         card.Should().Contain("Storage protection").And.Contain("This node's database is encrypted.").And.Contain("href=\"/VaultEncryption\"");
-        card.Should().NotContain("Database encryption").And.NotContain("a plain file").And.NotContain("Encrypt this node");
+        card.Should().NotContain("a plain file").And.NotContain("Encrypt this node");
         admin.Should().NotContain("Encrypt this node");
+        (await GetAsync("/Admin")).Should().NotContain("Encrypt this node", "the index only names the page");
     }
 
     [Fact]

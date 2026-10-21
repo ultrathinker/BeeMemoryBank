@@ -1,4 +1,5 @@
-// Admin Page Module
+// Admin Pages Module. One script for the pages of the Admin area (/Admin/<Name>): every part below looks for its own elements and does nothing when they
+// are not on the page, so the pages that have none of them (and the index, which does not load this file) raise no errors.
 (function () {
     'use strict';
 
@@ -15,19 +16,17 @@
     var pageOpts = pageSignal ? { signal: pageSignal } : false;
     var pageCaptureOpts = pageSignal ? { signal: pageSignal, capture: true } : true;
 
-    // Auto-refresh for in-progress software update
-    var updateContainer = document.querySelector('[data-is-updating="true"]');
-    if (updateContainer && !window._updateRefreshing) {
-        window._updateRefreshing = true;
-        setTimeout(function () { location.reload(); }, 2000);
+    // Auto-refresh for an in-progress software update and an active DEK rotation: the page reloads itself until the work is done. The pages of the area are swapped in
+    // by the single-page navigation (site-spa.js), so the timer must die with the page that started it: otherwise it reloads the NEXT page, and the flag that keeps
+    // two runs of this script from starting two timers stays set for good, so that a return to the page never refreshes again.
+    function reloadWhileBusy(selector, flag, ms) {
+        if (!document.querySelector(selector) || window[flag]) return;
+        window[flag] = true;
+        var timer = setTimeout(function () { location.reload(); }, ms);
+        if (pageSignal) pageSignal.addEventListener('abort', function () { clearTimeout(timer); window[flag] = false; });
     }
-
-    // Auto-refresh for active DEK rotation
-    var dekContainer = document.querySelector('[data-dek-active="true"]');
-    if (dekContainer && !window._dekRotationRefreshing) {
-        window._dekRotationRefreshing = true;
-        setTimeout(function () { location.reload(); }, 3000);
-    }
+    reloadWhileBusy('[data-is-updating="true"]', '_updateRefreshing', 2000);
+    reloadWhileBusy('[data-dek-active="true"]', '_dekRotationRefreshing', 3000);
 
     // Check for updates dialog
     var btnOpenCheckUpdate = document.getElementById('btn-open-check-update');
@@ -49,17 +48,6 @@
                 }
             })
             .catch(function () {});
-    }
-
-    // Compaction info dialog
-    var compactionBtn = document.getElementById('compaction-info-btn');
-    var compactionDlg = document.getElementById('compaction-info-dialog');
-    var compactionClose = document.getElementById('compaction-info-close');
-    if (compactionBtn && compactionDlg) {
-        compactionBtn.addEventListener('click', function () { compactionDlg.show(); });
-    }
-    if (compactionClose && compactionDlg) {
-        compactionClose.addEventListener('click', function () { compactionDlg.hide(); });
     }
 
     // AI / Chat Settings
@@ -603,7 +591,7 @@
                     reject(new Error(said || ('Upload failed: ' + (xhr.statusText || xhr.status) + '.')));
                 };
                 xhr.onerror = function () { reject(new Error('The node did not answer. Check that it is running and try again.')); };
-                xhr.open('POST', '/Admin?handler=UploadSnapshot');
+                xhr.open('POST', '/Admin/Snapshots?handler=UploadSnapshot');
                 var tokenInput = document.querySelector('input[name="__RequestVerificationToken"]');
                 if (tokenInput) {
                     xhr.setRequestHeader('RequestVerificationToken', tokenInput.value);
@@ -668,7 +656,7 @@
                 fd.append('masterPassword', password);
                 // A long operation (BMB-311): the pop-up covers the page; when the node refuses, the dialog is still here and says why next to the button.
                 bmbBusy.run(restoreBtn, function () {
-                    return bmbBusy.request('/Admin?handler=InitiateNetworkRestore', {
+                    return bmbBusy.request('/Admin/Snapshots?handler=InitiateNetworkRestore', {
                         method: 'POST',
                         headers: { 'RequestVerificationToken': token },
                         body: fd
@@ -690,7 +678,7 @@
 
             // A long operation (BMB-311): the pop-up covers the page; when the node refuses, the dialog is still here and says why next to the button.
             bmbBusy.run(restoreBtn, function () {
-                return bmbBusy.request('/Admin?handler=RestoreSnapshot', {
+                return bmbBusy.request('/Admin/Snapshots?handler=RestoreSnapshot', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded',

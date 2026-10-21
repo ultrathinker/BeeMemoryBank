@@ -52,7 +52,9 @@ internal sealed class BlindHubHost : IAsyncDisposable
         Admin.DefaultRequestHeaders.Add("X-User-Role", "superadmin");
     }
 
-    public static async Task<BlindHubHost> StartAsync(X509Certificate2 certificate, string displayName, string password)
+    /// <param name="configure">Registrations a test adds after the node's own (the last one wins): its own probe, clock or trust anchors.</param>
+    public static async Task<BlindHubHost> StartAsync(X509Certificate2 certificate, string displayName, string password,
+        Action<IServiceCollection>? configure = null)
     {
         // Same key as the factory-based tests: BMB_INTERNAL_KEY is process-wide.
         Environment.SetEnvironmentVariable("BMB_INTERNAL_KEY", BmbWebApplicationFactory.InternalKeyForTests);
@@ -72,6 +74,7 @@ internal sealed class BlindHubHost : IAsyncDisposable
         var errors = new System.Collections.Concurrent.ConcurrentQueue<string>();
         builder.Logging.AddProvider(new ErrorCapture(errors));
         builder.AddBeeApiServices(dataDir);
+        configure?.Invoke(builder.Services);
 
         var app = builder.Build();
         await app.RunBeeApiStartupTasksAsync(dataDir);

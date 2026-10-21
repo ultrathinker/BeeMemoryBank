@@ -37,8 +37,8 @@ public class PromotePasswordPeersModel(ApiClient api) : PageModel
         }
 
         return failed.Count == 0
-            ? RedirectToPage("/Admin", new { msg = $"{promoted} device(s) granted superadmin." })
-            : RedirectToPage("/Admin", new { err = $"{promoted} granted; failed: {string.Join("; ", failed)}" });
+            ? RedirectToPage("/Admin/TrustedNodes", new { msg = $"{promoted} device(s) granted superadmin." })
+            : RedirectToPage("/Admin/TrustedNodes", new { err = $"{promoted} granted; failed: {string.Join("; ", failed)}" });
     }
 
     /// <summary>

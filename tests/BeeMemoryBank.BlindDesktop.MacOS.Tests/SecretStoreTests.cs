@@ -65,7 +65,10 @@ internal sealed class FakeKeychainBackend : IKeychainBackend
         return _items.Remove((service, account)) ? KeychainStatus.Success : KeychainStatus.ItemNotFound;
     }
 
-    public string Describe(int status) => status == KeychainStatus.InteractionNotAllowed ? "User interaction is not allowed." : "";
+    /// <summary>When set, what the system "says" about every status (a test makes it name a place).</summary>
+    public string? DescribedAs { get; set; }
+
+    public string Describe(int status) => DescribedAs ?? (status == KeychainStatus.InteractionNotAllowed ? "User interaction is not allowed." : "");
 }
 
 /// <summary>The logic of the Keychain secret store, on a fake Keychain so it runs on any OS. The real Security.framework calls are in KeychainMacTests.</summary>

@@ -15,6 +15,11 @@ namespace BeeMemoryBank.Storage.Tests.Squash;
 /// </summary>
 internal static class SchemaDump
 {
+    // What the migrations AFTER the baseline add (041 and up). The squash tests compare a database with the schema the 39-file chain built, which is the
+    // baseline's, so these objects and ledger rows stay out of every dump (PostBaselineTests checks them on their own).
+    private const int FirstPostBaselineVersion = MigrationRunner.BaselineVersion + 1;
+    private static readonly HashSet<string> PostBaselineTables = new(StringComparer.Ordinal) { "tbl_blind_invite" };
+
     private static readonly Regex Blanks = new(@"\s+", RegexOptions.Compiled);
     private static readonly Regex Timestamp = new(@"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?Z?", RegexOptions.Compiled);
 
@@ -29,6 +34,7 @@ internal static class SchemaDump
         foreach (var (type, name, tblName, sql) in objects)
         {
             if (!withLedger && (name == "tbl_migration" || tblName == "tbl_migration")) continue;
+            if (PostBaselineTables.Contains(name) || PostBaselineTables.Contains(tblName)) continue; // its indexes and triggers carry its name as tbl_name
             if (type == "table")
             {
                 sb.Append("TABLE ").Append(name).Append(" | ").AppendLine(sql is not null && sql.StartsWith("CREATE VIRTUAL", StringComparison.OrdinalIgnoreCase) ? Normalize(sql) : "");
@@ -66,7 +72,7 @@ internal static class SchemaDump
     public static List<string> RowTables(IDbConnection conn) =>
         conn.Query<string>(
             @"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'fts\_%' ESCAPE '\'
-                AND name <> 'tbl_migration' AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL%') ORDER BY name").ToList();
+                AND name <> 'tbl_migration' AND name <> 'tbl_blind_invite' AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL%') ORDER BY name").ToList();
 
     /// <summary>Per table: the row count and a digest of every row (a row is its values, a blob as hex; rows sorted as text).</summary>
     public static SortedDictionary<string, (long Count, string Digest)> Rows(IDbConnection conn, bool maskTimestamps = false)
@@ -99,7 +105,7 @@ internal static class SchemaDump
         string.Join("\n", Rows(conn, maskTimestamps).Select(r => $"{r.Key} {r.Value.Count} {r.Value.Digest}"));
 
     public static List<(int Version, string Filename)> Ledger(IDbConnection conn) =>
-        conn.Query<(int, string)>("SELECT version, filename FROM tbl_migration ORDER BY version").ToList();
+        conn.Query<(int, string)>("SELECT version, filename FROM tbl_migration WHERE version < @first ORDER BY version", new { first = FirstPostBaselineVersion }).ToList();
 
     public static string FileDigest(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
 }

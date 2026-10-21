@@ -153,7 +153,8 @@ public sealed class FileLockSingleInstance : IDisposable
         }
         catch (Exception ex) when (ex is SocketException or IOException or UnauthorizedAccessException or PlatformNotSupportedException)
         {
-            ActivationUnavailable = $"{ex.GetType().Name}: {ex.Message}";
+            // The type only: the message of a socket or I/O failure names the socket file (a path in the data folder).
+            ActivationUnavailable = $"{ex.GetType().Name} (the activation socket could not be set up)";
         }
     }
 

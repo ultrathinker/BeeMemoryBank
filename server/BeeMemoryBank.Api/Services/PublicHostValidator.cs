@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using BeeMemoryBank.Crypto;
 
 namespace BeeMemoryBank.Api.Services;
 
@@ -46,14 +47,17 @@ public sealed class DnsPublicHostValidator : IPublicHostValidator
 /// rules: <see cref="IsPublic"/> (the probe relay: only the open internet) and <see cref="IsPossibleHub"/> ("let blind copies call
 /// this node": the open internet or the administrator's own network, never this machine). An address that merely wraps an
 /// IPv4 one (IPv4-mapped, IPv4-compatible, NAT64 <c>64:ff9b::/96</c>, 6to4 <c>2002::/16</c>) is judged as the IPv4 address it
-/// stands for, so no spelling gets a loopback or cloud-metadata address past the check.
+/// stands for, so no spelling gets a loopback or cloud-metadata address past the check. Both answers also hold the node-wide rule
+/// of <see cref="PeerNetworkRules"/> (the one every peer address and every connect step uses), which is where the fixed cloud-metadata
+/// addresses are listed (<c>100.100.100.200</c>, <c>192.0.0.192</c>, <c>168.63.129.16</c>, <c>fd00:ec2::/32</c>, <c>fd20:ce::254</c>), so that
+/// there is ONE list of them.
 /// </summary>
 public static class HostAddressPolicy
 {
     /// <summary>Open internet only: not this machine, not link-local, not multicast, not a private LAN range.</summary>
     public static bool IsPublic(IPAddress ip) =>
         ip.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6
-        && !IsNeverReachableByACopy(ip) && !IsPrivateNetwork(ip);
+        && !IsNeverReachableByACopy(ip) && !IsPrivateNetwork(ip) && PeerNetworkRules.IsAllowed(ip);
 
     /// <summary>
     /// An address a blind copy could be told to call: everything except loopback, link-local (169.254.0.0/16 with the cloud
@@ -61,7 +65,7 @@ public static class HostAddressPolicy
     /// (10/8, 172.16/12, 192.168/16, fc00::/7) stay allowed: a pinned hub on a company or home network is a supported setup.
     /// </summary>
     public static bool IsPossibleHub(IPAddress ip) =>
-        ip.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6 && !IsNeverReachableByACopy(ip);
+        ip.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6 && !IsNeverReachableByACopy(ip) && PeerNetworkRules.IsAllowed(ip);
 
     private static bool IsNeverReachableByACopy(IPAddress ip)
     {
@@ -87,17 +91,5 @@ public static class HostAddressPolicy
         return (b[0] & 0xFE) == 0xFC;                          // fc00::/7 unique local
     }
 
-    /// <summary>The IPv4 address an IPv6 address only wraps, or the address itself.</summary>
-    private static IPAddress Unwrap(IPAddress ip)
-    {
-        if (ip.AddressFamily != AddressFamily.InterNetworkV6) return ip;
-        if (ip.IsIPv4MappedToIPv6) return ip.MapToIPv4();
-        var b = ip.GetAddressBytes();
-        if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xFF && b[3] == 0x9B && b[4..12].All(x => x == 0))
-            return new IPAddress(b[12..16]);                                        // 64:ff9b::/96 NAT64
-        if (b[..12].All(x => x == 0) && !(b[12] == 0 && b[13] == 0 && b[14] == 0 && b[15] <= 1))
-            return new IPAddress(b[12..16]);                                        // ::a.b.c.d IPv4-compatible (not :: or ::1)
-        if (b[0] == 0x20 && b[1] == 0x02) return new IPAddress(b[2..6]);            // 2002::/16 6to4
-        return ip;
-    }
+    private static IPAddress Unwrap(IPAddress ip) => PeerNetworkRules.Unwrap(ip);
 }

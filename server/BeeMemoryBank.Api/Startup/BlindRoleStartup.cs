@@ -28,12 +28,15 @@ public static class BlindRoleStartup
 
         RefuseDekMaterial(dataPath, services.GetRequiredService<IDbConnectionFactory>());
 
+        AdoptEnvironmentLimits(services, logger);
+
         using var scope = services.CreateScope();
         var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
         var key = services.GetRequiredService<FileNodeKey>();
         var config = services.GetRequiredService<IConfiguration>();
         await EnsureIdentityAsync(nodeRepo, key, config["BMB_NODE_NAME"], logger);
         RepairSecretPermissions(dataPath, key.Path, logger);
+        BlindJoinStore.RemoveOrphans(dataPath);
 
         // A restore_network whose reseed flag a crash may have lost (plan 5.3), and a rotation a
         // crash left in Committing.
@@ -103,7 +106,7 @@ public static class BlindRoleStartup
     /// </summary>
     internal static void RepairSecretPermissions(string dataPath, string seedPath, ILogger logger)
     {
-        foreach (var file in new[] { seedPath, BlindTlsCertificate.PathIn(dataPath), BlindBackupSettingsStore.SettingsFileIn(dataPath) })
+        foreach (var file in new[] { seedPath, BlindTlsCertificate.PathIn(dataPath), BlindBackupSettingsStore.SettingsFileIn(dataPath), BlindJoinStore.FileIn(dataPath) })
         {
             if (OwnerOnlyFile.TryTighten(file, out var problem))
                 logger.LogInformation("Blind node: {Path} was readable by other accounts of this computer; it is now owner-only", file);
@@ -155,5 +158,59 @@ public static class BlindRoleStartup
                 logger.LogWarning(ex, "Blind node: could not remove leftover temporary {Path}", entry);
             }
         }
+    }
+
+    /// <summary>
+    /// The node's limits from <c>BMB_BLIND_MAX_STORED_BYTES</c> / <c>BMB_BLIND_MAX_TRAFFIC_PER_DAY</c>
+    /// (release 2.7): a value that does not parse, or a traffic cap below one sync round, refuses the
+    /// start — a node that cannot trust its own configuration must not serve without the caps its
+    /// owner believes are in force. A variable that IS set is adopted into <c>blind/settings.json</c>
+    /// (so the console shows and can edit what is in force, and a container keeps its limit across a
+    /// restart that forgets the environment); an empty one clears the stored limit; an unset one
+    /// leaves the file alone, so a limit the operator set in the console survives a restart.
+    /// </summary>
+    internal static void AdoptEnvironmentLimits(IServiceProvider services, ILogger logger)
+    {
+        // Through the host's configuration (it holds the environment): the variable of a container, or a setting a test gives.
+        var config = services.GetRequiredService<IConfiguration>();
+        Func<string, string?> get = name => config[name];
+        var (limits, problem) = BeeMemoryBank.Api.Services.BlindLimits.BlindNodeLimits.FromEnvironment(get);
+        if (problem is not null)
+            throw new InvalidOperationException("Blind node: " + problem + ". Fix the variable (or unset it) and start again.");
+        if (limits is null) return;
+
+        var store = services.GetRequiredService<BlindBackupSettingsStore>();
+        // Unreadable settings would leave the node serving with no limit while its owner believes the
+        // environment's caps are in force: refuse, as the console password change does for the same file.
+        if (!store.TryLoad(out _, out var unreadable))
+            throw new InvalidOperationException(
+                "Blind node: the limits from the environment could not be stored: the node's settings ("
+                + unreadable + ") cannot be read. Fix or restore blind/settings.json in the node's data folder, then start again.");
+        var stored = BeeMemoryBank.Api.Services.BlindLimits.BlindNodeLimits.ReadVariable(
+            BeeMemoryBank.Api.Services.BlindLimits.BlindNodeLimits.StoredEnvName, get);
+        var traffic = BeeMemoryBank.Api.Services.BlindLimits.BlindNodeLimits.ReadVariable(
+            BeeMemoryBank.Api.Services.BlindLimits.BlindNodeLimits.TrafficEnvName, get);
+        var changed = store.Update(s =>
+        {
+            var edit = false;
+            if (stored.Presence != BeeMemoryBank.Api.Services.BlindLimits.BlindNodeLimits.Presence.Unset
+                && s.MaxStoredBytes != stored.Bytes)
+            {
+                s.MaxStoredBytes = stored.Bytes;
+                edit = true;
+            }
+            if (traffic.Presence != BeeMemoryBank.Api.Services.BlindLimits.BlindNodeLimits.Presence.Unset
+                && s.MaxTrafficPerDay != traffic.Bytes)
+            {
+                s.MaxTrafficPerDay = traffic.Bytes;
+                edit = true;
+            }
+            return edit;
+        });
+        if (changed)
+            logger.LogInformation(
+                "Blind node: limits adopted from the environment (stored: {Stored}, traffic a day: {Traffic})",
+                stored.Bytes is { } b ? $"{b} bytes" : "no limit",
+                traffic.Bytes is { } t ? $"{t} bytes" : "no limit");
     }
 }

@@ -84,7 +84,7 @@ public class IosBoundaryTests
             csproj.Should().NotContain(name + ".csproj", "the app must not reference " + name);
         // The files it links from the desktop copies and the other phone apps are source, not their assemblies (BusyAction.cs: the one busy helper, BMB-311).
         Regex.Matches(csproj, "<Compile Include=\"([^\"]+)\"").Select(m => Path.GetFileName(m.Groups[1].Value.Replace('\\', '/')))
-            .Should().BeEquivalentTo("BlindTimerScheduler.cs", "MacOsBlindStateStore.cs", "BusyAction.cs");
+            .Should().BeEquivalentTo("MacOsBlindStateStore.cs", "BusyAction.cs");
     }
 
     [Fact]

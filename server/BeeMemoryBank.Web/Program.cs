@@ -429,7 +429,7 @@ public partial class Program { }
 
 // Request DTOs for the hand-written proxy routes (ArticleProxyEndpoints / SnapshotProxyEndpoints).
 // ProxyRouteTable entries need none: the forwarder streams request bodies through unparsed.
-// DisposingStreamWrapper backs the snapshot download in Admin.cshtml.cs.
+// DisposingStreamWrapper backs the snapshot download in Pages/Admin/Snapshots.cshtml.cs.
 
 internal record UpdateArticleProxyRequest(
     string? Title,

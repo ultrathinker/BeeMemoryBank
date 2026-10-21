@@ -912,6 +912,76 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             new { Me = result.NodeId.ToString(), Fp = source.CurrentFingerprint })).Should().Be(1);
     }
 
+    // ── RV7 (srvfix9): the restored device's name has a product-level maximum, so the claim that follows the commit can never be too large for the blind node ──
+
+    [Fact]
+    public async Task OverTheNetwork_ADisplayNameOverTheLimit_IsRefusedBeforeAnythingStarts()
+    {
+        var blind = source.Blind;
+        using var blindClient = blind.CreateClient();
+        var code = (await (await blindClient.PostAsync("/api/blind/restore-code", null)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString()!;
+        var recorder = new PinRecorder(blind.Server.CreateHandler());
+        using var target = new RecoveryTestFactory();
+        target.RouteOutboundHttpThrough(recorder);
+        using var targetClient = target.CreateClient();
+
+        var start = await targetClient.PostAsJsonAsync("/api/restore/blind", new
+        {
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = new string('N', 201)
+        });
+
+        start.StatusCode.Should().Be(HttpStatusCode.BadRequest, "a name that long would make the claim too large for the blind node, after the restore had committed");
+        (await start.Content.ReadAsStringAsync()).Should().Contain("200");
+        recorder.Seen.Should().BeEmpty("nothing was asked of the blind node");
+        (await targetClient.GetFromJsonAsync<JsonElement>("/api/restore/progress")).GetProperty("state").GetString().Should().Be("idle");
+    }
+
+    [Fact]
+    public async Task TheRestoreClient_RefusesADisplayNameOverTheLimit_BeforeItAsksTheBlindNodeForAnything()
+    {
+        var blind = source.Blind;
+        using var blindClient = blind.CreateClient();
+        var code = (await (await blindClient.PostAsync("/api/blind/restore-code", null)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString()!;
+        var recorder = new PinRecorder(blind.Server.CreateHandler());
+        using var target = new RecoveryTestFactory();
+        target.RouteOutboundHttpThrough(recorder);
+        _ = target.CreateClient();
+        var client = target.Services.GetRequiredService<BlindRestoreClient>();
+
+        var restore = () => client.RestoreFromBlindNodeAsync("https://blind.test", code, null,
+            new RestoreIdentity("admin", new string('N', 201), RestoreSourceFixture.Password));
+
+        (await restore.Should().ThrowAsync<ArgumentException>()).Which.Message.Should().Contain("200");
+        recorder.Seen.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OverTheNetwork_ADisplayNameAtTheLimit_RestoresAndTheBlindNodeAcceptsTheClaim()
+    {
+        var blind = source.Blind;
+        using var blindClient = blind.CreateClient();
+        var code = (await (await blindClient.PostAsync("/api/blind/restore-code", null)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString()!;
+        using var target = new RecoveryTestFactory();
+        target.RouteOutboundHttpThrough(blind.Server.CreateHandler());
+        using var targetClient = target.CreateClient();
+        var name = new string('N', 200);
+
+        var start = await targetClient.PostAsJsonAsync("/api/restore/blind", new
+        {
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = name
+        });
+        start.StatusCode.Should().Be(HttpStatusCode.Accepted, await start.Content.ReadAsStringAsync());
+        (await WaitForRestoreAsync(targetClient)).GetProperty("state").GetString().Should().Be("done");
+
+        Guid restoredId;
+        using (var scope = target.Services.CreateScope())
+            restoredId = (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!.NodeId;
+        using var blindScope = blind.Services.CreateScope();
+        var row = await blindScope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(restoredId);
+        row.Should().NotBeNull("the claim of a device with the longest allowed name is accepted (not a 413 after the commit)");
+        row!.DisplayName.Should().Be(name);
+    }
+
     [Fact]
     public async Task OverTheNetwork_FromABlindNode_ThenTheBlindNodeTrustsTheRestoredDevice()
     {

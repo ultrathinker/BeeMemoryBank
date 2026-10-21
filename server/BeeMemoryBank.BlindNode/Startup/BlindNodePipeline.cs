@@ -35,6 +35,11 @@ public static class BlindNodePipeline
         // Rate limiting for the sensitive endpoints - brute-force protection.
         app.UseMiddleware<BeeMemoryBank.Api.Middleware.RateLimitMiddleware>();
 
+        // The node's own limits (2.7): what it may store and move for the mesh. After RateLimit (a
+        // paused answer must not spend a brute-force slot) and before Maintenance (a node that is
+        // paused and in maintenance says "paused": that is the answer its callers can act on).
+        app.UseMiddleware<BeeMemoryBank.Api.Middleware.BlindUsageMiddleware>();
+
         // Maintenance mode - blocks every request except the restore and seed flows.
         app.UseMiddleware<BeeMemoryBank.Api.Middleware.MaintenanceMiddleware>();
     }

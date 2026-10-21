@@ -170,6 +170,32 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
 
     // ------------------------------------------------------------------------------------------------ tests
 
+    /// <summary>
+    /// The invitations to blind copies (migration 041) go with the peers they would have added, and a redeemed one holds the device's backup key sealed
+    /// under the OLD master key: nothing may be left that the old key opened.
+    /// </summary>
+    [Fact]
+    public async Task TheInvitationsToBlindCopies_AreClearedWithTheirPeers_NoneIsLeftHoldingAKeyOfTheOldVault()
+    {
+        using (var conn = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Pooling=False"))
+        {
+            conn.Open();
+            conn.Execute(@"INSERT INTO tbl_blind_invite
+                (invite_id, secret_hash, label, source_name, address, trust, created_by, created_at, expires_at, state, backup_key_enc, confirm_deadline)
+              VALUES ('inv-redeemed', 'h', 'Anna', 'Owner', 'https://hub.example.org', 'public-ca', 'admin', '2026-10-21T00:00:00.0000000Z',
+                      '2026-10-21T00:30:00.0000000Z', 'redeemed', x'0102030405060708', '2999-01-01T00:00:00.0000000Z'),
+                     ('inv-open', 'h2', '', 'Owner', 'https://hub.example.org', 'public-ca', 'admin', '2026-10-21T00:00:00.0000000Z',
+                      '2999-01-01T00:00:00.0000000Z', 'issued', NULL, NULL)");
+        }
+
+        var outcome = await RunAsync();
+
+        outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
+        using var after = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Mode=ReadOnly;Pooling=False");
+        after.Open();
+        after.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_blind_invite").Should().Be(0);
+    }
+
     [Fact]
     public async Task AfterTheReKey_OnlyTheOwnersPasswordUnlocks_AndNoOldCredentialOrPeerIsLeft()
     {

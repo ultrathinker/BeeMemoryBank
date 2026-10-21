@@ -160,6 +160,16 @@ const scenarios = {
         eq(M.statusText({ state: 'calls_us', lastContactAt: null }, NOW), 'Has not called since this node started', 'a device not heard');
         eq(M.statusText({ state: 'unknown', lastContactAt: null }, NOW), 'Not heard from since this node started', 'unknown');
     },
+    a_paused_or_removed_copy_says_so() {
+        const paused = "Paused by the device's owner: daily traffic limit (until 00:00 device time)";
+        eq(M.statusText({ state: 'calls_us', lastContactAt: ago(120), pausedText: paused }, NOW), paused + ' · last call 2 min ago', 'paused, with its last call');
+        eq(M.statusText({ state: 'calls_us', lastContactAt: null, pausedText: paused }, NOW), paused, 'paused, never heard');
+        eq(M.statusText({ state: 'calls_us', lastContactAt: ago(120), leftAt: ago(60), pausedText: paused }, NOW),
+            'Removed from the device by its owner — revoke it under Blind nodes', 'removed wins over paused');
+        eq(M.statusText({ state: 'calls_us', lastContactAt: ago(120), pausedText: null, leftAt: null }, NOW), 'Calls this node · last call 2 min ago', 'neither: as before');
+        const rows = M.nodeRows({ kind: 'blind', state: 'calls_us', lastContactAt: ago(60), pausedText: paused, isSynced: true, unsyncedCount: 0 }, { isSelf: true }, NOW);
+        eq(rows[0][1], paused + ' · last call 1 min ago', 'the Status row of the card');
+    },
     what_this_node_knows_of_the_notes_on_a_node() {
         const self = { isSelf: true, notes: 482, folders: 37, changes: 1204 };
         eq(M.notesText(self, self), '482 notes · 37 folders · 1,204 changes in the log', 'this node');

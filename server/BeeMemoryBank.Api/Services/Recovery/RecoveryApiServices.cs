@@ -33,6 +33,7 @@ public static class RecoveryApiServices
         // Restore: the blind side (codes) and the new device's side.
         services.TryAddSingleton<INodeRole, EnvironmentNodeRole>();
         services.AddScoped<BlindRestoreCodeService>();
+        services.AddSingleton<BlindRestoreCodeThrottle>();
         services.AddSingleton<RecoveryRestoreService>();
         services.AddSingleton<BlindRestoreClient>();
         services.AddSingleton<IBackupFileRestoreSource, BeeMemoryBank.Api.Services.BlindPhone.AndroidBackupRestoreSource>();

@@ -52,7 +52,11 @@ public interface IEventLogger
     /// <see cref="IWhitelistRepository.RevokeAsync"/>: the row is what a later event is compared
     /// against, so a row carrying some earlier write's version answers that comparison wrongly.
     /// </summary>
-    Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry);
+    /// <param name="eventId">
+    /// The id the event is written under, or null for a new one. A caller whose write is a step of something that can be interrupted (an invitation being
+    /// confirmed) names the event in advance, so that after a crash it can ask the log "did I get as far as this event?" instead of logging a second one.
+    /// </param>
+    Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry, Guid? eventId = null);
 
     /// <inheritdoc cref="LogWhitelistAddAsync"/>
     Task<RowVersion> LogWhitelistRevokeAsync(Guid nodeId);

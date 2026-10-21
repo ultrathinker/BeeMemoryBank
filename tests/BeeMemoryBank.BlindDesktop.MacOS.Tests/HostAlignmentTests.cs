@@ -180,7 +180,8 @@ public class KeyStoreUnavailableTests
         keychain.Locked = true;
         var locked = app.GetStatus();
 
-        locked.KeyStoreUnavailable.Should().NotBeNull().And.Contain("BlindSecretStoreException").And.Contain("-25308");
+        locked.KeyStoreUnavailable.Should().NotBeNull().And.Contain("BlindSecretStoreException").And.Contain("-25308", "the status of the system is what the person needs")
+            .And.Contain("backup key", "the secret is named by its kind").And.NotContain("backup-key-v1").And.NotContain("com.beememorybank");
         locked.KeyStoreUnavailable!.Length.Should().BeLessThan(160);
         locked.KeyStoreUnavailable.Should().NotContain(Convert.ToHexString(seed)).And.NotContain(Convert.ToBase64String(seed));
         locked.BackupKeyLost.Should().BeFalse("a Keychain that does not answer is not a lost key");
@@ -211,7 +212,7 @@ public class KeyStoreUnavailableTests
         keychain.FailNext["copy"] = KeychainStatus.AuthFailed;
         var status = app.GetStatus();
 
-        status.KeyStoreUnavailable.Should().Contain("-25293");
+        status.KeyStoreUnavailable.Should().Contain("BlindSecretStoreException").And.Contain("-25293").And.NotContain("-v1");
         status.BackupKeyLost.Should().BeFalse();
         app.GetStatus().KeyStoreUnavailable.Should().BeNull("one denied call is not a lasting state");
         SqliteConnection.ClearAllPools();
@@ -229,8 +230,9 @@ public class KeyStoreUnavailableTests
 
         var status = app.GetStatus();
 
-        status.KeyStoreUnavailable.Should().Contain("BlindSecretStoreException").And.Contain("altered outside the app").And.Contain("wipe",
-            "the advice survives AppCore's cut to one short line");
+        status.KeyStoreUnavailable.Should().Contain("BlindSecretStoreException").And.Contain("altered outside the app").And.Contain("remove this account",
+            "the advice (the way out a head really has) is said whole");
+        status.KeyStoreUnavailable.Should().NotContain("backup-key-v1").And.NotContain("com.beememorybank", "the item is named by its kind, not by its Keychain name");
         status.BackupKeyLost.Should().BeFalse();
         keychain.Items[("com.beememorybank.blind", "backup-key-v1")].Should().Equal(new byte[64], "the tampered item is left as it is, no new key is made over it");
         SqliteConnection.ClearAllPools();

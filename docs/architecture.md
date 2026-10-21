@@ -65,7 +65,7 @@ server/
 │   └── Models/              — DTOs for endpoints
 │
 ├── BeeMemoryBank.Web/       — Razor Pages Web UI (stateless proxy to API)
-│   ├── Pages/               — Login, Tree, Folder, Article/View, Article/Edit, Admin, Search, Activity, Users, Lock
+│   ├── Pages/               — Login, Tree, Folder, Article/View, Article/Edit, Admin (an index and a page per block, see below), Search, Activity, Users, Lock
 │   └── Services/ApiClient   — HTTP client to API (folder download, invisible mode)
 │
 ├── BeeMemoryBank.Cli/       — CLI (bmb)
@@ -168,6 +168,24 @@ Nodes are physical copies of the data across different locations and devices —
 **Users, agents, and folder ACL restrictions are node-local.** They are created on the node where they belong and are not propagated through the event stream. A user created on the primary node does not exist on a replica, and vice versa.
 
 This is a deliberate design choice. It rules out partial-sync topologies (a worker node syncing only `/Public`) and cross-node user provisioning. For small teams and families, the gain in simplicity outweighs the flexibility lost.
+
+## The Admin area (Web)
+
+`/Admin` is an index; every block of administration is a page of its own, `/Admin/<Name>` (`server/BeeMemoryBank.Web/Pages/Admin/`), all on one template.
+
+- **The list.** `AdminPageCatalog.All` (`Pages/Admin/AdminPageCatalog.cs`) has one row per page: route, section, icon, title and the short description. The index renders it
+  under the section headings, the template takes a page's title and icon from it, and the tests enumerate it. Adding a page is a row there plus `Pages/Admin/<Name>.cshtml`
+  and its `.cshtml.cs`.
+- **The template.** `Pages/Admin/_AdminPage.cshtml`, chosen for the whole folder by `_ViewStart.cshtml` (a page does not set a layout): the Back button to the list, the icon
+  and the title, the message of the last action, the page's own `@section About { ... }` (required: what this is and what it is for, in plain words, who should touch it and what
+  cannot be undone), then the content. `_AdminMessage.cshtml` is the message area.
+- **The base class.** `AdminPageModel` holds the superadmin gate (`[Authorize(Roles = "superadmin")]`) in one place, `Back(msg, err)` for the end of a handler (the message shows
+  on the page where the button is) and `Info`, the page's catalog row. A page model loads only what its page shows; the list loads only what it warns about (a master password
+  another node changed, data-key rotations waiting for this node, devices a restore left waiting).
+- **Old bookmarks.** A fragment such as `/Admin#card-snapshots` never reaches the server, so the script of the index (`wwwroot/js/pages/admin-index.js`) moves a known one to the
+  page of its block (`AdminPageCatalog.LegacyAnchors`).
+- **Guards.** `AdminPagesTests.cs`: the catalog and the files agree, every page uses the template and has a description, every handler of every page is posted by a test, and
+  nothing in the Web project links to an anchor of the old page. The rate limit of the node wipe follows its page (`/Admin/ResetNode`, `RateLimitPath`).
 
 ## Key Architectural Decisions
 

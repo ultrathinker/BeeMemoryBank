@@ -25,5 +25,6 @@ public static class BlindNodeEndpoints
 
         app.MapBlindBackupEndpoints();
         app.MapBlindConsoleEndpoints();
+        app.MapBlindJoinEndpoints(); // bmb blind join: the local routes of the invitation of a server node
     }
 }

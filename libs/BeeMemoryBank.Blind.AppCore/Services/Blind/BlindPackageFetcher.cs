@@ -11,10 +11,17 @@ public sealed class BlindPackageFetcher(
     BlindPhoneReplicaClient client, BlindHttpClientProvider http, BlindPhoneState state, string workDirectory)
     : IBlindVerifiedPackageFetcher
 {
+    /// <summary>Told the archive's length before the first byte of a backup's package: the blind app sets aside, from here, the peak footprint the backup needs beyond the archive.</summary>
+    public Action<long>? BeforeArchive { get; init; }
+
     public Task<VerifiedReplicaPackage> FetchAsync(Action<long> beforeDownload, IProgress<double>? progress, CancellationToken ct)
     {
         var target = state.CallCode
             ?? throw new InvalidDataException("This phone is not paired with a node to fetch a package from.");
-        return client.FetchVerifiedPackageAsync(http.GetClient(target), target, workDirectory, progress, ct, beforeDownload);
+        return client.FetchVerifiedPackageAsync(http.GetClient(target), target, workDirectory, progress, ct, length =>
+        {
+            BeforeArchive?.Invoke(length);
+            beforeDownload(length);
+        });
     }
 }

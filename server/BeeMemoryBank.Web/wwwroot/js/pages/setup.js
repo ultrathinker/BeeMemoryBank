@@ -125,7 +125,7 @@
         if (!nodes.length) {
             box.innerHTML =
                 '<small class="text-muted">Nothing found on your network. A computer is found only while ' +
-                '“Devices on my network” is switched on for it (Admin → Nodes), and only on the same network. ' +
+                '“Devices on my network” is switched on for it (Admin → Devices on my network), and only on the same network. ' +
                 'Otherwise paste the join code from its Connect a device card above.</small>';
             return;
         }

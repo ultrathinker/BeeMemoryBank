@@ -2,6 +2,7 @@ using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync.Blind;
 using BeeMemoryBank.Sync.Recovery;
 using BeeMemoryBank.Core.Services;
@@ -123,6 +124,8 @@ public static class RestoreEndpoints
             if (await init.IsInitializedAsync()) return Results.Conflict(new ErrorResponse("Node is already initialized."));
             if (string.IsNullOrWhiteSpace(req.Code) || string.IsNullOrEmpty(req.Password))
                 return Results.BadRequest(new ErrorResponse("The restore code and the master password are required."));
+            // The name travels in the claim the blind node reads after the restore has committed: a name it would refuse must be refused here, before anything starts.
+            if (DeviceDisplayName.Problem(req.DisplayName) is { } nameProblem) return Results.BadRequest(new ErrorResponse(nameProblem));
             BlindRestoreCode code;
             try { code = BlindRestoreCode.Parse(req.Code); }
             catch (FormatException ex) { return Results.BadRequest(new ErrorResponse(ex.Message)); }
@@ -151,6 +154,7 @@ public static class RestoreEndpoints
             if (await init.IsInitializedAsync()) return Results.Conflict(new ErrorResponse("Node is already initialized."));
             if (string.IsNullOrWhiteSpace(req.Path) || string.IsNullOrEmpty(req.Password))
                 return Results.BadRequest(new ErrorResponse("Backup location and master password are required."));
+            if (DeviceDisplayName.Problem(req.DisplayName) is { } nameProblem) return Results.BadRequest(new ErrorResponse(nameProblem));
             if (!progress.TryStart()) return Results.Conflict(new ErrorResponse("A restore is already running."));
 
             var who = new RestoreIdentity(req.AdminUsername, req.DisplayName, req.Password);

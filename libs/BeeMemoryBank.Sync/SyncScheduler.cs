@@ -62,6 +62,9 @@ public class SyncScheduler(
 
     private readonly ClosedPeers _closed = new();
 
+    // Blind nodes whose owner's limit stops them (503 + X-BMB-Paused): asked again when they said, never later than an hour, no back-off, one line per episode.
+    private readonly PausedPeers _pausedPeers = new();
+
     // The pause barrier: a flow that is about to delete or replace this node's tables holds the
     // loop off until it is done. See PauseAsync.
     private readonly SemaphoreSlim _pauseGate = new(1, 1);
@@ -72,6 +75,15 @@ public class SyncScheduler(
 
     /// <summary>The blind-node peers with an open "closed to me" episode (what the loop remembers about doors that said 401/403); a test reads it.</summary>
     internal int ClosedEpisodes => _closed.Count;
+
+    /// <summary>The blind-node peers with an open "paused by its owner" episode; a test reads it.</summary>
+    internal int PausedEpisodes => _pausedPeers.Count;
+
+    /// <summary>The shortest wait after a paused answer (a test shortens it to honour a one-second <c>Retry-After</c>).</summary>
+    internal TimeSpan PausedMinRetry { get => _pausedPeers.MinWait; set => _pausedPeers.MinWait = value; }
+
+    /// <summary>The clock of the pause bookkeeping (when a paused peer is asked again): a test steps it instead of sleeping.</summary>
+    internal Func<DateTime> PauseClock { get; set; } = static () => DateTime.UtcNow;
 
     /// <summary>The peers this loop cannot reach now, each with the start of its failure streak (<see cref="UnreachablePeers.FailingSince"/>).</summary>
     public IReadOnlyDictionary<Guid, DateTime> UnreachableSince() => _unreachable.FailingSince();
@@ -260,6 +272,9 @@ public class SyncScheduler(
                 if (_lastFailure.TryGetValue(node.NodeId, out var asked)) failures.Add(asked);
                 continue;
             }
+            // A peer whose owner's limit stops it is asked again when it said (an hour at most), and meanwhile is not a failure of this cycle: the Blind nodes page says why.
+            if (_pausedPeers.ShouldSkip(node.NodeId, PauseClock(), PeerContactLog.EndpointKey(node.ApiAddress)))
+                continue;
 
             Exception? failure = null;
             try
@@ -270,6 +285,7 @@ public class SyncScheduler(
                 _lastFailure.TryRemove(node.NodeId, out _);
                 if (blind && _closed.NoteOpen(node.NodeId))
                     logger.LogInformation("{NodeId} ({Address}) answers this blind node again", node.NodeId, node.ApiAddress);
+                EndPausedEpisode(node, "a session went through");
                 if (_unreachable.NoteSuccess(node.NodeId) is var failedBefore and > 0)
                     logger.LogInformation("{NodeId} ({Address}) is reachable again after {Failures} failed attempts",
                         node.NodeId, node.ApiAddress, failedBefore);
@@ -321,6 +337,16 @@ public class SyncScheduler(
                 NoteUnreachable(node, ex);
                 continue;
             }
+            catch (PeerPausedException ex)
+            {
+                // It answered, and said its owner's limit stops it (503 + X-BMB-Paused): its door is open, so this is contact, not a failure and not a streak; the push
+                // waits for the time it named. No reseed either: nothing is wrong with what it holds.
+                _lastFailure.TryRemove(node.NodeId, out _);
+                _unreachable.NoteSuccess(node.NodeId);
+                if (blind) EndClosedEpisode(node, ex.Reason == PeerPauseReport.Busy ? "it answered, busy with other transfers" : "it answered, paused by its owner");
+                NotePaused(node, ex, contacts);
+                continue;
+            }
             catch (Exception ex) when (blind && IsClosedToMe(ex))
             {
                 failure = ex;
@@ -349,6 +375,7 @@ public class SyncScheduler(
                     contacts?.NoteOutboundFailure(node.NodeId, DateTime.UtcNow, PeerContactLog.Describe(ex), node.ApiAddress);
                     // It answered with something that is not a refusal (a 404, a 500, a 502 of its proxy): the door is not what stops this node any more.
                     if (blind && ex is HttpRequestException { StatusCode: { } answered }) EndClosedEpisode(node, $"it answered {(int)answered}");
+                    if (ex is HttpRequestException { StatusCode: not null }) EndPausedEpisode(node, "it answered with something that is not a pause");
                 }
                 logger.LogWarning(ex, "Error synchronizing with {NodeId} ({Address})",
                     node.NodeId, node.ApiAddress);
@@ -357,6 +384,11 @@ public class SyncScheduler(
             if (reseeder != null && BlindNodeId.IsBlind(node.NodeId))
             {
                 try { await reseeder.AfterSyncAsync(node, http, failure, ct); }
+                catch (PeerPausedException ex) when (!ct.IsCancellationRequested)
+                {
+                    // The blind node took the call and said its owner's limit stops the seed (503 + X-BMB-Paused): a pause, held for the time it named - not a failed reseed.
+                    NotePaused(node, ex, contacts);
+                }
                 catch (Exception ex) when (!ct.IsCancellationRequested)
                 {
                     logger.LogError(ex, "Reseeding blind node {NodeId} ({Address}) failed", node.NodeId, node.ApiAddress);
@@ -423,8 +455,17 @@ public class SyncScheduler(
                     contacts?.NoteOutboundOk(node.NodeId, DateTime.UtcNow, node.ApiAddress);
                     _unreachable.NoteSuccess(node.NodeId);
                     _closed.NoteOpen(node.NodeId);
+                    EndPausedEpisode(node, "a check went through");
                     _lastFailure.TryRemove(node.NodeId, out _);
                     return new PeerCheck(true, true, false, applied, null);
+                }
+                catch (PeerPausedException ex)
+                {
+                    // It answered: paused by its owner. Not a failure of the check ("answered" is true) and the reason is the pause, in this node's words.
+                    _lastFailure.TryRemove(node.NodeId, out _);
+                    _unreachable.NoteSuccess(node.NodeId);
+                    NotePaused(node, ex, contacts);
+                    return new PeerCheck(true, true, false, 0, PeerContactLog.Describe(ex));
                 }
                 catch (Exception ex) when (ex is PushGapException or SnapshotRequiredException)
                 {
@@ -477,6 +518,7 @@ public class SyncScheduler(
     {
         _unreachable.Forget(nodeId);
         _closed.Forget(nodeId);
+        _pausedPeers.Forget(nodeId);
         _lastFailure.TryRemove(nodeId, out _);
         _lastCheckStarted.TryRemove(nodeId, out _);
         contacts?.ForgetOutbound(nodeId);
@@ -507,6 +549,7 @@ public class SyncScheduler(
         var activeIds = active.Select(n => n.NodeId).ToHashSet();
         foreach (var id in _lastCheckStarted.Keys.Where(id => !activeIds.Contains(id)).ToList()) _lastCheckStarted.TryRemove(id, out _);
         _closed.Retain(activeIds);   // a revoked or deleted node leaves no closed episode behind
+        _pausedPeers.Retain(activeIds);   // nor a paused one
         contacts?.Reconcile(activeIds, DateTime.UtcNow);
     }
 
@@ -539,6 +582,45 @@ public class SyncScheduler(
     {
         if (_closed.NoteOpen(node.NodeId))
             logger.LogInformation("{NodeId} ({Address}) no longer answers 401/403 ({How}): its door is open to this blind node again", node.NodeId, node.ApiAddress, how);
+    }
+
+    /// <summary>
+    /// A blind node said its owner's limit stops it: the pause is remembered (asked again when it said, never later than an hour), the contact log shows it in the hub's own
+    /// words, and the episode's one line is information, not a warning: nothing is wrong, the node was told to wait (see <see cref="PausedPeers"/>). A node that said
+    /// <see cref="PeerPauseReport.Busy"/> is not paused by its owner: it is busy with other transfers and is asked again in about a minute, and the log says that.
+    /// </summary>
+    private void NotePaused(WhitelistEntry node, PeerPausedException ex, PeerContactLog? contacts)
+    {
+        var now = PauseClock();
+        // A traffic limit lifts at the node's next local midnight and the node says how long that is; a storage limit lifts when its owner changes it: no end to show.
+        contacts?.NotePausedByNode(node.NodeId, now, ex.Reason, ex.Reason == PeerPauseReport.Traffic ? now + ex.RetryAfter : null, node.ApiAddress);
+        var busy = ex.Reason == PeerPauseReport.Busy;
+        if (_pausedPeers.NotePaused(node.NodeId, now, ex.RetryAfter, ex.Reason, PeerContactLog.EndpointKey(node.ApiAddress)))
+        {
+            if (busy)
+                logger.LogInformation("{NodeId} ({Address}) is busy with other transfers right now; nothing is wrong with it and nothing is sent until it can take more, asking again in about a minute",
+                    node.NodeId, node.ApiAddress);
+            else
+                logger.LogInformation("{NodeId} ({Address}) is paused by its owner ({Reason}); nothing is wrong with it and nothing is sent until it can take more, asking again at most every {Retry}",
+                    node.NodeId, node.ApiAddress, ex.Reason, PausedPeers.MaxRetry);
+        }
+        else if (busy)
+            logger.LogDebug("{NodeId} ({Address}) is still busy with other transfers", node.NodeId, node.ApiAddress);
+        else
+            logger.LogDebug("{NodeId} ({Address}) is still paused by its owner ({Reason})", node.NodeId, node.ApiAddress, ex.Reason);
+    }
+
+    /// <summary>The one line that says a peer that was paused by its owner takes data again, written when it gives an answer that is not a pause (see <see cref="PausedPeers"/>).</summary>
+    private void EndPausedEpisode(WhitelistEntry node, string how)
+    {
+        var busy = _pausedPeers.ReasonOf(node.NodeId) == PeerPauseReport.Busy;
+        if (_pausedPeers.NoteOpen(node.NodeId))
+        {
+            if (busy)
+                logger.LogInformation("{NodeId} ({Address}) is no longer busy with other transfers ({How})", node.NodeId, node.ApiAddress, how);
+            else
+                logger.LogInformation("{NodeId} ({Address}) is no longer paused by its owner ({How})", node.NodeId, node.ApiAddress, how);
+        }
     }
 
     /// <summary>

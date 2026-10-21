@@ -6,7 +6,7 @@ namespace BeeMemoryBank.Web.Services;
 public partial class ApiClient
 {
     // ─── Metadata encryption (Step A) ───────────────────────────────────────────
-    // The Admin page's "Metadata encryption" card (docs/design/step-a-spec.md 5.3, 5.4). Null on any transport error or
+    // The Admin area's "Metadata encryption" page (docs/design/step-a-spec.md 5.3, 5.4). Null on any transport error or
     // non-2xx, so the card says "unavailable" instead of failing the page.
 
     /// <param name="askPeers">False: this node's own observations only (the page load); true: every reachable device too.</param>

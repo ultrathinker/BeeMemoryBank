@@ -182,4 +182,4 @@ Add to your Cursor MCP configuration (`.cursor/mcp.json`):
 }
 ```
 
-The Bearer token is created on the Admin → Agents page. It is shown only once — copy it when creating the agent.
+The Bearer token is created on your Profile page (Admin → Agents lists every user's agents and revokes them). It is shown only once — copy it when creating the agent.

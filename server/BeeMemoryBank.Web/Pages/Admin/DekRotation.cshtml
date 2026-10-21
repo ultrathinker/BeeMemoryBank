@@ -1,0 +1,148 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.DekRotationModel
+
+@section About {
+    <p>
+        Every article, version and file is encrypted under its own key, and those keys are wrapped by one <strong>master data key</strong> (the DEK). <strong>Rotating</strong> it makes a new
+        master key and re-encrypts everything under it; the old key is retired. Reasons: you suspect the key leaked, or a device that held it should be locked out for good (revoke it
+        first on <a href="/Admin/TrustedNodes">Trusted Nodes</a>: a revoked device gets no copy of the new key), or you want periodic key hygiene.
+    </p>
+    <p class="admin-warning">
+        <strong>This is a heavy operation for the whole network.</strong> It is started on one node and the others apply it as they sync: each one must accept it (here, or automatically for
+        devices you set to Auto-DEK rotation). While it runs, this node is in maintenance and re-encrypts all article bodies, versions, conflict copies and files in one transaction. Do not
+        close the browser, restart the node or interrupt it until it completes.
+    </p>
+    <ul>
+        <li><strong>Agents that can unlock the vault by themselves</strong> (those owned by a superadmin that carry the master key) are deleted and must be issued again afterwards. All other agents keep working.</li>
+        <li><strong>The key slots of the other users are removed:</strong> they have to set their passwords again.</li>
+        <li><strong>All recovery keys stop working:</strong> <a href="/Admin/RecoveryKey">issue a new one</a> right after.</li>
+        <li>A snapshot of this node is taken automatically before anything is changed.</li>
+    </ul>
+    <p>It takes two steps: <em>propose</em> (with your master password), then <em>confirm</em> (with your master password again), which starts the re-encryption.</p>
+}
+
+<partial name="_PendingDekRotations" model="Model.PeerPendingRotations" />
+
+<div class="card mt-md" style="max-width:640px;" @(Model.Active ? "data-dek-active=\"true\"" : "")>
+    @if (Model.ShowRecoveryKeyReminder)
+    {
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Issue a new recovery key!</strong> All previous recovery keys were invalidated by the DEK rotation.
+            <a href="/Admin/RecoveryKey">Issue one now</a>.
+        </sl-alert>
+    }
+
+    @if (Model.Active)
+    {
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="arrow-clockwise"></sl-icon>
+            <strong>DEK Rotation in Progress</strong>
+            <div style="margin-top:8px;">
+                <strong>Step:</strong> @Model.DekRotationProgress!.CurrentStep
+            </div>
+            <sl-progress-bar value="@Model.DekRotationProgress.PercentageComplete" style="margin-top:8px;"></sl-progress-bar>
+            @if (!string.IsNullOrEmpty(Model.DekRotationProgress.StatusMessage))
+            {
+                <p class="text-muted text-sm" style="margin-top:4px;">@Model.DekRotationProgress.StatusMessage</p>
+            }
+            @if (!string.IsNullOrEmpty(Model.DekRotationProgress.ErrorMessage))
+            {
+                <p style="color:var(--sl-color-danger-600);margin-top:4px;">@Model.DekRotationProgress.ErrorMessage</p>
+            }
+            @if (Model.DekRotationProgress.EventId.HasValue)
+            {
+                <form data-busy="short" method="post" asp-page-handler="CancelDekRotation" style="margin-top:12px;">
+                    <input type="hidden" name="eventId" value="@Model.DekRotationProgress.EventId" />
+                    <sl-button type="submit" variant="danger" size="small">
+                        <sl-icon slot="prefix" name="x-lg"></sl-icon> Cancel Rotation
+                    </sl-button>
+                </form>
+            }
+            <p class="text-muted text-sm" style="margin-top:8px;">This page refreshes automatically every 3 seconds.</p>
+        </sl-alert>
+    }
+    else if (!string.IsNullOrEmpty(Model.DekRotationCommitId))
+    {
+        <sl-alert variant="primary" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="info-circle"></sl-icon>
+            <strong>DEK rotation proposed.</strong> Enter your master password to confirm and begin re-encryption.
+        </sl-alert>
+        <form method="post" asp-page-handler="AcceptDekRotation" data-busy="long" data-busy-title="Changing the data key" style="margin-bottom:8px;">
+            <input type="hidden" name="commitEventId" value="@Model.DekRotationCommitId" />
+            <div style="margin-bottom:12px;">
+                <sl-input name="masterPassword" label="Master password" type="password" password-toggle required autocomplete="off"
+                          data-1p-ignore data-lpignore="true"></sl-input>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <sl-button type="submit" variant="warning">
+                    <sl-icon slot="prefix" name="shield-lock"></sl-icon> Confirm DEK Rotation
+                </sl-button>
+                <span class="text-muted text-sm" data-busy-note hidden role="status">Starting the re-encryption...</span>
+            </div>
+        </form>
+        @* A form of its own: a form inside a form is dropped by the HTML parser, and the Cancel button then submitted the Accept form (with the
+           password typed, "Cancel" confirmed the rotation). *@
+        <form data-busy="short" method="post" asp-page-handler="CancelDekRotation" style="margin-bottom:16px;">
+            <input type="hidden" name="eventId" value="@Model.DekRotationCommitId" />
+            <sl-button type="submit" variant="default" size="small">Cancel this rotation</sl-button>
+        </form>
+    }
+    else if (Model.DekRotationProgress?.CurrentStep == "Failed")
+    {
+        <sl-alert variant="danger" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>DEK rotation failed.</strong>
+            @if (!string.IsNullOrEmpty(Model.DekRotationProgress.ErrorMessage))
+            {
+                <p style="margin-top:4px;">@Model.DekRotationProgress.ErrorMessage</p>
+            }
+        </sl-alert>
+        <div style="display:flex;gap:8px;">
+            <sl-button variant="warning" size="small" class="btn-open-dek-rotation">
+                <sl-icon slot="prefix" name="shield-lock"></sl-icon> Retry Rotation
+            </sl-button>
+            @if (Model.DekRotationProgress?.EventId != null)
+            {
+                <form data-busy="short" method="post" asp-page-handler="CancelDekRotation" style="display:inline;">
+                    <input type="hidden" name="eventId" value="@Model.DekRotationProgress.EventId" />
+                    <sl-button type="submit" variant="default" size="small">Dismiss</sl-button>
+                </form>
+            }
+        </div>
+    }
+    else
+    {
+        <sl-button variant="warning" size="small" class="btn-open-dek-rotation">
+            <sl-icon slot="prefix" name="shield-lock"></sl-icon> Rotate DEK
+        </sl-button>
+    }
+</div>
+
+<!-- DEK Rotation Dialog -->
+<sl-dialog id="dlg-dek-rotation" label="Rotate DEK" style="--width:580px;">
+    <sl-alert variant="danger" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>This is a destructive, network-wide operation.</strong>
+    </sl-alert>
+    <p style="margin-bottom:12px;">Before proceeding, understand the impact:</p>
+    <ul style="margin:0 0 16px 20px;line-height:1.8;">
+        <li>All article bodies, version history, conflict copies, and media files will be <strong>re-encrypted</strong> (one big transaction; node enters maintenance for the duration).</li>
+        <li><strong>Agents that can auto-unlock the vault</strong> (superadmin-owned agents that carry the master key) will be deleted and must be re-issued after rotation completes — their wrapped copy of the old key cannot be re-wrapped server-side. All other agents keep working unchanged.</li>
+        <li>All <strong>other user key slots</strong> will be removed — other users will need to re-register their passwords against the new DEK.</li>
+        <li>All <strong>recovery keys</strong> will be invalidated — issue a new recovery key immediately after rotation.</li>
+        <li>A <strong>pre-rotation snapshot</strong> is created automatically before any destructive change.</li>
+        <li><strong>Do not close the browser, restart the node, or interrupt the process</strong> until it completes.</li>
+    </ul>
+    <form method="post" asp-page-handler="ProposeDekRotation" class="sl-form" data-busy="long" data-busy-title="Changing the data key">
+        <div style="margin-bottom:16px;">
+            <sl-input name="masterPassword" label="Master password" type="password" password-toggle required autocomplete="off"
+                      data-1p-ignore data-lpignore="true"></sl-input>
+        </div>
+        <span class="text-muted text-sm" data-busy-note hidden role="status">Proposing the rotation...</span>
+        <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-dek-rotation">Cancel</sl-button>
+        <sl-button type="submit" slot="footer" variant="danger">
+            <sl-icon slot="prefix" name="shield-lock"></sl-icon> Propose DEK Rotation
+        </sl-button>
+    </form>
+</sl-dialog>

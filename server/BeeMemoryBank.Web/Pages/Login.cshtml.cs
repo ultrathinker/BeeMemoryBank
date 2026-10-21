@@ -117,7 +117,7 @@ public class LoginModel(ApiClient api) : PageModel
         {
             TempData["RecoveryKeyReminder"] =
                 "You signed in after resetting the password with a recovery key. If the card with that " +
-                "key was lost or seen by someone else, issue a new one: Admin \u2192 Security \u2192 Issue new recovery key.";
+                "key was lost or seen by someone else, issue a new one: Admin \u2192 Recovery key \u2192 Issue new recovery key.";
         }
 
         if (!string.IsNullOrEmpty(ReturnUrl) && !Url.IsLocalUrl(ReturnUrl))

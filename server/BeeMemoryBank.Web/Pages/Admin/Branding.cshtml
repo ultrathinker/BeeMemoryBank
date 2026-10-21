@@ -1,0 +1,25 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.BrandingModel
+
+@section About {
+    <p>
+        The <strong>product name</strong> is the name shown in the header next to the logo and in the title of the browser tab. Leave it empty to keep the built-in name, Bee Memory Bank. Use it
+        to tell several installations apart (&ldquo;Home&rdquo;, &ldquo;Office&rdquo;) or to put your own company name on a node you share with a team.
+    </p>
+    <p>
+        This is a setting of <strong>this node only</strong>. It is never synced, so every installation can carry its own name. It changes nothing else: no data, no sign-in, no sync.
+    </p>
+}
+
+<div class="card mt-md" style="max-width:480px;">
+    <sl-input id="brand-name-input" size="small" maxlength="40" clearable
+              label="Product name" style="max-width:320px;"></sl-input>
+    <p class="text-muted text-sm" style="margin:10px 0 16px;">
+        Header preview: <strong id="brand-preview" style="color:var(--text-primary);"></strong>
+    </p>
+    <sl-button id="btn-save-branding" variant="primary" size="small">
+        <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
+    </sl-button>
+    <sl-button id="btn-reset-branding" variant="text" size="small">Reset to default</sl-button>
+    <span id="branding-saved-msg" style="display:none;margin-left:8px;color:var(--sl-color-success-600);font-size:0.85rem;">Saved.</span>
+</div>

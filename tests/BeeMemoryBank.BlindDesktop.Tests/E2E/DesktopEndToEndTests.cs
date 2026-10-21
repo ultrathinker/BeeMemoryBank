@@ -5,7 +5,6 @@ using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using BeeMemoryBank.BlindDesktop.Platform;
-using BeeMemoryBank.BlindDesktop.Scheduling;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
@@ -25,17 +24,20 @@ public sealed class E2EFactAttribute : FactAttribute
 }
 
 /// <summary>
-/// The whole life of the Windows blind app against real nodes, without a window: AppCore composed with the real Windows adapters (DPAPI, the
-/// atomic state file, the paths) in a scratch folder and driven by the real timer scheduler; the listener is the Docker blind node image;
+/// The whole life of the Windows blind app against real nodes, without a window: the account host composed with the real Windows adapters (DPAPI and the
+/// atomic state file per account, the paths) in a scratch folder and driven by the real device loop; the listener is the Docker blind node image;
 /// the "PC" is a real full node (Api exe). Steps, each logged with PASS or FAIL to the e2e log:
 /// <list type="number">
 /// <item>start the blind node container and full node A, pair them;</item>
-/// <item>the app makes its identity and shows its phone code; A pairs it (POST /api/blind-nodes/android); the app accepts the call code;</item>
-/// <item>the scheduler runs the first load; the replica holds A's articles;</item>
+/// <item>"Add account" makes an account with its identity and phone code; A pairs it (POST /api/blind-nodes/android); the account accepts the call code;</item>
+/// <item>the device loop runs the first load; the replica holds A's articles;</item>
 /// <item>an article written on A reaches the blind node and then the app by a sync round ("Sync now");</item>
 /// <item>"Back up now" (repeated while the computer's sealed copy of the backup key has not arrived by sync) makes a backup;</item>
 /// <item>"Save to..." copies it; a FRESH full node B restores it from that file with the master password and shows the articles;</item>
-/// <item>"Disconnect and wipe" leaves no key, state or data, and the next start is a fresh first run.</item>
+/// <item>a SECOND account on the same device (as a second device of the same mesh: a second mesh needs a second blind node and a third full node) has its own
+/// identity, keys, folder and first load, and syncs in the same loop;</item>
+/// <item>"Remove" takes the second account away with its keys and folder and leaves the first untouched; removing the first leaves no key, state or data, and the next
+/// start is a fresh first run.</item>
 /// </list>
 /// Environment: BMB_E2E_DESKTOP=1; BMB_E2E_BLIND_IMAGE (default bmb-blind:f201); BMB_E2E_FULL_EXE (path of BeeMemoryBank.Api.exe);
 /// BMB_E2E_WORK (scratch folder, default under the temp folder). Only objects named bmb-e2e-desk-* are created. The test STOPS what it
@@ -85,41 +87,46 @@ public sealed class DesktopEndToEndTests
             await nodeA.SignInAsync();
             await log.WaitFor("blind node holds the 3 articles", TimeSpan.FromMinutes(3), () => BlindArticleCount(container) >= 3);
 
-            // 2. the app: identity, phone code, the computer's answer
+            // 2. the app: no account on a new device; "Add account" the old way makes one with its identity and phone code; A pairs it; the app accepts the call code
             var root = Path.Combine(work, "desktop-app");
             var platform = new E2EPlatform(PlatformSelector.Create(root));
-            var returned = 0;
             var reports = new List<string>();
-            var options = new BlindSchedulerOptions { Tick = TimeSpan.FromSeconds(1) };
-            app = BlindDesktopRuntime.Create(platform, () => null, () => Interlocked.Increment(ref returned), scheduler: options,
+            var options = new BlindDeviceSchedulerOptions { Tick = TimeSpan.FromSeconds(1) };
+            app = BlindDesktopRuntime.Create(platform, () => null, scheduler: options,
                 displayName: () => "E2E desktop", exporter: new FileExporter(Path.Combine(work, "saved")));
-            app.Scheduler.UserJobReported += s => { lock (reports) reports.Add(s); log.Say("user sees: " + s); };
+            app.Scheduler.UserJobReported += (id, said) => { lock (reports) reports.Add(said); log.Say($"user sees [{id[..Math.Min(8, id.Length)]}]: " + said); };
             await app.StartAsync();
-            var phoneCode = app.App.PairingCode();
-            log.Check("the app shows a phone code", phoneCode?.StartsWith("bmb-blind-phone:?") == true);
+            log.Check("a new device has no account", app.Accounts.GetSnapshot().Accounts.Count == 0);
+            var added = await app.Accounts.AddAsync("E2E desktop");
+            log.Check("Add account makes an account with a folder of its own", added.Ok && Directory.Exists(Path.Combine(root, "accounts", added.AccountId ?? "-")), added.Error);
+            var accountId = added.AccountId!;
+            var account = app.Accounts.For(accountId);
+            var accountFolder = Path.Combine(root, "accounts", accountId);
+            var phoneCode = account.PairingCode();
+            log.Check("the account shows a phone code", phoneCode?.StartsWith("bmb-blind-phone:?") == true);
             var callCode = await nodeA.PairPhoneAsync(phoneCode!, blindNodeId);
-            log.Check("PC pairs the app and returns a call code", callCode is not null);
-            log.Check("the app accepts the call code", app.App.AcceptCallCode(callCode!) is null);
-            app.Scheduler.RequestHeavy(); // what the Connect button does
+            log.Check("PC pairs the account and returns a call code", callCode is not null);
+            log.Check("the account accepts the call code", account.AcceptCallCode(callCode!) is null);
+            app.Scheduler.RequestHeavy(accountId); // what the Connect button does
 
-            // 3. the scheduler runs the first load
+            // 3. the device loop runs the first load
             await log.WaitFor("first load", TimeSpan.FromMinutes(6), () =>
             {
-                var s = app.App.GetStatus();
+                var s = account.GetStatus();
                 log.Say($"  status: job={s.ActiveJob ?? "-"} progress={s.JobProgress?.ToString("P0") ?? "-"} loaded={s.InitialLoadDone}");
                 return s.InitialLoadDone;
             }, pollSeconds: 2);
-            var replica = Path.Combine(root, "beememorybank.db");
+            var replica = Path.Combine(accountFolder, "beememorybank.db");
             log.Check("the replica holds the 3 articles", ReplicaArticleCount(replica) >= 3, "count=" + ReplicaArticleCount(replica));
 
             // 4. a later article reaches the app by sync
             await nodeA.WriteArticleAsync("desktop e2e after pairing", "late " + new string('y', 2000));
             await log.WaitFor("blind node holds the 4th article", TimeSpan.FromMinutes(3), () => BlindArticleCount(container) >= 4);
-            var syncedBefore = app.App.GetStatus().LastSyncAt;
-            app.Scheduler.RequestSync();
+            var syncedBefore = account.GetStatus().LastSyncAt;
+            app.Scheduler.RequestSync(accountId);
             await log.WaitFor("sync round brings the 4th article", TimeSpan.FromMinutes(2), () =>
                 ReplicaArticleCount(replica) >= 4
-                && app.App.GetStatus().LastSyncAt is { } at && (syncedBefore is null || at > syncedBefore), pollSeconds: 2);
+                && account.GetStatus().LastSyncAt is { } at && (syncedBefore is null || at > syncedBefore), pollSeconds: 2);
             log.Check("a sync round ran and the replica holds 4 articles", ReplicaArticleCount(replica) >= 4);
 
             // 5. a backup. It needs the network's recovery box, an integrity anchor (a full node publishes the first one at the end of its first
@@ -128,8 +135,8 @@ public sealed class DesktopEndToEndTests
             var restartedAt = DateTime.MinValue;
             await log.WaitFor("a backup is made", TimeSpan.FromMinutes(30), () =>
             {
-                if (app.App.GetStatus().Backups.Count > 0) return true;
-                app.Scheduler.RequestSync();
+                if (account.GetStatus().Backups.Count > 0) return true;
+                app.Scheduler.RequestSync(accountId);
                 Thread.Sleep(5000);
                 string? last;
                 lock (reports) last = reports.LastOrDefault(r => r != "Synced.");
@@ -141,14 +148,14 @@ public sealed class DesktopEndToEndTests
                     for (var i = 0; i < 60 && Shell.Run("docker", "inspect", "-f", "{{.State.Health.Status}}", container).Output.Trim() != "healthy"; i++)
                         Thread.Sleep(2000);
                 }
-                app.Scheduler.RequestBackup();
+                app.Scheduler.RequestBackup(accountId);
                 return false;
             }, pollSeconds: 10);
-            var backup = app.App.GetStatus().Backups.First();
+            var backup = account.GetStatus().Backups.First();
             log.Check("a finished backup exists", backup.Size > 0, backup.Name + " " + backup.Size + " bytes");
 
             // 6. save it, restore it on a FRESH full node
-            var copied = await app.App.ExportBackupAsync(backup.Name);
+            var copied = await account.ExportBackupAsync(backup.Name);
             var saved = Path.Combine(work, "saved", backup.Name);
             log.Check("Save to... wrote the whole backup", copied == backup.Size && new FileInfo(saved).Length == backup.Size, $"{copied} bytes");
             log.Check("the saved file is a finished backup", AndroidBackupRestore.LooksLikeBackup(saved));
@@ -161,20 +168,50 @@ public sealed class DesktopEndToEndTests
             foreach (var title in new[] { "desktop e2e 0", "desktop e2e 1", "desktop e2e 2", "desktop e2e after pairing" })
                 log.Check($"the restored node has \"{title}\"", titles.Contains(title));
 
-            // 7. Disconnect and wipe
-            await Task.Run(() => app.App.DisconnectAndWipeAsync());
-            log.Check("the host was told to return to its first-run state", returned == 1);
-            log.Check("the scheduler is stopped", !app.Scheduler.IsRunning);
-            log.Check("no key blob and no secrets folder is left", !Directory.Exists(Path.Combine(root, "secrets")));
-            log.Check("no state file is left", !File.Exists(Path.Combine(root, "state.json")));
-            log.Check("no replica database is left", Directory.GetFiles(root, "beememorybank.db*").Length == 0);
-            log.Check("no backups folder is left", !Directory.Exists(Path.Combine(root, "blind-backups")));
+            // 6b. a SECOND account on the same device. A second mesh would need a second blind node container and a third full node, so this
+            //     account joins the same mesh as a second device of the owner's: what the step proves is the device side - its own folder, identity,
+            //     keys and state, its own first load by the same loop - while the isolation of two MESHES is proved in process by the tests with two
+            //     hubs and their canaries (WindowsCompositionTests).
+            var second = await app.Accounts.AddAsync("E2E second");
+            log.Check("a second account is made", second.Ok, second.Error);
+            var secondId = second.AccountId!;
+            var secondAccount = app.Accounts.For(secondId);
+            var secondFolder = Path.Combine(root, "accounts", secondId);
+            log.Check("the two accounts have different identities", secondAccount.GetStatus().NodeId != account.GetStatus().NodeId);
+            log.Check("the second account has its own DPAPI blobs", Directory.GetFiles(Path.Combine(secondFolder, "secrets"), "*.dpapi").Length == 3);
+            log.Check("the second account's folder is its own", Directory.Exists(secondFolder) && secondFolder != accountFolder);
+            var secondCallCode = await nodeA.PairPhoneAsync(secondAccount.PairingCode()!, blindNodeId);
+            log.Check("PC pairs the second account", secondCallCode is not null);
+            log.Check("the second account accepts its call code", secondAccount.AcceptCallCode(secondCallCode!) is null);
+            app.Scheduler.RequestHeavy(secondId);
+            await log.WaitFor("the second account's first load", TimeSpan.FromMinutes(6), () => secondAccount.GetStatus().InitialLoadDone, pollSeconds: 2);
+            var secondReplica = Path.Combine(secondFolder, "beememorybank.db");
+            log.Check("the second replica holds the 4 articles", ReplicaArticleCount(secondReplica) >= 4, "count=" + ReplicaArticleCount(secondReplica));
+            var firstSyncAt = account.GetStatus().LastSyncAt;
+            var secondSyncAt = secondAccount.GetStatus().LastSyncAt;
+            app.Scheduler.RequestSync(accountId);
+            app.Scheduler.RequestSync(secondId);
+            await log.WaitFor("a sync round of each account", TimeSpan.FromMinutes(3), () =>
+                account.GetStatus().LastSyncAt is { } a && (firstSyncAt is null || a > firstSyncAt)
+                && secondAccount.GetStatus().LastSyncAt is { } b && (secondSyncAt is null || b > secondSyncAt), pollSeconds: 2);
+            log.Check("the device lists both accounts", app.Accounts.GetSnapshot().Accounts.Count == 2);
+
+            // 7. Remove: the second account goes with its keys and folder and the first is untouched; then the first goes and nothing is left
+            await app.Accounts.RemoveAsync(secondId);
+            log.Check("the second account's folder is gone", !Directory.Exists(secondFolder));
+            log.Check("the first account is untouched (paired, keys, replica)",
+                app.Accounts.For(accountId).GetStatus() is { IsPaired: true } && Directory.GetFiles(Path.Combine(accountFolder, "secrets"), "*.dpapi").Length >= 2 && ReplicaArticleCount(replica) >= 4);
+            await app.Accounts.RemoveAsync(accountId);
+            log.Check("the loop still runs (it is the device's, not the account's)", app.Scheduler.IsRunning);
+            log.Check("no account folder is left", !Directory.Exists(accountFolder) && !Directory.Exists(secondFolder));
+            log.Check("no secrets folder is left in the root", !Directory.Exists(Path.Combine(root, "secrets")));
+            log.Check("no replica database is left", Directory.GetFiles(root, "beememorybank.db*", SearchOption.AllDirectories).Length == 0);
+            log.Check("the list of accounts is empty", app.Accounts.GetSnapshot().Accounts.Count == 0);
             await app.DisposeAsync();
 
-            app = BlindDesktopRuntime.Create(platform, () => null, () => { }, scheduler: options, displayName: () => "E2E desktop");
+            app = BlindDesktopRuntime.Create(platform, () => null, scheduler: options, displayName: () => "E2E desktop");
             await app.StartAsync();
-            var fresh = app.App.GetStatus();
-            log.Check("the next start is a fresh first run (new identity, not paired)", fresh.NodeId is not null && !fresh.IsPaired && fresh.AwaitingAnswer && fresh.StartError is null);
+            log.Check("the next start is a fresh first run (no account, ready to add one)", app.Accounts.GetSnapshot() is { Accounts.Count: 0, CanAdd: true, RegistryProblem: null });
             log.Say("RESULT: ALL PASS");
         }
         catch (Exception ex)
@@ -230,14 +267,12 @@ public sealed class DesktopEndToEndTests
     {
         public string Name => inner.Name;
         public IBlindPaths Paths => inner.Paths;
+        public IBlindSecretStoreFactory SecretStores => inner.SecretStores;
+        public IBlindStateStoreFactory StateStores => inner.StateStores;
+        public IBlindDeviceConditions DeviceConditions => inner.DeviceConditions;
+        public IBlindAutostart Autostart { get; } = new FakeAutostart();
         public IInstanceGuard? TryAcquireInstance() => inner.TryAcquireInstance();
         public bool SignalRunningInstance() => inner.SignalRunningInstance();
-
-        public void AddSeams(IServiceCollection services)
-        {
-            inner.AddSeams(services);
-            services.AddSingleton<IBlindAutostart>(new FakeAutostart());
-        }
     }
 
     private sealed class FileExporter(string folder) : IBlindBackupExporter

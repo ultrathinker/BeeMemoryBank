@@ -1,5 +1,6 @@
 using System.Reflection;
 using BeeMemoryBank.BlindMobile.Services.Blind;
+using BeeMemoryBank.Sync.Blind;
 using Microsoft.Win32;
 
 namespace BeeMemoryBank.BlindDesktop.Windows;
@@ -80,6 +81,6 @@ public sealed class RegistryAutostart : IBlindAutostart
         var apphost = string.IsNullOrEmpty(assembly) ? null : Path.ChangeExtension(assembly, ".exe");
         return apphost is not null && File.Exists(apphost)
             ? apphost
-            : throw new InvalidOperationException("The app was not started from its own executable, so there is nothing to register to start with Windows.");
+            : throw new BlindSentenceException("The app was not started from its own executable, so there is nothing to register to start with Windows.");
     }
 }

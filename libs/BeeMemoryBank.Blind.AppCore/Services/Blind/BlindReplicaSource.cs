@@ -18,4 +18,8 @@ public sealed class BlindReplicaSource(BlindPhoneReplicaClient client, BlindHttp
     public Task<bool> UpdateBaselineAsync(
         BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
         client.UpdateBaselineAsync(http.GetClient(target), target, workDirectory, progress, ct);
+
+    public Task<BlindBaselineCheck> CheckBaselineAsync(
+        BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
+        client.CheckBaselineAsync(http.GetClient(target), target, workDirectory, progress, ct);
 }

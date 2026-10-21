@@ -305,6 +305,12 @@ else
     // No extra trust roots in production; a test registers its own after this (the same abstraction the blind apps use).
     builder.Services.AddSingleton(BeeMemoryBank.Crypto.TlsTrustAnchors.None);
     builder.Services.AddSingleton<HubTrustProbe>();
+    // Invitations to a blind copy (release 2.7): made here, redeemed at /api/sync/invite/redeem, confirmed by the owner. Full node only: the table is local
+    // to the node, the service needs the master key, and none of it is linked into the blind host (tools/blind-link/exclude.txt).
+    builder.Services.AddScoped<BeeMemoryBank.Core.Interfaces.IBlindInviteRepository, BeeMemoryBank.Storage.Sqlite.BlindInviteRepository>();
+    builder.Services.AddSingleton<BlindInviteRateLimits>();
+    builder.Services.AddSingleton<BlindInviteService>();
+    builder.Services.AddHostedService<BlindInviteSweeper>();
     AddMcp(builder.Services);
 }
 

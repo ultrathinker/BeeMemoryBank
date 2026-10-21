@@ -8,7 +8,26 @@
                lower === '/article/view' ||
                lower === '/search' ||
                lower === '/activity' ||
-               lower === '/admin';
+               isAdminAreaPath(lower);
+    }
+
+    // The Admin area: the list (/admin) and a page per block (/admin/<name>, letters only: the names of the pages of Pages/Admin). Nothing deeper, nothing with a dot, a
+    // dash or an escape in it: such a path is not a page of the area and is left to the browser. The query string never gets here (isSpaUrl is asked the pathname).
+    function isAdminAreaPath(lower) {
+        return lower === '/admin' || /^\/admin\/[a-z]+$/.test(lower);
+    }
+
+    // A link of the Admin area with a handler in its query (/Admin/Snapshots?handler=DownloadSnapshot) is a download or an action, not a page: the browser takes it.
+    // The server reads the name of a query value in any case, so this does too.
+    function hasHandler(url) {
+        var found = false;
+        url.searchParams.forEach(function (value, name) { if (name.toLowerCase() === 'handler') found = true; });
+        return found;
+    }
+
+    function isSpaLink(url) {
+        if (!isSpaUrl(url.pathname)) return false;
+        return !(isAdminAreaPath(url.pathname.replace(/\/+$/, '').toLowerCase()) && hasHandler(url));
     }
 
     var currentPageAbortController = new AbortController();
@@ -131,7 +150,7 @@
         }
         if (window.bmbHighlightActiveTreeItem) window.bmbHighlightActiveTreeItem(true);
         var mainContent = pageContent.querySelector('.main-content');
-        // A link with a fragment (/Admin#card-metadata) opens at that card, any other at the top.
+        // A link with a fragment (a page and #the-id-of-an-element) opens at that element, any other at the top.
         if (!(window.bmbScrollToHash && window.bmbScrollToHash()) && mainContent) mainContent.scrollTop = 0;
 
         document.dispatchEvent(new CustomEvent('bmb:page-swapped'));
@@ -143,7 +162,7 @@
     function spaNavigate(url, pushState) {
         if (spaNavigating) return;
         var targetUrl = (typeof url === 'string') ? new URL(url, window.location.origin) : url;
-        if (!isSpaUrl(targetUrl.pathname)) { window.location.href = targetUrl.href; return; }
+        if (!isSpaLink(targetUrl)) { window.location.href = targetUrl.href; return; }
         if (pushState !== false && targetUrl.href === window.location.href) return;
 
         spaNavigating = true;
@@ -202,7 +221,7 @@
         var url;
         try { url = new URL(href, window.location.origin); } catch (err) { return; }
         if (url.origin !== window.location.origin) return;
-        if (!isSpaUrl(url.pathname)) return;
+        if (!isSpaLink(url)) return;
         e.preventDefault();
         if (slBtn) e.stopPropagation();
         spaNavigate(url, true);
@@ -210,7 +229,7 @@
 
     window.addEventListener('popstate', function () {
         var url = new URL(window.location.href);
-        if (isSpaUrl(url.pathname)) spaNavigate(url, false);
+        if (isSpaLink(url)) spaNavigate(url, false);
         else window.location.reload();
     });
 
@@ -220,4 +239,5 @@
 
     window.bmbSpaNavigate = spaNavigate;
     window.bmbIsSpaUrl = isSpaUrl;
+    window.bmbIsSpaLink = isSpaLink;
 })();

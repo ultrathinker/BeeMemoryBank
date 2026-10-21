@@ -1,6 +1,8 @@
 using BeeMemoryBank.Api.Helpers;
+using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.BlindLimits;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Sync.Blind;
@@ -41,9 +43,11 @@ public static class BlindEndpoints
         {
             if (await ResolveAuthorityAsync(ctx, seedId, pairing, store, whitelist) is not { } authority)
                 return Results.Unauthorized();
+            // The seeder is known: the traffic of this part is reserved now (the storage limit is judged by the seed itself, part by part).
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
             try
             {
-                var progress = await seeds.ReceiveAsync(seedId, offset, total, sha256, authority, ctx.Request.Body, ct);
+                var progress = await seeds.ReceiveAsync(seedId, offset, total, sha256, authority, ctx.Request.Body, ct, ctx.Request.ContentLength);
                 return progress.Applied
                     ? Results.Ok(new { seed_id = progress.SeedId, status = "applied" })
                     : Results.Json(new { seed_id = progress.SeedId, received = progress.Received, total = progress.Total },
@@ -61,6 +65,16 @@ public static class BlindEndpoints
             {
                 return Results.Unauthorized();
             }
+            catch (BlindSeedWipingException)
+            {
+                ctx.Response.Headers.RetryAfter = "5";
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (BlindStoragePausedException ex)
+            {
+                // The node's storage limit, reached while the seed arrives: the same answer the door gives (503, X-BMB-Paused: disk, Retry-After), which the full node reads as a pause.
+                return new BlindPauseResult(ex.Pause);
+            }
             catch (BlindSeedRejectedException ex)
             {
                 // The sender is told too, but it is the operator of THIS node who looks in the log first. The reason is a CODE and the fixed sentence of that code
@@ -74,7 +88,7 @@ public static class BlindEndpoints
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: StatusCodes.Status507InsufficientStorage);
             }
-        }).WithTags("Blind");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithTags("Blind");
 
         app.MapGet("/api/blind/seed/{seedId:guid}", async (
             HttpContext ctx, Guid seedId, BlindSeedService seeds, BlindPairing pairing, SyncTokenStore store,
@@ -102,6 +116,7 @@ public static class BlindEndpoints
             HttpContext ctx, SyncTokenStore store, BlindReplicaPackageCache packages, INodeRole role, string? have, CancellationToken ct) =>
         {
             if (await SyncEndpoints.AuthenticatePeerAsync(ctx, store) is not { } peer) return Results.Unauthorized();
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
             // Only for a blind peer: a full node joins through /api/join and gets the join snapshot,
             // which is what its own restore and key handling expect.
             if (!BlindNodeId.IsBlind(peer)) return Results.StatusCode(StatusCodes.Status403Forbidden);
@@ -138,7 +153,7 @@ public static class BlindEndpoints
                 return await producerAuthority.IsSuperadminAsync(buildCt);
             }, ct);
             return await ServeAsync(ctx, lease, ct);
-        }).WithTags("Blind");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithTags("Blind");
     }
 
     private static async Task<IResult> ServeAsync(HttpContext ctx, BlindReplicaPackageCache.Lease lease, CancellationToken ct)

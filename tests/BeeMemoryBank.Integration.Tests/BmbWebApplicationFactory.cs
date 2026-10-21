@@ -33,6 +33,9 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
     /// <summary>A request with this header reaches its handler with <c>RequestAborted</c> already cancelled: the client has gone away.</summary>
     public const string ClientGoneHeader = "X-Test-Client-Gone";
 
+    /// <summary>A request that carries this header comes, as far as the app can tell, from the address it names (the harness presents every other request as loopback).</summary>
+    public const string RemoteIpHeader = "X-Test-Remote-Ip";
+
     private readonly string _tempDir;
 
     /// <summary>A node over a fresh, empty data folder.</summary>
@@ -111,6 +114,9 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
             app.Use(async (ctx, nextMiddleware) =>
             {
                 ctx.Connection.RemoteIpAddress ??= System.Net.IPAddress.Loopback;
+                // A test that needs callers from different addresses (a limiter keyed on the source) says which one this request comes from.
+                if (ctx.Request.Headers.TryGetValue(RemoteIpHeader, out var asked) && System.Net.IPAddress.TryParse(asked.ToString(), out var address))
+                    ctx.Connection.RemoteIpAddress = address;
                 // A request that says its client is gone (a test of a long write that must stop when the client disconnects): the handler runs with the abort token
                 // already cancelled, which is what the server hands it when the connection drops. The transport of the test stays up, so the exception comes back whole.
                 if (ctx.Request.Headers.ContainsKey(ClientGoneHeader)) ctx.RequestAborted = new CancellationToken(canceled: true);

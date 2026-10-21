@@ -12,7 +12,7 @@ public enum BlindJobPhase
     /// <summary>It has ended well: what it makes (the first load, a sync, a backup) is in the state.</summary>
     Finished,
 
-    /// <summary>It ended with an error (<see cref="BlindJobOutcome.Message"/> says which).</summary>
+    /// <summary>It ended with an error (<see cref="BlindJobOutcome.Message"/> says which, by the kind of failure: <see cref="BlindFailureText"/>).</summary>
     Failed,
 
     /// <summary>It did not start within the queue's grace and left no mark: nothing is known about it any more.</summary>
@@ -66,7 +66,7 @@ public static class BlindJobWait
 
         // A failure recorded after the ask is the job's own end (the first load and backups record theirs; a sync's is in the log).
         if (status.LastFailure is { } failure && failure.Title == ask.Kind && failure.At >= ask.At)
-            return new BlindJobOutcome(BlindJobPhase.Failed, failure.Message);
+            return new BlindJobOutcome(BlindJobPhase.Failed, BlindFailureText.ForDisplay(failure.Message));
 
         var finished = ask.Kind switch
         {

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
 
@@ -31,6 +32,12 @@ public sealed class BlindPhoneBackupRunner(
     public const string Extension = ".bmbbackup";
 
     public string BackupsDirectory => backupsDirectory;
+
+    /// <summary>
+    /// Called after each step of a backup that persisted something: the package written beside the backup, the encrypted file. The host that keeps count of what the phone holds learns from it that the
+    /// folders grew. An init property: the constructor does not change.
+    /// </summary>
+    public Action? AfterStep { get; init; }
 
     /// <summary>Finished backups, newest first.</summary>
     /// <summary>True if the recovery set's sealed secrets include <paramref name="name"/> (any case).</summary>
@@ -67,7 +74,7 @@ public sealed class BlindPhoneBackupRunner(
 
         var backupKey = keys.LoadBackupKey();
         if (backupKey is null)
-            return new(BlindBackupOutcomeKind.Failed, "This phone has no backup key. Disconnect and set it up again.");
+            return new(BlindBackupOutcomeKind.Failed, "This phone has no backup key. Remove this account from the accounts list and add it again.");
 
         try
         {
@@ -88,10 +95,12 @@ public sealed class BlindPhoneBackupRunner(
             {
                 await package.CreateAsync(source + ".tmp", ct);
                 File.Move(source + ".tmp", source, overwrite: true);
+                AfterStep?.Invoke();
             }
 
             await AndroidBackupWriter.WriteAsync(source, output, backupKey, nodeId,
                 keyName, recoverySetJson, progress: progress, ct: ct);
+            AfterStep?.Invoke();
 
             // WriteAsync returns only after decrypting the finished file and matching it against the
             // package copy, so the copy can go now; on any failure it stays for the next attempt.
@@ -113,8 +122,10 @@ public sealed class BlindPhoneBackupRunner(
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
         {
-            log.Add("backup", $"Backup failed: {ex.Message}");
-            return new(BlindBackupOutcomeKind.Failed, ex.Message);
+            // The kind of failure, not the exception's message (a path of the backup folder, a key alias): the log line and the outcome are what a head shows.
+            var said = BlindFailureText.Say(ex);
+            log.Add("backup", $"Backup failed: {said}");
+            return new(BlindBackupOutcomeKind.Failed, said);
         }
         finally
         {

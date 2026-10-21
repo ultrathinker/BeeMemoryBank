@@ -1,8 +1,10 @@
+DELETE /api/blind/join/
 DELETE /api/sync/quarantine/{eventId:guid}
 GET /api/blind/backup/list
 GET /api/blind/backup/settings
 GET /api/blind/console/generation
 GET /api/blind/console/logins
+GET /api/blind/join/
 GET /api/blind/pair-code
 GET /api/blind/replica
 GET /api/blind/restore-codes
@@ -30,6 +32,8 @@ POST /api/blind/backup/verify
 POST /api/blind/claim
 POST /api/blind/console/login
 POST /api/blind/console/password
+POST /api/blind/join/
+POST /api/blind/join/preview
 POST /api/blind/pair-code/renew
 POST /api/blind/restore-code
 POST /api/blind/seed

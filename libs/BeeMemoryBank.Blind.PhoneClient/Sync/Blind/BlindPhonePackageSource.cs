@@ -143,7 +143,7 @@ public sealed class BlindPhonePackageSource(
     {
         var free = _free(folder);
         if (free < needed)
-            throw new IOException($"Not enough room for a backup: about {needed >> 20} MiB are needed, {free >> 20} MiB are free.");
+            throw new BlindNotEnoughRoomException($"Not enough room for a backup: about {needed >> 20} MiB are needed, {free >> 20} MiB are free.");
     }
 
     private static long DiskFreeBytes(string folder) => new DriveInfo(folder).AvailableFreeSpace;
@@ -155,3 +155,9 @@ public sealed class BlindPhonePackageSource(
         catch (UnauthorizedAccessException) { }
     }
 }
+
+/// <summary>
+/// The phone has too little free room for the file a backup needs. The sentence is this code's own and holds only two sizes, so a screen may say it as it is; every other
+/// <see cref="IOException"/> is told by its kind only (its message may carry a path).
+/// </summary>
+public sealed class BlindNotEnoughRoomException(string message) : IOException(message), IBlindOwnSentence;

@@ -102,6 +102,10 @@ internal sealed class FakeApp : IBlindAppController
     public Func<string, Task<long>>? ExportBody { get; set; }
     public Func<Task>? WipeBody { get; set; }
     public string? PairingCodeValue { get; set; }
+
+    /// <summary>When set, reading the status (or starting a re-pairing) throws it.</summary>
+    public Exception? StatusFailure { get; set; }
+    public Exception? RePairFailure { get; set; }
     public BlindBackupSchedule? LastSchedule { get; private set; }
     public int MaxConcurrentJobs => _maxRunning;
     public List<bool> HeavyForce { get; } = [];
@@ -129,7 +133,7 @@ internal sealed class FakeApp : IBlindAppController
             keyStoreUnavailable, lastFailure);
 
     public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
-    public BlindAppStatus GetStatus() => Status;
+    public BlindAppStatus GetStatus() => StatusFailure is { } failure ? throw failure : Status;
     public string? PairingCode() => PairingCodeValue;
 
     public string? AcceptCallCode(string text)
@@ -138,7 +142,11 @@ internal sealed class FakeApp : IBlindAppController
         return AcceptError;
     }
 
-    public void StartRePair() => RePairCalls++;
+    public void StartRePair()
+    {
+        if (RePairFailure is { } failure) throw failure;
+        RePairCalls++;
+    }
     public void SetSchedule(BlindBackupSchedule schedule) => LastSchedule = schedule;
 
     public async Task<string> RunHeavyAsync(bool forceBackup, CancellationToken ct = default)

@@ -1,6 +1,7 @@
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Sync;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
@@ -22,10 +23,14 @@ public static class BlindNodeManagementEndpoints
         // /node/alarms. Kinds, times and protocol numbers only, and names only while the vault is unlocked.
         group.MapGet("/alarms", async (BlindNodeManager manager) => Results.Ok(await manager.GetAlarmsAsync()));
 
-        group.MapPost("/", async (AddBlindNodeRequest req, BlindNodeManager manager, CancellationToken ct) =>
+        group.MapPost("/", async (AddBlindNodeRequest req, BlindNodeManager manager, BlindInviteService invites, CancellationToken ct) =>
         {
             try
             {
+                // One way of adding a node at a time: this node has redeemed an invitation (bmb blind join) that the owner has not answered yet.
+                if (await invites.ServerInvitationIsPendingAsync(req.Code))
+                    return Results.Json(new ErrorResponse(
+                        "This blind node has redeemed an invitation that is waiting for your answer. Confirm or refuse the invitation instead of using its pair code."), statusCode: 409);
                 return Results.Ok(await manager.AddAsync(req.Code, ct));
             }
             catch (FormatException ex)
@@ -39,6 +44,10 @@ public static class BlindNodeManagementEndpoints
             catch (BlindNodeUnreachableException ex)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
+            }
+            catch (PeerPausedException ex)
+            {
+                return Results.Json(new ErrorResponse(BlindNodeManager.PausedSeedSentence(ex)), statusCode: 409);
             }
             catch (BaselineNotReadyException ex)
             {
@@ -61,6 +70,10 @@ public static class BlindNodeManagementEndpoints
             catch (BlindNodeUnreachableException ex)
             {
                 return Results.Json(new ErrorResponse(ex.Message), statusCode: 502);
+            }
+            catch (PeerPausedException ex)
+            {
+                return Results.Json(new ErrorResponse(BlindNodeManager.PausedSeedSentence(ex)), statusCode: 409);
             }
             catch (BaselineNotReadyException ex)
             {

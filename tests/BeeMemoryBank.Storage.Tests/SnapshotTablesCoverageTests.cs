@@ -70,7 +70,11 @@ public class SnapshotTablesCoverageTests
 
         // A blind host's adopted baseline and its blob list (migration 039, step-a-spec 9.1): the baseline itself travels
         // in format-2 packages as encrypted files, never as rows of a snapshot.
-        "tbl_baseline", "tbl_baseline_blob"
+        "tbl_baseline", "tbl_baseline_blob",
+
+        // The invitations this full node made to blind copies (migration 041): bearer-secret hashes, the redeeming device's keys and, until the owner
+        // decides, its backup key under this node's DEK. About this one node; a join snapshot or a package empties it (FilterSecretsFrom).
+        "tbl_blind_invite"
     ];
 
     [Fact]

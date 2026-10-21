@@ -36,7 +36,9 @@ public static partial class BlindRoleServices
         // Pairing and seed (plan 4.1-4.4): the self-signed certificate in the data volume, the pair code, and the
         // receiver of the package that makes this node's database.
         services.AddSingleton(new BlindTlsIdentity(BlindTlsCertificate.LoadOrCreate(dataPath)));
+        services.AddSingleton(new BlindJoinStore(dataPath));
         services.AddSingleton<BlindPairing>();
+        services.AddSingleton<BlindJoinService>();
         services.AddSingleton<BeeMemoryBank.Api.Services.BlindStatus.IBlindStatusContributor, PairingBlindStatusContributor>();
         services.AddSingleton(sp => ActivatorUtilities.CreateInstance<BlindSeedService>(sp, dataPath));
 
@@ -48,6 +50,18 @@ public static partial class BlindRoleServices
         // (hook H1), then the format-2 package services of this role (hook H2, track 2).
         services.AddBlindMetadataHost(dataPath);
         AddBlindRoleFormat2Services(services, dataPath);
+
+        // The node's own limits (2.7, the server host's phase 2): what it may store and move for the
+        // mesh. One TimeProvider so a test can move the day; the guard reads the settings fresh on
+        // every decision, so a console change holds from the next request.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton(sp => new BeeMemoryBank.Api.Services.BlindLimits.BlindUsageLedger(
+            Path.Combine(dataPath, "blind", "usage.json"), sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new BeeMemoryBank.Api.Services.BlindLimits.BlindStoredSize(
+            dataPath, sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<BeeMemoryBank.Api.Services.BlindLimits.BlindUsageGuard>();
+        services.AddScoped<BeeMemoryBank.Api.Services.BlindStatus.IBlindStatusContributor,
+            BeeMemoryBank.Api.Services.BlindLimits.BlindLimitsStatusContributor>();
     }
 
     /// <summary>Hook H2 (spec 15.2), track 2: <c>Startup/BlindRoleServices.Format2.cs</c>, linked into the BlindNode host.</summary>

@@ -1,0 +1,24 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.ConnectDeviceModel
+
+@section About {
+    <p>
+        Use this to join a phone or another computer to this node over your local network, without changing any permanent setting. The Connect page opens this node
+        to the network for <strong>15 minutes</strong> (or until one device has joined) and shows a <strong>join code</strong> and a QR code. The code carries the address of this node and a
+        one-time token, and it also proves to the other device that it reached this computer and not an impostor on the network. When the 15 minutes are over,
+        nothing stays open.
+    </p>
+    <p>
+        On a computer, paste the code under <strong>Connect to another device</strong> on its first-run page. On a phone, scan the QR code or paste the code in the app.
+        The device that joins becomes a trusted node of this network (see <a href="/Admin/TrustedNodes">Trusted Nodes</a>).
+    </p>
+    <p>
+        If you would rather keep this node reachable all the time, switch on <a href="/Admin/DevicesOnMyNetwork">Devices on my network</a> instead.
+    </p>
+}
+
+<div class="card mt-md" style="max-width:640px;">
+    <sl-button variant="primary" size="small" href="/Connect">
+        <sl-icon slot="prefix" name="qr-code"></sl-icon> Connect a device
+    </sl-button>
+</div>

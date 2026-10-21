@@ -8,14 +8,19 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindIos.Platforms.iOS;
 
 /// <summary>
-/// The blind copy's background time on iOS, through BGTaskScheduler (see <see cref="IosBackgroundRounds"/> for what each task does and
-/// what iOS promises - which is little). Both requests are submitted again whenever the app goes to the background and at the start of
-/// every round, so one is always pending; the handler ends the round when iOS says the time is up (the job pauses and resumes later).
+/// The blind app's background time on iOS, through BGTaskScheduler (see <see cref="IosBackgroundRounds"/> for what each task does and
+/// what iOS promises - which is little). The two task identifiers are fixed in Info.plist and are NOT per account: a wake serves the
+/// accounts of the phone in turn, the one that synced longest ago first (<see cref="IosBackgroundRounds"/>). Both requests are submitted
+/// again whenever the app goes to the background and at the start of every round, so one is always pending while an account needs it; the
+/// handler ends the round when iOS says the time is up (the job pauses and resumes later).
 /// </summary>
 public sealed class IosBlindBackground(IServiceProvider services) : IIosBackgroundRequests
 {
-    /// <summary>The state key of the last background round (time, task and result), for the screen.</summary>
-    public const string LastRoundKey = "bmb.ios.last_background_round";
+    /// <summary>The state key of the last background round of an account (time, task and result), for its screen.</summary>
+    public const string LastRoundKey = IosLastRound.StateKey;
+
+    /// <summary>How long a wake waits for the Network framework's first answer before it goes on (the metered check then says "cannot tell" and an account that wants an unmetered network waits).</summary>
+    private static readonly TimeSpan FirstPathWait = TimeSpan.FromSeconds(2);
 
     private int _registered;
 
@@ -47,11 +52,11 @@ public sealed class IosBlindBackground(IServiceProvider services) : IIosBackgrou
             };
             BGTaskScheduler.Shared.Submit(work, out var workError);
 
-            if ((syncError ?? workError) is { } error) Log($"iOS refused a background request: {error.LocalizedDescription}");
+            if ((syncError ?? workError) is { } error) Log(IosBackgroundRequestText.Describe(new(error.Domain, (long)error.Code, error.LocalizedDescription)));
         }
         catch (Exception ex)
         {
-            Log($"Asking iOS for background time failed ({ex.GetType().Name}): {ex.Message}");
+            Log($"Asking iOS for background time failed ({IosFailureText.Say(ex)}).");
         }
     }
 
@@ -59,7 +64,7 @@ public sealed class IosBlindBackground(IServiceProvider services) : IIosBackgrou
 
     private void Handle(BGTask task, bool work)
     {
-        // The next requests first: a round that iOS ends early, or a failure below, must not leave none pending.
+        // The next requests first: a round that iOS ends early, or a failure below, must not leave none pending. (Withdrawn again at the end when no account needs them.)
         Submit();
         var stop = new CancellationTokenSource();
         task.ExpirationHandler = () => stop.Cancel();
@@ -70,43 +75,44 @@ public sealed class IosBlindBackground(IServiceProvider services) : IIosBackgrou
             IosBlindRuntime? runtime = null;
             try
             {
-                runtime = services.GetRequiredService<IosBlindHost>().Current;
-                var result = work
-                    ? await IosBackgroundRounds.RunWorkAsync(runtime.App, stop.Token)
-                    : await IosBackgroundRounds.RunSyncAsync(runtime.App, stop.Token);
-                Remember(runtime, name, result);
-                completed = true;
+                runtime = services.GetRequiredService<IosBlindRuntime>();
+                // The network path arrives a moment after the monitor starts; a wake that began from nothing waits briefly for it.
+                await services.GetRequiredService<IIosNetworkPathSource>().WaitForFirstPathAsync(FirstPathWait, stop.Token);
+                // ONE background round at a time for the whole device, whichever task iOS woke the app for: a round that begins beside another one (or while the app is open) does nothing and
+                // is completed as "nothing to do" (IosBlindRuntime.RunBackgroundAsync).
+                var outcome = await runtime.RunBackgroundAsync(work, stop.Token);
+                IosBackgroundRecorder.Record(runtime, name, outcome);
+                completed = outcome.Skipped is not null || !outcome.EndedByIos;
             }
             catch (OperationCanceledException)
             {
-                if (runtime is not null) Remember(runtime, name, "ended by iOS before it finished; it continues later");
+                // iOS ended the wake before it began anything.
             }
             catch (Exception ex)
             {
-                if (runtime is not null) BlindRunReport.RecordFailure(runtime.Services.GetRequiredService<BlindPhoneLog>(), "background", ex);
+                if (runtime is not null) IosBackgroundRecorder.RecordFailure(runtime, name, ex);
             }
             finally
             {
                 try
                 {
-                    if (runtime is not null) services.GetService<IosSilenceNotifier>()?.Update(runtime.App.GetStatus());
+                    if (runtime is not null)
+                    {
+                        services.GetService<IosSilenceNotifier>()?.Update(runtime.Accounts.GetSnapshot());
+                        runtime.RefreshBackgroundRequests();
+                    }
                 }
-                catch (Exception) { /* the notification is a convenience */ }
+                catch (Exception) { /* the notification and the next request are a convenience */ }
                 task.SetTaskCompleted(completed);
                 stop.Dispose();
             }
         });
     }
 
-    private static void Remember(IosBlindRuntime runtime, string task, string result)
-    {
-        try { runtime.Services.GetRequiredService<IBlindStateStore>().Set(LastRoundKey, IosLastRound.Format(DateTimeOffset.UtcNow, task, result)); }
-        catch (Exception) { /* the screen's line only */ }
-    }
-
+    /// <summary>The wake belongs to the device, not to one account: its sentence goes to the DEVICE's log, which holds no account's name or fate.</summary>
     private void Log(string message)
     {
-        try { BlindRunReport.Record(services.GetRequiredService<IosBlindHost>().Current.Services.GetRequiredService<BlindPhoneLog>(), "background", message); }
+        try { BlindRunReport.Record(services.GetRequiredService<IosBlindRuntime>().DeviceLog, "background", message); }
         catch (Exception) { /* nowhere left to tell it */ }
     }
 }

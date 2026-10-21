@@ -276,7 +276,7 @@ document.addEventListener('submit', function (e) {
 // There used to be a second copy of that here (BMB-303): it took over the function that marks a form busy, added a second submit listener and let the form go after
 // two minutes while the node was still working. One state owner now: wwwroot/js/bmb-busy.js, loaded before this file by the layout.
 
-// ---- The page opens at the card of the button that was pressed (a fragment: /Admin#card-metadata) ---------------------------------------
+// ---- The page opens at the card of the button that was pressed (a fragment: #the-id-of-the-card) ---------------------------------------
 window.bmbScrollToHash = function () {
     var id = '';
     try { id = decodeURIComponent((location.hash || '').slice(1)); } catch (err) { return false; }

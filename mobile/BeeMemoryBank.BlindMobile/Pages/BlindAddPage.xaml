@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.BlindMobile.Pages.BlindAddPage"
+             Title="Add account"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="16" MaximumWidthRequest="520">
+
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Paste the invitation" FontAttributes="Bold" />
+                    <Label Text="The owner of the computer makes a one-time invitation on its Blind nodes page. It starts with bmb-invite: and works once, for a short time. Paste it here, or open its link on this phone."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Entry x:Name="InviteEntry" AutomationId="BlindInviteEntry" Placeholder="bmb-invite:?…"
+                           IsSpellCheckEnabled="False" IsTextPredictionEnabled="False" MaxLength="2048" Style="{StaticResource BaseEntry}" TextChanged="OnTextChanged" />
+                    <Button x:Name="PasteButton" Text="Paste" Clicked="OnPasteClicked" />
+                    <Button x:Name="ScanButton" Text="Scan a QR code" IsVisible="False" Clicked="OnScanClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <!-- What the invitation is, from the text alone: nothing is sent and nothing is written until Add -->
+            <Frame x:Name="PreviewFrame" IsVisible="False" BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="6">
+                    <Label x:Name="DescriptionLabel" LineBreakMode="WordWrap" />
+                    <Label x:Name="LimitsLabel" FontSize="12" LineBreakMode="WordWrap" />
+                    <Label x:Name="ValidityLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Label x:Name="RefusalLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <Button x:Name="AddButton" Text="Add" Style="{StaticResource PrimaryButton}" IsEnabled="False" Clicked="OnAddClicked" />
+            <Label x:Name="ResultLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
+
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="No invitation?" FontAttributes="Bold" />
+                    <Label Text="Pair the old way: this phone shows a code, you put it into the computer's Blind nodes page, and paste the code the computer shows back."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Button x:Name="PairingButton" Text="Add with a pairing code" Clicked="OnPairingClicked" />
+                </VerticalStackLayout>
+            </Frame>
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

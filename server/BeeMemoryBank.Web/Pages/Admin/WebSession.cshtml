@@ -1,0 +1,31 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.WebSessionModel
+
+@section About {
+    <p>
+        When someone signs in on the <a href="/Login">Login</a> page, the browser gets a cookie (<code>bee_session</code>). This page decides how long that cookie stays valid before a
+        fresh sign-in is asked for. It has no effect on AI agents connected with a bearer token: they never use or extend this cookie.
+    </p>
+    <p>
+        With <strong>sliding</strong> on, each visit resets the countdown, so someone who is active every day is never logged out. With it off, the session ends exactly the chosen number of
+        hours after sign-in, however often the person visits. A shorter duration is safer on a shared computer; a longer one is more convenient on your own.
+    </p>
+    <p>
+        A change applies to <strong>new sign-ins only</strong>: sessions that are already open keep the expiry they were given and are not shortened or revoked. To end them at once,
+        <a href="/Admin/LockServer">lock the server</a>.
+    </p>
+}
+
+<div class="card mt-md" style="max-width:480px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <sl-input id="session-expire-hours" type="number" min="1" max="720" size="small"
+            label="Session duration (hours)" style="max-width:160px;"></sl-input>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <sl-switch id="session-sliding-toggle" size="small">Extend on activity (sliding)</sl-switch>
+    </div>
+    <sl-button id="btn-save-session-settings" variant="primary" size="small">
+        <sl-icon slot="prefix" name="check-lg"></sl-icon> Save
+    </sl-button>
+    <span id="session-settings-saved-msg" style="display:none;margin-left:8px;color:var(--sl-color-success-600);font-size:0.85rem;">Saved.</span>
+</div>

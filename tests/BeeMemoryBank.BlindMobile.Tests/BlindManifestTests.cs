@@ -115,6 +115,47 @@ public sealed class BlindManifestTests
         launchers.Should().HaveCount(1, $"{path} must offer one way to start the app, found: {string.Join(", ", launchers)}");
     }
 
+    /// <summary>
+    /// The one intended change of this guard for several accounts: a <c>bmb-invite:</c> link (tapped in a message, or read by the Camera from a QR code) opens the app on its Add screen. One filter on
+    /// the launcher activity, nothing else may be opened this way, and the link only shows a preview - the person presses Add.
+    /// </summary>
+    [Fact]
+    public void TheBuiltManifest_OpensTheAppOnABmbInviteLink_AndOnNoOtherScheme()
+    {
+        var (manifest, path) = LastBuiltManifest();
+
+        var main = manifest.Root!.Element("application")!.Elements("activity")
+            .Single(a => a.Elements("intent-filter").Any(f => f.Elements("category").Any(c => (string?)c.Attribute(Android + "name") == "android.intent.category.LAUNCHER")));
+        var links = main.Elements("intent-filter")
+            .Where(f => f.Elements("data").Any(d => (string?)d.Attribute(Android + "scheme") is not null))
+            .ToList();
+
+        links.Should().ContainSingle($"{path}: the launcher activity has one filter for links");
+        var filter = links[0];
+        filter.Elements("action").Select(a => (string?)a.Attribute(Android + "name")).Should().Equal("android.intent.action.VIEW");
+        filter.Elements("category").Select(c => (string?)c.Attribute(Android + "name")).Should().BeEquivalentTo(
+            ["android.intent.category.DEFAULT", "android.intent.category.BROWSABLE"]);
+        filter.Elements("data").Select(d => (string?)d.Attribute(Android + "scheme")).Should().Equal("bmb-invite");
+
+        // no other activity, service or receiver takes a link
+        manifest.Root!.Descendants("data").Select(d => (string?)d.Attribute(Android + "scheme")).Where(s => s is not null)
+            .Should().OnlyContain(s => s == "bmb-invite", "the only link the app opens on is an invitation");
+    }
+
+    /// <summary>
+    /// The QR code is read by the system (Google's scanner, or the phone's Camera app opening the link), never by this app's own camera access: the app must not ask for the CAMERA permission.
+    /// </summary>
+    [Fact]
+    public void TheBuiltManifest_DoesNotAskForTheCamera()
+    {
+        var (manifest, path) = LastBuiltManifest();
+
+        manifest.Root!.Elements("uses-permission").Select(e => (string?)e.Attribute(Android + "name"))
+            .Should().NotContain("android.permission.CAMERA", $"{path}: scanning needs no permission of ours");
+        manifest.Root!.Elements("uses-feature").Select(e => (string?)e.Attribute(Android + "name"))
+            .Should().NotContain("android.hardware.camera");
+    }
+
     private static (XDocument Manifest, string Path) LastBuiltManifest()
     {
         var dir = AppContext.BaseDirectory;

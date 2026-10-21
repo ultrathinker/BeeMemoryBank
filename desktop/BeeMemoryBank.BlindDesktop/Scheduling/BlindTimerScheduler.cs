@@ -311,14 +311,12 @@ public sealed class BlindTimerScheduler : IBlindScheduler, IBlindWorkRequests, I
     }
 
     /// <summary>
-    /// A problem of the scheduler itself: kept in <see cref="LastError"/> and, in words without secrets (type and a short message), written
-    /// once to the log - the same sentence again only after fifteen minutes.
+    /// A problem of the scheduler itself: kept in <see cref="LastError"/> and, in words without secrets (the type's name, never the message:
+    /// a message carries a path, a key alias or an address), written once to the log - the same sentence again only after fifteen minutes.
     /// </summary>
     private void Problem(string what, Exception ex)
     {
-        var message = (ex.Message ?? "").ReplaceLineEndings(" ").Trim();
-        if (message.Length > 120) message = message[..120] + "...";
-        var sentence = $"{what} ({ex.GetType().Name}: {message}).";
+        var sentence = $"{what} ({ex.GetType().Name}).";
         _lastError = sentence;
         if (_report is null) return;
         lock (_reportGate)

@@ -26,14 +26,13 @@ public sealed record RestoreCodeLogEntry(string IssuedAt, string ExpiresAt, stri
 
 /// <summary>
 /// One-time restore codes on a blind node (plan 6.7, 9): a code opens the recovery package and lets a new
-/// device claim this blind node. 15 minutes, single use, 80 random bits; only its hash is stored. Wrong
-/// codes count against every code still open: after <see cref="MaxFailures"/> of them all open codes are
-/// revoked, so guessing cannot outrun the lifetime. Every issue is logged (audit log + the table itself).
+/// device claim this blind node. 15 minutes, single use, 80 random bits; only its hash is stored. A wrong code
+/// revokes nothing: guessing is stopped per source address (<see cref="BlindRestoreCodeThrottle"/>), so a stranger
+/// cannot burn the code of the device that holds it. Every issue is logged (audit log + the table itself).
 /// </summary>
 public class BlindRestoreCodeService(IDbConnectionFactory connFactory, IAuditLogRepository audit)
 {
     public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(15);
-    public const int MaxFailures = 5;
     private const string Alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O, 1/I
 
     public async Task<(string Code, DateTime ExpiresAt)> IssueAsync(string? issuedBy)
@@ -62,7 +61,7 @@ public class BlindRestoreCodeService(IDbConnectionFactory connFactory, IAuditLog
     /// <summary>
     /// True for an open code (issued, not expired, not used, not revoked) - or, when <paramref name="claimant"/> is given,
     /// for one that device itself spent within the code's lifetime (a repeated claim, <see cref="RestoreCodeUse.Repeat"/>).
-    /// A wrong code is counted.
+    /// Nothing is recorded about a wrong code here: the caller counts it against the address it came from.
     /// </summary>
     public async Task<bool> ValidateAsync(string? code, Guid? claimant = null)
     {
@@ -74,15 +73,7 @@ public class BlindRestoreCodeService(IDbConnectionFactory connFactory, IAuditLog
               WHERE code_hash = @H AND used_at IS NULL AND revoked = 0 AND expires_at > @Now",
             new { H = Hash(code), Now = now });
         if (open > 0) return true;
-        if (claimant is { } node && await SpentByAsync(conn, code, node, now)) return true;
-
-        await conn.ExecuteAsync(
-            @"UPDATE tbl_blind_restore_code SET failed_attempts = failed_attempts + 1
-              WHERE used_at IS NULL AND revoked = 0 AND expires_at > @Now;
-              UPDATE tbl_blind_restore_code SET revoked = 1
-              WHERE used_at IS NULL AND revoked = 0 AND failed_attempts >= @Max",
-            new { Now = now, Max = MaxFailures });
-        return false;
+        return claimant is { } node && await SpentByAsync(conn, code, node, now);
     }
 
     /// <summary>

@@ -84,6 +84,9 @@
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
     <PackageVersion Include="Velopack" Version="1.2.0" />
     <PackageVersion Include="Xamarin.AndroidX.Biometric" Version="1.1.0.33" />
+    <!-- The blind Android app scans an invitation QR code with Google Play services' code scanner (Google's own screen: no CAMERA permission here). Binding of
+         com.google.android.gms:play-services-code-scanner 16.1.0; the scanner itself runs inside Play services, nothing of it is bundled into the app. -->
+    <PackageVersion Include="Xamarin.GooglePlayServices.Code.Scanner" Version="116.1.0.17" />
     <!-- WorkManager 2.11 pulls Lifecycle 2.11 / Collection 1.6, while MAUI 10 pulls the 2.9.2 Lifecycle and 1.5 Collection.Ktx bindings, whose
          dependency ranges stop below 2.9.3 / 1.5.1 (NU1608 warnings; the ordinary app also had them for Activity.Ktx and Fragment.Ktx, which
          Biometric lifts). These transitive bindings are referenced directly by the Android apps and raised to the train WorkManager needs, so

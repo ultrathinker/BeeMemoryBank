@@ -20,7 +20,7 @@ namespace BeeMemoryBank.Web.Middleware;
 /// necessity: they exist for people who cannot authenticate yet.
 /// </description></item>
 /// <item><description>
-/// <c>POST /Admin?handler=ResetNode</c> — WIPES THE NODE on a correct master password. Not
+/// <c>POST /Admin/ResetNode</c> — WIPES THE NODE on a correct master password. Not
 /// anonymous (the page is superadmin-only), but throttled anyway: the master password is a second
 /// credential in front of a destructive action, and a hijacked admin session must not get unlimited
 /// guesses at it. There is deliberately no anonymous route onto this wipe (no
@@ -67,7 +67,7 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
 
         // Classification lives in RateLimitPath so it can be unit-tested: both mistakes possible
         // here are silent ones. The same page serves several handlers and they are not equally
-        // dangerous — on /Admin the default POST is routine config, ?handler=ResetNode WIPES THE NODE.
+        // dangerous — most pages of the Admin area post routine config, /Admin/ResetNode WIPES THE NODE.
         //
         // The bucket key is the ROUTE CLASS, not the path, so any second route onto the same
         // destructive action shares one budget instead of doubling it.
@@ -118,7 +118,7 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
     /// A failed Razor login re-renders the page as 200 with an error message; only success
     /// redirects (to the return URL). So for /Login a 3xx is the only success signal and 200
     /// explicitly is not (/RecoverAccess works the same way). The Admin reset handler always redirects — to /Setup on success, back to
-    /// /Admin with an <c>err</c> query value on a wrong password — so a status code cannot tell the
+    /// /Admin/ResetNode with an <c>err</c> query value on a wrong password — so a status code cannot tell the
     /// two apart, and its bucket is deliberately never reset: five wipe attempts per 15 minutes is
     /// already far above what a legitimate admin needs.
     /// </remarks>

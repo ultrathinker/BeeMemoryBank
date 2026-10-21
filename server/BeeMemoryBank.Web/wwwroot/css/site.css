@@ -1939,3 +1939,45 @@ sl-input.bmb-secret::part(input) {
     opacity: 0.45;
 }
 
+
+/* ===== Admin: the index and the template of its pages ===== */
+.admin-scope .admin-page { max-width: 880px; }
+.admin-scope .admin-back { margin: 0 0 14px; }
+.admin-scope .admin-page-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
+.admin-scope .admin-page-icon { font-size: 1.6rem; color: var(--accent); flex: none; }
+.admin-scope .admin-title { font-size: 1.5rem; font-weight: 700; margin: 0; overflow-wrap: anywhere; }
+.admin-scope .admin-lede { margin: 0 0 18px; color: var(--text-secondary); }
+.admin-scope .admin-message sl-alert { display: block; margin-bottom: 14px; }
+
+/* what the page is and what it is for: prose, as long as it helps */
+.admin-scope .admin-about { margin: 0 0 22px; line-height: 1.6; max-width: 72ch; }
+.admin-scope .admin-about > :first-child { margin-top: 0; }
+.admin-scope .admin-about p { margin: 0 0 10px; }
+.admin-scope .admin-about ul, .admin-scope .admin-about ol { margin: 0 0 10px; padding-left: 22px; }
+.admin-scope .admin-about li { margin-bottom: 4px; }
+.admin-scope .admin-about h2 { font-size: 1rem; margin: 16px 0 6px; }
+.admin-scope .admin-about .admin-warning { border-left: 3px solid var(--sl-color-danger-600, #dc2626); padding: 4px 0 4px 12px; margin: 0 0 12px; }
+
+.admin-scope .admin-body { min-width: 0; }
+.admin-scope .admin-body .card { max-width: 880px; }
+
+/* the index: a quiet list, grouped under headings */
+.admin-scope .admin-section { margin: 26px 0 0; }
+.admin-scope .admin-section-title { font-size: .78rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-secondary); margin: 0 0 2px; }
+.admin-scope .admin-section-title.is-danger { color: var(--sl-color-danger-600, #dc2626); }
+.admin-scope .admin-section-hint { font-size: .82rem; color: var(--text-secondary); margin: 0 0 8px; }
+.admin-scope .admin-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-card); }
+.admin-scope .admin-list li + li { border-top: 1px solid var(--border); }
+.admin-scope .admin-item { display: flex; align-items: center; gap: 14px; padding: 12px 16px; color: inherit; text-decoration: none; }
+.admin-scope .admin-item:hover, .admin-scope .admin-item:focus-visible { background: var(--tree-hover); outline: none; }
+.admin-scope .admin-item-icon { font-size: 1.3rem; color: var(--accent); flex: none; width: 1.6rem; }
+.admin-scope .admin-item-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.admin-scope .admin-item-title { font-weight: 600; }
+.admin-scope .admin-item-desc { font-size: .84rem; color: var(--text-secondary); line-height: 1.4; }
+.admin-scope .admin-item-chevron { color: var(--text-secondary); flex: none; }
+.admin-scope .admin-item:hover .admin-item-chevron { color: var(--accent); }
+.admin-scope .is-danger + .admin-section-hint + .admin-list .admin-item-icon { color: var(--sl-color-danger-600, #dc2626); }
+@media (max-width: 719px) {
+    .admin-scope .admin-item { padding: 12px; gap: 10px; }
+    .admin-scope .admin-title { font-size: 1.3rem; }
+}

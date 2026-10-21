@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
 using Dapper;
@@ -48,6 +49,18 @@ public sealed partial class BlindPhoneReplicaClient(
     private static readonly byte[] SignatureDomain = "BMB-MANIFEST-FILE-V1\0"u8.ToArray();
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// Told the signed length of the whole archive once the response headers are in and before the first byte of a first load or a baseline update is written (a backup has its own
+    /// <c>beforeDownload</c> parameter); throwing stops the download with the partial left as it was. The blind app sets aside, from here, the peak footprint the install needs beyond the archive.
+    /// </summary>
+    public Action<long>? BeforeArchiveDownload { get; init; }
+
+    /// <summary>
+    /// Called after each step that persisted something: the archive is complete, a blob is stored, the package is extracted and verified, the copy is installed. The host that keeps count of what
+    /// the phone holds learns from it that the folders grew by more than the bytes that came in. An init property: the constructor does not change.
+    /// </summary>
+    public Action? AfterBatch { get; init; }
+
     public async Task FetchAndInstallAsync(
         HttpClient http, BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
         await FetchAsync(http, target, workDirectory, progress, ct, update: false);
@@ -61,21 +74,29 @@ public sealed partial class BlindPhoneReplicaClient(
     /// </summary>
     public async Task<bool> UpdateBaselineAsync(
         HttpClient http, BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
+        await CheckBaselineAsync(http, target, workDirectory, progress, ct) == BlindBaselineCheck.Installed;
+
+    /// <summary>
+    /// <see cref="UpdateBaselineAsync"/> with the answer told apart: <see cref="BlindBaselineCheck.NotAsked"/> when nothing was sent to the node (the phone holds no baseline yet), <see cref="BlindBaselineCheck.Current"/>
+    /// when the node authenticated this phone and said it holds the same baseline (304), <see cref="BlindBaselineCheck.Installed"/> when a newer one was installed. The last two are both contacts that went through.
+    /// </summary>
+    public async Task<BlindBaselineCheck> CheckBaselineAsync(
+        HttpClient http, BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
         await FetchAsync(http, target, workDirectory, progress, ct, update: true);
 
-    private async Task<bool> FetchAsync(
+    private async Task<BlindBaselineCheck> FetchAsync(
         HttpClient http, BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct, bool update)
     {
         string? have = null;
         if (update)
         {
             have = await HeldBaselineIdAsync(ct);
-            if (have is null) return false;
+            if (have is null) return BlindBaselineCheck.NotAsked;
         }
         var identity = await identityRepo.GetAsync()
-            ?? throw new InvalidOperationException("The blind phone identity has not been recorded.");
+            ?? throw new BlindSentenceException("The blind phone identity has not been recorded.");
         if (identity.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
-            throw new InvalidOperationException("The blind phone requires its v=2 external-key identity before replica download.");
+            throw new BlindSentenceException("The blind phone requires its v=2 external-key identity before replica download.");
 
         Directory.CreateDirectory(workDirectory);
         CleanupExtractionArtifacts(workDirectory);
@@ -85,13 +106,14 @@ public sealed partial class BlindPhoneReplicaClient(
         var metadataPath = Path.Combine(workDirectory, "replica.part.json");
         try
         {
-            var current = await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct, have: have);
+            var current = await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct, BeforeArchiveDownload, have: have);
             if (current is null)
             {
                 // 304: the node's baseline is the one this phone holds.
                 progress?.Report(1);
-                return false;
+                return BlindBaselineCheck.Current;
             }
+            AfterBatch?.Invoke(); // the archive is on disk, complete
             try
             {
                 var extraction = Path.Combine(workDirectory, "verified-" + current.Sha256.ToLowerInvariant());
@@ -102,8 +124,16 @@ public sealed partial class BlindPhoneReplicaClient(
                 else
                 {
                     await VerifyAndExtractAsync(partPath, extraction, current, target, ct);
+                    AfterBatch?.Invoke(); // extracted
                     await BuildAndSwitchDatabaseAsync(extraction, target, ct);
                 }
+                AfterBatch?.Invoke(); // installed
+            }
+            catch (BlindPausedException)
+            {
+                // A limit said "not now" while the blobs of the baseline were being fetched (they are content-addressed: what came stays). That is no fault of the package: no failure
+                // is recorded and no back-off started, so the next pass carries on as soon as the person's limit allows.
+                throw;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -120,7 +150,7 @@ public sealed partial class BlindPhoneReplicaClient(
             ClearInstallFailure(workDirectory);
             progress?.Report(1);
             logger.LogInformation("Installed verified blind replica {Hash} from {NodeId}", current.Sha256, target.NodeId);
-            return true;
+            return BlindBaselineCheck.Installed;
         }
         catch (InvalidDataException)
         {
@@ -152,9 +182,9 @@ public sealed partial class BlindPhoneReplicaClient(
         Action<long>? beforeDownload = null)
     {
         var identity = await identityRepo.GetAsync()
-            ?? throw new InvalidOperationException("The blind phone identity has not been recorded.");
+            ?? throw new BlindSentenceException("The blind phone identity has not been recorded.");
         if (identity.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
-            throw new InvalidOperationException("The blind phone requires its v=2 external-key identity before a package download.");
+            throw new BlindSentenceException("The blind phone requires its v=2 external-key identity before a package download.");
 
         Directory.CreateDirectory(workDirectory);
         CleanupBackupExtractions(workDirectory);
@@ -166,6 +196,7 @@ public sealed partial class BlindPhoneReplicaClient(
         try
         {
             current = (await DownloadAsync(http, target, token, partPath, metadataPath, progress, ct, beforeDownload))!;
+            AfterBatch?.Invoke(); // the archive is on disk, complete
         }
         catch (InvalidDataException ex)
         {
@@ -194,6 +225,7 @@ public sealed partial class BlindPhoneReplicaClient(
             }
             var anchors = await ReadAnchorIdsAsync(recoveryDb, ct);
             var boxes = await CountRecoveryBoxesAsync(recoveryDb, ct);
+            AfterBatch?.Invoke(); // extracted and read
             var archivePath = Path.Combine(workDirectory, BackupArchiveName);
             File.Move(partPath, archivePath, overwrite: true);
             if (File.Exists(metadataPath)) File.Delete(metadataPath);
@@ -251,8 +283,8 @@ public sealed partial class BlindPhoneReplicaClient(
     {
         var failure = await ReadInstallFailureAsync(Path.Combine(workDirectory, fileName), ct);
         if (failure is null || failure.NodeId != nodeId || failure.RetryAfter <= UtcNow()) return;
-        throw new InvalidDataException(
-            $"The last replica install failed {failure.Attempts} time(s) ({failure.Error}); next attempt after {failure.RetryAfter:u}.");
+        throw BlindOwnSentence.Mark(new InvalidDataException(
+            $"The last replica install failed {failure.Attempts} time(s) ({SafeTypeName(failure.Error)}); next attempt after {failure.RetryAfter:u}."));
     }
 
     private async Task RecordInstallFailureAsync(string workDirectory, Guid nodeId, Exception cause,
@@ -516,7 +548,7 @@ public sealed partial class BlindPhoneReplicaClient(
         var candidatePath = Path.Combine(Path.GetDirectoryName(databasePath)!,
             $"beememorybank.replica-{blindManifest.SeedId:N}.db");
 
-        var self = await identityRepo.GetAsync() ?? throw new InvalidOperationException("Blind phone identity disappeared during install.");
+        var self = await identityRepo.GetAsync() ?? throw new BlindSentenceException("Blind phone identity disappeared during install.");
         DeleteCandidateIfPresent(candidatePath);
         try
         {
@@ -757,6 +789,10 @@ public sealed partial class BlindPhoneReplicaClient(
 
     private sealed record InstallFailure(Guid NodeId, int Attempts, DateTimeOffset RetryAfter, string Error);
 
+    /// <summary>The recorded failure is the NAME of an exception type; a file that holds anything else (an older or a damaged record) is told as "an error".</summary>
+    internal static string SafeTypeName(string? recorded) =>
+        recorded is { Length: > 0 and <= 80 } && recorded.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '.' or '`') ? recorded : "an error";
+
     private sealed record PackageMetadata(string Sha256, string SignatureB64, long Length)
     {
         public bool Matches(PackageMetadata other) =>
@@ -764,6 +800,45 @@ public sealed partial class BlindPhoneReplicaClient(
             string.Equals(Sha256, other.Sha256, StringComparison.OrdinalIgnoreCase) &&
             CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(SignatureB64), Convert.FromBase64String(other.SignatureB64));
     }
+}
+
+/// <summary>
+/// Says that the message of an exception is a sentence THIS CODE wrote on purpose, to be read by the person (what was refused and what to do). <c>BlindFailureText.Say</c> passes on the message of
+/// an exception that carries this mark (bounded to one line, and only while the sentence names no place) and of NO other: the type of an exception does not prove where its message came from -
+/// the framework, a library or the other side throw <see cref="InvalidOperationException"/>, <see cref="ArgumentException"/> and <see cref="UnauthorizedAccessException"/> with a URL, a path, an
+/// account id or a token in the words - so every unmarked exception is told by its kind only.
+/// </summary>
+public interface IBlindOwnSentence;
+
+/// <summary>
+/// A refusal or a state of the blind copy in the words of this code (an <see cref="InvalidOperationException"/>, so that what catches that still catches it): "This phone has no blind identity.",
+/// the sentences a start error shows. Throw it where the sentence is MEANT to be shown; its message is said as it is by <c>BlindFailureText.Say</c>. Never put a path, an address, a key alias or the
+/// message of another exception in it.
+/// </summary>
+public sealed class BlindSentenceException : InvalidOperationException, IBlindOwnSentence
+{
+    public BlindSentenceException(string sentence) : base(sentence) { }
+
+    public BlindSentenceException(string sentence, Exception inner) : base(sentence, inner) { }
+}
+
+/// <summary>
+/// The same mark for a type that cannot be replaced by <see cref="BlindSentenceException"/> because its callers catch it by type (<see cref="ArgumentException"/>, the sealed
+/// <see cref="InvalidDataException"/>, <see cref="FileNotFoundException"/>): the mark is a key in <see cref="Exception.Data"/>, as <c>AndroidBackupFile</c> already does for a body that is too large.
+/// </summary>
+public static class BlindOwnSentence
+{
+    /// <summary>The <see cref="Exception.Data"/> key of the mark.</summary>
+    public const string Key = "bmb.own-sentence";
+
+    public static T Mark<T>(T exception) where T : Exception
+    {
+        exception.Data[Key] = true;
+        return exception;
+    }
+
+    /// <summary>True for an exception of a type that says it (<see cref="IBlindOwnSentence"/>) or one marked with <see cref="Mark{T}"/>.</summary>
+    public static bool IsMarked(Exception exception) => exception is IBlindOwnSentence || exception.Data.Contains(Key);
 }
 
 /// <summary>

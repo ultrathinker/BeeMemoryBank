@@ -1,0 +1,40 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.RecoveryKeyModel
+
+@section About {
+    <p>
+        A <strong>recovery key</strong> is a second way into the vault, for the day the administrator password is lost. It is issued by a superadmin, shown <strong>once</strong>, and
+        kept <strong>offline</strong>: on paper or on a card in a safe place, not in the vault it protects. Only a key derived from it is stored on the node, never the key itself, so
+        nobody, including this page, can show it to you again.
+    </p>
+    <p>
+        With a recovery key, the Sign In page's <em>Forgot your password? Use a recovery key</em> sets a new password for a superadmin account (the <code>bmb</code> command line can
+        do the same). It changes that one account's password and nothing else, and it does not open the vault by itself.
+    </p>
+    <p>
+        Issuing a new key does not invalidate your passwords or your other recovery keys: make a new one if a copy was lost or seen by someone else, and keep the old ones until you are
+        sure you no longer need them. <strong>A data-key rotation invalidates all recovery keys</strong>, so issue a new one right after it
+        (<a href="/Admin/DekRotation">DEK Rotation</a>).
+    </p>
+}
+
+<div class="card mt-md" style="max-width:640px;">
+    <sl-button id="issue-recovery-key-btn" variant="primary" size="small">
+        <sl-icon slot="prefix" name="key"></sl-icon>
+        Issue new recovery key
+    </sl-button>
+    <div class="text-muted text-sm" style="margin-top:8px;">The key is shown in a window you have to close. Copy it before you do.</div>
+</div>
+
+<sl-dialog id="recovery-key-dialog" label="Your new recovery key" style="--width:560px;">
+    <sl-alert variant="warning" open style="margin-bottom:12px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Save this now. It is not stored anywhere in recoverable form and will never be shown again.
+    </sl-alert>
+    <sl-input id="recovery-key-value" readonly filled></sl-input>
+    <sl-button slot="footer" id="recovery-key-copy" variant="primary">
+        <sl-icon slot="prefix" name="clipboard"></sl-icon>
+        Copy
+    </sl-button>
+    <sl-button slot="footer" id="recovery-key-close">Done</sl-button>
+</sl-dialog>

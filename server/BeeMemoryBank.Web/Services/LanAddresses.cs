@@ -5,7 +5,7 @@ using System.Net.Sockets;
 namespace BeeMemoryBank.Web.Services;
 
 /// <summary>
-/// This machine's LAN IPv4 addresses: the hosts a join code or the "address to open" on the Admin card names.
+/// This machine's LAN IPv4 addresses: the hosts a join code or the "address to open" on the Admin page names.
 /// Skips loopback, tunnel, and common virtual adapters.
 /// </summary>
 /// <remarks>

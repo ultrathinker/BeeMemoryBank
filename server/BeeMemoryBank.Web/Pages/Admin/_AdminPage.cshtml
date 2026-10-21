@@ -1,0 +1,40 @@
+@using BeeMemoryBank.Web.Pages.Admin
+@{
+    // THE template of the Admin area (every page but the index is drawn here): back to the index, icon and title, the message of the last action, what the
+    // page is and what it is for (the "About" section of the page, required), and then the page itself. The title and the icon are the ones of the index.
+    Layout = "_Layout";
+    var admin = (AdminPageModel)ViewContext.ViewData.Model!;
+    var info = admin.Info;
+    ViewData["Title"] = info.Title;
+}
+@section Scripts {
+    <script src="/js/pages/admin.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+}
+
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content admin-scope" data-admin-page="@info.Route">
+    <div class="admin-page">
+        <div class="admin-back">
+            <sl-button id="admin-back" size="small" variant="default" href="/Admin">
+                <sl-icon slot="prefix" name="arrow-left"></sl-icon> Back
+            </sl-button>
+        </div>
+        <header class="admin-page-head">
+            <sl-icon class="admin-page-icon" name="@info.Icon"></sl-icon>
+            <h1 class="admin-title">@info.Title</h1>
+        </header>
+
+        <partial name="_AdminMessage" model="admin" />
+
+        <section id="admin-page-about" class="admin-about" aria-label="What this is for">
+            @await RenderSectionAsync("About", required: true)
+        </section>
+
+        <div id="admin-page-body" class="admin-body">
+            @RenderBody()
+        </div>
+    </div>
+</div>
+</div>

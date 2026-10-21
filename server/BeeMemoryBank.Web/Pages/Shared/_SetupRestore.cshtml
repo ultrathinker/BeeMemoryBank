@@ -25,7 +25,7 @@
                           help-text="Only if the address in the code does not reach the blind node from here."></sl-input>
                 <sl-input name="password" type="password" label="Master password" required password-toggle autocomplete="off"></sl-input>
                 <sl-input name="adminUsername" label="Your login name" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedUsername"></sl-input>
-                <sl-input name="displayName" label="Name of this computer" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedNodeName"></sl-input>
+                <sl-input name="displayName" label="Name of this computer" required maxlength="@BeeMemoryBank.Core.Models.DeviceDisplayName.MaxLength" value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedNodeName"></sl-input>
                 <div class="form-actions"><sl-button type="submit" variant="primary">Restore</sl-button></div>
             </form>
         </sl-tab-panel>
@@ -44,7 +44,7 @@
                 </div>
                 <sl-input name="password" type="password" label="Master password" required password-toggle autocomplete="off"></sl-input>
                 <sl-input name="adminUsername" label="Your login name" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedUsername"></sl-input>
-                <sl-input name="displayName" label="Name of this computer" required value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedNodeName"></sl-input>
+                <sl-input name="displayName" label="Name of this computer" required maxlength="@BeeMemoryBank.Core.Models.DeviceDisplayName.MaxLength" value="@BeeMemoryBank.Web.Pages.SetupModel.SuggestedNodeName"></sl-input>
                 <div class="form-actions"><sl-button type="submit" variant="primary">Restore</sl-button></div>
             </form>
         </sl-tab-panel>
@@ -178,7 +178,7 @@
             <sl-alert variant="warning" open>
                 No integrity anchor under your master key vouches for these devices, so they were restored inactive — they
                 cannot sync with this one until you confirm them or pair them again. Confirm the ones you recognise now
-                (your master password again), or later in Admin → Nodes.
+                (your master password again), or later in Admin → Restored devices.
             </sl-alert>
             @if (Model.ConfirmPeersError is { } confirmError)
             {

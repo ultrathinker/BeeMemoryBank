@@ -127,15 +127,93 @@ public class BlindRestoreEndpointsTests : IAsyncLifetime
         (await PackageAsync(code)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
-    [Fact]
-    public async Task RepeatedWrongCodes_RevokeTheOpenCodes()
+    // ── RV7-01: wrong codes are counted against the ADDRESS that sent them, never against the codes ──
+
+    private Task<HttpResponseMessage> FromAsync(string address, HttpRequestMessage request)
+    {
+        request.Headers.Add(BmbWebApplicationFactory.RemoteIpHeader, address);
+        return _public.SendAsync(request);
+    }
+
+    private Task<HttpResponseMessage> PackageFromAsync(string address, string code)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/blind/restore/package");
+        request.Headers.Add("X-Restore-Code", code);
+        return FromAsync(address, request);
+    }
+
+    private Task<HttpResponseMessage> ClaimFromAsync(string address, string code, Guid nodeId, HttpContent? content = null)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/blind/claim")
+        {
+            Content = content ?? JsonContent.Create(new { nodeId, displayName = "New PC", publicKeyB64 = NewKey() })
+        };
+        request.Headers.Add("X-Restore-Code", code);
+        return FromAsync(address, request);
+    }
+
+    [Theory]
+    [InlineData("claim")]
+    [InlineData("package")]
+    public async Task RV7_01_five_wrong_codes_from_one_address_cannot_revoke_a_legitimate_devices_code(string route)
     {
         var code = await IssueAsync();
+        var device = Guid.NewGuid();
 
         for (var i = 0; i < 5; i++)
-            (await PackageAsync($"WRNG-{i}AAA-BBBB-CCCC")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        {
+            using var wrong = route == "claim"
+                ? await ClaimFromAsync("203.0.113.7", $"WRNG-{i}AAA-BBBB-CCCC", Guid.NewGuid())
+                : await PackageFromAsync("203.0.113.7", $"WRNG-{i}AAA-BBBB-CCCC");
+            wrong.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
 
-        (await PackageAsync(code)).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "guessing must not outrun the code's lifetime");
+        using var legitimate = route == "claim"
+            ? await ClaimFromAsync("198.51.100.20", code, device)
+            : await PackageFromAsync("198.51.100.20", code);
+        legitimate.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized, "a stranger's wrong guesses did not burn the code of the device that holds it");
+        if (route == "claim") legitimate.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task RV7_01_a_guesser_is_stopped_after_five_wrong_tries_from_one_address_whatever_it_sends_next()
+    {
+        var code = await IssueAsync();
+        for (var i = 0; i < 5; i++)
+        {
+            using var wrong = await PackageFromAsync("203.0.113.7", $"WRNG-{i}AAA-BBBB-CCCC");
+            wrong.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        using var sixth = await PackageFromAsync("203.0.113.7", "WRNG-6AAA-BBBB-CCCC");
+        using var rightCodeFromTheSameAddress = await PackageFromAsync("203.0.113.7", code);
+        using var claimFromTheSameAddress = await ClaimFromAsync("203.0.113.7", "WRNG-7AAA-BBBB-CCCC", Guid.NewGuid());
+
+        sixth.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+        sixth.Headers.RetryAfter.Should().NotBeNull();
+        rightCodeFromTheSameAddress.StatusCode.Should().Be(HttpStatusCode.TooManyRequests, "an address that has used its budget cannot test one more guess, even by accident");
+        claimFromTheSameAddress.StatusCode.Should().Be(HttpStatusCode.TooManyRequests, "the budget is the address's, across the routes that take a code");
+    }
+
+    [Fact]
+    public async Task RV7_01_a_right_code_does_not_use_up_the_budget_and_a_claim_with_a_bad_body_does()
+    {
+        var code = await IssueAsync();
+        for (var i = 0; i < 4; i++)
+        {
+            using var wrong = await PackageFromAsync("203.0.113.9", $"WRNG-{i}AAA-BBBB-CCCC");
+            wrong.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+        using (var right = await PackageFromAsync("203.0.113.9", code)) right.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized);
+        using (var right = await PackageFromAsync("203.0.113.9", code)) right.StatusCode.Should().NotBe(HttpStatusCode.TooManyRequests, "the right code counts nothing");
+
+        for (var i = 0; i < 5; i++)
+        {
+            using var garbage = await ClaimFromAsync("203.0.113.11", code, Guid.NewGuid(), new StringContent("{ not json", System.Text.Encoding.UTF8, "application/json"));
+            garbage.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+        using var next = await ClaimFromAsync("203.0.113.11", code, Guid.NewGuid());
+        next.StatusCode.Should().Be(HttpStatusCode.TooManyRequests, "every body the node reads for an address that has no right to be read is an attempt of that address");
     }
 
     [Fact]

@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Cli.Commands;
 
 /// <summary>
 /// `bmb blind …` — the operator's handle on a blind node (plan §9): init, status, pair-code,
-/// restore-code, backup now|list|verify, jobs, wipe. The CLI is the break-glass twin of the
+/// restore-code, backup now|list|verify, jobs, wipe, join (<see cref="BlindJoinCommand"/>). The CLI is the break-glass twin of the
 /// console page: same Api endpoints, same internal key, no browser. `pair-code` and
 /// `restore-code` call the endpoints owned by the pairing (BMB-52) and recovery (BMB-53) work;
 /// until those merge the Api answers 404 and this command says so.
@@ -101,6 +101,8 @@ public static class BlindCommand
         }, dataOption, secretsFile, wipeName);
         blind.AddCommand(wipe);
 
+        BlindJoinCommand.AddTo(blind, dataOption);
+
         root.AddCommand(blind);
     }
 
@@ -188,6 +190,19 @@ public static class BlindCommand
             await output.WriteLineAsync($"Deltas:    {Str(deltas, "count")} ({Human(deltas, "bytes")})");
         if (j.TryGetProperty("stored", out var st))
             await output.WriteLineAsync($"Stored:    {Str(st, "blobs")} blobs, {Human(st, "bytes")}");
+        // The node's own limits (release 2.7): what it may store and move for the mesh, and what it holds and moved today.
+        if (j.TryGetProperty("limits", out var limits) && limits.ValueKind == JsonValueKind.Object)
+        {
+            await output.WriteLineAsync(
+                $"Limits:    storage {LimitText(limits, "max_stored_bytes")} (holds {Human(limits, "stored_bytes")}), " +
+                $"traffic {LimitText(limits, "max_traffic_per_day")} a day ({Human(limits, "traffic_today")} today)");
+            if (Str(limits, "paused") is { } paused)
+                await output.WriteLineAsync(paused == "disk"
+                    ? "PAUSED:    the storage limit holds: the node takes and gives no data until the limit is raised"
+                    : $"PAUSED:    the daily traffic limit holds: the node answers again {(Str(limits, "traffic_resumes_at") is { } at ? "at " + at : "after the next local midnight")}");
+            if (limits.TryGetProperty("traffic_unavailable", out var unavailable) && unavailable.ValueKind == JsonValueKind.True)
+                await output.WriteLineAsync("Warning:   the traffic counts cannot be read or saved; with a daily traffic limit set the node stays paused until they can");
+        }
         if (j.TryGetProperty("legacy_copies", out var legacy) && legacy.ValueKind == JsonValueKind.Array)
             foreach (var copy in legacy.EnumerateArray())
                 await output.WriteLineAsync($"Legacy:    {copy.GetString()} (holds plaintext metadata; retire it)");
@@ -303,7 +318,7 @@ public static class BlindCommand
         return status == 404 ? 2 : 1;
     }
 
-    private static BlindApi Create(string dataPath, BlindApiOptions? options) =>
+    internal static BlindApi Create(string dataPath, BlindApiOptions? options) =>
         new(new BlindApiOptions
         {
             BaseUrl = options?.BaseUrl,
@@ -364,6 +379,12 @@ public static class BlindCommand
 
     private static string Bytes(JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? $"{v.GetInt64() / 1_000_000} MB" : "?";
+
+    /// <summary>One limit of the status's <c>limits</c> object: "no limit" for null, "0 (paused)" for zero, else a size.</summary>
+    private static string LimitText(JsonElement limits, string name) =>
+        !limits.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Number ? "no limit"
+            : v.GetInt64() == 0 ? "0 (paused)"
+            : Human(limits, name);
 
     /// <summary>A byte count for a person: B, KB, MB, GB (base 1024, one decimal).</summary>
     private static string Human(JsonElement e, string name)

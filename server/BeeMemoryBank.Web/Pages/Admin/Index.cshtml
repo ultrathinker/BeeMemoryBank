@@ -1,0 +1,72 @@
+@page
+@using System.Text.Json
+@using BeeMemoryBank.Web.Pages.Admin
+@model BeeMemoryBank.Web.Pages.Admin.IndexModel
+@{
+    // The index is the one page of the area that draws itself: it is the list the template's Back button returns to.
+    Layout = "_Layout";
+    ViewData["Title"] = "Admin";
+}
+
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content admin-scope" data-admin-page="index">
+    <div class="admin-page">
+        <header class="admin-page-head">
+            <sl-icon class="admin-page-icon" name="gear"></sl-icon>
+            <h1 class="admin-title">Admin</h1>
+        </header>
+        <p class="admin-lede">Everything you can administer on this node, by topic. Pick an item to open its page.</p>
+
+        <partial name="_AdminMessage" model="Model" />
+
+        <partial name="_MasterPasswordNotice" model="Model" />
+
+        @await Component.InvokeAsync("RecoveryWarnings")
+
+        <partial name="_PendingDekRotations" model="Model.PeerPendingRotations" />
+
+        @if (Model.RestoredPeers.Count > 0)
+        {
+            <sl-alert id="restored-devices-notice" variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
+                <strong>@Model.RestoredPeers.Count restored @(Model.RestoredPeers.Count == 1 ? "device waits" : "devices wait") for your confirmation.</strong>
+                A restore kept @(Model.RestoredPeers.Count == 1 ? "it" : "them") switched off, because nothing vouched for @(Model.RestoredPeers.Count == 1 ? "it" : "them").
+                <a href="@AdminRoutes.RestoredDevices">Review @(Model.RestoredPeers.Count == 1 ? "it" : "them")</a>.
+            </sl-alert>
+        }
+
+        @foreach (var (title, hint) in AdminPageCatalog.Sections)
+        {
+            var pages = AdminPageCatalog.In(title).ToList();
+            if (pages.Count == 0) { continue; }
+            <section class="admin-section" aria-labelledby="admin-section-@pages[0].Name">
+                <h2 id="admin-section-@pages[0].Name" class="admin-section-title@(title == AdminPageCatalog.DangerZone ? " is-danger" : "")">@title</h2>
+                <p class="admin-section-hint">@hint</p>
+                <ul class="admin-list">
+                    @foreach (var item in pages)
+                    {
+                        <li>
+                            <a class="admin-item" href="@item.Route" data-admin-item="@item.Name">
+                                <sl-icon class="admin-item-icon" name="@item.Icon"></sl-icon>
+                                <span class="admin-item-text">
+                                    <span class="admin-item-title">@item.Title</span>
+                                    <span class="admin-item-desc">@item.Summary</span>
+                                </span>
+                                <sl-icon class="admin-item-chevron" name="chevron-right"></sl-icon>
+                            </a>
+                        </li>
+                    }
+                </ul>
+            </section>
+        }
+
+        @* The bookmarks of the old single page had the id of a card as their fragment: a fragment never reaches the server, so the script reads this table and moves the browser. *@
+        <div id="admin-legacy-anchors" hidden data-map="@JsonSerializer.Serialize(AdminPageCatalog.LegacyAnchors)"></div>
+    </div>
+</div>
+</div>
+
+@section Scripts {
+    <script src="/js/pages/admin-index.js" asp-append-version="true"></script>
+}

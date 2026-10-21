@@ -5,6 +5,9 @@ namespace BeeMemoryBank.BlindIos.Services;
 /// <summary>The last background round iOS granted, as the state store keeps it ("time|task|result") and as the screen says it.</summary>
 public static class IosLastRound
 {
+    /// <summary>The state key of the last background round of an account (time, task and result), for its screen. The 2.6 key, unchanged.</summary>
+    public const string StateKey = "bmb.ios.last_background_round";
+
     public static string Format(DateTimeOffset at, string task, string result) =>
         $"{at.ToString("O", CultureInfo.InvariantCulture)}|{task}|{result.ReplaceLineEndings(" ")}";
 

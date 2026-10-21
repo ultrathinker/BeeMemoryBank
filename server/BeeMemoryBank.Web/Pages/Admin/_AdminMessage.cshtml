@@ -1,0 +1,18 @@
+@model BeeMemoryBank.Web.Pages.Admin.AdminPageModel
+@* BMB-303: what the last action did, in the page where its button is - right under the title, not at the end of a long page. *@
+<div id="admin-page-message" class="admin-message">
+    @if (!string.IsNullOrEmpty(Model.SuccessMessage))
+    {
+        <sl-alert variant="success" open closable class="card-message" role="status">
+            <sl-icon slot="icon" name="check-circle"></sl-icon>
+            @Model.SuccessMessage
+        </sl-alert>
+    }
+    @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+    {
+        <sl-alert variant="danger" open closable class="card-message" role="alert">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            @Model.ErrorMessage
+        </sl-alert>
+    }
+</div>

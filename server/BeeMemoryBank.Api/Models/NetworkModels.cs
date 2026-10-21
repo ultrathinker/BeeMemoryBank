@@ -16,6 +16,8 @@ public record NetworkResponse(NetworkNode Self, List<NetworkNode> Peers, List<Ne
 /// <param name="Scheme">The scheme, host and port of the node's address, as configured (never a path, a query or credentials): what an arrow to it points at.</param>
 /// <param name="State"><c>self</c> for this node; otherwise <c>answering</c>, <c>not_answering</c>, <c>calls_us</c> or <c>unknown</c> (see <c>PeerContactView</c>).</param>
 /// <param name="SeenFrom">The address the node's last call to this node came from, as this node's server saw it (in memory only, never logged); null when it has not called since this node started.</param>
+/// <param name="PausedText">A blind copy that said its owner's limits stop it: "Paused by the device's owner: daily traffic limit (until 00:00 device time)", made by this node from a closed set of reasons; null otherwise.</param>
+/// <param name="LeftAt">When the device's own owner removed this copy from the device; the owner of the network revokes it.</param>
 /// <param name="Notes">This node only: how many notes it holds (null when it could not be counted, for example while the vault is closed).</param>
 /// <param name="Folders">This node only: how many folders.</param>
 /// <param name="Changes">This node only: the head of its event log (how many changes it has made and received).</param>
@@ -49,7 +51,9 @@ public record NetworkNode(
     DateTime? AddedAt,
     int? Notes = null,
     int? Folders = null,
-    long? Changes = null);
+    long? Changes = null,
+    string? PausedText = null,
+    DateTime? LeftAt = null);
 
 /// <summary>One direction of a call: <c>From</c> calls <c>To</c>, at the address of <c>To</c>.</summary>
 /// <param name="Basis"><c>observed</c> (this node is one end of the call and measured it) or <c>expected</c> (between two other nodes: the network's rule is that every node calls every node that has an address; this node cannot see those calls).</param>

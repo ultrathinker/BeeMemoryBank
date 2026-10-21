@@ -434,6 +434,45 @@ public class SealedRelayTests
     }
 
     [Fact]
+    public async Task APositionReport_ThatNamesAPause_IsNotedForABlindCopy_AndNotForAnotherPeer()
+    {
+        await using var h = await SealedRelayHost.StartAsync();
+        var copy = await h.AddPeerAsync(id: BlindNodeId.NewId());
+        var full = await h.AddPeerAsync();
+        var copyToken = await h.TokenAsync(copy);
+        var contacts = h.App.Services.GetRequiredService<PeerContactLog>();
+
+        (await h.SendAsync(HttpMethod.Post, "/api/sync/report-position?sequence=1&paused=traffic&pausedUntil=2999-01-01", copyToken)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await h.SendAsync(HttpMethod.Post, "/api/sync/report-position?sequence=1&paused=traffic", await h.TokenAsync(full))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        contacts.Get(copy.Id).PausedReason.Should().Be("traffic", "a closed node relays the same additive fields as an open one");
+        contacts.Get(copy.Id).PausedUntil.Should().BeNull("an end a year away is not believed; the pause stays");
+        contacts.Get(full.Id).PausedReason.Should().BeNull();
+
+        (await h.SendAsync(HttpMethod.Post, "/api/sync/report-position?sequence=2", copyToken)).StatusCode.Should().Be(HttpStatusCode.OK);
+        contacts.Get(copy.Id).PausedReason.Should().BeNull("an old-shape report ends it");
+    }
+
+    /// <summary>
+    /// The open node clears "the device's owner removed it" when the device signs in again; the closed node's relay did not, so a copy that had said goodbye and
+    /// was set up again while the hub was closed went on being shown as removed, with a Revoke button for a working copy.
+    /// </summary>
+    [Fact]
+    public async Task ACopyThatLeft_AndSignsInAgainThroughTheClosedRelay_IsNoLongerShownAsRemoved()
+    {
+        await using var h = await SealedRelayHost.StartAsync();
+        var copy = await h.AddPeerAsync(id: BlindNodeId.NewId());
+        var contacts = h.App.Services.GetRequiredService<PeerContactLog>();
+        contacts.NoteLeft(copy.Id, DateTime.UtcNow);
+        contacts.Get(copy.Id).LeftAt.Should().NotBeNull("the goodbye was noted");
+
+        var token = await h.TokenAsync(copy);
+
+        token.Should().NotBeNullOrEmpty("the relay let it in");
+        contacts.Get(copy.Id).LeftAt.Should().BeNull("a device that signs in again has not left");
+    }
+
+    [Fact]
     public async Task ThePing_NeedsTheInternalKey_AsItDoesOnAnOpenNode()
     {
         await using var h = await SealedRelayHost.StartAsync();

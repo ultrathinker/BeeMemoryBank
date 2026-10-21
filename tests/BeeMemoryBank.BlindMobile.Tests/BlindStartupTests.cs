@@ -34,11 +34,11 @@ public sealed class BlindStartupTests
     }
 
     /// <summary>
-    /// Every entry point that reads or writes the database waits for it to be open: the page (creates the identity),
-    /// the app's start-up, and the three background entry points (a worker can be the first thing to run after a
-    /// reboot or an update). Read from the built assembly; a type that names <c>BlindStartup</c> is one that awaits it. The page does
-    /// not open the database itself: it asks the shared controller's <c>InitializeAsync</c>, which awaits <c>BlindStartup</c> (the
-    /// controller's own test in the AppCore tests, <c>Initialize_MakesTheIdentityWithTheHostsName_AndStatusShowsItAwaitingAnAnswer</c>).
+    /// Every entry point that reads or writes a database waits for it to be open: the app's start-up and the three background entry points (a worker can be
+    /// the first thing to run after a reboot or an update) go through <c>BlindDevice</c>, whose <c>StartAsync</c> is the account host's start: it opens every account's
+    /// database (<c>BlindStartup</c>, in each account's own composition) and makes the identity of one that has none. Read from the built assembly; a type that names
+    /// <c>BlindDevice</c> is one that asks it (the source tests hold that the workers call <c>device.StartAsync(token)</c> before the schedulers). The page shows ONE account through the shared
+    /// <c>IBlindAppController</c> of the host, which started it (the host's own tests, <c>BlindAccountHostTests</c>).
     /// </summary>
     [Theory]
     [InlineData("BeeMemoryBank.BlindMobile.App")]
@@ -50,12 +50,12 @@ public sealed class BlindStartupTests
     {
         var awaited = entryPoint == "BeeMemoryBank.BlindMobile.Pages.BlindHomePage"
             ? "BeeMemoryBank.BlindMobile.Services.Blind.IBlindAppController"
-            : "BeeMemoryBank.BlindMobile.Services.Blind.BlindStartup";
+            : "BeeMemoryBank.BlindMobile.Services.Blind.BlindDevice";
         var startup = new HashSet<string>(StringComparer.Ordinal) { awaited };
 
         var mentions = BoundaryScanner.Scan(FindAppDll(), owner => owner == entryPoint, startup);
 
-        mentions.Should().NotBeEmpty($"{entryPoint} must await {awaited.Split('.')[^1]} (which opens the database) before it uses the database");
+        mentions.Should().NotBeEmpty($"{entryPoint} must go through {awaited.Split('.')[^1]} (which has the accounts' databases opened) before it uses a database");
     }
 
     /// <summary>
@@ -76,16 +76,16 @@ public sealed class BlindStartupTests
     }
 
     /// <summary>
-    /// The same wipe then started the launcher activity and killed its own process, which also hosted the new activity: the
-    /// app simply vanished. The restart goes through a helper activity in another process, which kills the old process and
-    /// starts the app again.
+    /// A wipe once started the launcher activity and killed its own process, which also hosted the new activity: the app simply vanished. The restart goes through
+    /// a helper activity in another process, which kills the old process and starts the app again. With several accounts nothing restarts the process any more (a removal
+    /// is the account host's, and the other accounts keep running), so the helper has no caller; it stays, and this guard with it, because the manifest guard names it.
     /// </summary>
     [Fact]
-    public void TheWipe_RestartsThroughAHelperActivity_NotByStartingTheLauncherItselfAndKillingTheProcess()
+    public void TheRestartHelper_StartsAHelperActivityInAnotherProcess_NotTheLauncherItselfFromTheProcessItKills()
     {
-        var calls = MemberCalls(FindAppDll(), "BeeMemoryBank.BlindMobile.Platforms.Android.AndroidBlindLifecycle");
+        var calls = MemberCalls(FindAppDll(), "BeeMemoryBank.BlindMobile.Platforms.Android.ProcessRestart");
 
-        calls.Should().Contain(c => c.StartsWith("BeeMemoryBank.BlindMobile.Platforms.Android.ProcessRestart.", StringComparison.Ordinal));
+        calls.Should().Contain(c => c.EndsWith(".StartActivity", StringComparison.Ordinal));
         calls.Should().NotContain(c => c.EndsWith(".GetLaunchIntentForPackage", StringComparison.Ordinal),
             "starting the launcher from the process that is about to be killed loses the new activity with it");
     }

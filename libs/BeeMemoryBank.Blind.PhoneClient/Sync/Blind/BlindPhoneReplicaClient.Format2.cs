@@ -108,7 +108,7 @@ public sealed partial class BlindPhoneReplicaClient
         var store = sp.GetRequiredService<IBaselineStore>();
         var whitelist = sp.GetRequiredService<IWhitelistRepository>();
         var blobs = sp.GetRequiredService<IBlobRepository>();
-        var self = await identityRepo.GetAsync() ?? throw new InvalidOperationException("Blind phone identity disappeared during install.");
+        var self = await identityRepo.GetAsync() ?? throw new BlindSentenceException("Blind phone identity disappeared during install.");
 
         // No write lands in the middle of this: the pull sync and the applier wait, and this flow writes through.
         using var writeGate = await EventWriteGate.Instance.QuiesceAsync(ct);
@@ -148,6 +148,7 @@ public sealed partial class BlindPhoneReplicaClient
                 {
                     ct.ThrowIfCancellationRequested();
                     await blobs.StoreAsync(await File.ReadAllBytesAsync(file, ct));
+                    AfterBatch?.Invoke();
                 }
         }
 
@@ -155,7 +156,7 @@ public sealed partial class BlindPhoneReplicaClient
         // from a node that did not ship its blobs carries none either; the copy fetches what it lacks from the node that serves it.
         var listed = Format2Package.ParseBlobList(await File.ReadAllBytesAsync(
             Path.Combine(verified.Baseline.Directory, BaselineManifest.BlobListFileName), ct));
-        var unavailable = await BlobTransport.FetchHashesAsync(http, target.Address.TrimEnd('/'), token, listed, blobs, logger, ct);
+        var unavailable = await BlobTransport.FetchHashesAsync(http, target.Address.TrimEnd('/'), token, listed, blobs, logger, ct, AfterBatch);
         if (unavailable > 0)
             throw new InvalidDataException($"{unavailable} of the {listed.Count} blobs the baseline lists are not available from the node.");
 

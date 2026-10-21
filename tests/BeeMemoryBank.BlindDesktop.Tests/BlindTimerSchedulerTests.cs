@@ -281,7 +281,7 @@ public sealed class BlindTimerSchedulerTests
         var app = new FakeApp();
         var scheduler = new BlindTimerScheduler(app, TimeProvider.System, new BlindSchedulerOptions { Tick = TimeSpan.FromMilliseconds(20) });
         var calls = 0;
-        app.SyncBody = _ => Interlocked.Increment(ref calls) == 1 ? throw new InvalidOperationException("boom") : Task.FromResult("Synced.");
+        app.SyncBody = _ => Interlocked.Increment(ref calls) == 1 ? throw new InvalidOperationException("boom C:\\Users\\secret\\key.bin") : Task.FromResult("Synced.");
 
         scheduler.EnsureScheduled();
         await WaitUntil(() => calls >= 1);
@@ -289,7 +289,7 @@ public sealed class BlindTimerSchedulerTests
         await WaitUntil(() => calls >= 2);
 
         scheduler.IsRunning.Should().BeTrue();
-        scheduler.LastError.Should().Contain("InvalidOperationException").And.Contain("boom");
+        scheduler.LastError.Should().Contain("InvalidOperationException").And.NotContain("boom").And.NotContain("secret", "the sentence is kept and logged: the type, never the message");
         await scheduler.StopAsync();
         scheduler.IsRunning.Should().BeFalse();
     }

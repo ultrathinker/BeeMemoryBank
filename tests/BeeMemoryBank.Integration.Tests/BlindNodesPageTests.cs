@@ -75,10 +75,12 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     // ── how the operator gets there ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task TheAdminPage_LinksToBlindNodes_ForASuperadmin()
+    public async Task TheAdminPages_LinkToBlindNodes_ForASuperadmin()
     {
-        var page = await (await _admin.GetAsync("/Admin")).Content.ReadAsStringAsync();
+        var index = await (await _admin.GetAsync("/Admin")).Content.ReadAsStringAsync();
+        var page = await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync();
 
+        index.Should().Contain("href=\"/Admin/BlindNodes\"", "the Admin index lists the page of the blind nodes");
         page.Should().Contain("href=\"/BlindNodes\"",
             "the page that adds a blind node had no link anywhere: the owner had to type its address");
         (await _admin.GetAsync("/BlindNodes")).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -93,6 +95,91 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         admin.StatusCode.Should().NotBe(HttpStatusCode.OK);
         blind.StatusCode.Should().NotBe(HttpStatusCode.OK);
         (await admin.Content.ReadAsStringAsync()).Should().NotContain("href=\"/BlindNodes\"");
+    }
+
+    /// <summary>
+    /// Fix round 2 (addendum B): the page used to say "Titles, paths, tags and file names are visible to it", which is untrue once metadata encryption is on (every node set up with 2.6.2 or later).
+    /// It says what a blind node sees in each case, and the Admin page describes both ways of adding a copy, the invitation first.
+    /// </summary>
+    /// <summary>The page as plain text on one line: entities decoded, runs of white space (the source's line breaks) made one space.</summary>
+    private static string Flat(string html) => string.Join(' ', System.Net.WebUtility.HtmlDecode(html).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    [Fact]
+    public async Task TheBlindNodesPage_SaysWhatABlindNodeSees_ForBothStatesOfMetadataEncryption()
+    {
+        var html = Flat(await (await _admin.GetAsync("/BlindNodes")).Content.ReadAsStringAsync());
+
+        html.Should().NotContain("are visible to it");
+        html.Should().Contain("id=\"blind-sees\"").And.Contain("With metadata encryption on").And.Contain("2.6.2 or later")
+            .And.Contain("no titles, no paths, no folder, tag or file names")
+            .And.Contain("On an older network where metadata encryption has not been switched on yet")
+            .And.Contain("can still see titles, paths, tags and file names, but never the text of a note");
+    }
+
+    [Fact]
+    public async Task TheAdminBlindNodesPage_DescribesTheInvitationFirst_AndThePairCodeAsTheOlderWay_AndKeepsItsLink()
+    {
+        var html = Flat(await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync());
+
+        html.Should().Contain("href=\"/BlindNodes\"");
+        var invitation = html.IndexOf("invitation", StringComparison.Ordinal);
+        var pair = html.IndexOf("pair code", StringComparison.Ordinal);
+        invitation.Should().BeGreaterThan(0);
+        pair.Should().BeGreaterThan(invitation, "the invitation is described first");
+        html.Should().Contain("match code").And.Contain("master password").And.Contain("older way").And.Contain("blind node on a server");
+        html.Should().NotContain("You add one with the pair code that its own console shows");
+    }
+
+    /// <summary>
+    /// Fix round 3 (review of the documentation): the invitation pages said that before the owner confirms, the device "receives nothing". Asking to join already sends this node the device's id, public
+    /// key, name, platform, version and its own backup key; what is true is that no vault content and no usable key of the memory bank is sent TO the device. The old copy must fail these tests.
+    /// </summary>
+    private static readonly string[] NothingCopy = ["they receive nothing", "receives nothing", "nothing reaches"];
+
+    [Fact]
+    public async Task TheBlindNodesPage_InvitationCard_SaysWhatIsSentBeforeTheConfirmation_AndNotThatNothingIs()
+    {
+        var html = Flat(await (await _admin.GetAsync("/BlindNodes")).Content.ReadAsStringAsync());
+
+        html.Should().Contain("id=\"invite\"");
+        foreach (var old in NothingCopy) html.Should().NotContainEquivalentOf(old);
+        html.Should().Contain("no vault content and no usable key of your memory bank is sent to their device")
+            .And.Contain("Their app does send this node its own device id, public key, name, platform, version and its own backup key when it asks to join")
+            .And.Contain("this node keeps that backup key encrypted until you decide");
+    }
+
+    [Fact]
+    public async Task TheAdminBlindNodesPage_SaysWhatIsSentBeforeTheConfirmation_AndNotThatNothingReachesTheDevice()
+    {
+        var html = Flat(await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync());
+
+        foreach (var old in NothingCopy) html.Should().NotContainEquivalentOf(old);
+        html.Should().Contain("no vault content and no usable key of your memory bank is sent to their device")
+            .And.Contain("their device id, public key, name, platform, version and their own backup key")
+            .And.Contain("the node keeps that backup key encrypted until you decide");
+    }
+
+    [Fact]
+    public void TheSourcesOfTheInvitationPages_AndTheirContracts_DoNotPromiseThatNothingReachesTheDevice_AndQualifyTheReplay()
+    {
+        var root = DiSnapshot.RepoRoot();
+        string Source(params string[] parts) => Flat(File.ReadAllText(Path.Combine([root, .. parts])));
+        var web = Path.Combine("server", "BeeMemoryBank.Web", "Pages");
+
+        // The page models and views, including the sentence of the refusal that no rendered page test reaches without a real invitation.
+        foreach (var file in new[] { Path.Combine(web, "BlindNodes.cshtml"), Path.Combine(web, "BlindNodes.cshtml.cs"), Path.Combine(web, "Admin", "BlindNodes.cshtml") })
+            foreach (var old in NothingCopy)
+                Source(file).Should().NotContainEquivalentOf(old, $"{file} must not say that nothing is sent when the redemption already sends the device's own data to this node");
+        Source(web, "BlindNodes.cshtml.cs").Should().Contain("Nothing of your memory bank was sent to that device");
+
+        Source("server", "BeeMemoryBank.Api", "Services", "Blind", "BlindInviteService.cs").Should().NotContain("nothing reaches the device before the confirmation")
+            .And.Contain("What flows the other way is not nothing");
+        foreach (var contract in new[]
+                 {
+                     Path.Combine("libs", "BeeMemoryBank.Blind.AppCore", "Services", "Blind", "Invitations", "BlindAccountHost.Invitations.cs"),
+                     Path.Combine("libs", "BeeMemoryBank.Blind.AppCore", "Services", "Blind", "Invitations", "BlindInvitationClient.cs"),
+                 })
+            Source(contract).Should().Contain("only while the invitation is still <c>redeemed</c> and its confirmation window is open", $"{contract} must give the condition of the replay");
     }
 
     // ── the banners ──────────────────────────────────────────────────────────────────────────────
@@ -176,7 +263,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         ShowsInOrder(html,
             "Cannot add the blind node yet",
             "The device 'Galaxy Tab A7 Lite' has not been seen on the current version (sync protocol 3) for over 7 days",
-            "Update it to the latest version and open it once so it syncs, or remove it under Admin → Nodes",
+            "Update it to the latest version and open it once so it syncs, or remove it under Admin → Trusted Nodes",
             "press Add again");
         html.Should().Contain($">{PairCode}</textarea>", "a failed add must not throw the pasted code away");
     }
@@ -197,16 +284,16 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         ShowsInOrder(html,
             "The device 'Old phone' runs an older version (sync protocol 2; the blind node needs 3)",
             "The device 'Hub' does not yet accept this computer as a superadmin",
-            "On 'Hub' open Admin → Nodes and make this computer a superadmin",
+            "On 'Hub' open Admin → Trusted Nodes and make this computer a superadmin",
             "The device 'Kitchen tablet' did not accept this computer's check",
-            "remove it under Admin → Nodes");
+            "remove it under Admin → Trusted Nodes");
     }
 
     [Fact]
     public async Task APreflightRefusal_FromAnApiWithoutDetails_StillShowsItsOwnSentences()
     {
         _scripted.Add = (HttpStatusCode.Conflict,
-            """{"error":"This PC cannot add a blind node yet: x","problems":["\"Hub\" does not see this PC as superadmin: promote this PC on \"Hub\" (Admin → Nodes → superadmin) and try again."]}""");
+            """{"error":"This PC cannot add a blind node yet: x","problems":["\"Hub\" does not see this PC as superadmin: promote this PC on \"Hub\" (Admin → Trusted Nodes → superadmin) and try again."]}""");
 
         var (_, html) = await AddAsync();
 
@@ -236,7 +323,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     [InlineData(403, """{"error":"Session is locked","code":"session_locked"}""", "vault on this computer is locked|Unlock")]
     [InlineData(403, """{"error":"Superadmin required"}""", "Only a superadmin|Sign in as a superadmin")]
     // the Api itself failed
-    [InlineData(500, """{"error":"boom"}""", "error 500|Add again|Admin → Diagnostics|Technical detail: boom")]
+    [InlineData(500, """{"error":"boom"}""", "error 500|Add again|Admin → Search diagnostics|Technical detail: boom")]
     public async Task AFailedAdd_SaysWhatIsWrongAndWhatToDo_AndKeepsThePairCode(int status, string body, string expected)
     {
         _scripted.Add = ((HttpStatusCode)status, body);

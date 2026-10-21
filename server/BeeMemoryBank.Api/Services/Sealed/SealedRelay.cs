@@ -215,6 +215,8 @@ public sealed class SealedRelay : ISealedRelay
                 statusCode: StatusCodes.Status426UpgradeRequired);
         }
 
+        // A device that signs in again has not left (re-paired, or its owner changed their mind): what it said when it left no longer holds - as on the open path.
+        context.RequestServices.GetService<PeerContactLog>()?.ClearLeft(req.NodeId);
         return Results.Ok(new SyncAuthResponse(_tokens.IssueToken(req.NodeId, req.ProtocolVersion!.Value, req.Capabilities)));
     }
 
@@ -460,6 +462,10 @@ public sealed class SealedRelay : ISealedRelay
         if (lease is null) return Busy(context);
 
         await _inbox.RecordReportAsync(peer, sequence, ct);
+        // The same additive fields as the open node's report-position: a blind copy that its owner's limits stop says so (memory only, closed reasons).
+        if (BlindNodeId.IsBlind(peer))
+            context.RequestServices.GetService<PeerContactLog>()?.NotePauseReport(
+                peer, DateTime.UtcNow, context.Request.Query["paused"].FirstOrDefault(), context.Request.Query["pausedUntil"].FirstOrDefault());
         return Results.Ok();
     }
 

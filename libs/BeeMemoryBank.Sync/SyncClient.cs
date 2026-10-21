@@ -577,6 +577,7 @@ public class SyncClient(
             catch (JsonException) { }
             throw new SnapshotRequiredException(baseUrl, lastCp, headSeq, msg, code, headReported);
         }
+        PeerPausedException.ThrowIfPaused(resp);
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync<List<SyncEvent>>(JsonOpts, ct)
             ?? [];
@@ -637,6 +638,8 @@ public class SyncClient(
         // and the next cycle would resend the same request and 413 again, forever.
         if (resp.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
             return new ApplyResultDto(0, 0, null, 0, TooLarge: true);
+        // A blind node whose owner's limit stops it answers 503 + X-BMB-Paused: a pause with a time, not a failure (PausedPeers).
+        PeerPausedException.ThrowIfPaused(resp);
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync<ApplyResultDto>(JsonOpts, ct)
             ?? new ApplyResultDto(0, 0);

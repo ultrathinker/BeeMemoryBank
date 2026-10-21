@@ -1,11 +1,10 @@
 using BeeMemoryBank.BlindMobile.Services.Blind;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.BlindDesktop.Platform;
 
 /// <summary>
 /// What the operating system adds to the cross-platform host: the private folder and the AppCore seams that depend on the OS
-/// (secrets, state, device conditions, autostart), the way "only one copy runs" is kept, and the few presentation facts that differ
+/// (the per-account secret and state stores, device conditions, autostart), the way "only one copy runs" is kept, and the few presentation facts that differ
 /// (where the error log goes, which icon the tray shows, what the tray is called). The Windows implementation sits in the Windows
 /// platform assembly, the macOS one in the macOS adapters; <see cref="PlatformSelector"/> chooses the one the host was built for, and
 /// nothing else in the host asks which operating system it runs on.
@@ -18,8 +17,23 @@ public interface IBlindDesktopPlatform
     /// <summary>The app-private root, its database file and its other paths.</summary>
     IBlindPaths Paths { get; }
 
-    /// <summary>Registers the OS-dependent seams: <see cref="IBlindSecretStore"/>, <see cref="IBlindStateStore"/>, and <see cref="IBlindAutostart"/>.</summary>
-    void AddSeams(IServiceCollection services);
+    /// <summary>
+    /// The secrets of each account (DPAPI files, Keychain items), under the naming contract of <see cref="BlindAccountNames"/>: the 2.6 account keeps its names, any other account's carry its id.
+    /// Nothing secret is touched until a store is used.
+    /// </summary>
+    IBlindSecretStoreFactory SecretStores { get; }
+
+    /// <summary>The state file of each account, in the account's folder.</summary>
+    IBlindStateStoreFactory StateStores { get; }
+
+    /// <summary>
+    /// Whether the network in use is metered and whether the computer is saving power: what the two switches of an account ask. A value that Windows or macOS does not give is
+    /// "cannot tell" (null), and an account with the switch on then waits.
+    /// </summary>
+    IBlindDeviceConditions DeviceConditions { get; }
+
+    /// <summary>"Start in the tray / menu bar when I sign in": one choice for the device, not per account.</summary>
+    IBlindAutostart Autostart { get; }
 
     /// <summary>
     /// Takes "the one running copy" for this data folder: the guard if this process is the first, null if another copy already runs.

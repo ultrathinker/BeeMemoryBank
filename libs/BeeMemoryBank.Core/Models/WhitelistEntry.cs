@@ -44,7 +44,7 @@ public class WhitelistEntry
     /// peer cannot escalate its own privileges.
     ///
     /// <para>Set on every node that joins with the master password, since a join grants full
-    /// trust. It can be cleared again from Admin → Nodes, which emits a whitelist_update carrying
+    /// trust. It can be cleared again from Admin → Trusted Nodes, which emits a whitelist_update carrying
     /// the new value so the whole mesh agrees; a peer can never RAISE its own flag through that
     /// event, only an existing superadmin peer can promote it.</para>
     /// </summary>

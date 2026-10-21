@@ -12,6 +12,12 @@ public partial class SetupModel
 
     public async Task<IActionResult> OnPostRestoreBlindAsync(string? address, string code, string password, string adminUsername, string displayName)
     {
+        if (BeeMemoryBank.Core.Models.DeviceDisplayName.Problem(displayName) is { } nameProblem)
+        {
+            ErrorMessage = nameProblem;
+            Step = "restore";
+            return Page();
+        }
         var (ok, error) = await api.StartRestoreFromBlindAsync(address, code, password, adminUsername, displayName);
         if (ok) return RedirectToPage("/Setup", new { step = "restoring" });
         ErrorMessage = error ?? "The restore could not be started.";
@@ -21,6 +27,13 @@ public partial class SetupModel
 
     public async Task<IActionResult> OnPostRestoreBackupAsync(string backupPath, string password, string adminUsername, string displayName)
     {
+        if (BeeMemoryBank.Core.Models.DeviceDisplayName.Problem(displayName) is { } nameProblem)
+        {
+            ErrorMessage = nameProblem;
+            RestoreBackupPath = backupPath;
+            Step = "restore";
+            return Page();
+        }
         var (ok, error) = await api.StartRestoreFromBackupAsync(backupPath, password, adminUsername, displayName);
         if (ok) return RedirectToPage("/Setup", new { step = "restoring" });
         ErrorMessage = error ?? "The restore could not be started.";

@@ -1,6 +1,8 @@
 using BeeMemoryBank.Api.Helpers;
+using BeeMemoryBank.Api.Middleware;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.BlindLimits;
 using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
@@ -31,6 +33,30 @@ public sealed record BlindRestoreEvents(List<SyncEvent> Events);
 public static class BlindRestoreEndpoints
 {
     public const string RestoreCodeHeader = "X-Restore-Code";
+
+    /// <summary>The address a request is charged to: the connection's (forwarded headers have already been applied by the host when it trusts them), or "unknown" where the host cannot say.</summary>
+    private static string SourceOf(HttpContext ctx) => ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+    /// <summary>429 with the time to wait, in the words and shape of the other rate-limited routes.</summary>
+    private static IResult TooManyAttempts(HttpContext ctx, TimeSpan wait)
+    {
+        ctx.Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return Results.Json(new ErrorResponse("Too many attempts. Try again later."), statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
+    /// <summary>
+    /// The code check of the routes that take a code in a header: null when it is open, 429 when the caller's address has used its budget of wrong codes (checked BEFORE the
+    /// code is looked at), else 401 - and a wrong code is one more failure of that address (a blank header guesses nothing and counts nothing).
+    /// </summary>
+    private static async Task<IResult?> RefuseUnlessCodeAsync(HttpContext ctx, BlindRestoreCodeService codes, BlindRestoreCodeThrottle throttle)
+    {
+        var source = SourceOf(ctx);
+        if (throttle.IsBlocked(source, out var wait)) return TooManyAttempts(ctx, wait);
+        var code = ctx.Request.Headers[RestoreCodeHeader].FirstOrDefault();
+        if (await codes.ValidateAsync(code)) return null;
+        if (!string.IsNullOrWhiteSpace(code)) throttle.Fail(source);
+        return Results.Unauthorized();
+    }
     private const int MaxEvents = 200_000;
 
     public static void MapBlindRestoreEndpoints(this WebApplication app)
@@ -59,12 +85,12 @@ public static class BlindRestoreEndpoints
         // tbl_hard_delete_audit, projections nulled, blind-manifest.json), signed by this node. Once activated
         // (step-a-spec 8.7, 9.7) a format-2 full package with blobs instead, or 503 while there is no sealed baseline.
         app.MapGet("/api/blind/restore/package", async (
-            HttpContext ctx, INodeRole role, BlindRestoreCodeService codes, BlindPackageBuilder builder,
+            HttpContext ctx, INodeRole role, BlindRestoreCodeService codes, BlindRestoreCodeThrottle throttle, BlindPackageBuilder builder,
             INodeIdentityRepository nodeRepo, CancellationToken ct) =>
         {
             if (!role.IsBlind) return Results.NotFound();
-            if (!await codes.ValidateAsync(ctx.Request.Headers[RestoreCodeHeader].FirstOrDefault()))
-                return Results.Unauthorized();
+            if (await RefuseUnlessCodeAsync(ctx, codes, throttle) is { } refused) return refused;
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
 
             var identity = await nodeRepo.GetAsync() ?? throw new InvalidOperationException("Node not initialized");
             if (ctx.RequestServices.GetService<ISyncProtocolPolicy>() is { SealsMetadata: true })
@@ -95,34 +121,52 @@ public static class BlindRestoreEndpoints
             var stream = new FileStream(package.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
                 bufferSize: 81920, FileOptions.DeleteOnClose | FileOptions.Asynchronous);
             return Results.File(stream, "application/gzip", "bmb-blind-restore.tar.gz");
-        }).WithMetadata(new SkipInternalKey()).WithTags("BlindRestore");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithMetadata(new SkipInternalKey()).WithTags("BlindRestore");
 
         // GET /api/blind/restore/events — signed events this node still holds, with the keys to check
         // them: a restore verifies rows newer than the last anchor against these (plan 5.5).
         app.MapGet("/api/blind/restore/events", async (
-            HttpContext ctx, INodeRole role, BlindRestoreCodeService codes, IEventLogRepository eventLog) =>
+            HttpContext ctx, INodeRole role, BlindRestoreCodeService codes, BlindRestoreCodeThrottle throttle, IEventLogRepository eventLog) =>
         {
             if (!role.IsBlind) return Results.NotFound();
-            if (!await codes.ValidateAsync(ctx.Request.Headers[RestoreCodeHeader].FirstOrDefault()))
-                return Results.Unauthorized();
+            if (await RefuseUnlessCodeAsync(ctx, codes, throttle) is { } refused) return refused;
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
 
             // Wire hygiene: this node's stored events carry actor fields and transported entity
             // ids locally; a restoring device re-derives both, so they do not travel (SyncWire).
             return Results.Json(
                 new BlindRestoreEvents(SyncWire.Strip(await eventLog.GetAllAfterSequenceAsync(0, MaxEvents)).ToList()),
                 SyncWire.Options);
-        }).WithMetadata(new SkipInternalKey()).WithTags("BlindRestore");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithMetadata(new SkipInternalKey()).WithTags("BlindRestore");
 
         // POST /api/blind/claim — the restored device becomes this blind node's superadmin, locally:
         // the new root of trust exists only here (plan 6.7 step 4); no restore_network.
         app.MapPost("/api/blind/claim", async (
-            BlindClaimRequest req, HttpContext ctx, INodeRole role, BlindRestoreCodeService codes,
+            HttpContext ctx, INodeRole role, BlindRestoreCodeService codes, BlindRestoreCodeThrottle throttle,
             IWhitelistRepository whitelist, INodeIdentityRepository nodeRepo, IAuditLogRepository audit) =>
         {
             if (!role.IsBlind) return Results.NotFound();
             var code = ctx.Request.Headers[RestoreCodeHeader].FirstOrDefault();
+            var source = SourceOf(ctx);
+            // No code, no body read at all. With one, the body is read - at most BlindBodyLimits.Claim of it - because the code is judged together with the node id the body names
+            // (a device that spent it may repeat its claim); it is never bound as a parameter, which would read it, unbounded, before this line.
+            if (string.IsNullOrWhiteSpace(code)) return Results.Unauthorized();
+            // An address that has used its budget of wrong codes reads nothing more (the body below is read for a caller that has not been identified).
+            if (throttle.IsBlocked(source, out var wait)) return TooManyAttempts(ctx, wait);
+            var (claim, refusal) = await BlindBodyLimits.ReadJsonAsync<BlindClaimRequest>(ctx, BlindBodyLimits.Claim);
+            if (refusal is not null)
+            {
+                throttle.Fail(source);
+                return refusal;
+            }
+            var req = claim!;
             // Open, or spent by this same device (a repeated claim, see below).
-            if (!await codes.ValidateAsync(code, claimant: req.NodeId)) return Results.Unauthorized();
+            if (!await codes.ValidateAsync(code, claimant: req.NodeId))
+            {
+                throttle.Fail(source);
+                return Results.Unauthorized();
+            }
+            if (ctx.ReserveForPeer() is { } admissionPause) return new BlindPauseResult(admissionPause);
 
             byte[] publicKey;
             try { publicKey = Convert.FromBase64String(req.PublicKeyB64 ?? ""); }
@@ -168,6 +212,6 @@ public static class BlindRestoreEndpoints
 
             var identity = await nodeRepo.GetAsync() ?? throw new InvalidOperationException("Node not initialized");
             return Results.Ok(new BlindClaimResponse(identity.NodeId, identity.DisplayName, Convert.ToBase64String(identity.Ed25519PublicKey)));
-        }).WithMetadata(new SkipInternalKey()).WithTags("BlindRestore");
+        }).WithMetadata(BlindMeteredEndpoint.Instance).WithMetadata(new SkipInternalKey()).WithTags("BlindRestore");
     }
 }

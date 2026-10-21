@@ -14,19 +14,19 @@ friend's machine) that must sync with this one.
 You do **not** need it for your own devices on the same network. A desktop node (the Windows app, the
 Mac app, the Windows service) answers this computer only by default: its front door, port 5310, is on
 `127.0.0.1`. The app has two ways to let devices on your own network in, both under
-**Admin → Nodes**, and both work in the Windows app, the Mac app and the Windows service:
+**Admin → Devices on my network** and **Admin → Connect a device**, and both work in the Windows app, the Mac app and the Windows service:
 
 - **Devices on my network** is a setting, **off by default** and remembered per profile. Switched on, the
   node also serves its whole web page and API over HTTPS on port 5311 (a certificate from the node's own
   local CA) and announces itself on the local network by mDNS (only while the listener really listens: if
-  port 5311 is taken, nothing is announced and the card says so), so another computer's first-run page
+  port 5311 is taken, nothing is announced and the page says so), so another computer's first-run page
   (**Find devices on my network**) can see it and a phone can open it in a browser. It takes effect at
   once, without a restart, and the vault stays unlocked. What it exposes: everything the node serves, so
   anyone on the same network can reach the sign-in page and try passwords (the node limits attempts). A
   phone or another computer must trust the node's CA once to open the page without a warning (the
   **Connect a device** page offers `ca.crt` and the steps). Use it on a home or office network you trust,
   not on a public one. Setting `BMB_HTTPS_ENABLED=1` for the node still switches the same listener on by
-  itself, for existing setups; the setting then has nothing to change, and the card says so.
+  itself, for existing setups; the setting then has nothing to change, and the page says so.
 - **Connect a device** is a temporary door instead of a permanent setting: port 5311 opens for 15
   minutes with a one-time token, serves only the few calls a join needs (not the web page, not MCP) and
   closes by itself once the device has joined (it stays up two more minutes, serving only the abort of a join that
@@ -190,8 +190,31 @@ calls a node. Your server behind the proxy above can be that node — a *hub*. T
 
    The node checks the address and the certificate before it saves: the address answers as that very node (its
    id and key), and a *Normal* certificate must validate (expired, self-signed or wrongly named ones are refused
-   with the reason). Then *Blind nodes → Add an Android blind copy* (also used for the Windows and macOS copies)
+   with the reason). Then *Admin → Blind nodes*, the **Blind nodes** button and *Add an Android blind copy* (also used for the Windows and macOS copies)
    lists the server as a hub, with its certificate mode, and the call code it gives the copy carries that mode.
+
+**Inviting a friend's device (2.7) needs no new proxy entry.** *Admin → Blind nodes*, then the **Blind nodes** button and its *Invite a blind copy* card, makes a one-line
+invitation on the hub itself; the friend's app redeems it at `POST /api/sync/invite/redeem` and asks about the answer at
+`POST /api/sync/invite/status`, both under `/api/sync/`, which every recipe above already forwards (and
+`/api/blind/replica`, once it is confirmed). Two things to know. Making the invitation, the server calls its own public
+address the way a blind copy will, to be sure it leads back to this very node (the form starts from `BMB_PUBLIC_ADDRESS` when it
+is set, else from the address the page was opened at). Behind a router that does not loop public addresses back to the
+inside, the check fails with "could not reach": let the server resolve that name to the proxy (a hosts entry, or a
+router that loops back) and try again. The check refuses an address that can never be a hub - this machine itself, a link-local
+address, an unspecified or multicast one, and the fixed addresses of the cloud metadata services (169.254.169.254, 100.100.100.200,
+192.0.0.192, 168.63.129.16, `fd00:ec2::/32`, `fd20:ce::254`, in any spelling) - for the address you type and for every address a
+name resolves to; addresses on your own network are fine. And the invitation is a
+*one-time invitation*, not an encrypted message - it names the address and the certificate trust, and no vault content and no usable key of your memory bank is sent to
+the device until you confirm its short code on that page with your master password (redeeming already sends the device's id, public key, name, platform, version and its own backup key to this node, which keeps that key encrypted until you decide) (`docs/sync.md`, "Invitations to a blind copy").
+A copy of an invitation does **not** need the switch "Let blind copies call this node" (Admin -> Trusted Nodes): neither the invitation page nor the routes a copy calls
+(`/api/sync/invite/*`, `/api/blind/replica`, `/api/sync/*`) read it, and a copy redeems, is confirmed, first-loads and syncs with the switch off (the address and the certificate trust
+it calls come from the invitation, the node's own entry in the package from `BMB_PUBLIC_ADDRESS` and the certificate it serves). The switch is a record on this node's whitelist row, set
+from another full node of the network, and what reads it is the old way of pairing (a pair code names one of the nodes it lists), the hub list on the Blind nodes page, and the other
+full nodes of the network, which check a pinned key when they call this node. Switch it on if you also pair blind copies with codes or want the network to hold that record.
+The routes the friend's device calls are limited per caller and, together, for the whole node (answers `429`/`503` with
+`Retry-After`); per caller means the address the connection comes from, an IPv6 address by its /64. Behind a reverse proxy
+that address is the real client only if you declared the proxy in `BMB_TRUSTED_PROXIES`; otherwise all friends share the
+proxy's address and its budget of 10 redemptions per 10 minutes.
 
 **What this exposes.** The two routes need a sync token, which a device gets only by signing in with its own key
 — one you paired — and the device's whitelist entry is checked on every request. What they serve is ciphertext

@@ -1,5 +1,6 @@
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Services.BlindPhone;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindMobile.Tests;
 
@@ -76,12 +77,13 @@ public sealed class BlindRunReportTests
     {
         var log = NewLog();
 
-        BlindRunReport.RecordFailure(log, "run", new InvalidOperationException("The blind phone identity has not been recorded."));
-        BlindRunReport.RecordFailure(log, "run", new InvalidOperationException("The blind phone identity has not been recorded."));
+        // The exception the sync clients really throw for this (a sentence this code threw on purpose to be read).
+        BlindRunReport.RecordFailure(log, "run", new BlindSentenceException("The blind phone identity has not been recorded."));
+        BlindRunReport.RecordFailure(log, "run", new BlindSentenceException("The blind phone identity has not been recorded."));
 
         var line = log.Latest(10).Should().ContainSingle().Which;
         line.Kind.Should().Be("run");
-        line.Message.Should().Contain("InvalidOperationException").And.Contain("identity has not been recorded");
+        line.Message.Should().Contain("BlindSentenceException").And.Contain("identity has not been recorded");
     }
 
     private static BlindPhoneLog NewLog() =>

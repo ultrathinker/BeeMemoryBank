@@ -38,7 +38,7 @@
             <sl-icon name="qr-code" style="font-size:1.4rem;vertical-align:middle;margin-right:6px;"></sl-icon>
             Connect a device
         </h2>
-        <p class="connect-subtitle">Join a phone or another computer to this one, without a hub. <a href="/Admin">Back to Admin</a></p>
+        <p class="connect-subtitle">Join a phone or another computer to this one, without a hub. <a href="/Admin/ConnectDevice">Back to Admin</a></p>
 
         @if (Model.Lan.Error != null)
         {
@@ -98,7 +98,7 @@
                 <sl-alert variant="danger" open style="margin-bottom:16px;">
                     <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
                     <strong>Devices on my network is on, but the node could not open port @Model.Lan.Port.</strong>
-                    Another program may be using it. See <a href="/Admin">Admin</a>.
+                    Another program may be using it. See <a href="/Admin/DevicesOnMyNetwork">Admin</a>.
                 </sl-alert>
             }
             else if (!Model.Lan.Active)
@@ -121,7 +121,7 @@
                 }
                 else if (Model.Lan.Mode == "permanent")
                 {
-                    <p class="connect-subtitle">These codes do not expire: Devices on my network is on (<a href="/Admin">Admin</a>).</p>
+                    <p class="connect-subtitle">These codes do not expire: Devices on my network is on (<a href="/Admin/DevicesOnMyNetwork">Admin</a>).</p>
                 }
                 @foreach (var ep in Model.Endpoints)
                 {
@@ -146,7 +146,7 @@
                 {
                     <p class="instructions">This door is for joining only, and closes afterwards. For another computer to keep
                        syncing with this one it has to reach this computer again: switch on
-                       <strong>Devices on my network</strong> in <a href="/Admin">Admin</a>.</p>
+                       <strong>Devices on my network</strong> in <a href="/Admin/DevicesOnMyNetwork">Admin</a>.</p>
                     <form data-busy="short" method="post" asp-page-handler="Disable" class="action-row">
                         <sl-button type="submit" variant="default">Stop listening</sl-button>
                     </form>

@@ -55,8 +55,8 @@ public sealed class HostOptionsTests
     [Fact]
     public void TheWindowSpeaksOfTheTray_ByDefault_AndOfTheMenuBar_OnAMac()
     {
-        var windows = new MainViewModel(new FakeApp(), new FakeWorkRequests(), new FakeAutostart(), _ => []);
-        var mac = new MainViewModel(new FakeApp(), new FakeWorkRequests(), new FakeAutostart(), _ => [], statusArea: "menu bar");
+        var windows = new MainViewModel(new FakeAccounts(), _ => new FakeWorkRequests(), new FakeAutostart(), _ => []);
+        var mac = new MainViewModel(new FakeAccounts(), _ => new FakeWorkRequests(), new FakeAutostart(), _ => [], statusArea: "menu bar");
 
         windows.StatusArea.Should().Be("tray");
         windows.AutostartText.Should().Be("Start in the tray when I sign in", "the Windows words did not change");
@@ -83,7 +83,7 @@ public sealed class HostOptionsTests
             ErrorLog.PathOfLog.Should().Be(path);
             var lines = File.ReadAllLines(path);
             lines.Should().ContainSingle();
-            lines[0].Should().Contain("Showing the window failed").And.Contain("InvalidOperationException: line one line two");
+            lines[0].Should().Contain("Showing the window failed").And.Contain("InvalidOperationException").And.NotContain("line one").And.NotContain("line two");
         }
         finally
         {

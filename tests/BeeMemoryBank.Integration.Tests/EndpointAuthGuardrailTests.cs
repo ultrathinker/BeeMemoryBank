@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Crypto;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -295,6 +296,15 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         // no users and no Web; on every other node both routes answer 404.
         "POST /api/blind/restore-code",
         "POST /api/blind/claim",
+
+        // The invitation of a blind copy (release 2.7): the invited device has only the invitation's one-time secret and its own key. Redeeming needs
+        // the node unlocked, is rate limited per caller, and answers one 410 for everything that is not a valid invitation; the owner's decision is
+        // a separate, superadmin route (/api/blind-nodes/invites/...).
+        "POST /api/sync/invite/redeem",
+        "POST /api/sync/invite/status",
+
+        // A blind copy whose owner removed it from the device says goodbye, under its sync token (release 2.7); the hub only notes it.
+        "POST /api/sync/leave",
     ];
 
     /// <summary>
@@ -734,6 +744,56 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         if (pattern.Contains("user"))
             return new { username = "t", password = "t", displayName = "t" };
         return new { };
+    }
+
+    /// <summary>
+    /// Who the network trusts is a person's decision, taken with the master password: an agent owned by a superadmin inherits IsSuperadmin, so
+    /// <c>.RequireSuperadmin()</c> alone would let a leaked bee_ key issue, confirm, refuse or withdraw an invitation. Every route registered under
+    /// <c>/api/blind-nodes/invites</c> - found by walking the endpoint table, so a route added later is covered without anyone editing this test - is called
+    /// with a valid internal key and the bearer key of an agent whose owner is the superadmin, and must answer the "Agents cannot" 403 (a 400/403/404 of the
+    /// handler itself would prove nothing about the gate, hence the message).
+    /// </summary>
+    [Fact]
+    public async Task Every_blind_invitation_management_route_refuses_an_agent_owned_by_a_superadmin()
+    {
+        string apiKey = AgentKeyHelper.GenerateApiKey();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var owner = await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetByUsernameAsync("admin");
+            owner.Should().NotBeNull();
+            await scope.ServiceProvider.GetRequiredService<IAgentRepository>().CreateAsync(new Agent
+            {
+                Name = "invite-attacker",
+                KeyPrefix = AgentKeyHelper.GetKeyPrefix(apiKey),
+                KeyHash = AgentKeyHelper.ComputeKeyHash(apiKey),
+                Status = "A",
+                CreatedAt = DateTime.UtcNow,
+                OwnerUserId = owner!.Id,
+            });
+        }
+
+        var routes = _factory.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
+            .Where(e => e.RoutePattern.RawText?.StartsWith("/api/blind-nodes/invites", StringComparison.Ordinal) == true)
+            .ToList();
+        routes.Should().HaveCount(6, "the owner's side is make, list, defaults, confirm, refuse, withdraw; a new route must be added here on purpose");
+
+        // base client, not the factory helper: that one stamps a superadmin role header, which an agent request does not carry.
+        using var client = _factory.Server.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Internal-Key", BmbWebApplicationFactory.InternalKeyForTests);
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+
+        foreach (var route in routes)
+        {
+            var method = route.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Single();
+            using var request = new HttpRequestMessage(new HttpMethod(method), route.RoutePattern.RawText!.Replace("{inviteId}", "AbCdEf0123456789"));
+            if (method == "POST") request.Content = JsonContent.Create(new { password = "x" });
+
+            var response = await client.SendAsync(request);
+
+            var body = await response.Content.ReadAsStringAsync();
+            response.StatusCode.Should().Be(HttpStatusCode.Forbidden, $"{method} {route.RoutePattern.RawText}: {body}");
+            body.Should().Contain("Agents cannot perform this operation", $"{method} {route.RoutePattern.RawText} must stop at the agent gate, not at a later check");
+        }
     }
 
     private static bool IsMethod(RouteEndpoint endpoint, string method)

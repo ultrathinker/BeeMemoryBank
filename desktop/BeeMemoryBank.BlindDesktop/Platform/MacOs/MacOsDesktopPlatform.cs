@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using BeeMemoryBank.BlindDesktop.MacOS;
 using BeeMemoryBank.BlindMobile.Services.Blind;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.BlindDesktop.Platform;
 
@@ -19,15 +18,17 @@ namespace BeeMemoryBank.BlindDesktop.Platform;
 internal sealed class MacOsDesktopPlatform : IBlindDesktopPlatform
 {
     private readonly MacOsBlindHostOptions _options;
-    private readonly IBlindSecretStore? _secretStore;
+    private readonly MacOsBlindSeams _seams;
+    private readonly bool _keychainReplaced;
     private readonly bool _customFolder;
 
-    public MacOsDesktopPlatform(string? dataDirectory) : this(dataDirectory, null) { }
+    public MacOsDesktopPlatform(string? dataDirectory) : this(dataDirectory, null, null) { }
 
-    /// <param name="secretStore">Replaces the Keychain store (tests of the host pass an in-memory one so that they never touch a keychain).</param>
-    internal MacOsDesktopPlatform(string? dataDirectory, IBlindSecretStore? secretStore)
+    /// <param name="secretStores">Replaces the Keychain factory (tests of the host pass an in-memory one so that they never touch a keychain).</param>
+    /// <param name="conditions">Replaces the Network.framework / Low Power Mode adapter (a test answers by hand).</param>
+    internal MacOsDesktopPlatform(string? dataDirectory, IBlindSecretStoreFactory? secretStores, IBlindDeviceConditions? conditions = null)
     {
-        _secretStore = secretStore;
+        _keychainReplaced = secretStores is not null;
         _customFolder = !string.IsNullOrWhiteSpace(dataDirectory);
         var suffix = _customFolder ? "." + FolderKey(dataDirectory!) : "";
         _options = new MacOsBlindHostOptions
@@ -36,6 +37,7 @@ internal sealed class MacOsDesktopPlatform : IBlindDesktopPlatform
             KeychainService = MacOsKeychainSecretStore.DefaultService + suffix,
             AutostartLabel = MacOsBlindAutostartOptions.DefaultLabel + suffix,
         };
+        _seams = MacOsBlindHostServices.CreateSeams(_options, secretStores, conditions);
     }
 
     /// <summary>The real app's data folder (~/Library/Application Support/BeeMemoryBankBlind); nothing is created.</summary>
@@ -43,7 +45,15 @@ internal sealed class MacOsDesktopPlatform : IBlindDesktopPlatform
 
     public string Name => "macOS";
 
-    public IBlindPaths Paths => _options.Paths;
+    public IBlindPaths Paths => _seams.Paths;
+
+    public IBlindSecretStoreFactory SecretStores => _seams.Secrets;
+
+    public IBlindStateStoreFactory StateStores => _seams.States;
+
+    public IBlindDeviceConditions DeviceConditions => _seams.Conditions;
+
+    public IBlindAutostart Autostart => _seams.Autostart;
 
     public string StatusAreaName => "menu bar";
 
@@ -56,12 +66,6 @@ internal sealed class MacOsDesktopPlatform : IBlindDesktopPlatform
     public string? ErrorLogPath => _customFolder
         ? null
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Logs", "BeeMemoryBankBlind", "error.log");
-
-    public void AddSeams(IServiceCollection services)
-    {
-        if (_secretStore is not null) services.AddSingleton(_secretStore);
-        services.AddMacOsBlindSeams(_options);
-    }
 
     public IInstanceGuard? TryAcquireInstance()
     {
@@ -77,37 +81,31 @@ internal sealed class MacOsDesktopPlatform : IBlindDesktopPlatform
         var folder = Paths.DataDirectory;
 
         var mode = File.GetUnixFileMode(folder);
-        var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
-        items.Add(new SelfCheckItem("private folder", mode == expected, $"{folder} has mode {Convert.ToString((int)mode, 8)} (expected 700)"));
+        var private700 = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        items.Add(new SelfCheckItem("private folder", mode == private700, $"{folder} has mode {Convert.ToString((int)mode, 8)} (expected 700)"));
 
         var socket = FileLockSingleInstance.SocketPathFor(folder);
         items.Add(new SelfCheckItem("activation socket", socket is not null,
             socket is null ? "no socket path is short enough" : $"{socket} ({Encoding.UTF8.GetByteCount(socket)} bytes, a file, no network port)"));
 
-        // The seams the platform registers are the macOS ones (constructing them touches nothing: no keychain call, no file).
-        var services = new ServiceCollection();
-        AddSeams(services);
-        using var provider = services.BuildServiceProvider();
-        var expectedTypes = new (Type Seam, Type Implementation)[]
+        // The seams the platform hands out are the macOS ones (constructing them touches nothing: no keychain call, no file).
+        var expected = new (string Seam, object Actual, Type Implementation)[]
         {
-            (typeof(IBlindPaths), typeof(MacOsBlindPaths)),
-            (typeof(IBlindStateStore), typeof(MacOsBlindStateStore)),
-            (typeof(IBlindAutostart), typeof(MacOsBlindAutostart)),
+            (nameof(IBlindPaths), Paths, typeof(MacOsBlindPaths)),
+            (nameof(IBlindStateStoreFactory), StateStores, typeof(MacOsBlindStateStoreFactory)),
+            (nameof(IBlindDeviceConditions), DeviceConditions, typeof(MacOsDeviceConditions)),
+            (nameof(IBlindAutostart), Autostart, typeof(MacOsBlindAutostart)),
         };
-        foreach (var (seam, implementation) in expectedTypes)
+        foreach (var (seam, actual, implementation) in expected)
+            items.Add(new SelfCheckItem("seam " + seam, actual.GetType() == implementation, actual.GetType().Name));
+        if (!_keychainReplaced)
         {
-            var actual = provider.GetRequiredService(seam).GetType();
-            items.Add(new SelfCheckItem("seam " + seam.Name, actual == implementation, actual.Name));
-        }
-        if (_secretStore is null)
-        {
-            // Registered as a factory: resolving it builds the Keychain adapter object (RequireMacOS only), it makes no keychain call.
-            var secrets = provider.GetRequiredService<IBlindSecretStore>();
-            items.Add(new SelfCheckItem("seam IBlindSecretStore", secrets is MacOsKeychainSecretStore,
-                $"{secrets.GetType().Name}, Keychain service '{_options.KeychainService}' (not opened)"));
+            // Built, not called: the factory makes the Keychain adapter object (RequireMacOS only), it makes no keychain call.
+            items.Add(new SelfCheckItem("seam IBlindSecretStoreFactory", SecretStores is MacOsSecretStoreFactory,
+                $"{SecretStores.GetType().Name}, Keychain service '{_options.KeychainService}' (not opened)"));
         }
 
-        var autostart = provider.GetRequiredService<MacOsBlindAutostart>();
+        var autostart = (MacOsBlindAutostart)Autostart;
         var expectedAgents = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "LaunchAgents");
         items.Add(new SelfCheckItem("login item", autostart.PlistPath.StartsWith(expectedAgents, StringComparison.Ordinal),
             $"label '{autostart.Label}', file {autostart.PlistPath}, program {string.Join(' ', autostart.ProgramArguments)}"));

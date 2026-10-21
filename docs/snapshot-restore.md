@@ -119,7 +119,7 @@ How it works:
    says where to fetch the copy and its hash. The offer is open for 30 days.
 2. Each other node learns of it when it next syncs. It applies the restore **only if** it trusts this node as a
    superadmin (every device that joined with the master password starts that way) **and** has *Auto-restore*
-   switched on for this node (Admin → Nodes). It then downloads the copy from this node (or from another node
+   switched on for this node (Admin → Trusted Nodes). It then downloads the copy from this node (or from another node
    that already has it), checks the hash, and applies it. A node without Auto-restore keeps the event pending and
    does **not** restore. (Applying a pending restore by hand is not offered in the Admin UI: switch
    Auto-restore on for the originator and the node picks the pending event up the next time it syncs or is
@@ -137,7 +137,7 @@ receiving node, held events that arrived after a restore wait until that restore
 
 ## Joining a device after sealed metadata is turned on
 
-Once the owner has turned on sealed metadata ([encryption.md](encryption.md), the activation in Admin → Sync), a node no longer hands out
+Once the owner has turned on sealed metadata ([encryption.md](encryption.md), the activation in Admin → Metadata encryption), a node no longer hands out
 a plain archive to a device that joins:
 
 - **The join archive's database is sealed.** `GET /api/sync/snapshot/for-join` returns the archive with its database entry as a
@@ -149,7 +149,7 @@ a plain archive to a device that joins:
   is written, on the producer or anywhere else.
 - **A new node joins only a node that is on protocol 4 (2.6.2).** The joining side checks what the host declares in its answer and
   refuses a host on protocol 3 before it writes anything: "Cannot join: the other computer does not encrypt its metadata yet ... Switch
-  metadata encryption on there first (Admin page, "Metadata encryption"), then join again." There is no workaround and no
+  metadata encryption on there first (Admin → Metadata encryption), then join again." There is no workaround and no
   compatibility mode: `bmb join`, the Setup page and both phone apps stop at the same sentence, and the host is told that the attempt
   was abandoned. A joined node is then encrypted (database and metadata) under the master password it was given, the same as a node
   set up from nothing.

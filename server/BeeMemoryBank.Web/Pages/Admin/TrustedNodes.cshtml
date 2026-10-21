@@ -1,0 +1,303 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.TrustedNodesModel
+
+@section About {
+    <p>
+        These are the devices that belong to this network: the nodes this one syncs with, and the blind copies that hold its encrypted backups. A node that is not on
+        this list is not accepted, and a node that is revoked stops being accepted by every node that receives the revocation. Each row says whether the device
+        answers, when it was last in contact (in which direction) and what it may do.
+    </p>
+    <p>
+        <strong>Superadmin.</strong> A device that joined with the master password is a superadmin. Only a superadmin can revoke other devices, hard-delete content
+        across the whole network and restore every node from its own snapshot. <strong>Auto-restore</strong> and <strong>Auto-DEK rotation</strong> decide whether a
+        restore or a data-key rotation that this device starts is applied here without asking you. Both can replace or re-encrypt everything, so switch them on only for
+        devices you fully trust, such as your own. <strong>Change URL</strong> is for a device that moved to another address; the button next to it sets a node up so
+        that blind copies (on a PC, a Mac or a phone) may call it.
+    </p>
+    <p>
+        <strong>Revoking is not eviction.</strong> It stops this network accepting the device, but a device that already holds the vault key still holds it. To
+        lock such a device out for good, revoke it and then <a href="/Admin/DekRotation">rotate the data key</a>.
+    </p>
+}
+
+@{ var passwordPeersToPromote = BeeMemoryBank.Web.Pages.PromotePasswordPeersModel.CandidatesOf(Model.Whitelist); }
+@if (passwordPeersToPromote.Count > 0)
+{
+    <!-- BMB-42: devices joined before "whoever knows the master password is a superadmin" -->
+    <sl-alert variant="warning" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>@passwordPeersToPromote.Count device(s) joined with the master password are not superadmins yet.</strong>
+        Their hard deletes and password changes are refused by the rest of the network, so the copies drift apart.
+        <div style="margin-top:8px;">
+            <sl-button size="small" variant="warning" href="/PromotePasswordPeers">
+                <sl-icon slot="prefix" name="shield-check"></sl-icon> Grant superadmin to all devices joined with the password&hellip;
+            </sl-button>
+        </div>
+    </sl-alert>
+}
+
+<div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:8px;">
+    <span id="local-events-counter" class="text-muted text-sm"></span>
+</div>
+
+@if (Model.Whitelist != null && Model.Whitelist.Count > 0)
+{
+    <div class="card" style="padding:0;overflow:hidden;">
+        <table class="version-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Node ID</th>
+                    <th>API Address</th>
+                    <th>Status</th>
+                    <th>
+                        Auto-restore
+                        <sl-tooltip content="When ON, snapshot restores initiated by this peer apply automatically without your confirmation. The peer can replace your articles, folders, and tags. Enable only for peers you fully trust (e.g. your own devices). When OFF, a received restore remains pending; there is no UI prompt or manual approval path. If you later switch it on, the node applies the pending restore after its next sync or unlock." placement="top">
+                            <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
+                        </sl-tooltip>
+                    </th>
+                    <th>
+                        Auto-DEK rotation
+                        <sl-tooltip content="When ON, DEK rotation events initiated by this peer apply automatically without your confirmation. DEK rotation is more destructive than snapshot restore — it re-encrypts ALL article bodies, versions, and media with a new key. Enable only for peers you fully trust." placement="top">
+                            <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
+                        </sl-tooltip>
+                    </th>
+                    <th>Added</th>
+                    <th>
+                        Last contact
+                        <sl-tooltip content="The last time this node and that one made contact, either way (we -> it: this node called; it -> us: it called), whether or not changes moved. The last time changes were delivered is shown under it.">
+                            <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
+                        </sl-tooltip>
+                    </th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var entry in Model.Whitelist)
+                {
+                    var isSelf = Model.Identity != null && entry.NodeId == Model.Identity.NodeId;
+                    NodeContactDto? contact = null;
+                    if (!isSelf && Model.NodeSyncStatus != null)
+                        Model.NodeSyncStatus.TryGetValue(entry.NodeId, out contact);
+                    <tr>
+                        <td><strong>@entry.DisplayName</strong></td>
+                        <td><code class="text-sm">@entry.NodeId.ToString()[..8]&hellip;</code></td>
+                        <td class="text-muted text-sm">@(entry.ApiAddress ?? "—")</td>
+                        <td>
+                            <sl-badge variant="@(entry.Status == "active" ? "success" : "neutral")" pill>
+                                @entry.Status
+                            </sl-badge>
+                            @if (entry.CanGenerateEmbeddings)
+                            {
+                                <sl-badge variant="primary" pill style="margin-left:4px;">embeddings</sl-badge>
+                            }
+                            @if (entry.IsSuperadmin && !isSelf)
+                            {
+                                <sl-tooltip content="This peer can revoke other peers, hard-delete content across the whole network, and restore every node from its own snapshot. Every device that joins with the master password starts this way." placement="top">
+                                    <sl-badge variant="warning" pill style="margin-left:4px;">superadmin</sl-badge>
+                                </sl-tooltip>
+                            }
+                            @if (entry.TlsTrust == "pin" || entry.TlsTrust == "public-ca")
+                            {
+                                var hubIsPinned = entry.TlsTrust == "pin";
+                                var hubHttps = entry.ApiAddress != null && entry.ApiAddress.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+                                <sl-tooltip content="@(!hubHttps ? "The address of this node is not https, so blind copies cannot be paired to it. Set an https address with the button next to this badge." : hubIsPinned ? "Blind copies can be told to call this node. They accept only the certificate key pinned for it (" + (entry.TlsSpki ?? "") + ")." : "Blind copies can be told to call this node. They accept only a certificate a public authority vouches for, for this name.")" placement="top">
+                                    <sl-badge variant="@(hubHttps ? "primary" : "warning")" pill style="margin-left:4px;" class="badge-blind-callable">blind copies: @(hubIsPinned ? "pinned certificate" : "normal certificate")@(hubHttps ? "" : " (address not https)")</sl-badge>
+                                </sl-tooltip>
+                            }
+                        </td>
+                        <td>
+                            @if (!isSelf)
+                            {
+                                <form data-busy="short" method="post" asp-page-handler="SetAutoAcceptRestore" style="display:inline;" id="autoaccept-form-@entry.NodeId">
+                                    <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                    <input type="hidden" name="autoAccept" value="@((!entry.AutoAcceptRestore).ToString().ToLower())" id="autoaccept-value-@entry.NodeId" />
+                                    <sl-switch
+                                        @(entry.AutoAcceptRestore ? "checked" : "")
+                                        data-node-id="@entry.NodeId"
+                                        data-node-name="@entry.DisplayName"
+                                        class="switch-auto-accept">
+                                    </sl-switch>
+                                </form>
+                            }
+                            else
+                            {
+                                <span class="text-muted text-sm">—</span>
+                            }
+                        </td>
+                        <td>
+                            @if (!isSelf)
+                            {
+                                <form data-busy="short" method="post" asp-page-handler="SetAutoAcceptDekRotation" style="display:inline;" id="autoaccept-dek-form-@entry.NodeId">
+                                    <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                    <input type="hidden" name="autoAccept" value="@((!entry.AutoAcceptDekRotation).ToString().ToLower())" id="autoaccept-dek-value-@entry.NodeId" />
+                                    <sl-switch
+                                        @(entry.AutoAcceptDekRotation ? "checked" : "")
+                                        data-node-id="@entry.NodeId"
+                                        data-node-name="@entry.DisplayName"
+                                        class="switch-auto-accept-dek">
+                                    </sl-switch>
+                                </form>
+                            }
+                            else
+                            {
+                                <span class="text-muted text-sm">—</span>
+                            }
+                        </td>
+                        <td class="text-muted text-sm">@entry.CreatedAt.ToString("d")</td>
+                        <td class="text-muted text-sm" data-contact-state="@(contact?.State ?? "unknown")">
+                            @if (isSelf)
+                            {
+                                <text>&mdash;</text>
+                            }
+                            else if (contact is { State: "not_answering", NotAnsweringSince: { } notSince })
+                            {
+                                <span style="color:var(--sl-color-danger-600);">Not answering since @notSince.ToLocalTime().ToString("g") (@AdminText.RelativeTime(notSince))</span>
+                                <div>@contact.NotAnsweringReason</div>
+                                @if (contact.LastContactAt is { } lastAt)
+                                {
+                                    <div>Last contact @AdminText.RelativeTime(lastAt) (@AdminText.ContactDirectionWords(contact.Direction))</div>
+                                }
+                            }
+                            else if (contact is { LastContactAt: { } contactAt, Direction: not null })
+                            {
+                                <span>@AdminText.RelativeTime(contactAt) (@AdminText.ContactDirectionWords(contact.Direction))</span>
+                                @if (contact.State == "unknown")
+                                {
+                                    <div>Not checked since this node started; the next check will say.</div>
+                                }
+                                @if (contact.PushedAt is { } pushedAt)
+                                {
+                                    <div>changes delivered @AdminText.RelativeTime(pushedAt)</div>
+                                }
+                            }
+                            else if (string.IsNullOrEmpty(entry.ApiAddress))
+                            {
+                                <span>It calls this node; no call since this node started@(contact?.PushedAt is { } p2 ? ", changes delivered " + AdminText.RelativeTime(p2) : "")</span>
+                            }
+                            else
+                            {
+                                <span>No contact since this node started</span>
+                            }
+                        </td>
+                        <td style="text-align:right;">
+                            @if (!isSelf)
+                            {
+                                <sl-icon-button name="link-45deg" label="Change URL"
+                                    class="btn-open-change-url"
+                                    data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress">
+                                </sl-icon-button>
+                                @* A blind node is called by the pin in its pair code; only a full node is set up here. *@
+                                @if (!BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(entry.NodeId))
+                                {
+                                <sl-icon-button name="broadcast-pin" label="Let blind copies call this node"
+                                    class="btn-open-hub"
+                                    data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress"
+                                    data-trust="@entry.TlsTrust">
+                                </sl-icon-button>
+                                }
+                                @* A blind node can never be promoted (the Api refuses it too); demoting one stays possible. *@
+                                @if (entry.IsSuperadmin || !BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(entry.NodeId))
+                                {
+                                <form data-busy="short" method="post" asp-page-handler="SetPeerSuperadmin" style="display:inline;">
+                                    <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                    <input type="hidden" name="isSuperadmin" value="@((!entry.IsSuperadmin).ToString().ToLower())" />
+                                    <sl-icon-button
+                                        name="@(entry.IsSuperadmin ? "shield-slash" : "shield-check")"
+                                        label="@(entry.IsSuperadmin ? "Demote from superadmin" : "Promote to superadmin")"
+                                        class="btn-confirm-superadmin"
+                                        data-node-name="@entry.DisplayName"
+                                        data-demote="@(entry.IsSuperadmin.ToString().ToLower())">
+                                    </sl-icon-button>
+                                </form>
+                                }
+                                <form data-busy="short" method="post" asp-page-handler="RevokeNode" style="display:inline;">
+                                    <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                                    <sl-icon-button name="trash" label="Revoke"
+                                        class="btn-confirm-submit"
+                                        data-confirm-pattern="Revoke node {name}?"
+                                        data-name="@entry.DisplayName">
+                                    </sl-icon-button>
+                                </form>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+else
+{
+    <div class="card" style="text-align:center;padding:40px;">
+        <sl-icon name="people" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+        <p class="text-muted">No trusted nodes</p>
+    </div>
+}
+
+<!-- Change Node URL Dialog -->
+<sl-dialog id="dlg-change-url" label="Change Node URL">
+    <form data-busy="short" method="post" asp-page-handler="ChangeNodeAddress" class="sl-form">
+        <input type="hidden" id="change-url-node-id" name="nodeId" />
+        <p id="change-url-node-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
+        <div style="margin-bottom:16px;">
+            <sl-input id="change-url-input" name="newApiAddress" label="New API Address" placeholder="https://example.com" required></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input name="password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+        </div>
+        <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-change-url">Cancel</sl-button>
+        <sl-button type="submit" slot="footer" variant="primary">
+            <sl-icon slot="prefix" name="link-45deg"></sl-icon> Change URL
+        </sl-button>
+    </form>
+</sl-dialog>
+
+<!-- Let blind copies call this node (ADR 0007) -->
+<sl-dialog id="dlg-hub" label="Let blind copies call this node">
+    <form data-busy="short" method="post" asp-page-handler="SetBlindCallable" class="sl-form">
+        <input type="hidden" id="hub-node-id" name="nodeId" />
+        <p id="hub-node-name" style="margin:0 0 12px;color:var(--text-secondary);"></p>
+        <p class="text-muted text-sm" style="margin:0 0 16px;">
+            A blind copy (the Windows, macOS or Android app) never listens: it calls a node over https. Choose how it should trust
+            this node's certificate. This server checks the address and the certificate before it saves anything.
+        </p>
+        <div id="hub-address-row" style="margin-bottom:16px;">
+            <sl-input id="hub-address" name="address" label="Address (https)" placeholder="https://bmb.example.org"
+                      help-text="Replaces this node's address for every device in the network."></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-select id="hub-trust" name="trust" label="Certificate" value="public-ca" hoist>
+                <sl-option value="public-ca">Normal certificate (Let's Encrypt or another public authority)</sl-option>
+                <sl-option value="pin">Pinned certificate</sl-option>
+                <sl-option value="off">Do not let blind copies call this node</sl-option>
+            </sl-select>
+        </div>
+        <sl-alert id="hub-help-public-ca" variant="primary" open style="margin-bottom:16px;">
+            Use this for a node behind a reverse proxy with a real certificate. A blind copy accepts only a certificate that a public
+            authority vouches for, issued for exactly this name. Because anyone a public authority can be made to issue a certificate for
+            this name to could impersonate the node to a blind copy, "Pinned certificate" is stronger. Make sure the proxy forwards
+            <code>/api/sync/</code> and <code>/api/blind/replica</code> to this node (see the Internet Access guide).
+        </sl-alert>
+        <sl-alert id="hub-help-pin" variant="warning" open style="margin-bottom:16px;display:none;">
+            Use this for a node with a certificate of its own. This server connects once, reads the key the node presents and pins it:
+            every device then accepts only that key for this node. That key is taken on trust from this one connection, so compare it
+            with the key the node shows for itself if you can (paste it below). A certificate from a public authority that is renewed
+            with a new key breaks the pin; use "Normal certificate" for those.
+        </sl-alert>
+        <sl-alert id="hub-help-off" variant="neutral" open style="margin-bottom:16px;display:none;">
+            Blind copies can no longer be paired to call this node. Copies that are already paired keep calling it until it stops
+            answering them; revoke a lost copy on this page.
+        </sl-alert>
+        <div id="hub-pin-row" style="margin-bottom:16px;display:none;">
+            <sl-input name="expectedPin" label="Expected key pin (optional)" placeholder="43 characters" autocomplete="off"></sl-input>
+        </div>
+        <div style="margin-bottom:16px;">
+            <sl-input name="password" label="Master Password" type="password" password-toggle required autocomplete="off"></sl-input>
+        </div>
+        <sl-button type="button" slot="footer" variant="default" data-dlg-cancel="dlg-hub">Cancel</sl-button>
+        <sl-button type="submit" slot="footer" variant="primary">
+            <sl-icon slot="prefix" name="broadcast-pin"></sl-icon> Save
+        </sl-button>
+    </form>
+</sl-dialog>

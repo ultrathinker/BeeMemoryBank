@@ -1,0 +1,24 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.HardDeleteModel
+
+@section About {
+    <p>
+        When you delete an article or a folder from the tree, it goes to the trash: the item is hidden from the tree and from search, but its encrypted content and files are still on disk, and
+        you can bring it back. <strong>Hard delete</strong> is the other thing: the selected article or folder (with everything under it) is <strong>physically removed</strong> from the database and
+        from the disk, and a signed event tells every synced node to remove it too.
+    </p>
+    <p class="admin-warning">
+        <strong>It is permanent and cannot be undone</strong>, here or on any other node. The only way back is a snapshot or a backup that was made before. Only a superadmin can do it, and the
+        page asks you to confirm each deletion after showing what it will remove.
+    </p>
+    <p>
+        Use it for cleaning up junk imports, or for data that must not persist anywhere. For ordinary tidying, delete from the tree instead. The Hard Delete page lists the items with a filter, and
+        has an audit log of what was removed.
+    </p>
+}
+
+<div class="card mt-md" style="max-width:480px;">
+    <sl-button variant="danger" size="small" href="/HardDelete">
+        <sl-icon slot="prefix" name="trash"></sl-icon> Open Hard Delete
+    </sl-button>
+</div>

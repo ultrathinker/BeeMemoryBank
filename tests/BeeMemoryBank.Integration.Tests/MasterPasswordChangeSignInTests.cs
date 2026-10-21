@@ -4,7 +4,7 @@ using System.Net.Http.Json;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Admin -> Security -> Change master password, done by a signed-in web user, must move the user's
+/// Admin -> Master Password -> Change master password, done by a signed-in web user, must move the user's
 /// sign-in to the new password along with the key slot. It used to rotate the slot only: the new
 /// password was refused at sign-in and the old one signed in without unlocking, so after the next
 /// lock the node could not be opened from the web at all (BMB-31, scenario 18; bug B1 of the plan).

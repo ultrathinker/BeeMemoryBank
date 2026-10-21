@@ -53,7 +53,7 @@
         if (!data.isInvisible) return '';
         return '<div class="sync-invisible-note">' +
                '<sl-icon name="eye-slash"></sl-icon> Invisible Mode is on: this node calls nobody and answers nobody. ' +
-               '<a href="/Admin#card-invisible-mode">Change it in Admin</a></div>';
+               '<a href="/Admin/InvisibleMode">Change it in Admin</a></div>';
     }
 
     // ---- what a node's row says -------------------------------------------------------------------------------------------------------

@@ -242,6 +242,9 @@ public sealed class BlindBackupSettingsStore(string dataPath)
         CheckSubsetPercent = s.CheckSubsetPercent,
         ResticGoMemLimit = s.ResticGoMemLimit,
         ResticBinary = s.ResticBinary,
+        // The node's own limits are not secrets (a pause announces itself to the mesh anyway).
+        MaxStoredBytes = s.MaxStoredBytes,
+        MaxTrafficPerDay = s.MaxTrafficPerDay,
     };
 }
 

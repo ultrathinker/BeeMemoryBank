@@ -81,6 +81,10 @@ public record SyncBlobStoreResult(int Stored, int Rejected);
 /// <param name="Online">Contact within <see cref="PeerContactView.OnlineWindowFor"/> of now (a window made from the effective sync interval, not a fixed five minutes), and not failing.</param>
 /// <param name="NotAnsweringSince">When this node's calls to it began to fail, while nothing has been heard from it since.</param>
 /// <param name="NotAnsweringReason">Why, in a sentence.</param>
+/// <param name="PausedReason">A blind copy told, in its last report (at most <see cref="BeeMemoryBank.Sync.PeerPauseReport.Fresh"/> ago), that its owner's limits or switch stop it: a closed token (<c>traffic</c>, <c>requests</c>, <c>disk</c>, <c>device-traffic</c>, <c>device-disk</c>, <c>paused-by-you</c>, <c>other</c>). Null otherwise.</param>
+/// <param name="PausedUntil">When the pause ends, as the copy said (UTC).</param>
+/// <param name="PausedText">The sentence to show: "Paused by the device's owner: daily traffic limit (until 00:00 device time)". Made by the hub from the closed token, never from the peer's words.</param>
+/// <param name="LeftAt">When the device's own owner removed the copy from the device (<c>POST /api/sync/leave</c>). The hub cannot revoke by itself: the owner of the network does.</param>
 public record DeliveryNodeStatus(
     Guid NodeId,
     string DisplayName,
@@ -98,7 +102,11 @@ public record DeliveryNodeStatus(
     string State = PeerContactView.Unknown,
     bool Online = false,
     DateTime? NotAnsweringSince = null,
-    string? NotAnsweringReason = null);
+    string? NotAnsweringReason = null,
+    string? PausedReason = null,
+    DateTime? PausedUntil = null,
+    string? PausedText = null,
+    DateTime? LeftAt = null);
 
 /// <summary>The answer of <c>POST /api/sync/nodes/{id}/check</c>: what happened when this node asked the peer now.</summary>
 /// <param name="Outcome"><c>answered</c>, <c>not_answering</c>, <c>calls_us</c> (no address: it calls this node, nothing was asked), <c>busy</c> (a cycle is running), <c>invisible</c>, <c>unknown_node</c>.</param>
@@ -174,9 +182,22 @@ public static class PeerContactView
         var checkedHere = memory.OutboundOkAt is not null || memory.OutboundFailingSince is not null;
         var state = notSince is not null ? NotAnswering : !canBeCalled ? CallsUs : last is null || !checkedHere ? Unknown : Answering;
         var online = state != NotAnswering && last is { } at && nowUtc - at < OnlineWindowFor(syncInterval, !canBeCalled);
+
+        // A blind copy that said, in its last report, that its owner's limits stop it: shown while that report is fresh, in the hub's own words.
+        string? pausedReason = null;
+        string? pausedText = null;
+        DateTime? pausedUntil = null;
+        if (memory is { PausedReason: { } paused, PausedReportedAt: { } reportedAt }
+            && reportedAt <= nowUtc + SkewTolerance && nowUtc - reportedAt <= BeeMemoryBank.Sync.PeerPauseReport.Fresh)
+        {
+            pausedReason = paused;
+            pausedUntil = Utc(memory.PausedUntil);
+            pausedText = BeeMemoryBank.Sync.PeerPauseReport.Sentence(paused, pausedUntil, memory.PausedUntilOffsetMinutes, nowUtc, memory.PausedByNode);
+        }
         return new DeliveryNodeStatus(
             node.NodeId, node.DisplayName, canBeCalled ? "public" : "private", push?.LastPushedSeq ?? 0, headSeq, unsyncedCount, unsyncedCount == 0,
-            last, direction, Utc(push?.PushedAt), outbound, inbound, canBeCalled, state, online, notSince, reason);
+            last, direction, Utc(push?.PushedAt), outbound, inbound, canBeCalled, state, online, notSince, reason,
+            pausedReason, pausedUntil, pausedText, Utc(memory.LeftAt));
     }
 
     private static DateTime? Utc(DateTime? time) =>

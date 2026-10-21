@@ -33,7 +33,7 @@ public static class MiscProxyEndpoints
         // "maintenance"), served by the forwarder below.
 
         // Backfill Orphan Media Links proxy — disabled. Auto-link on save handles new uploads.
-        // Uncomment together with the UI in Admin.cshtml and the API endpoint if ever needed.
+        // Uncomment together with the UI in a page of Pages/Admin and the API endpoint if ever needed.
         // app.MapPost("/api-proxy/admin/backfill-media-links", async (ApiClient api) =>
         // {
         //     var (ok, body, status) = await api.PostRawAsync("admin/backfill-media-links", "");

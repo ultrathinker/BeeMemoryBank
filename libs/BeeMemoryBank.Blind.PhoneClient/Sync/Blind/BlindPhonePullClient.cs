@@ -21,14 +21,23 @@ public sealed class BlindPhonePullClient(
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// Called after every batch this client has persisted: each blob it stored, every <see cref="BatchEvents"/> events it applied, and the end of the page. The host that keeps count of
+    /// what the phone holds learns from it that the folders grew by more than the bytes that came in. An init property, not a constructor parameter: the heads' constructors do not change.
+    /// </summary>
+    public Action? AfterBatch { get; init; }
+
+    /// <summary>How many applied events make a batch.</summary>
+    public const int BatchEvents = 100;
+
     public async Task SyncOnceAsync(HttpClient http, BlindCallCode target, CancellationToken ct)
     {
         using var scope = scopes.CreateScope();
         var services = scope.ServiceProvider;
         var identity = await services.GetRequiredService<INodeIdentityRepository>().GetAsync()
-            ?? throw new InvalidOperationException("The blind phone identity has not been recorded.");
+            ?? throw new BlindSentenceException("The blind phone identity has not been recorded.");
         if (identity.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
-            throw new InvalidOperationException("The blind phone requires its v=2 external-key identity before sync.");
+            throw new BlindSentenceException("The blind phone requires its v=2 external-key identity before sync.");
 
         var declared = services.GetService<ISyncProtocolPolicy>()?.Declared;
         var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct, declared);
@@ -37,12 +46,13 @@ public sealed class BlindPhonePullClient(
         var after = position?.LastSequenceNum ?? 0;
         var events = await PullAsync(http, target.Address, token, after, ct);
         await BlobTransport.FetchForAsync(http, target.Address, token, events,
-            services.GetRequiredService<IBlobRepository>(), logger, ct);
+            services.GetRequiredService<IBlobRepository>(), logger, ct, AfterBatch);
 
         var applier = services.GetRequiredService<EventApplier>();
         var eventLog = services.GetRequiredService<IEventLogRepository>();
         var quarantine = services.GetRequiredService<ISyncQuarantineRepository>();
         var last = after;
+        var applied = 0;
         OperationCanceledException? stopped = null;
         foreach (var evt in events)
         {
@@ -67,6 +77,7 @@ public sealed class BlindPhonePullClient(
                 await applier.ApplyAsync(evt, new ApplyContext(ReceivedFrom: target.NodeId, ReceivedSeq: evt.SequenceNum));
                 await SyncEventQuarantine.ClearFailureAsync(quarantine, evt.EventId);
                 last = evt.SequenceNum;
+                if (++applied % BatchEvents == 0) AfterBatch?.Invoke();
             }
             catch (OperationCanceledException ex)
             {
@@ -94,8 +105,43 @@ public sealed class BlindPhonePullClient(
             LastSequenceNum = last,
             UpdatedAt = DateTime.UtcNow
         });
+        AfterBatch?.Invoke(); // the page: what it applied and the cursor are on disk
         if (stopped is not null) ExceptionDispatchInfo.Capture(stopped).Throw();
         await ReportPositionAsync(http, target.Address, token, last, declared ?? SyncProtocolVersion.Current, ct);
+    }
+
+    /// <inheritdoc />
+    public async Task ReportPausedAsync(HttpClient http, BlindCallCode target, BlindPause pause, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(pause);
+        using var scope = scopes.CreateScope();
+        var services = scope.ServiceProvider;
+        var identity = await services.GetRequiredService<INodeIdentityRepository>().GetAsync()
+            ?? throw new BlindSentenceException("The blind phone identity has not been recorded.");
+        if (identity.Ed25519PrivateKeyV != NodeIdentityCrypto.ExternalKeyVersion)
+            throw new BlindSentenceException("The blind phone requires its v=2 external-key identity before it reports.");
+
+        var declared = services.GetService<ISyncProtocolPolicy>()?.Declared;
+        var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct, declared);
+        var position = await services.GetRequiredService<ISyncPositionRepository>().GetAsync(target.NodeId);
+        using var request = new HttpRequestMessage(HttpMethod.Post,
+            ReportUrl(target.Address, position?.LastSequenceNum ?? 0, declared ?? SyncProtocolVersion.Current, pause));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await http.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>The position report's address; with <paramref name="pause"/> it carries the two additive fields (the reason, and when it ends if that is known).</summary>
+    internal static string ReportUrl(string address, long sequence, int declaredProtocol, BlindPause? pause)
+    {
+        var url = $"{address.TrimEnd('/')}/api/sync/report-position?sequence={sequence}&protocolVersion={declaredProtocol}" +
+                  $"&capabilities={Uri.EscapeDataString(string.Join(",", MetadataCapabilities.Advertised))}" +
+                  $"&appVersion={Uri.EscapeDataString(BuildVersion.Current)}";
+        if (pause is null) return url;
+        url += $"&paused={Uri.EscapeDataString(pause.Reason)}";
+        if (pause.Until is { } until)
+            url += $"&pausedUntil={Uri.EscapeDataString(until.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture))}";
+        return url;
     }
 
     private static async Task<List<SyncEvent>> PullAsync(HttpClient http, string address, string token, long after, CancellationToken ct)
@@ -123,10 +169,7 @@ public sealed class BlindPhonePullClient(
         try
         {
             // What this copy declares and advertises (docs/design/step-a-spec.md 5.1): a node that has activated Step A refuses a peer that says less.
-            using var request = new HttpRequestMessage(HttpMethod.Post,
-                $"{address.TrimEnd('/')}/api/sync/report-position?sequence={sequence}&protocolVersion={declaredProtocol}" +
-                $"&capabilities={Uri.EscapeDataString(string.Join(",", MetadataCapabilities.Advertised))}" +
-                $"&appVersion={Uri.EscapeDataString(BuildVersion.Current)}");
+            using var request = new HttpRequestMessage(HttpMethod.Post, ReportUrl(address, sequence, declaredProtocol, pause: null));
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using var response = await http.SendAsync(request, ct);
             response.EnsureSuccessStatusCode();

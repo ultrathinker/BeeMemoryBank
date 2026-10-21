@@ -34,7 +34,8 @@ Image: ghcr.io/ultrathinker/beememorybank:<version> (docker-compose.image.yml),
 ### The ready-made image
 
 Released versions are on GitHub's container registry: `ghcr.io/ultrathinker/beememorybank` (full node) and
-`ghcr.io/ultrathinker/beememorybank-blind` (blind node, see [docker/blind/README.md](../docker/blind/README.md)), each for
+`ghcr.io/ultrathinker/beememorybank-blind` (blind node, see [docker/blind/README.md](../docker/blind/README.md); several meshes on one machine are several containers, see
+[blind-node/README.md](blind-node/README.md#several-memory-banks-on-one-machine-docker)), each for
 `linux/amd64` and `linux/arm64`. Tags: `X.Y.Z`, `X.Y` (the newest patch of that line) and `latest`; a pre-release
 (`2.4.0-rc1`) gets only its own tag. `docker-compose.image.yml` runs it with the same safety defaults as
 `docker-compose.yml`; `BMB_VERSION` in `.env` picks the tag. The image carries everything: the Api, the Web front, the CLI
@@ -74,7 +75,7 @@ attestation: `gh attestation verify oci://ghcr.io/ultrathinker/beememorybank:X.Y
 removes its container when the run ends, whether it succeeds, fails, or is interrupted; set `BMB_SMOKE_KEEP=1` to keep
 the stopped container around for `docker logs` (the last line names it).
 `scripts/test-entrypoint-term.sh <image> [rounds] [entrypoint]` starts the container and sends it SIGTERM a few milliseconds after
-the start, round after round: each round must stop by itself, so a `docker stop` never has to end in SIGKILL (BMB-185). The
+the start, round after round: each round must stop by itself, so a `docker stop` never has to end in SIGKILL. The
 full node is the default; for the blind node image pass its entrypoint: `scripts/test-entrypoint-term.sh <blind-image> 40 /app/entrypoint.sh`.
 
 ### Exposure
@@ -82,7 +83,7 @@ full node is the default; for the blind node image pass its entrypoint: `scripts
 The shipped `docker-compose.yml` deliberately publishes only the Web port, and only on this
 computer's loopback (`127.0.0.1`) — the right choice for a purely local node. Docker's port
 publishing skips `ufw`, so a mapping without a host address would put the login page on every network
-interface of the host. (The desktop apps' "Devices on my network" switch, Admin → Nodes, does not apply to Docker: here the
+interface of the host. (The desktop apps' "Devices on my network" switch, Admin → Devices on my network, does not apply to Docker: here the
 published ports are the whole answer; see [internet-access.md](internet-access.md#do-you-need-this).) To expose it on purpose (a trusted LAN), set `BMB_WEB_BIND=0.0.0.0` in `.env`
 and put TLS in front of it: the session cookie is `Secure`, so sign-in over plain HTTP from another
 computer does not work anyway. For a node that must be reachable from other nodes or MCP agents, use
@@ -212,7 +213,7 @@ Wiping a node back to first-run Setup — every article, folder, user, key and s
 available two ways. Both require the master password as confirmation; the password is verified
 *without* unlocking the vault, so a rejected attempt leaves nothing open.
 
-- **Web UI:** `/Admin` → *Reset This Node*. Superadmin only, and a human superadmin at that: the
+- **Web UI:** Admin → *Reset This Node* (`/Admin/ResetNode`). Superadmin only, and a human superadmin at that: the
   endpoint behind it also refuses agent bearer tokens, so a superadmin's MCP agent cannot wipe the
   node on its owner's behalf.
 - **Host CLI:** `bmb init reset --master-password '<password>' --yes` — for when nobody can sign in
@@ -238,7 +239,7 @@ So under Docker, restart the container after the `docker exec` above, before ope
 
 Two different things can be backed up:
 
-- **Snapshots** (`<data>/snapshots/`, *Admin → Backup*, `bmb snapshot create`) are the node's own backups: one file each,
+- **Snapshots** (`<data>/snapshots/`, *Admin → Snapshots*, `bmb snapshot create`) are the node's own backups: one file each,
   encrypted under the master key, written complete and atomically. Copy them whenever you like, **while the node runs**.
   Bringing a node back from one is described in [snapshot-restore.md](snapshot-restore.md).
 - **The data folder itself**, with restic, rsync, a volume backup or a file-system snapshot. Do this only with the node
@@ -310,7 +311,7 @@ of this computer instead (the Windows or macOS key store). On a server that swit
 *409 role_server*; on a desktop the server routes answer *409 role_desktop*. A plain server (one that was never encrypted) can
 use the option too, with the same warnings.
 
-**Turning it on** (superadmin, a person and not an agent, vault unlocked): *Admin → Security* and the encryption page, or
+**Turning it on** (superadmin, a person and not an agent, vault unlocked): *Admin → Database encryption* (the encryption page), or
 `bmb vault auto-unlock enable`. It asks twice. First a warning with *Cancel* as the default; then the master password and the
 phrase `START UNLOCKED`, typed exactly. The API route behind it is `POST /api/keys/server-auto-unlock/enable` with
 `{ "password": "…", "confirmation": "START UNLOCKED" }`; `GET …/status` and `POST …/disable` sit beside it. An audit line
@@ -351,7 +352,7 @@ switch the option on: the node takes the secret for the new slot from that file 
 operator's, turning the option off never deletes it: remove it yourself. A key file the node created itself is wiped and deleted when the option is
 turned off.
 
-**Turning it off:** *Admin → Security* or `bmb vault auto-unlock disable`, with the master password. The enable record goes first,
+**Turning it off:** *Admin → OS Auto-Unlock* or `bmb vault auto-unlock disable`, with the master password. The enable record goes first,
 then the slot, then a key file the node created.
 
 **What a restore does to it.** A restore never turns the option on. The slot travels with the data, the enable record never does,

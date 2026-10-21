@@ -165,7 +165,13 @@ public static class BusyAction
     /// The story of an exception for the screen: the text of the failures of local work and of everything inside them, and the kind of failure (never the words) of
     /// a call to another device. The one mechanism is <see cref="BeeMemoryBank.Sync.FailureText.Story"/>; it tells the kinds apart by the type of the exception.
     /// </summary>
-    public static string Describe(Exception ex) => BeeMemoryBank.Sync.FailureText.Story(ex);
+    public static string Describe(Exception ex) => (Describer ?? BeeMemoryBank.Sync.FailureText.Story)(ex);
+
+    /// <summary>
+    /// The one place an app may replace the story of a failure for its screens. The ordinary app leaves it empty (it tells the text of its own local failures). The blind apps set it at
+    /// start to their closed formatter, so that no dialog or result label built by this helper can show a path, a key name or a library's words.
+    /// </summary>
+    public static Func<Exception, string>? Describer { get; set; }
 
     private static bool IsSpinnerText(string? text) => !string.IsNullOrEmpty(text) && Spinner.Contains(text[0]);
 

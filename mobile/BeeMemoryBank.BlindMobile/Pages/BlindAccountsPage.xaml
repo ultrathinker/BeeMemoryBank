@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.BlindMobile.Pages.BlindAccountsPage"
+             Title="Blind copies"
+             BackgroundColor="{StaticResource BackgroundColor}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20" Spacing="16" MaximumWidthRequest="520">
+
+            <!-- The list of accounts could not be read (or the folder is in use by another copy of the app): the sentence, and nothing is touched -->
+            <Label x:Name="ProblemLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" FontAttributes="Bold" LineBreakMode="WordWrap" />
+
+            <!-- Where the list and the disk disagree: each difference with the explicit action that settles it -->
+            <VerticalStackLayout x:Name="RepairsHost" Spacing="8" />
+
+            <Label x:Name="DeviceLabel" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+
+            <!-- One card per account, filled by the code from BlindAccountsView -->
+            <VerticalStackLayout x:Name="CardsHost" Spacing="12" />
+            <Label x:Name="EmptyLabel" IsVisible="False" LineBreakMode="WordWrap"
+                   Text="No copy on this phone yet. Add one with an invitation from the owner of the computer, or with a pairing code." />
+
+            <Button x:Name="AddButton" Text="Add account" Style="{StaticResource PrimaryButton}" Clicked="OnAddClicked" />
+            <Label x:Name="AddHintLabel" IsVisible="False" FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+
+            <!-- This device: limits over every account -->
+            <Frame BorderColor="{StaticResource BorderColor}" BackgroundColor="{StaticResource SurfaceColor}" CornerRadius="8" Padding="16">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="This phone" FontAttributes="Bold" />
+                    <Label Text="Limits over every copy together. An empty box is no limit; 0 pauses all of them."
+                           FontSize="12" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+                    <Label Text="Storage" FontSize="12" />
+                    <Entry x:Name="DeviceStoredEntry" Placeholder="for example 5 GB" IsSpellCheckEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <Label Text="Traffic a day" FontSize="12" />
+                    <Entry x:Name="DeviceTrafficEntry" Placeholder="for example 500 MB" IsSpellCheckEnabled="False" Style="{StaticResource BaseEntry}" />
+                    <Label x:Name="DeviceFormLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
+                    <Button x:Name="SaveDeviceButton" Text="Save phone limits" Clicked="OnSaveDeviceLimitsClicked" />
+                    <Label x:Name="DeviceUsageLabel" IsVisible="False" TextColor="{StaticResource ErrorColor}" LineBreakMode="WordWrap" />
+                    <Button x:Name="NewCountsButton" Text="Start new counts" IsVisible="False" Clicked="OnStartNewCountsClicked" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <Label x:Name="ProblemLogLabel" IsVisible="False" FontSize="11" TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

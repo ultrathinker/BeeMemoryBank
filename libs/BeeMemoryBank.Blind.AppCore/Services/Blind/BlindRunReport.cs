@@ -16,7 +16,7 @@ public static class BlindRunReport
     public static void Record(BlindPhoneLog log, string kind, string message)
     {
         if (string.IsNullOrWhiteSpace(message) || Quiet.Contains(message)) return;
-        if (log.Latest(1) is [{ } last] && last.Kind == kind && last.Message == message) return;
+        if (log.LatestStored(1) is [{ } last] && last.Kind == kind && last.Message == message) return;
         log.Add(kind, message);
     }
 
@@ -24,34 +24,22 @@ public static class BlindRunReport
     /// A run that ended in an error nobody planned for (a damaged database, a missing identity row): the worker must
     /// not die silently in WorkManager's logcat, the screen's log is where the user can read it.
     /// </summary>
-    public static void RecordFailure(BlindPhoneLog log, string kind, Exception error) =>
-        Record(log, kind, $"Stopped by an unexpected error ({error.GetType().Name}): {(BeeMemoryBank.Sync.FailureText.IsRemoteInfluenced(error) ? BeeMemoryBank.Sync.PeerContactLog.Describe(error) : error.Message)}{Where(error)}");
-
-    /// <summary>
-    /// The exception's message, followed by the messages of its inner exceptions that say something new (type and words). The TLS and socket
-    /// errors of the HTTP stack hide the cause behind "The SSL connection could not be established, see inner exception.": without the
-    /// inner part a refused certificate, a reset connection and a protocol mismatch read the same on the screen. Messages only, never data.
-    /// </summary>
-    public static string Reason(Exception error)
+    public static void RecordFailure(BlindPhoneLog log, string kind, Exception error)
     {
-        // A failure of a call to the other computer is told as the KIND of failure (refused connection, certificate not accepted, no answer in time, an answer that cannot be
-        // read): the HTTP stack's own words carry the reason phrase of the answer and the address that was dialled, which are the other side's and this network's text.
-        if (BeeMemoryBank.Sync.FailureText.IsRemoteInfluenced(error)) return BeeMemoryBank.Sync.PeerContactLog.Describe(error);
-        var text = new System.Text.StringBuilder(OneLine(error.Message));
-        var seen = new HashSet<string>(StringComparer.Ordinal) { OneLine(error.Message) };
-        for (var inner = error.InnerException; inner is not null && seen.Count <= MaxInner; inner = inner.InnerException)
-        {
-            var message = OneLine(inner.Message);
-            if (message.Length == 0 || !seen.Add(message)) continue;
-            text.Append($" ({inner.GetType().Name}: {message})");
-        }
-        return text.Length <= MaxReason ? text.ToString() : text.ToString(0, MaxReason) + "...";
+        // The kind of failure (BlindFailureText), then the type's name when the sentence has not said it: never the message of the exception, which may carry a path, a key alias,
+        // a request address or a library's words, and this line is kept on the phone and shown on its screen.
+        var said = BlindFailureText.Say(error);
+        var type = error.GetType().Name;
+        Record(log, kind, $"Stopped by an unexpected error{(said.Contains(type, StringComparison.Ordinal) ? "" : $" ({type})")}: {said}{Where(error)}");
     }
 
-    private const int MaxInner = 3;
-    private const int MaxReason = 400;
-
-    private static string OneLine(string? message) => (message ?? "").ReplaceLineEndings(" ").Trim();
+    /// <summary>
+    /// What a failed job or sync tells the log and the screen: <see cref="BlindFailureText.Say"/> - the KIND of failure (a refused connection, a certificate that was not accepted, no
+    /// answer in time, an answer that cannot be read; a file, a database, a key), or a bounded sentence this code wrote itself. Never the message of the exception and never the message
+    /// of anything inside it: the HTTP stack's own words carry the address that was dialled and the answer's reason phrase, and an I/O, database or crypto message carries a path, a
+    /// key alias or a library's words. This is where the failure is RECORDED, so what is stored (the log line, <see cref="BlindHeavyFailure.Message"/>) is clean for every head.
+    /// </summary>
+    public static string Reason(Exception error) => BlindFailureText.Say(error);
 
     /// <summary>
     /// " [at A.B.M &lt; C.D.N &lt; ...]": the first few methods of the stack, names only (no arguments, no file paths). A Release

@@ -13,6 +13,9 @@ public record BlindNodeDto(
 /// </summary>
 /// <param name="LastContactDirection"><c>outbound</c> (this PC called), <c>inbound</c> (it called this PC), or null.</param>
 /// <param name="State"><c>answering</c>, <c>not_answering</c>, <c>calls_us</c> or <c>unknown</c> (not checked since this node started).</param>
+/// <param name="PausedText">A blind copy that told its owner's limits stop it: "Paused by the device's owner: daily traffic limit (until 00:00 device time)", worded by the Api from a closed set; null otherwise.</param>
+/// <param name="LeftAt">When the device's own owner removed the copy from the device; the owner of the network revokes it here.</param>
 public record BlindContactDto(
     DateTime? LastContactAt, string? LastContactDirection = null, DateTime? LastPushAt = null, DateTime? LastOutboundAt = null, DateTime? LastInboundAt = null,
-    string State = "unknown", bool Online = false, DateTime? NotAnsweringSince = null, string? NotAnsweringReason = null);
+    string State = "unknown", bool Online = false, DateTime? NotAnsweringSince = null, string? NotAnsweringReason = null,
+    string? PausedReason = null, DateTime? PausedUntil = null, string? PausedText = null, DateTime? LeftAt = null);

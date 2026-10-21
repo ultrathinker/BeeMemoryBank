@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Services.BlindPhone;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
@@ -18,7 +19,7 @@ public static class BlindBackupExport
     public static async Task<long> CopyAsync(string backupPath, Stream target, IProgress<double>? progress, CancellationToken ct)
     {
         if (!AndroidBackupRestore.LooksLikeBackup(backupPath))
-            throw new InvalidDataException("This is not a finished backup file; nothing was saved.");
+            throw BlindOwnSentence.Mark(new InvalidDataException("This is not a finished backup file; nothing was saved."));
 
         await using var source = new FileStream(backupPath, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, FileOptions.Asynchronous);
         var total = source.Length;
@@ -34,7 +35,7 @@ public static class BlindBackupExport
         await target.FlushAsync(ct);
 
         if (copied != total || (target.CanSeek && target.Length != total))
-            throw new IOException("The chosen place kept an incomplete file; the backup was not saved.");
+            throw new BlindFileSentenceException("The chosen place kept an incomplete file; the backup was not saved.");
         return copied;
     }
 }

@@ -1,0 +1,539 @@
+using System.Collections.ObjectModel;
+using System.Windows.Input;
+using BeeMemoryBank.BlindDesktop.Scheduling;
+using BeeMemoryBank.BlindMobile.Services.Blind;
+using BeeMemoryBank.Core.Services.BlindPhone;
+
+namespace BeeMemoryBank.BlindDesktop.ViewModels;
+
+/// <summary>One finished backup in the list, with its own "Save to..." command.</summary>
+public sealed class BackupRow(string name, long size, ICommand save)
+{
+    public string Name { get; } = name;
+    public string SizeText { get; } = $"{size / 1024} KiB";
+    public ICommand SaveCommand { get; } = save;
+}
+
+/// <summary>
+/// Today's panel of ONE account, mirroring the Android blind home page: identity and pairing code (text and QR), the field for the
+/// computer's answer, the paired endpoint, first load / last sync / last backup, why a job waits, the running job and its progress,
+/// "Sync now" / "Back up now", the schedule, the backups with "Save to...", the last 30 log lines, and Re-pair. It holds no blind logic: every
+/// action goes to the account's <see cref="IBlindAppController"/> or to the work requests the device loop serves, and every text comes from
+/// <see cref="BlindAppStatus"/>. The account around it - its card, limits, rename, pause and removal - is <see cref="AccountDetailViewModel"/>;
+/// the device - the list of accounts, adding one, the autostart choice - is <see cref="MainViewModel"/>.
+/// </summary>
+public sealed class AccountPanelViewModel : ObservableObject, IDisposable
+{
+    public static readonly string[] ScheduleNames = ["Off", "Daily", "Weekly"];
+    private static readonly BlindBackupSchedule[] Schedules = [BlindBackupSchedule.Off, BlindBackupSchedule.Daily, BlindBackupSchedule.Weekly];
+
+    private readonly IBlindAppController _app;
+    private readonly IBlindWorkRequests _work;
+    private readonly Func<string, byte[]> _qr;
+    private readonly Action<Action> _post;
+    private readonly TimeProvider _time;
+    private int _refreshPending;
+    private readonly Action<string, Exception>? _problem;
+    private bool _applying;
+    private string? _qrFor;
+    private bool _disposed;
+
+    private string _identityText = "";
+    private string _nodeText = "";
+    private string _pairText = "";
+    private string _loadText = "";
+    private string _storeText = "";
+    private static readonly TimeSpan StoreEvery = TimeSpan.FromSeconds(15);
+    private readonly Func<CancellationToken, Task<BlindStoreInfo?>>? _storeSource;
+    private BlindStoreInfo? _storeSummary;
+    private DateTimeOffset _storeAt = DateTimeOffset.MinValue;
+    private bool _readingStore;
+    private string _syncText = "";
+    private string _backupText = "";
+    private string _jobText = "";
+    private bool _jobVisible;
+    private double _jobProgress;
+    private bool _showPairingCode;
+    private string? _pairingCodeText;
+    private byte[]? _pairingQrPng;
+    private string _pairingMessage = "";
+    private string _callCodeInput = "";
+    private string? _connectError;
+    private bool _canRePair;
+    private bool _canConnect;
+    private bool _canSyncNow;
+    private bool _canBackupNow;
+    private int _scheduleIndex = 2;
+    private string _logText = "";
+    private string? _notice;
+    private string? _keyLostText;
+    private string? _startErrorText;
+    private string? _keyStoreNoticeText;
+    private bool _busy;
+    private string _busyTitle = "";
+    private string _busyText = "";
+    private bool _busyByJob;
+    private BlindJobAsk? _busyAsk;
+    private string _busyBaseText = "";
+    private BlindAppStatus? _lastStatus;
+    private bool _isPaired;
+    private IReadOnlyList<BackupRow> _backups = [];
+
+    /// <param name="qr">Makes the PNG of a pairing code; in the app it is the QR library, in tests anything.</param>
+    /// <param name="post">Runs an action on the UI thread; the default runs it at once (tests).</param>
+    /// <param name="problem">Where a failed command or refresh is written besides the notice on the screen (the error log); tests pass nothing.</param>
+    /// <param name="store">What the copy holds (docs/design/step-a-spec.md 10.2), asked now and then off the UI thread for the store line; none means the line stays "unknown".</param>
+    /// <param name="time">The clock of the pop-up's waiting for a job (the system clock; a test moves its own).</param>
+    public AccountPanelViewModel(IBlindAppController app, IBlindWorkRequests work,
+        Func<string, byte[]> qr, Action<Action>? post = null, Action<string, Exception>? problem = null,
+        Func<CancellationToken, Task<BlindStoreInfo?>>? store = null, TimeProvider? time = null)
+    {
+        _time = time ?? TimeProvider.System;
+        _storeSource = store;
+        _problem = problem;
+        _app = app;
+        _work = work;
+        _qr = qr;
+        _post = post ?? (action => action());
+
+        // Every command runs on the UI thread: a failure becomes a notice, it never escapes into the UI loop.
+        Action<Exception> failed = CommandFailed;
+        // While a long operation runs (IsBusy) no command can be started a second time: the pop-up covers the window and the commands are off.
+        ConnectCommand = new RelayCommand(Connect, () => _canConnect && !_busy, failed);
+        SyncNowCommand = new RelayCommand(SyncNow, () => _canSyncNow && !_busy, failed);
+        BackupNowCommand = new RelayCommand(BackupNow, () => _canBackupNow && !_busy, failed);
+        RePairCommand = new RelayCommand(RePair, () => _canRePair && !_busy, failed);
+        // busy-exempt: copies the code to the clipboard, nothing is sent and nothing waits
+        CopyPairingCodeCommand = new RelayCommand(() => { if (_pairingCodeText is { } code) CopyRequested?.Invoke(code); },
+            () => _pairingCodeText is not null, failed);
+        _all = new[] { ConnectCommand, SyncNowCommand, BackupNowCommand, RePairCommand }.Cast<RelayCommand>().ToArray();
+
+        _app.Changed += RequestRefresh;
+        _work.UserJobReported += OnUserJobReported;
+    }
+
+    /// <summary>Raised when the user asks to copy the pairing code; the window puts it on the clipboard.</summary>
+    public event Action<string>? CopyRequested;
+
+    public ICommand ConnectCommand { get; }
+    public ICommand SyncNowCommand { get; }
+    public ICommand BackupNowCommand { get; }
+    public ICommand RePairCommand { get; }
+    public ICommand CopyPairingCodeCommand { get; }
+
+    public string IdentityText { get => _identityText; private set => Set(ref _identityText, value); }
+    public string NodeText { get => _nodeText; private set => Set(ref _nodeText, value); }
+    public string PairText { get => _pairText; private set => Set(ref _pairText, value); }
+    public string LoadText { get => _loadText; private set => Set(ref _loadText, value); }
+
+    /// <summary>The restore point's age, the changes since it and the bytes stored; never a note count (docs/design/step-a-spec.md 10.2).</summary>
+    public string StoreText { get => _storeText; private set => Set(ref _storeText, value); }
+    public string SyncText { get => _syncText; private set => Set(ref _syncText, value); }
+    public string BackupText { get => _backupText; private set => Set(ref _backupText, value); }
+    public string JobText { get => _jobText; private set => Set(ref _jobText, value); }
+    public bool JobVisible { get => _jobVisible; private set => Set(ref _jobVisible, value); }
+
+    /// <summary>0..1 for a progress bar.</summary>
+    public double JobProgress { get => _jobProgress; private set => Set(ref _jobProgress, value); }
+
+    public bool ShowPairingCode { get => _showPairingCode; private set => Set(ref _showPairingCode, value); }
+    public string? PairingCodeText { get => _pairingCodeText; private set => Set(ref _pairingCodeText, value); }
+    public byte[]? PairingQrPng { get => _pairingQrPng; private set => Set(ref _pairingQrPng, value); }
+
+    /// <summary>The sentence shown instead of the code: paired and used up, or why the app could not set itself up.</summary>
+    public string PairingMessage { get => _pairingMessage; private set => Set(ref _pairingMessage, value); }
+
+    /// <summary>The computer's answer typed or pasted by the user.</summary>
+    public string CallCodeInput
+    {
+        get => _callCodeInput;
+        set { if (Set(ref _callCodeInput, value)) ConnectError = null; }
+    }
+
+    public string? ConnectError { get => _connectError; private set { if (Set(ref _connectError, value)) Raise(nameof(HasConnectError)); } }
+    public bool HasConnectError => !string.IsNullOrEmpty(_connectError);
+
+    public bool CanRePair { get => _canRePair; private set { if (Set(ref _canRePair, value)) ((RelayCommand)RePairCommand).RaiseCanExecuteChanged(); } }
+    public bool CanConnect { get => _canConnect; private set { if (Set(ref _canConnect, value)) ((RelayCommand)ConnectCommand).RaiseCanExecuteChanged(); } }
+    public bool CanSyncNow { get => _canSyncNow; private set { if (Set(ref _canSyncNow, value)) ((RelayCommand)SyncNowCommand).RaiseCanExecuteChanged(); } }
+    public bool CanBackupNow { get => _canBackupNow; private set { if (Set(ref _canBackupNow, value)) ((RelayCommand)BackupNowCommand).RaiseCanExecuteChanged(); } }
+
+    public bool IsPaired { get => _isPaired; private set => Set(ref _isPaired, value); }
+
+    public IReadOnlyList<string> ScheduleOptions => ScheduleNames;
+
+    public int ScheduleIndex
+    {
+        get => _scheduleIndex;
+        set
+        {
+            if (value < 0 || value >= Schedules.Length || !Set(ref _scheduleIndex, value)) return;
+            if (!_applying) _app.SetSchedule(Schedules[value]);
+        }
+    }
+
+    public IReadOnlyList<BackupRow> Backups { get => _backups; private set { if (Set(ref _backups, value)) Raise(nameof(HasBackups)); } }
+    public bool HasBackups => _backups.Count > 0;
+    public string LogText { get => _logText; private set => Set(ref _logText, value); }
+
+    /// <summary>The line under the buttons: what the last action did.</summary>
+    public string? Notice { get => _notice; private set { if (Set(ref _notice, value)) Raise(nameof(HasNotice)); } }
+    public bool HasNotice => !string.IsNullOrEmpty(_notice);
+
+    public string? KeyLostText { get => _keyLostText; private set { if (Set(ref _keyLostText, value)) Raise(nameof(HasKeyLost)); } }
+    public bool HasKeyLost => _keyLostText is not null;
+    public string? KeyStoreNoticeText { get => _keyStoreNoticeText; private set { if (Set(ref _keyStoreNoticeText, value)) Raise(nameof(HasKeyStoreNotice)); } }
+    public bool HasKeyStoreNotice => _keyStoreNoticeText is not null;
+    public string? StartErrorText { get => _startErrorText; private set { if (Set(ref _startErrorText, value)) Raise(nameof(HasStartError)); } }
+    public bool HasStartError => _startErrorText is not null;
+
+    /// <summary>
+    /// A long operation (connect with its first load, sync, backup, save) is running (BMB-311): the window shows a "please wait"
+    /// pop-up over everything, and no command can be started a second time until it ends.
+    /// </summary>
+    public bool IsBusy { get => _busy; private set => Set(ref _busy, value); }
+
+    /// <summary>The pop-up's headline.</summary>
+    public string BusyTitle { get => _busyTitle; private set => Set(ref _busyTitle, value); }
+
+    /// <summary>The pop-up's line: what is being waited for, then the running job's own progress.</summary>
+    public string BusyText { get => _busyText; private set => Set(ref _busyText, value); }
+
+    private RelayCommand[] _all = [];
+
+    // ask: the pop-up ends with the job the user asked the scheduler for, judged by the state of the app (BlindJobWait, the model of the phones); with none its
+    // owner ends it.
+    private void BeginBusy(string title, string text, BlindJobAsk? ask = null)
+    {
+        BusyTitle = title;
+        BusyText = text;
+        _busyBaseText = text;
+        _busyByJob = ask is not null;
+        _busyAsk = ask;
+        IsBusy = true;
+        foreach (var command in _all) command.RaiseCanExecuteChanged();
+    }
+
+    private void EndBusy()
+    {
+        if (!_busy) return;
+        IsBusy = false;
+        foreach (var command in _all) command.RaiseCanExecuteChanged();
+        foreach (var row in _backups) (row.SaveCommand as RelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>Starts the long operation <paramref name="ask"/> asks for; when asking itself fails the pop-up does not stay up.</summary>
+    private void AskFor(string title, string text, string kind, Action ask)
+    {
+        // The marks the job will leave are noted now, from the last status that was shown (the UI thread does not read the database).
+        BeginBusy(title, text, new BlindJobAsk(kind, _time.GetUtcNow(), _lastStatus?.LastSyncAt, _lastStatus?.LastBackupAt));
+        try { ask(); }
+        catch
+        {
+            EndBusy();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The pop-up follows the job the user asked for by the STATE of the app, the one model of the phones (<see cref="BlindJobWait.Judge"/>): it ends when the job's
+    /// own mark appears (the first load is done, the time of the last sync or backup moved) or its failure is recorded, and never by a clock while the job runs
+    /// (BMB-311 fix round) or while it is queued behind another one: a job that is asked for and has not started holds the lock, the pop-up and the commands, for the
+    /// queue's grace (two minutes). Only a job that never started and left no mark for longer than that is reported as such. Another job that runs meanwhile (a
+    /// scheduled backup) is NOT the job asked for: it is said to run first, and does not end the wait.
+    /// </summary>
+    private void UpdateBusyFrom(BlindAppStatus status)
+    {
+        if (!_busy || !_busyByJob || _busyAsk is not { } ask) return;
+        var now = _time.GetUtcNow();
+        var outcome = BlindJobWait.Judge(ask, status, running: false, now);
+        switch (outcome.Phase)
+        {
+            case BlindJobPhase.Running:
+                var progress = status.JobProgress is { } p ? $"{status.ActiveJob}: {p:P0}" : status.ActiveJob!;
+                BusyText = now - ask.At > BlindJobWait.StillRunningAfter ? $"{progress} - {BlindJobWait.StillRunningText}" : progress;
+                return;
+            case BlindJobPhase.Queued:
+                BusyText = status.ActiveJob is { } first ? $"{first} is running first; this job starts after it. {_busyBaseText}" : _busyBaseText;
+                return;
+            default:   // Finished, Failed, Unreported
+                if (outcome.Message is { } said) Notice = said;
+                EndBusy();
+                return;
+        }
+    }
+    /// <summary>Reads the status again (off the UI thread) and shows it.</summary>
+    public async Task RefreshAsync()
+    {
+        if (_disposed) return;
+        BlindAppStatus status;
+        try
+        {
+            status = await Task.Run(_app.GetStatus);
+        }
+        catch (Exception ex) when (!IsFatal(ex))
+        {
+            Notice = FailureNotice.Say("Could not read the status", ex);
+            _problem?.Invoke("Reading the status failed", ex);
+            return;
+        }
+        if (_disposed) return;
+        try
+        {
+            Apply(status);
+        }
+        catch (Exception ex) when (!IsFatal(ex))
+        {
+            // Showing a status is not worth ending the app for: say so, and show the next one.
+            Notice = FailureNotice.Say("Could not show the status", ex);
+            _problem?.Invoke("Showing the status failed", ex);
+        }
+    }
+
+    private void CommandFailed(Exception ex)
+    {
+        Notice = FailureNotice.Say("That did not work", ex);
+        _problem?.Invoke("A command failed", ex);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _app.Changed -= RequestRefresh;
+        _work.UserJobReported -= OnUserJobReported;
+    }
+
+    private void Apply(BlindAppStatus status)
+    {
+        _applying = true;
+        try
+        {
+            IdentityText = status.DisplayName ?? "(no name)";
+            NodeText = status.NodeId is { } id ? $"Node {id}" : "No identity";
+            IsPaired = status.IsPaired;
+            PairText = status.IsPaired
+                ? $"Calls {status.Endpoint}"
+                : "Not paired yet: do steps 1 and 2 below.";
+            LoadText = LoadTextFor(status);
+            StoreText = BlindHomeView.StoreText(_storeSummary, status, DateTimeOffset.UtcNow);
+            ReadStoreSoon(status);
+            SyncText = $"Last sync: {When(status.LastSyncAt)}";
+            BackupText = $"Last backup: {When(status.LastBackupAt)}";
+
+            _lastStatus = status;
+            UpdateBusyFrom(status);
+            JobVisible = status.ActiveJob is not null;
+            JobText = status.ActiveJob is null ? ""
+                : status.JobProgress is { } p ? $"{status.ActiveJob}: {p:P0}" : status.ActiveJob;
+            JobProgress = status.JobProgress ?? 0;
+
+            ScheduleIndex = Math.Max(0, Array.IndexOf(Schedules, status.Schedule));
+
+            Backups = status.Backups.Select(b => new BackupRow(b.Name, b.Size,
+                new RelayCommand(() => _ = SaveBackupAsync(b.Name), () => !_busy, CommandFailed))).ToList();
+            // The controller's status normally holds the lines cleaned already; apply the same provenance projection for a status supplied directly to this view too.
+            LogText = string.Join("\n", status.RecentLog.Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {e.ForDisplay().Message}"));
+
+            KeyLostText = status.BackupKeyLost
+                ? "The backup key of this copy is gone from this computer's key store. The paired computer keeps a sealed copy of it, so a new key is never made silently: remove this account, then add it again."
+                : null;
+            // The secret store did not answer (locked, access denied, busy): that is NOT a lost key and nothing here asks for a removal.
+            KeyStoreNoticeText = status.KeyStoreUnavailable is { } storeProblem
+                ? $"The key store of this computer did not answer ({BlindFailureText.ForDisplay(storeProblem)}). Nothing was changed and no key is lost. Try again in a moment; if it stays, check that the computer is unlocked and that this app may use its key store."
+                : null;
+            StartErrorText = status.StartError is { } error
+                ? $"Could not set the app up: {BlindFailureText.ForDisplay(error)} Close the app and open it again; if this stays, remove this account and add it again."
+                : null;
+
+            ApplyPairing(status);
+
+            // A job that runs (a scheduled backup, the one the user asked for) holds the commands that start another: the same rule as the phones' buttons.
+            CanSyncNow = status.IsPaired && status.InitialLoadDone && status.ActiveJob is null;
+            CanBackupNow = status.IsPaired && !status.BackupKeyLost && status.ActiveJob is null;
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    /// <summary>Asks for what the copy holds now and then, off the UI thread; the line shows the last answer.</summary>
+    private void ReadStoreSoon(BlindAppStatus status)
+    {
+        if (_storeSource is null || _readingStore || DateTimeOffset.UtcNow - _storeAt < StoreEvery) return;
+        if (!status.InitialLoadDone) { _storeSummary = null; return; }
+        _readingStore = true;
+        _storeAt = DateTimeOffset.UtcNow;
+        _ = Task.Run(async () =>
+        {
+            var summary = await _storeSource(CancellationToken.None);
+            _post(() =>
+            {
+                _readingStore = false;
+                _storeSummary = summary;
+                try { StoreText = BlindHomeView.StoreText(summary, _app.GetStatus(), DateTimeOffset.UtcNow); }
+                catch (Exception ex) { CommandFailed(ex); }
+            });
+        });
+    }
+
+    private void ApplyPairing(BlindAppStatus status)
+    {
+        var code = status.AwaitingAnswer ? _app.PairingCode() : null;
+        ShowPairingCode = code is not null;
+        PairingCodeText = code;
+        if (code != _qrFor)
+        {
+            // The picture is a convenience: the text of the code is on the screen too. A QR library that fails must not take the rest of
+            // the screen with it (the answer field has to stay usable), and it is tried once per code, not on every refresh.
+            _qrFor = code;
+            try
+            {
+                PairingQrPng = code is null ? null : _qr(code);
+            }
+            catch (Exception ex) when (!IsFatal(ex))
+            {
+                PairingQrPng = null;
+                Notice = FailureNotice.Say("The QR picture could not be made", ex) + " Copy the code below instead.";
+                _problem?.Invoke("Making the QR picture failed", ex);
+            }
+        }
+
+        PairingMessage = code is not null ? ""
+            : status.KeyStoreUnavailable is not null ? "The pairing code cannot be shown while the key store of this computer does not answer."
+            : status.StartError is not null ? "The app could not set itself up; see the message below."
+            : status.IsPaired ? "Paired. The code was used up; to connect to another computer, choose Re-pair."
+            : "No identity. Remove this account and add it again.";
+
+        CanConnect = code is not null;
+        CanRePair = code is null && status.IsPaired;
+        ((RelayCommand)CopyPairingCodeCommand).RaiseCanExecuteChanged();
+    }
+
+    private void Connect()
+    {
+        var error = _app.AcceptCallCode(CallCodeInput ?? "");
+        ConnectError = error;
+        if (error is null)
+        {
+            CallCodeInput = "";
+            Notice = "Paired. The first load starts now.";
+            // A long operation (BMB-311): the first copy of the data is loaded; the pop-up stays until that job is over.
+            AskFor("Connecting", "Please wait. The first copy of the data is being loaded; this can take a while. You can close the window: the job goes on.", BlindJobWait.FirstLoad, _work.RequestHeavy);
+        }
+        _ = RefreshAsync();
+    }
+
+    private void RePair()
+    {
+        try
+        {
+            _app.StartRePair();
+            Notice = "A new code was made. The current connection stays until the computer's new answer is accepted.";
+        }
+        catch (Exception ex)
+        {
+            Notice = FailureNotice.Say("Could not start re-pairing", ex);
+            _problem?.Invoke("Starting a re-pairing failed", ex);
+        }
+        _ = RefreshAsync();
+    }
+
+    private void SyncNow()
+    {
+        AskFor("Syncing", "Please wait while this computer syncs. You can close the window: the job goes on.", BlindJobWait.Sync, _work.RequestSync);
+        Notice = "Sync asked for.";
+    }
+
+    private void BackupNow()
+    {
+        AskFor("Backing up", "Please wait while the backup is made. You can close the window: the job goes on.", BlindJobWait.Backup, _work.RequestBackup);
+        Notice = "Backup asked for.";
+    }
+
+    private async Task SaveBackupAsync(string name)
+    {
+        // A long operation (BMB-311): the pop-up stays until the file is saved (or the place was not chosen).
+        BeginBusy("Saving the backup", "Please wait while the backup is copied to the place you chose.");
+        try
+        {
+            var bytes = await _app.ExportBackupAsync(name);
+            Notice = $"Saved {name} ({bytes / 1024} KiB) to the chosen place.";
+        }
+        catch (OperationCanceledException)
+        {
+            Notice = "Nothing was saved.";
+        }
+        catch (Exception ex)
+        {
+            Notice = FailureNotice.Say("Could not save the backup", ex);
+            _problem?.Invoke("Saving a backup failed", ex);
+        }
+        finally
+        {
+            EndBusy();
+        }
+        await RefreshAsync();
+    }
+
+    private void RequestRefresh()
+    {
+        if (_disposed || Interlocked.Exchange(ref _refreshPending, 1) == 1) return;
+        _post(() =>
+        {
+            Interlocked.Exchange(ref _refreshPending, 0);
+            _ = RefreshAsync();
+        });
+    }
+
+    private void OnUserJobReported(string sentence) => _post(() =>
+    {
+        Notice = sentence;
+        if (_busyByJob) EndBusy();
+    });
+
+    private static bool IsFatal(Exception ex) =>
+        ex is OutOfMemoryException or AccessViolationException or StackOverflowException or ThreadAbortException;
+
+    /// <summary>
+    /// What the first load is doing: not started because not paired, running with progress, a real failure with its retry time, or about to start.
+    /// </summary>
+    private string LoadTextFor(BlindAppStatus status)
+    {
+        if (status.InitialLoadDone) return "First load: done.";
+        if (!status.IsPaired) return "First load: starts after pairing.";
+        if (status.ActiveJob == "First load")
+            return status.JobProgress is { } progress ? $"First load: running ({progress:P0})." : "First load: running.";
+        if (status.LastFailure is { Title: "First load" } failure) return FailedLoadText(failure);
+        return "First load: starting.";
+    }
+
+    private string FailedLoadText(BlindAppFailure failure)
+    {
+        var text = $"First load: the last try failed - {Reason(failure.Message)}";
+        if (failure.Attempts > 1) text += $" ({failure.Attempts} tries in a row)";
+        if (_work.FirstLoadRetry is { } retry)
+        {
+            text += $" Next try at {retry.NextAt.ToLocalTime():HH:mm:ss}";
+            text += retry.AtCeiling ? $"; it keeps trying every {Math.Max(1, (int)retry.Every.TotalMinutes)} minutes until it works." : ".";
+        }
+        else
+        {
+            text += " It tries again soon.";
+        }
+        return text;
+    }
+
+    /// <summary>The error in one short line; a 401 right after pairing is the normal case and is said so (the computer has not heard of this device yet).</summary>
+    private static string Reason(string message)
+    {
+        var text = message.ReplaceLineEndings(" ").Trim();
+        if (text.Length > 140) text = text[..140] + "...";
+        if (text.Contains("401", StringComparison.Ordinal))
+            text += " The computer has probably not heard of this device yet; that is normal for a short time after pairing.";
+        return text;
+    }
+
+    private static string When(DateTimeOffset? at) => at is { } t ? t.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : "never";
+}

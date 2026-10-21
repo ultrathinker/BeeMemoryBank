@@ -155,7 +155,7 @@ public class HostServicesTests
         await second.GetRequiredService<BlindAppController>().InitializeAsync();
         var act = () => second.GetRequiredService<BlindMobilePairing>().CreateIdentityAsync("Test Mac");
 
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Disconnect and wipe required*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Remove this account from the accounts list and add it again*");
         keychain.Items.Should().BeEmpty("a missing seed is never replaced by a new one over the existing identity");
         keychain.AddCalls.Should().Be(addsBefore);
         SqliteConnection.ClearAllPools();

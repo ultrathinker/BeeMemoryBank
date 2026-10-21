@@ -8,7 +8,7 @@ Compaction is how we bound that growth.
 
 Compaction is **admin-triggered only** — no background/periodic compaction. The admin sees
 a preview of what would be deleted and confirms in the Web UI (Admin → Event Log & Compaction
-→ "Compact Now"). Or via API:
+→ "Compact now"). Or via API:
 
     curl -H "X-Internal-Key: $BMB_INTERNAL_KEY" \
          http://localhost:5300/api/admin/compact/preview
@@ -85,7 +85,7 @@ All endpoints require `X-Internal-Key` header. POST additionally requires an unl
 
 ## UI
 
-The Admin page shows an "Event Log & Compaction" section with:
+The "Event Log & Compaction" page of the Admin area (`/Admin/Compaction`) explains what the log is and what compaction does, and shows:
 - **Statistics grid**: total events, head seq, min retained seq, active peers
 - **Peer positions**: each peer's last synced sequence number
 - **Warnings**: e.g. peer position too close to head

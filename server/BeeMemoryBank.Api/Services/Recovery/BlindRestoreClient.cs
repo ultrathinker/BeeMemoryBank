@@ -43,6 +43,8 @@ public class BlindRestoreClient(
     public async Task<RestoreResult> RestoreFromBlindNodeAsync(string? address, string code, string? pin, RestoreIdentity who,
         CancellationToken ct = default, RestoreBoxPolicy boxes = RestoreBoxPolicy.Default)
     {
+        // Before anything is asked of the blind node: the name goes into the claim it reads after the restore has committed (BlindClaimRequest, 16 KiB at most).
+        if (BeeMemoryBank.Core.Models.DeviceDisplayName.Problem(who.DisplayName) is { } nameProblem) throw new ArgumentException(nameProblem);
         BlindRestoreCode restoreCode;
         try { restoreCode = BlindRestoreCode.Parse(code); }
         catch (FormatException ex) { throw new ArgumentException(ex.Message, ex); }

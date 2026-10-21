@@ -1,7 +1,7 @@
 # Forgot the password? Use a recovery key
 
 A **recovery key** is a second way into the vault's master key, issued once by a superadmin and kept offline
-(Admin → Security → **Issue new recovery key**). It is stored as a key slot of type `recovery`; only a key
+(Admin → Recovery key → **Issue new recovery key**). It is stored as a key slot of type `recovery`; only a key
 derived from it is in the database, never the key itself.
 
 If the only administrator forgets their password there used to be no route back in from the browser: the Sign
@@ -56,7 +56,7 @@ recovery keys keep working; make a new one if a card or paper copy was lost or s
 | Per username | 5 attempts per 15 minutes at the node, counted for names that do not exist exactly as for those that do |
 | Typos | A new password that breaks the rules, or two that do not match, is said at once and costs no attempt |
 | Audit log | `user_password_recovery_reset` (user, client address) and `user_password_recovery_refused` (reason class `key` or `account`, address) — never the key, a password or a name that is not an account |
-| Other nodes | Key slots are node-local, so other nodes still accept the old password. A `master_password_changed` event tells them, as the Admin → Security card does |
+| Other nodes | Key slots are node-local, so other nodes still accept the old password. A `master_password_changed` event tells them, as the Admin → Master Password page does |
 
 The per-username budget means that someone who knows an administrator's username can keep that account's
 recovery locked for a while by guessing; they gain nothing else by it, and the key itself — 256 random bits — is

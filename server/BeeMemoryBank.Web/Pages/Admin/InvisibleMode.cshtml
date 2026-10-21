@@ -1,0 +1,42 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.InvisibleModeModel
+
+@* BMB-313: Invisible Mode lives here (superadmin only, like the page) - not in the header, where the switch of a node's whole network behaviour sat one
+   click from the sync status. While it is on, the sync icon of the header shows a badge. *@
+@section About {
+    <p>
+        When Invisible Mode is on, this node <strong>rejects every incoming sync call and makes none of its own</strong>: the other nodes cannot see it, and it does
+        not see them. Nothing is lost. You can go on working on this node, and every change you make is kept and delivered to the others when you turn the mode off.
+    </p>
+    <p>
+        Use it when you want a node quiet for a while: on a metered connection, while you copy its data folder, or before you decide what to do about a device you no
+        longer trust. It is not a protection against someone who already holds the vault key. The sync icon in the header shows a badge while it is on, so you do not
+        forget; the <a href="/Network">network map</a> says so too.
+    </p>
+}
+
+<div class="card mt-md" style="max-width:640px;">
+    @if (Model.IsInvisible is null)
+    {
+        <p class="text-muted text-sm">The node did not say whether Invisible Mode is on.</p>
+    }
+    else
+    {
+        <form method="post" asp-page-handler="SetInvisibleMode" id="invisible-mode-form" data-busy="short" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <sl-badge variant="@(Model.IsInvisible == true ? "danger" : "neutral")" pill id="invisible-mode-state">@(Model.IsInvisible == true ? "on" : "off")</sl-badge>
+            <input type="hidden" name="enabled" value="@(Model.IsInvisible == true ? "false" : "true")" />
+            @if (Model.IsInvisible == true)
+            {
+                <sl-button type="submit" variant="default" size="small"><sl-icon slot="prefix" name="eye"></sl-icon> Turn Invisible Mode off</sl-button>
+            }
+            else
+            {
+                <sl-button type="submit" variant="danger" size="small" class="btn-confirm-click"
+                           data-confirm="Turn Invisible Mode on? This node will reject incoming sync calls and stop its own until you turn it off.">
+                    <sl-icon slot="prefix" name="eye-slash"></sl-icon> Turn Invisible Mode on
+                </sl-button>
+            }
+            <span class="text-muted text-sm" data-busy-note hidden role="status">Changing Invisible Mode...</span>
+        </form>
+    }
+</div>

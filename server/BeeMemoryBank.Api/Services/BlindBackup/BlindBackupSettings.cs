@@ -27,8 +27,9 @@ public static class ResticPasswordSources
 }
 
 /// <summary>
-/// Local, non-replicated settings of a blind node's backup subsystem (plan §7): where the restic
-/// repository is, how long snapshots are kept, when backups run, how much CPU they may use.
+/// Local, non-replicated settings of a blind node (plan §7): where the restic repository is, how
+/// long snapshots are kept, when backups run, how much CPU they may use — and, since 2.7, the
+/// node's own limits (what it may store and move for the mesh, <see cref="MaxStoredBytes"/>).
 ///
 /// <para>Deliberately a JSON file (<c>{dataPath}/blind/settings.json</c>) and NOT a vault table:
 /// a reseed replaces the whole vault database (plan §5.2), and a blind node that came back up
@@ -148,6 +149,23 @@ public sealed partial class BlindBackupSettings
     /// Only settable by editing the settings file on the node, never through the Api.
     /// </summary>
     public string? ResticBinary { get; set; }
+
+    /// <summary>
+    /// The most this node may store for the mesh (bytes; the database, blobs, media and baselines).
+    /// Null is no limit, 0 is paused. Set by the console or by <c>BMB_BLIND_MAX_STORED_BYTES</c>
+    /// (a variable that IS set wins over the file at every start; an unset one leaves it alone).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? MaxStoredBytes { get; set; }
+
+    /// <summary>
+    /// The most this node may move for the mesh per local day (bytes; request and response bodies
+    /// of the routes that carry the mesh's data). Null is no limit, 0 is paused, and a value below
+    /// 10 MB a day is refused at the door (<see cref="BlindLimits.BlindNodeLimits.MinTrafficPerDay"/>).
+    /// Set by the console or by <c>BMB_BLIND_MAX_TRAFFIC_PER_DAY</c>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? MaxTrafficPerDay { get; set; }
 
     internal static readonly JsonSerializerOptions JsonOpts = new()
     {

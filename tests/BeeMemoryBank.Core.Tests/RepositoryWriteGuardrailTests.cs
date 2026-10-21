@@ -67,6 +67,10 @@ public class RepositoryWriteGuardrailTests
 
     // Shared reasons for entries whose justification is identical across many call sites, so the
     // list below reads as "what" without repeating "why" fifty times.
+    private const string InviteLedgerReason =
+        "tbl_blind_invite is this node's own ledger of the invitations it made and their redemptions: local by construction (not in SnapshotTables.Replicated), " +
+        "no LamportTs/SourceNodeId on a row, so there is no sync event to log; every change writes its own audit line.";
+
     private const string AuditLogReason =
         "IAuditLogRepository is the local admin-activity audit trail (no LamportTs/SourceNodeId on " +
         "the row, DeleteOlderThanAsync is its only other write) — it is not the sync event log this " +
@@ -149,7 +153,7 @@ public class RepositoryWriteGuardrailTests
         new("server/BeeMemoryBank.Api/Endpoints/SearchMetricsEndpoints.cs", "INodeIdentityRepository", "SetCanGenerateEmbeddingsAsync", NodeLocalSettingReason),
         new("server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs", "INodeIdentityRepository", "SetSessionSettingsAsync", NodeLocalSettingReason),
         // The recovery-key password reset (POST /api/session/recover-access and `bmb user reset-password`) does the same node-local
-        // bookkeeping as the Admin -> Security card in KeyEndpoints above: this node's own "password changed" notice and timestamp.
+        // bookkeeping as the Admin -> Master Password page in KeyEndpoints above: this node's own "password changed" notice and timestamp.
         // The mesh is told separately, by the master_password_changed event (EventLogger, in the endpoint; deferred while locked).
         new("server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs", "INodeIdentityRepository", "ClearMasterPasswordNoticeAsync", NodeLocalSettingReason),
         new("server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs", "INodeIdentityRepository", "SetMasterPasswordChangedLocallyAtAsync", NodeLocalSettingReason),
@@ -259,6 +263,18 @@ public class RepositoryWriteGuardrailTests
             "Blind node trusting a restored device locally: a blind node cannot publish whitelist_add, by design."),
         new("server/BeeMemoryBank.Api/Endpoints/BlindRestoreEndpoints.cs", "IWhitelistRepository", "UpdateAsync",
             "Blind node trusting a restored device locally: a blind node cannot publish whitelist_update, by design."),
+
+        // ── Invitations to a blind copy (release 2.7, migration 041): tbl_blind_invite is this node's own ledger of the invitations it made and the redemptions it
+        // received. It is local by construction (not in SnapshotTables.Replicated, so no snapshot, package or baseline carries a row) and its rows have no
+        // LamportTs/SourceNodeId: there is no event to log. The device a confirmation enrols goes through IEventLogger (whitelist_add) and the sealed-secret service;
+        // each change of the ledger writes its own audit line.
+        new("server/BeeMemoryBank.Api/Services/Blind/BlindInviteService.cs", "IBlindInviteRepository", "TryInsertAsync", InviteLedgerReason),
+        new("server/BeeMemoryBank.Api/Services/Blind/BlindInviteService.cs", "IBlindInviteRepository", "TryRedeemAsync", InviteLedgerReason),
+        new("server/BeeMemoryBank.Api/Services/Blind/BlindInviteService.cs", "IBlindInviteRepository", "TryReplacePairCodeAsync", InviteLedgerReason),
+        new("server/BeeMemoryBank.Api/Services/Blind/BlindInviteService.cs", "IBlindInviteRepository", "TryBeginConfirmAsync", InviteLedgerReason),
+        new("server/BeeMemoryBank.Api/Services/Blind/BlindInviteService.cs", "IBlindInviteRepository", "TryConfirmAsync", InviteLedgerReason),
+        new("server/BeeMemoryBank.Api/Services/Blind/BlindInviteService.cs", "IBlindInviteRepository", "TryExpireAsync", InviteLedgerReason),
+        new("server/BeeMemoryBank.Api/Services/Blind/BlindInviteService.cs", "IBlindInviteRepository", "DeleteFinalBeforeAsync", InviteLedgerReason),
 
         // ── Blind node format-2 seed (step-a-spec 8.6, 9.2): the peers a package's signed blind manifest names are taken into
         // this node's whitelist locally, as the format-1 seed does (BlindSeedService.cs builds them through the concrete
