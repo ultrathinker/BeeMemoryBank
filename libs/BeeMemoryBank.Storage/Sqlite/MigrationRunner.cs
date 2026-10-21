@@ -42,6 +42,9 @@ public class MigrationRunner
     /// <summary>The resource name of the baseline, which is also its ledger row's file name.</summary>
     public const string BaselineResourceName = LegacyMigrationChain.ResourcePrefix + "040_baseline.sql";
 
+    /// <summary>Test seam only: called with the version of a migration this runner has decided to apply, right before it opens the transaction for it.</summary>
+    internal Action<int>? BeforeTransaction { get; set; }
+
     public MigrationRunner(DbConnectionFactory factory, ILogger<MigrationRunner>? logger = null)
     {
         _factory = factory;
@@ -126,9 +129,23 @@ public class MigrationRunner
                 await connection.ExecuteAsync("PRAGMA legacy_alter_table = ON");
             }
 
-            using var transaction = connection.BeginTransaction();
+            BeforeTransaction?.Invoke(version);
+            // IMMEDIATE (Serializable in Microsoft.Data.Sqlite; also what the default is): the write lock is taken here, before anything is decided.
+            using var transaction = connection.BeginTransaction(System.Data.IsolationLevel.Serializable);
             try
             {
+                // The set of applied versions was read before this loop, without a lock. Another program that started together with this one
+                // (the CLI next to a node, two containers on one volume) may have applied and recorded this migration while this one waited for the
+                // lock; its statements are idempotent, but the ledger row is not (UNIQUE on version). So the ledger is asked again, now that no
+                // one else can write, and a migration that is recorded is skipped.
+                var recordedByAnother = await connection.ExecuteScalarAsync<long>(
+                    "SELECT COUNT(*) FROM tbl_migration WHERE version = @version", new { version }, transaction: transaction) > 0;
+                if (recordedByAnother)
+                {
+                    transaction.Rollback();
+                    continue;
+                }
+
                 foreach (var statement in sqlStatements)
                 {
                     // Use a savepoint per statement so that idempotent failures (e.g. "duplicate
