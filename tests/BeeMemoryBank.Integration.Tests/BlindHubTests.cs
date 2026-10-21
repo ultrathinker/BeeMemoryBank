@@ -68,8 +68,18 @@ public sealed class BlindHubWorld : IAsyncLifetime
     }
 
     /// <summary>The hub's row on the PC as it was after joining: no address, no trust, the hub's real key.</summary>
+    /// <summary>The hub answers at most 30 sync challenges a minute to one address; the tests of this world make several rounds in a few seconds (a first load, a pairing, a sync), and on a fast runner the next test found the budget spent (a 429 at the challenge). Every test starts with a full one: the limiter keeps its window in a private field, replaced by an empty one.</summary>
+    private static void ResetChallengeBudget(IServiceProvider services)
+    {
+        var limiter = services.GetRequiredService<BeeMemoryBank.Api.Endpoints.SyncEndpoints.SyncChallengeRateLimiter>();
+        var field = typeof(BeeMemoryBank.Api.Endpoints.SyncEndpoints.SyncChallengeRateLimiter).GetField("_limiter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        field.SetValue(limiter, new BeeMemoryBank.Hosting.AspNetCore.SlidingWindowRateLimiter(30, TimeSpan.FromMinutes(1)));
+    }
+
     public async Task ResetAsync()
     {
+        ResetChallengeBudget(Hub.Services);
+        ResetChallengeBudget(Pc.Services);
         Hub.Certificate = CaLeaf;
         using var scope = Pc.Services.CreateScope();
         var repo = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
