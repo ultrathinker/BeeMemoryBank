@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.7.1 (2026-10-22)
+
+A fix release. Two processes that start at the same moment on a database that still has to be moved to the 2.7 schema (for example a node and a command-line tool started together by a script) could both write the same step into the migration ledger, and one of them stopped with an error. The runner now reads the ledger again once it holds the write lock, so the second process finds the work done and goes on. Nothing else changes: no new feature, no new step in the schema (it stays at version 42), and no action is needed for databases or blind copies.
+
+### Fixed
+
+- **The migration runner is safe when two processes start together.** After it takes the write lock it asks the ledger again, so a step that another process has just applied is skipped instead of failing on the ledger's unique key. A test starts several runners at once on a database that needs steps 041 and 042.
+
+### Changed
+
+- Tests only: the rows of the Admin template guard have distinct names, the check of the OS auto-unlock words runs on a Mac only, and every blind hub test starts with a full challenge budget.
+
 #### 2.7.0 (2026-10-21)
 
 The blind copy (Android, iPhone, Windows, macOS) can hold the copies of several memory banks, is added from a one-time invitation, and can be limited. **A blind copy you already have keeps working as it is:** it becomes the first account of the app, in place, with no limits and any network, until you set some. A server blind node (Docker, service) gets two limits of its own and can join with the same kind of invitation by one command. The database schema goes to version 42 (see "Notes for upgrading"). What this release does not do is at the end of this block.
