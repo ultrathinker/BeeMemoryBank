@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.7.2 (2026-10-23)
+
+A fix and tidy-up release for the web pages of Admin. Nothing is added to the data, the protocol or the database schema (it stays at version 42), and no action is needed for databases or blind copies. Two things change on the screen. First, an Admin page that shows a wide table, such as Trusted Nodes with its nine columns, was held to the width of the reading column (880 pixels), so the table scrolled sideways inside its card even on a wide screen; such a page now uses the width the window has, up to 1240 pixels, while text and the other cards keep their width. Second, six functions that opened a second page from a button now live on their own Admin page: you no longer click through to another page to do the work.
+
+### Fixed
+
+- **Admin: a wide table fits on the page.** A page whose table sits directly in a card is no longer capped at 880 pixels; it takes up to 1240 pixels or the width of the window, whichever is less. In a window narrower than the table, the table still scrolls inside its card.
+- **Admin: the OS auto-unlock switch is in one place.** It was on two pages (Database encryption and OS Auto-Unlock); it is now only on OS Auto-Unlock. The Database encryption page no longer repeats an element id.
+
+### Changed
+
+- **Admin: no second page behind a button.** Blind nodes (with the Android blind copy card), Connect a device, Hard Delete, Database encryption (Storage protection) and Trusted Nodes (granting superadmin to devices that joined with the password, now a card on that page) each hold their whole function on their own Admin page. The old addresses (/BlindNodes, /AndroidBlindCopy, /Connect, /HardDelete, /VaultEncryption, /PromotePasswordPeers) still work and send you to the new page.
+- An error on the Blind nodes page lists the devices to blame under the page title.
+
 #### 2.7.1 (2026-10-22)
 
 A fix release. Two processes that start at the same moment on a database that still has to be moved to the 2.7 schema (for example a node and a command-line tool started together by a script) could both write the same step into the migration ledger, and one of them stopped with an error. The runner now reads the ledger again once it holds the write lock, so the second process finds the work done and goes on. Nothing else changes: no new feature, no new step in the schema (it stays at version 42), and no action is needed for databases or blind copies.

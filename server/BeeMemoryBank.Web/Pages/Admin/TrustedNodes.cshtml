@@ -8,7 +8,7 @@
         answers, when it was last in contact (in which direction) and what it may do.
     </p>
     <p>
-        <strong>Superadmin.</strong> A device that joined with the master password is a superadmin. Only a superadmin can revoke other devices, hard-delete content
+        <strong>Superadmin.</strong> A device that joined with the master password is a superadmin. A device that joined before that rule is still recorded as an ordinary peer; while there is one, a card above the table offers to grant it superadmin. Only a superadmin can revoke other devices, hard-delete content
         across the whole network and restore every node from its own snapshot. <strong>Auto-restore</strong> and <strong>Auto-DEK rotation</strong> decide whether a
         restore or a data-key rotation that this device starts is applied here without asking you. Both can replace or re-encrypt everything, so switch them on only for
         devices you fully trust, such as your own. <strong>Change URL</strong> is for a device that moved to another address; the button next to it sets a node up so
@@ -20,20 +20,44 @@
     </p>
 }
 
-@{ var passwordPeersToPromote = BeeMemoryBank.Web.Pages.PromotePasswordPeersModel.CandidatesOf(Model.Whitelist); }
-@if (passwordPeersToPromote.Count > 0)
+@if (Model.PasswordPeersToPromote.Count > 0)
 {
-    <!-- BMB-42: devices joined before "whoever knows the master password is a superadmin" -->
-    <sl-alert variant="warning" open style="margin-bottom:16px;">
-        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-        <strong>@passwordPeersToPromote.Count device(s) joined with the master password are not superadmins yet.</strong>
-        Their hard deletes and password changes are refused by the rest of the network, so the copies drift apart.
-        <div style="margin-top:8px;">
-            <sl-button size="small" variant="warning" href="/PromotePasswordPeers">
-                <sl-icon slot="prefix" name="shield-check"></sl-icon> Grant superadmin to all devices joined with the password&hellip;
-            </sl-button>
-        </div>
-    </sl-alert>
+    <!-- BMB-42: devices joined before "whoever knows the master password is a superadmin"; the card is here only while there are any -->
+    <div class="card" id="promote-password-peers" style="margin-bottom:16px;border-color:var(--sl-color-warning-600);">
+        <h3 style="margin:0 0 8px;"><sl-icon name="shield-check"></sl-icon> Grant superadmin to devices joined with the password</h3>
+        <sl-alert variant="warning" open style="margin-bottom:12px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>@Model.PasswordPeersToPromote.Count device(s) joined with the master password are not superadmins yet.</strong>
+            Their hard deletes and password changes are refused by the rest of the network, so the copies drift apart.
+        </sl-alert>
+        <p style="margin-bottom:12px;">
+            Whoever knows the master password is a superadmin. These devices joined before that
+            rule, so the network still treats them as ordinary peers: a hard delete or a password
+            change made on them is applied there but refused everywhere else, and the copies drift
+            apart. Granting them superadmin tells every node, one device at a time.
+        </p>
+        <p class="text-muted text-sm" style="margin-bottom:16px;">
+            If you demoted one of these devices on purpose, untick it. Blind nodes never appear here.
+        </p>
+        <form data-busy="short" method="post" asp-page-handler="PromotePasswordPeers">
+            @foreach (var c in Model.PasswordPeersToPromote)
+            {
+                <div style="margin-bottom:8px;">
+                    <label>
+                        <input type="checkbox" name="nodeIds" value="@c.NodeId" checked />
+                        <strong>@c.DisplayName</strong>
+                        <code class="text-sm">@c.NodeId.ToString()[..8]&hellip;</code>
+                        <span class="text-muted text-sm">@(c.ApiAddress ?? "")</span>
+                    </label>
+                </div>
+            }
+            <div style="margin-top:16px;">
+                <sl-button type="submit" variant="warning" size="small">
+                    <sl-icon slot="prefix" name="shield-check"></sl-icon> Grant superadmin to the ticked devices
+                </sl-button>
+            </div>
+        </form>
+    </div>
 }
 
 <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:8px;">
@@ -43,33 +67,34 @@
 @if (Model.Whitelist != null && Model.Whitelist.Count > 0)
 {
     <div class="card" style="padding:0;overflow:hidden;">
-        <table class="version-table">
+        @* The columns follow the width of the CARD (site.css, Admin): below 1060px the node id and the date added go, below 860px a row stacks (name, address, status, the two switches with their words, last contact, the icons). *@
+        <table class="version-table admin-stack">
             <thead>
                 <tr>
-                    <th>Name</th>
-                    <th>Node ID</th>
-                    <th>API Address</th>
-                    <th>Status</th>
-                    <th>
+                    <th class="col-name">Name</th>
+                    <th class="hide-lt-1060">Node ID</th>
+                    <th class="col-api">API Address</th>
+                    <th class="col-status">Status</th>
+                    <th class="col-auto">
                         Auto-restore
                         <sl-tooltip content="When ON, snapshot restores initiated by this peer apply automatically without your confirmation. The peer can replace your articles, folders, and tags. Enable only for peers you fully trust (e.g. your own devices). When OFF, a received restore remains pending; there is no UI prompt or manual approval path. If you later switch it on, the node applies the pending restore after its next sync or unlock." placement="top">
                             <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
                         </sl-tooltip>
                     </th>
-                    <th>
+                    <th class="col-auto">
                         Auto-DEK rotation
                         <sl-tooltip content="When ON, DEK rotation events initiated by this peer apply automatically without your confirmation. DEK rotation is more destructive than snapshot restore — it re-encrypts ALL article bodies, versions, and media with a new key. Enable only for peers you fully trust." placement="top">
                             <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
                         </sl-tooltip>
                     </th>
-                    <th>Added</th>
-                    <th>
+                    <th class="hide-lt-1060">Added</th>
+                    <th class="col-contact">
                         Last contact
                         <sl-tooltip content="The last time this node and that one made contact, either way (we -> it: this node called; it -> us: it called), whether or not changes moved. The last time changes were delivered is shown under it.">
                             <sl-icon name="info-circle" style="color:var(--text-secondary);font-size:0.85rem;cursor:help;"></sl-icon>
                         </sl-tooltip>
                     </th>
-                    <th style="text-align:right;">Actions</th>
+                    <th class="col-actions">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -80,10 +105,10 @@
                     if (!isSelf && Model.NodeSyncStatus != null)
                         Model.NodeSyncStatus.TryGetValue(entry.NodeId, out contact);
                     <tr>
-                        <td><strong>@entry.DisplayName</strong></td>
-                        <td><code class="text-sm">@entry.NodeId.ToString()[..8]&hellip;</code></td>
-                        <td class="text-muted text-sm">@(entry.ApiAddress ?? "—")</td>
-                        <td>
+                        <td class="col-name"><strong title="Node ID @entry.NodeId, added @entry.CreatedAt.ToString("d")">@entry.DisplayName</strong></td>
+                        <td class="hide-lt-1060"><code class="text-sm">@entry.NodeId.ToString()[..8]&hellip;</code></td>
+                        <td class="col-api text-muted text-sm" data-label="API address">@(entry.ApiAddress ?? "—")</td>
+                        <td class="col-status" data-label="Status">
                             <sl-badge variant="@(entry.Status == "active" ? "success" : "neutral")" pill>
                                 @entry.Status
                             </sl-badge>
@@ -106,7 +131,7 @@
                                 </sl-tooltip>
                             }
                         </td>
-                        <td>
+                        <td class="col-auto@(isSelf ? " is-self" : "")" data-label="Auto-restore">
                             @if (!isSelf)
                             {
                                 <form data-busy="short" method="post" asp-page-handler="SetAutoAcceptRestore" style="display:inline;" id="autoaccept-form-@entry.NodeId">
@@ -125,7 +150,7 @@
                                 <span class="text-muted text-sm">—</span>
                             }
                         </td>
-                        <td>
+                        <td class="col-auto@(isSelf ? " is-self" : "")" data-label="Auto-DEK rotation">
                             @if (!isSelf)
                             {
                                 <form data-busy="short" method="post" asp-page-handler="SetAutoAcceptDekRotation" style="display:inline;" id="autoaccept-dek-form-@entry.NodeId">
@@ -144,8 +169,8 @@
                                 <span class="text-muted text-sm">—</span>
                             }
                         </td>
-                        <td class="text-muted text-sm">@entry.CreatedAt.ToString("d")</td>
-                        <td class="text-muted text-sm" data-contact-state="@(contact?.State ?? "unknown")">
+                        <td class="hide-lt-1060 text-muted text-sm">@entry.CreatedAt.ToString("d")</td>
+                        <td class="col-contact text-muted text-sm" data-label="Last contact" data-contact-state="@(contact?.State ?? "unknown")">
                             @if (isSelf)
                             {
                                 <text>&mdash;</text>
@@ -180,9 +205,10 @@
                                 <span>No contact since this node started</span>
                             }
                         </td>
-                        <td style="text-align:right;">
+                        <td class="col-actions">
                             @if (!isSelf)
                             {
+                                <div class="row-actions">
                                 <sl-icon-button name="link-45deg" label="Change URL"
                                     class="btn-open-change-url"
                                     data-node-id="@entry.NodeId" data-node-name="@entry.DisplayName" data-current-url="@entry.ApiAddress">
@@ -219,6 +245,7 @@
                                         data-name="@entry.DisplayName">
                                     </sl-icon-button>
                                 </form>
+                                </div>
                             }
                         </td>
                     </tr>

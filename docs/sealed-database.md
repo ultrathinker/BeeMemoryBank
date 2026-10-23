@@ -57,9 +57,9 @@ What encryption does **not** protect (the residual, so that nobody is surprised)
 
 ## Before you start: the preflight
 
-Open **Admin > Database encryption** (`/VaultEncryption`), or run `bmb vault seal` (it calls the running node and
-asks for the master password). Once the database is encrypted the same card and page are called **Storage protection**:
-they show the status ("encrypted since ...", open or closed) and, on a server, the permanent *Start unlocked after a
+Open **Admin > Database encryption** (`/Admin/StorageProtection`; the old address `/VaultEncryption` sends you there), or run `bmb vault seal` (it calls the running node and
+asks for the master password). Once the database is encrypted the same page shows its **storage protection**:
+the status ("encrypted since ...", open or closed) and, on a server, the permanent *Start unlocked after a
 restart* switch, and offer no encryption any more. The page runs a preflight and lists what is in the way. Each blocker has a code and a
 sentence; the migration starts only when none is left.
 
@@ -249,7 +249,7 @@ confirmation say:
 > your password. If someone gets this computer or its disk, their protection rests only on your Windows/macOS account
 > password (and on disk encryption, if you use it).
 
-**Server: "Start unlocked after a restart"** (`/VaultEncryption`, or `bmb vault auto-unlock enable|disable|status`;
+**Server: "Start unlocked after a restart"** (**Admin > Database encryption**, `/Admin/StorageProtection`, or `bmb vault auto-unlock enable|disable|status`;
 plain servers get it too). Turning it on takes two steps: the warning
 
 > Strongly not recommended on a server. With this on, the key that opens this server's database is kept on the server

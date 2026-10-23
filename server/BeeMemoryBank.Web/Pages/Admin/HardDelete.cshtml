@@ -12,13 +12,133 @@
         page asks you to confirm each deletion after showing what it will remove.
     </p>
     <p>
-        Use it for cleaning up junk imports, or for data that must not persist anywhere. For ordinary tidying, delete from the tree instead. The Hard Delete page lists the items with a filter, and
-        has an audit log of what was removed.
+        Use it for cleaning up junk imports, or for data that must not persist anywhere. For ordinary tidying, delete from the tree instead. Below, the list shows the items with a filter, and
+        the audit log shows what was removed.
     </p>
 }
 
-<div class="card mt-md" style="max-width:480px;">
-    <sl-button variant="danger" size="small" href="/HardDelete">
-        <sl-icon slot="prefix" name="trash"></sl-icon> Open Hard Delete
+<div style="display:flex; justify-content:flex-end; margin:16px 0 12px;">
+    <sl-button variant="default" size="small" id="btn-open-audit">
+        <sl-icon slot="prefix" name="journal-text"></sl-icon> View Audit Log
     </sl-button>
 </div>
+
+<div class="card" id="hard-delete-filter" style="margin-bottom:16px;">
+    <div style="display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap;">
+        <sl-input id="filter-input" label="Filter (path or title)" placeholder="Type to filter..." style="flex:1; min-width:200px;" clearable></sl-input>
+
+        <sl-select id="status-select" label="Status" value="All" style="width:150px;">
+            <sl-option value="All">All</sl-option>
+            <sl-option value="ActiveOnly">Active Only</sl-option>
+            <sl-option value="DeletedOnly">Soft Deleted</sl-option>
+        </sl-select>
+
+        <sl-select id="pagesize-select" label="Page Size" value="100" style="width:100px;">
+            <sl-option value="100">100</sl-option>
+            <sl-option value="250">250</sl-option>
+            <sl-option value="500">500</sl-option>
+        </sl-select>
+    </div>
+</div>
+
+<div id="loading-overlay" style="display:none; text-align:center; padding:40px;">
+    <sl-spinner style="font-size: 3rem;"></sl-spinner>
+</div>
+
+@* The table is the direct child of the card: that is the layout of a page with a wide table (site.css, Admin), which gives the page up to 1240px instead of scrolling inside 880. *@
+<div class="card" id="table-container">
+    <table class="bmb-table" style="width:100%; border-collapse:collapse;">
+        <thead>
+            <tr>
+                <th class="col-icon"></th>
+                <th class="sortable" data-sort="title" style="cursor:pointer;user-select:none;">Path / Title <span class="sort-arrow"></span></th>
+                <th class="sortable col-status" data-sort="status" style="cursor:pointer;user-select:none;">Status <span class="sort-arrow"></span></th>
+                <th class="sortable col-created hide-lt-620" data-sort="createdAt" style="cursor:pointer;user-select:none;">Created <span class="sort-arrow"></span></th>
+                <th class="sortable col-size hide-lt-620" data-sort="size" style="cursor:pointer;user-select:none;">Size <span class="sort-arrow"></span></th>
+                <th class="col-actions">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="list-body">
+            <!-- Loaded via JS -->
+        </tbody>
+    </table>
+
+    <div id="pagination-container" style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
+        <span id="pagination-info" style="font-size:var(--sl-font-size-small);color:var(--sl-color-neutral-600);"></span>
+        <div style="display:flex; gap:8px;">
+            <sl-button id="btn-prev" size="small" disabled>Previous</sl-button>
+            <sl-button id="btn-next" size="small" disabled>Next</sl-button>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Dialog -->
+<sl-dialog id="dlg-confirm-delete" label="Confirm Hard Delete">
+    <sl-alert variant="danger" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        <strong>WARNING:</strong> This operation is permanent and cannot be undone. It will physically remove data from the database and disk on all nodes.
+    </sl-alert>
+
+    <div id="delete-preview" style="margin-bottom:16px; padding:12px; background:var(--sl-color-neutral-50); border-radius:var(--sl-border-radius-medium);">
+        <sl-spinner id="preview-spinner"></sl-spinner>
+        <div id="preview-content" style="display:none;">
+            <p id="preview-text"></p>
+        </div>
+    </div>
+
+    <p id="confirm-instruction"></p>
+    <sl-input id="confirm-input" placeholder="Type exactly as above to confirm" autocomplete="off" style="margin-top:8px;"></sl-input>
+
+    <sl-checkbox id="confirm-checkbox" style="margin-top:16px;">I understand this cannot be undone</sl-checkbox>
+
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-confirm-delete">Cancel</sl-button>
+
+    <sl-button slot="footer" id="btn-final-delete" variant="danger" disabled>Delete Forever</sl-button>
+</sl-dialog>
+
+<!-- Restore Confirmation Dialog -->
+<sl-dialog id="dlg-confirm-restore" label="Restore">
+    <sl-alert variant="primary" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="info-circle"></sl-icon>
+        This will create a <strong>new copy</strong> <code id="restore-target-name"></code> at the root. The original stays in the trash — you can hard-delete it separately.
+        <br/><br/>
+        <span id="restore-article-note" style="display:none;">Content, tags, and ciphertext are preserved. Comments and version history are not copied.</span>
+        <span id="restore-folder-note" style="display:none;">The subfolder structure (deleted together with this folder) will be recreated as empty folders. Articles from the deleted folder are already orphaned and live in the root.</span>
+    </sl-alert>
+    <sl-button slot="footer" id="btn-restore-cancel" variant="default">Cancel</sl-button>
+    <sl-button slot="footer" id="btn-restore-confirm" variant="success">
+        <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon>
+        Create copy
+    </sl-button>
+</sl-dialog>
+
+<!-- Audit Log Dialog -->
+<sl-dialog id="dlg-audit" label="Hard Delete Audit Log" style="--width: 80vw;">
+    <div id="audit-loading" style="text-align:center; padding:20px;">
+        <sl-spinner></sl-spinner>
+    </div>
+    <div id="audit-container" style="max-height:60vh; overflow-y:auto; display:none;">
+        <table class="bmb-table audit-table" style="width:100%; border-collapse:collapse; font-size:var(--sl-font-size-small);">
+            <thead>
+                <tr>
+                    <th class="col-date">Date</th>
+                    <th class="col-entity">Entity</th>
+                    <th class="col-counts">Counts (A/F/M)</th>
+                    <th class="col-actor">Actor / Node</th>
+                </tr>
+            </thead>
+            <tbody id="audit-body"></tbody>
+        </table>
+    </div>
+    <div slot="footer" style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <span id="audit-info" style="font-size:var(--sl-font-size-small); color:var(--sl-color-neutral-600);"></span>
+        <div style="display:flex; gap:8px;">
+            <sl-button id="audit-prev" size="small" disabled>
+                <sl-icon slot="prefix" name="chevron-left"></sl-icon> Prev
+            </sl-button>
+            <sl-button id="audit-next" size="small" disabled>
+                Next <sl-icon slot="suffix" name="chevron-right"></sl-icon>
+            </sl-button>
+        </div>
+    </div>
+</sl-dialog>

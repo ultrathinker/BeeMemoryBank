@@ -1,6 +1,8 @@
 # Walks every page of the web UI at several window sizes, saves a screenshot per page and size,
-# and measures what the eye would catch: page-level horizontal scroll, elements running past the
-# window edge, clipped buttons/inputs/text, and header items wrapping onto extra lines.
+# and measures what the eye would catch: horizontal scroll of the page (the window AND the scrolling
+# column .main-content, which is where the app scrolls), elements running past the window edge,
+# clipped buttons/inputs/text, header items wrapping onto extra lines, and - on a line of their own -
+# the cards and boxes that scroll sideways inside the page (a table that is wider than its card).
 #
 #   python shot.py <outdir> --password <admin password> [--base http://127.0.0.1:5310] [--pages Tree,Search] [--sizes 360x740,800x600]
 #
@@ -22,7 +24,10 @@ sizes = [tuple(int(v) for v in s.split("x")) for s in args.sizes.split(",")]
 MEASURE = r"""
 () => {
   const vw = document.documentElement.clientWidth, vh = window.innerHeight;
-  const out = { pageScrollX: document.documentElement.scrollWidth - vw, offRight: [], clipped: [], wrapped: [] };
+  // The app scrolls .main-content, not the document: a page that is too wide shows a sideways scrollbar there and leaves the document at 0.
+  const main = document.querySelector('.main-content');
+  const mainScrollX = main ? main.scrollWidth - main.clientWidth : 0;
+  const out = { pageScrollX: Math.max(document.documentElement.scrollWidth - vw, mainScrollX), mainScrollX, offRight: [], clipped: [], wrapped: [], cardScroll: [] };
   const name = el => {
     let s = el.tagName.toLowerCase();
     if (el.id) s += '#' + el.id;
@@ -36,9 +41,10 @@ MEASURE = r"""
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   };
-  // Is the element inside something that scrolls horizontally on purpose (tables, code)?
+  // Is the element inside something that scrolls horizontally on purpose (tables, code)? The page's own column is not "on purpose": that is the defect.
   const inHScroller = el => {
     for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (p === main) continue;
       const ox = getComputedStyle(p).overflowX;
       if ((ox === 'auto' || ox === 'scroll') && p.scrollWidth > p.clientWidth + 1) return true;
     }
@@ -69,7 +75,13 @@ MEASURE = r"""
     const r = el.getBoundingClientRect();
     if (r.height > lh * 1.8 && r.height < 200) out.wrapped.push(`${name(el)} h=${Math.round(r.height)}`);
   }
-  for (const k of ['offRight', 'clipped', 'wrapped']) out[k] = [...new Set(out[k])].slice(0, 40);
+  // Cards and boxes that scroll sideways inside the page: the content is wider than the box, and the person has to swipe to see the rest (a hidden column, a hidden button).
+  for (const el of document.querySelectorAll('body *')) {
+    if (el === main || !visible(el)) continue;
+    const ox = getComputedStyle(el).overflowX;
+    if ((ox === 'auto' || ox === 'scroll') && el.scrollWidth > el.clientWidth + 1) out.cardScroll.push(`${name(el)} [scroll ${el.scrollWidth} in ${el.clientWidth}]`);
+  }
+  for (const k of ['offRight', 'clipped', 'wrapped', 'cardScroll']) out[k] = [...new Set(out[k])].slice(0, 40);
   return out;
 }
 """
@@ -112,7 +124,12 @@ with sync_playwright() as p:
         "Activity": "/Activity",
         "Admin": "/Admin",
         "RemoteAccounts": "/RemoteAccounts",
-        "Connect": "/Connect",
+        "Connect": "/Admin/ConnectDevice",
+        "BlindNodes": "/Admin/BlindNodes",
+        "HardDelete": "/Admin/HardDelete",
+        "StorageProtection": "/Admin/StorageProtection",
+        "OsAutoUnlock": "/Admin/OsAutoUnlock",
+        "TrustedNodes": "/Admin/TrustedNodes",
         "AI": "/AI",
     }
     if args.pages:
@@ -137,7 +154,9 @@ with sync_playwright() as p:
             report[f"{key}-{w}x{h}"] = m
             flags = len(m["offRight"]) + len(m["clipped"]) + len(m["wrapped"]) + (1 if m["pageScrollX"] > 0 else 0)
             eta = (time.time() - t0) / n * (total - n)
-            print(f"[{n}/{total}] {key} {w}x{h} issues={flags} scrollX={m['pageScrollX']} eta={eta:.0f}s", flush=True)
+            print(f"[{n}/{total}] {key} {w}x{h} issues={flags} scrollX={m['pageScrollX']} (main {m['mainScrollX']}) eta={eta:.0f}s", flush=True)
+            if m["cardScroll"]:
+                print(f"    cards that scroll sideways ({len(m['cardScroll'])}): " + "; ".join(m["cardScroll"]), flush=True)
 
     # Interactive states on a phone-sized window: the tree drawer and the header menu open.
     page.set_viewport_size({"width": 360, "height": 740})

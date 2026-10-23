@@ -9,6 +9,10 @@
 }
 @section Scripts {
     <script src="/js/pages/admin.js" asp-append-version="true"></script>
+    @foreach (var script in admin.PageScripts)
+    {
+        <script src="@script" asp-append-version="true"></script>
+    }
     @await RenderSectionAsync("Scripts", required: false)
 }
 

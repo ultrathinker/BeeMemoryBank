@@ -552,9 +552,10 @@ public sealed class AdminPagesTests : IAsyncLifetime
 
     // ---------------------------------------------------------------- every handler works from its new page
 
-    private enum Expect { Message, NoMessage, BadRequest, DownloadRefused }
+    /// <summary><c>Page</c>: the handler answers the page itself, not a redirect (a secret or what the operator typed must not travel in an address), and the page shows the element named in <c>Shown</c>.</summary>
+    private enum Expect { Message, NoMessage, BadRequest, DownloadRefused, Page }
 
-    private sealed record Case(string Page, string Handler, Expect Expect, Dictionary<string, string>? Fields = null, string Method = "POST");
+    private sealed record Case(string Page, string Handler, Expect Expect, Dictionary<string, string>? Fields = null, string Method = "POST", string? Shown = null);
 
     private static Dictionary<string, string> F(params (string Key, string Value)[] pairs) => pairs.ToDictionary(p => p.Key, p => p.Value);
 
@@ -582,9 +583,19 @@ public sealed class AdminPagesTests : IAsyncLifetime
         new("/Admin/SoftwareUpdates", "ApplyUpdate", Expect.Message),
         new("/Admin/SoftwareUpdates", "ResetUpdate", Expect.Message),
 
+        new("/Admin/BlindNodes", "Add", Expect.Page, F(("code", "not a pair code")), Shown: "id=\"admin-page-error\""),
+        new("/Admin/BlindNodes", "Invite", Expect.Page, F(("label", "Anna"), ("sourceName", "Alex"), ("lifetime", "30"), ("address", "https://localhost:1")), Shown: "id=\"invite-error\""),
+        new("/Admin/BlindNodes", "ConfirmInvite", Expect.Message, F(("inviteId", Nobody), ("password", "not the password"))),
+        new("/Admin/BlindNodes", "RefuseInvite", Expect.Message, F(("inviteId", Nobody))),
+        new("/Admin/BlindNodes", "WithdrawInvite", Expect.Message, F(("inviteId", Nobody))),
+        new("/Admin/BlindNodes", "Reseed", Expect.Message, F(("nodeId", Nobody))),
+        new("/Admin/BlindNodes", "Disconnect", Expect.Message, F(("nodeId", Nobody))),
+        new("/Admin/BlindNodes", "PairPhone", Expect.Page, F(("code", "not a phone code"), ("listenerId", Nobody)), Shown: "id=\"phone-error\""),
+
         new("/Admin/TrustedNodes", "SetPeerSuperadmin", Expect.Message, F(("nodeId", Nobody), ("isSuperadmin", "true"))),
         new("/Admin/TrustedNodes", "RevokeNode", Expect.Message, F(("nodeId", Nobody))),
         new("/Admin/TrustedNodes", "ChangeNodeAddress", Expect.Message, F(("nodeId", Nobody), ("newApiAddress", "http://127.0.0.1:1"), ("password", "not the password"))),
+        new("/Admin/TrustedNodes", "PromotePasswordPeers", Expect.Message, F(("nodeIds", Nobody))),
         new("/Admin/TrustedNodes", "SetBlindCallable", Expect.Message, F(("nodeId", Nobody), ("trust", "off"), ("password", "not the password"))),
         new("/Admin/TrustedNodes", "SetAutoAcceptRestore", Expect.Message, F(("nodeId", Nobody), ("autoAccept", "true"))),
         new("/Admin/TrustedNodes", "SetAutoAcceptDekRotation", Expect.Message, F(("nodeId", Nobody), ("autoAccept", "true"))),
@@ -600,6 +611,15 @@ public sealed class AdminPagesTests : IAsyncLifetime
 
         new("/Admin/MasterPassword", "ChangeMasterPassword", Expect.Message, F(("oldPassword", "not the password"), ("newPassword", "Another-Pass-9"))),
         new("/Admin/MasterPassword", "DismissPasswordNotice", Expect.Message),
+
+        new("/Admin/ConnectDevice", "Enable", Expect.Page, Shown: "id=\"connect-device\""),
+        new("/Admin/ConnectDevice", "Disable", Expect.Page, Shown: "id=\"connect-device\""),
+        new("/Admin/ConnectDevice", "Firewall", Expect.Page, Shown: "id=\"connect-device\""),
+
+        new("/Admin/StorageProtection", "Seal", Expect.Message, F(("password", "not the password"))),
+        new("/Admin/StorageProtection", "Erase", Expect.Message, F(("password", "not the password"), ("paths", "no-such-copy.db"))),
+        new("/Admin/StorageProtection", "EnableServerAutoUnlock", Expect.Message, F(("password", "not the password"), ("confirmation", "START UNLOCKED"))),
+        new("/Admin/StorageProtection", "DisableServerAutoUnlock", Expect.Message, F(("password", "not the password"))),
 
         new("/Admin/OsAutoUnlock", "EnableAutoUnlock", Expect.Message),
         new("/Admin/OsAutoUnlock", "DisableAutoUnlock", Expect.Message),
@@ -694,6 +714,11 @@ public sealed class AdminPagesTests : IAsyncLifetime
                 response.StatusCode.Should().Be(HttpStatusCode.BadRequest, $"{handler} answers a refusal in words, not with the page");
                 (await response.Content.ReadAsStringAsync()).Should().NotBeNullOrWhiteSpace();
                 break;
+            case Expect.Page:
+                response.StatusCode.Should().Be(HttpStatusCode.OK, handler);
+                var shown = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
+                shown.Should().Contain($"data-admin-page=\"{page}\"", "the answer is the page itself").And.Contain(c.Shown!, $"{handler} says what came of it, on the page");
+                break;
             case Expect.NoMessage:
                 response.StatusCode.Should().Be(HttpStatusCode.Redirect, handler);
                 WebUtility.UrlDecode(response.Headers.Location!.OriginalString).Should().Be(page, $"{handler} comes back to its own page");
@@ -771,18 +796,10 @@ public sealed class AdminPagesTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ThePagesThatOnlyPointElsewhere_PointToTheRightPlace()
+    public async Task LockServer_IsTheOnePageWhoseButtonLeadsToAnAction_AndTheActionStillAnswers()
     {
-        (await GetAsync("/Admin/ConnectDevice")).Should().Contain("href=\"/Connect\"");
-        (await GetAsync("/Admin/BlindNodes")).Should().Contain("href=\"/BlindNodes\"");
-        (await GetAsync("/Admin/HardDelete")).Should().Contain("href=\"/HardDelete\"");
+        // /Lock is an action, not a page that holds a function: it locks the node and signs out. The page explains what it does and what comes back.
         (await GetAsync("/Admin/LockServer")).Should().Contain("href=\"/Lock\"");
-        (await GetAsync("/Admin/StorageProtection")).Should().Contain("href=\"/VaultEncryption\"");
-        foreach (var target in new[] { "/Connect", "/BlindNodes", "/HardDelete", "/VaultEncryption" })
-        {
-            using var response = await _admin.GetAsync(target);
-            response.StatusCode.Should().Be(HttpStatusCode.OK, target);
-        }
     }
 
     [Fact]

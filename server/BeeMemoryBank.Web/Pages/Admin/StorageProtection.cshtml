@@ -1,9 +1,9 @@
 @page
 @model BeeMemoryBank.Web.Pages.Admin.StorageProtectionModel
 @{
-    // BMB-305: an encrypted node has nothing left to switch on here: this is the node's storage protection (its status and, on a server, whether it
-    // starts unlocked after a restart). A node whose database is still a plain file keeps "Database encryption" with its way to "Encrypt this node".
-    var storageProtected = Model.VaultStatus is { IsSealed: true };
+    // BMB-305: an encrypted node has nothing left to switch on here: the page is the status of its storage protection (and, on a server, whether it starts
+    // unlocked after a restart). A node whose database is still a plain file is offered "Encrypt this node". The title is "Database encryption" in both states.
+    var status = Model.VaultStatus;
 }
 
 @section About {
@@ -12,36 +12,235 @@
         folder, tag, user name or activity line is readable in any file the node writes. The key is opened by your master password each time the node starts, and a locked node holds
         no key in memory. A node that is set up today is encrypted from its first day.
     </p>
-    <p>
-        A node set up by an earlier version may still keep its database as a plain file. No update encrypts it for you: you do it once, on purpose, from the encryption page. Encrypting
-        <strong>keeps no copy of the unencrypted database</strong>, so there is no way back from the node: take your own backup first if you may want one.
-    </p>
+    @if (status is { IsSealed: true })
+    {
+        <p>
+            The database of this node is encrypted, and there is nothing left to switch on. Encrypting it <strong>kept no copy of the unencrypted database</strong>: there is no way back from the node.
+        </p>
+    }
+    else
+    {
+        <p>
+            A node set up by an earlier version may still keep its database as a plain file. No update encrypts it for you: you do it once, on purpose, with <strong>Encrypt this node</strong> below.
+            Encrypting <strong>keeps no copy of the unencrypted database</strong>, so there is no way back from the node: take your own backup first if you may want one.
+        </p>
+    }
     <p>
         This protects the files, not a running, unlocked node. If you also switch on <a href="/Admin/OsAutoUnlock">OS auto-unlock</a>, the computer opens the vault by itself and a
-        stolen disk can be read again. On a server, the encryption page is also where you choose whether it opens by itself after a restart.
+        stolen disk can be read again. On a server, this page is also where you choose whether it opens by itself after a restart.
     </p>
 }
 
-<div class="card mt-md" id="storage-protection" style="max-width:640px;">
-    <p class="text-muted text-sm" style="margin-bottom:12px;">
-        @if (Model.VaultStatus is null)
+@if (status is null)
+{
+    <sl-alert variant="warning" open style="max-width:720px;">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        The node did not answer. Reload this page in a moment.
+    </sl-alert>
+}
+else if (status.IsSealed)
+{
+    <h3 id="card-database-encryption" style="margin-bottom:12px;"><sl-icon name="shield-check"></sl-icon> Status</h3>
+    <div class="card" id="vault-sealed-card" style="margin-bottom:32px;">
+        <sl-badge variant="success" pill style="margin-bottom:12px;">encrypted</sl-badge>
+        <p style="margin:0 0 8px 0;">
+            This node's database is encrypted@(status.SealedAt is { Length: > 0 } at && DateTime.TryParse(at, out var sealedAt) ? $" since {sealedAt.ToUniversalTime():yyyy-MM-dd HH:mm} UTC" : "").
+            It is @(status.State == "Open" ? "open" : "closed") now.
+        </p>
+        @if (status.Migration?.WipePending is { Count: > 0 } pending)
         {
-            <text>The node did not say how its database is stored. Try again in a moment.</text>
+            <sl-alert variant="warning" open style="margin-top:12px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>@pending.Count replaced unencrypted file(s) could not be removed yet.</strong>
+                Restart the node: the start removes them before it serves anything.
+            </sl-alert>
         }
-        else if (storageProtected)
+        @if (status.Migration?.LinkedPlain is { Count: > 0 } linked)
         {
-            <text>This node's database is encrypted.</text>
+            <sl-alert variant="warning" open style="margin-top:12px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                <strong>An unencrypted file of your database has another name.</strong>
+                The name in the data folder was removed, but the bytes live on under the other name (a link you made): <code>@string.Join(", ", linked)</code>.
+                Delete it yourself.
+            </sl-alert>
+        }
+    </div>
+}
+else
+{
+    <h3 id="card-database-encryption" style="margin-bottom:12px;"><sl-icon name="lock"></sl-icon> Encrypt this node</h3>
+    <div class="card" id="vault-plain-card" style="margin-bottom:32px;">
+        <sl-badge variant="neutral" pill style="margin-bottom:12px;">not encrypted</sl-badge>
+        <p style="margin:0 0 12px 0;">
+            This node's database is a plain file. Encrypting it keeps the node out of service while it works, and then removes every unencrypted copy
+            of the database. It is done on this node alone: your other devices are not touched.
+        </p>
+
+        @if (Model.Running)
+        {
+            <div id="seal-running" data-running="true"></div>
+        }
+
+        @if (Model.Preflight is { } pre)
+        {
+            @foreach (var warning in pre.Warnings)
+            {
+                <sl-alert variant="warning" open style="margin-bottom:12px;">
+                    <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                    @warning.Message
+                </sl-alert>
+            }
+
+            @if (!pre.CanStart)
+            {
+                <sl-alert variant="danger" open style="margin-bottom:12px;">
+                    <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                    <strong>This node cannot be encrypted yet:</strong>
+                    <ul style="margin:8px 0 0 20px;">
+                        @foreach (var blocker in pre.Blockers)
+                        {
+                            <li data-blocker="@blocker.Code">
+                                @if (blocker.Code == "not_activated" && StorageProtectionModel.SectionAt(blocker.Message) is var at and >= 0)
+                                {
+                                    @blocker.Message[..at]<a href="/Admin/MetadataEncryption">@StorageProtectionModel.ActivationSection</a>@blocker.Message[(at + StorageProtectionModel.ActivationSection.Length)..]
+                                }
+                                else
+                                {
+                                    @blocker.Message
+                                }
+                            </li>
+                        }
+                    </ul>
+                </sl-alert>
+            }
+
+            @if (pre.PlainCopies.Count > 0)
+            {
+                <div id="plain-copies" style="margin-bottom:16px;">
+                    <p class="text-muted text-sm" style="margin-bottom:8px;">
+                        These files are unencrypted copies of your vault. A stolen disk would open them. Move them out of the data folder, or erase them here.
+                    </p>
+                    <form method="post" asp-page-handler="Erase" class="form-confirm" data-busy="long" data-busy-title="Erasing the plain copies"
+                          data-confirm="Erase the ticked copies? They are overwritten and removed; this cannot be undone.">
+                        @Html.AntiForgeryToken()
+                        <table class="table" style="margin-bottom:12px;">
+                            <thead><tr><th></th><th>File</th><th>Kind</th><th>Size</th></tr></thead>
+                            <tbody>
+                                @foreach (var copy in pre.PlainCopies)
+                                {
+                                    <tr>
+                                        <td>@if (copy.CanBeErased) { <input type="checkbox" name="paths" value="@copy.Path" checked /> }</td>
+                                        <td><code style="word-break:break-all;">@copy.Path</code></td>
+                                        <td>@copy.Kind@(copy.CanBeErased ? "" : " (cannot be erased here)")</td>
+                                        <td>@(copy.Bytes / 1024) KB</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <sl-input name="password" type="password" required password-toggle autocomplete="off" data-1p-ignore data-lpignore="true"
+                                  label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
+                        <sl-button type="submit" variant="warning" size="small">
+                            <sl-icon slot="prefix" name="eraser"></sl-icon> Erase these copies
+                        </sl-button>
+                    </form>
+                </div>
+            }
+
+            @if (pre.CanStart)
+            {
+                <form method="post" asp-page-handler="Seal" id="seal-form" class="form-confirm" data-busy="long" data-busy-title="Encrypting this node"
+                      data-confirm="Encrypt this node now? The node is out of service while it works, and it cannot be taken back to an unencrypted database from the node.">
+                    @Html.AntiForgeryToken()
+                    <sl-input name="password" type="password" required password-toggle autocomplete="off" data-1p-ignore data-lpignore="true"
+                              label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
+                    <sl-button type="submit" variant="primary">
+                        <sl-icon slot="prefix" name="lock"></sl-icon> Encrypt this node
+                    </sl-button>
+                </form>
+            }
+        }
+        else if (Model.Running)
+        {
+            <sl-alert variant="primary" open>
+                <sl-icon slot="icon" name="info-circle"></sl-icon>
+                This node is being encrypted. It is out of service until this has finished.
+            </sl-alert>
         }
         else
         {
-            <text>This node's database is a plain file. You can encrypt it, so that a stolen disk or a copy of the data folder shows nothing.</text>
+            <sl-alert variant="warning" open>
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                The checks could not be run. Reload this page in a moment.
+            </sl-alert>
         }
-        @if (Model.VaultRole == "server")
-        {
-            <text> Whether this server opens the vault by itself after a restart is set there too.</text>
-        }
-    </p>
-    <sl-button href="/VaultEncryption" variant="default" size="small">
-        <sl-icon slot="prefix" name="lock"></sl-icon> @(storageProtected ? "Storage protection" : "Database encryption")
-    </sl-button>
-</div>
+
+        <div id="seal-progress" style="display:none;margin-top:16px;">
+            <sl-progress-bar id="seal-progress-bar" value="0"></sl-progress-bar>
+            <p class="text-muted text-sm" id="seal-progress-text" style="margin-top:8px;"></p>
+        </div>
+    </div>
+}
+
+@if (status is not null && !Model.Running && Model.Role == "server")
+{
+    @* A server: whether it opens its vault by itself after a restart. (On a desktop this is the page OS Auto-Unlock.) *@
+    <h3 id="card-auto-unlock" style="margin-bottom:12px;"><sl-icon name="key"></sl-icon> Start unlocked after a restart</h3>
+    @if (Model.ServerAutoUnlock is { } server)
+    {
+        <div class="card" id="server-auto-unlock-card" style="margin-bottom:32px;">
+            <p class="text-muted text-sm" style="margin-bottom:12px;">
+                A restarted server stays locked until the master password is entered. You can have it open the vault by itself instead.
+            </p>
+            @if (server.Enabled)
+            {
+                <sl-badge variant="warning" pill style="margin-bottom:12px;">Start unlocked after a restart: on</sl-badge>
+                <form method="post" asp-page-handler="DisableServerAutoUnlock" data-busy="short">
+                    @Html.AntiForgeryToken()
+                    <sl-input name="password" type="password" required password-toggle autocomplete="off" data-1p-ignore data-lpignore="true"
+                              label="Master password" style="margin-bottom:12px;max-width:360px;"></sl-input>
+                    <sl-button type="submit" variant="default" size="small">Turn it off</sl-button>
+                </form>
+            }
+            else
+            {
+                <sl-badge variant="neutral" pill style="margin-bottom:12px;">Start unlocked after a restart: off</sl-badge>
+                <div>
+                    <sl-button id="server-auto-unlock-start" variant="default" size="small">Start unlocked after a restart...</sl-button>
+                </div>
+            }
+            @if (!string.IsNullOrEmpty(server.Notice))
+            {
+                <p class="text-muted text-sm" style="margin-top:12px;">@server.Notice</p>
+            }
+        </div>
+
+        <sl-dialog id="server-auto-unlock-step1" label="Start unlocked after a restart">
+            <sl-alert variant="danger" open>
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @StorageProtectionModel.ServerWarning
+            </sl-alert>
+            <sl-button id="server-auto-unlock-cancel1" slot="footer" variant="primary" autofocus>Cancel</sl-button>
+            <sl-button id="server-auto-unlock-go" slot="footer" variant="default">I understand, go on</sl-button>
+        </sl-dialog>
+
+        <sl-dialog id="server-auto-unlock-step2" label="Last check">
+            <form method="post" asp-page-handler="EnableServerAutoUnlock" id="server-auto-unlock-form" data-busy="short">
+                @Html.AntiForgeryToken()
+                <p>@StorageProtectionModel.ServerConfirmation</p>
+                <sl-input name="password" type="password" required password-toggle autocomplete="off" data-1p-ignore data-lpignore="true"
+                          label="Master password" style="margin-bottom:12px;"></sl-input>
+                <sl-input name="confirmation" id="server-auto-unlock-phrase" required autocomplete="off"
+                          label="Type @StorageProtectionModel.Phrase to confirm"></sl-input>
+            </form>
+            <sl-button id="server-auto-unlock-cancel2" slot="footer" variant="primary">Cancel</sl-button>
+            <sl-button id="server-auto-unlock-enable" slot="footer" variant="danger" disabled>Turn it on</sl-button>
+        </sl-dialog>
+    }
+    else
+    {
+        <p class="text-muted text-sm" style="margin-bottom:32px;">The node did not say whether it can open itself at start.</p>
+    }
+}
+
+@* What the script of the page needs to know: whether the node is encrypting now, and the phrase of the last check of the server switch. *@
+<div id="page-data" hidden data-running="@(Model.Running ? "true" : "false")" data-phrase="@StorageProtectionModel.Phrase"></div>

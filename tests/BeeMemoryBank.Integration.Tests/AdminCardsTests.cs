@@ -61,11 +61,12 @@ public sealed class AdminCardsTests : IAsyncLifetime
         About(metadata).Should().Contain("Before you switch it on, take a fresh backup of this node and keep it offline");
         Body(metadata).Should().NotContain("On since");
 
+        // The page of the Admin area holds the whole thing: the way to encrypt is ON it, not behind a button to another page.
         var storage = await GetAsync("/Admin/StorageProtection");
-        Body(storage).Should().Contain("Database encryption").And.Contain("a plain file").And.Contain("href=\"/VaultEncryption\"");
+        Body(storage).Should().Contain("Encrypt this node").And.Contain("a plain file").And.NotContain("href=\"/VaultEncryption\"");
         storage.Should().NotContain("Storage protection");
 
-        var page = await GetAsync("/VaultEncryption");
+        var page = storage;
         page.Should().Contain("<title>Database encryption").And.Contain("Encrypt this node");
         page.Should().NotContain("Storage protection");
         // The blocker that names a page of the Admin area links to that page.
@@ -92,13 +93,13 @@ public sealed class AdminCardsTests : IAsyncLifetime
         Message(admin).Should().Contain("Metadata encryption is on. Every device switches as it syncs.", "the result of the switch is on the page, where the button was");
         Regex.Matches(body, "<form").Should().BeEmpty("a finished switch has no form");
 
-        Body(await GetAsync("/Admin/StorageProtection")).Should().Contain("Database encryption", "the database of this node is still a plain file");
+        Body(await GetAsync("/Admin/StorageProtection")).Should().Contain("Encrypt this node", "the database of this node is still a plain file");
 
         // The next visit of the page: the status line alone.
         var again = await GetAsync(MetadataPage);
         Body(again).Should().Contain("<strong>On</strong>");
         Message(again).Should().NotContain("Metadata encryption is on. Every device");
-        var page = await GetAsync("/VaultEncryption");
+        var page = await GetAsync("/Admin/StorageProtection");
         page.Should().NotContain("Activate the new sync format first", "the sync format is active now");
     }
 
@@ -223,13 +224,13 @@ public sealed class AdminCardsTests : IAsyncLifetime
     [Fact]
     public async Task The_question_of_a_form_that_asks_first_is_asked_on_every_page_not_only_by_the_script_of_the_Admin_pages()
     {
-        // The encryption page carries no script of the Admin pages; its "Encrypt this node" and "Erase these copies" forms ask first (data-confirm).
+        // The page "Encrypt this node" is on carries the script of the Admin pages (the template loads it); its "Encrypt this node" and "Erase these copies" forms ask first (data-confirm).
         var site = await GetAsync("/js/site.js");
         var admin = await GetAsync("/js/pages/admin.js");
 
         site.Should().Contain("form.form-confirm");
         admin.Should().NotContain("form.form-confirm", "a second question would be asked on the Admin pages");
-        (await GetAsync("/VaultEncryption")).Should().Contain("/js/site.js");
+        (await GetAsync("/Admin/StorageProtection")).Should().Contain("/js/site.js");
     }
 
     // ------------------------------------------------------------------ BMB-313: Invisible Mode lives here, the contact times are read as contact

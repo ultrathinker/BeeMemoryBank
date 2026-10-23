@@ -20,34 +20,36 @@
 @if (Model.Agents != null && Model.Agents.Count > 0)
 {
     <div class="card" style="padding:0;overflow:hidden;">
-        <table class="version-table">
+        @* Like Trusted Nodes (site.css, Admin): the columns follow the width of the card. Below 1060px the key prefix and the date created go (they are in the title of the
+           name), below 860px a row stacks with the label of each cell, and the Delete button is never hidden. *@
+        <table class="version-table admin-stack">
             <thead>
                 <tr>
-                    <th>Name</th>
-                    <th>Description</th>
-                    <th>Owner</th>
-                    <th>API Key</th>
-                    <th>
+                    <th class="col-name">Name</th>
+                    <th class="col-desc">Description</th>
+                    <th class="col-owner">Owner</th>
+                    <th class="hide-lt-1060">API Key</th>
+                    <th class="col-unlock">
                         Auto-unlock
                         <sl-tooltip content="Whether this key can wake a locked node by itself. Only a superadmin's agent can — an ordinary user's agent only works while the vault is already unlocked by someone else.">
                             <sl-icon name="info-circle"></sl-icon>
                         </sl-tooltip>
                     </th>
-                    <th>Created</th>
+                    <th class="hide-lt-1060">Created</th>
                     <th>Last Access</th>
                     <th>Requests</th>
-                    <th style="text-align:right;">Actions</th>
+                    <th class="col-actions">Actions</th>
                 </tr>
             </thead>
             <tbody>
                 @foreach (var agent in Model.Agents)
                 {
                     <tr>
-                        <td><strong>@agent.Name</strong></td>
-                        <td class="text-muted text-sm">@(agent.Description ?? "—")</td>
-                        <td class="text-muted text-sm">@(agent.OwnerName ?? (agent.OwnerUserId > 0 ? $"#{agent.OwnerUserId}" : "—"))</td>
-                        <td><code class="text-sm">@agent.KeyPrefix</code></td>
-                        <td>
+                        <td class="col-name"><strong title="API key @agent.KeyPrefix, created @agent.CreatedAt.ToString("g")">@agent.Name</strong></td>
+                        <td class="col-desc text-muted text-sm" data-label="Description">@(agent.Description ?? "—")</td>
+                        <td class="col-owner text-muted text-sm" data-label="Owner">@(agent.OwnerName ?? (agent.OwnerUserId > 0 ? $"#{agent.OwnerUserId}" : "—"))</td>
+                        <td class="hide-lt-1060"><code class="text-sm">@agent.KeyPrefix</code></td>
+                        <td class="col-unlock" data-label="Auto-unlock">
                             @if (agent.CanAutoUnlock)
                             {
                                 <sl-badge variant="warning" pill>Yes</sl-badge>
@@ -57,18 +59,20 @@
                                 <span class="text-muted text-sm">No</span>
                             }
                         </td>
-                        <td class="text-muted text-sm">@agent.CreatedAt.ToString("g")</td>
-                        <td class="text-muted text-sm">@AdminText.RelativeTime(agent.LastAccessedAt)</td>
-                        <td class="text-muted text-sm">@(agent.RequestCount == 0 ? "—" : agent.RequestCount.ToString("N0"))</td>
-                        <td style="text-align:right;">
-                            <form data-busy="short" method="post" asp-page-handler="DeleteAgent" style="display:inline;">
-                                <input type="hidden" name="agentId" value="@agent.Id" />
-                                <sl-icon-button name="trash" label="Delete"
-                                    class="btn-confirm-submit"
-                                    data-confirm-pattern="Delete agent {name}?"
-                                    data-name="@agent.Name">
-                                </sl-icon-button>
-                            </form>
+                        <td class="hide-lt-1060 text-muted text-sm">@agent.CreatedAt.ToString("g")</td>
+                        <td class="text-muted text-sm" data-label="Last access">@AdminText.RelativeTime(agent.LastAccessedAt)</td>
+                        <td class="text-muted text-sm" data-label="Requests">@(agent.RequestCount == 0 ? "—" : agent.RequestCount.ToString("N0"))</td>
+                        <td class="col-actions">
+                            <div class="row-actions">
+                                <form data-busy="short" method="post" asp-page-handler="DeleteAgent" style="display:inline;">
+                                    <input type="hidden" name="agentId" value="@agent.Id" />
+                                    <sl-icon-button name="trash" label="Delete"
+                                        class="btn-confirm-submit"
+                                        data-confirm-pattern="Delete agent {name}?"
+                                        data-name="@agent.Name">
+                                    </sl-icon-button>
+                                </form>
+                            </div>
                         </td>
                     </tr>
                 }

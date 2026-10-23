@@ -263,7 +263,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 else maskSecrets();
 
 // ---- A form that asks first (form.form-confirm data-confirm="...") -----------------------------------------------------------------------
-// Asked here, for every page: the encryption page has no script of the Admin page, and its "Encrypt this node" and "Erase these copies" went out without
+// Asked here, for every page: the script of the Admin pages (admin.js) does not ask it, and "Encrypt this node" and "Erase these copies" of the Database encryption page went out without
 // the question their forms carry.
 document.addEventListener('submit', function (e) {
     var form = e.target && e.target.closest ? e.target.closest('form.form-confirm') : null;

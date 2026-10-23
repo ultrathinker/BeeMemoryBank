@@ -47,7 +47,7 @@ public sealed class BlindInviteWebPathTests(BlindInviteWorld world) : IAsyncLife
     /// <summary>Posts the "Invite a blind copy" form the way the browser does: the page first (the antiforgery token and cookie), then the form with the session.</summary>
     private async Task<HttpResponseMessage> PostInviteFormAsync()
     {
-        var form = await _admin.GetAsync("/BlindNodes");
+        var form = await _admin.GetAsync("/Admin/BlindNodes");
         form.StatusCode.Should().Be(HttpStatusCode.OK);
         var html = await form.Content.ReadAsStringAsync();
         var session = string.Join("; ", _admin.DefaultRequestHeaders.GetValues("Cookie"));
@@ -57,7 +57,7 @@ public sealed class BlindInviteWebPathTests(BlindInviteWorld world) : IAsyncLife
             ["label"] = "Anna", ["sourceName"] = "Alex", ["lifetime"] = "30", ["address"] = world.Hub.Origin,
             ["__RequestVerificationToken"] = Token.Match(html).Groups[1].Value,
         };
-        using var post = new HttpRequestMessage(HttpMethod.Post, "/BlindNodes?handler=Invite") { Content = new FormUrlEncodedContent(body) };
+        using var post = new HttpRequestMessage(HttpMethod.Post, "/Admin/BlindNodes?handler=Invite") { Content = new FormUrlEncodedContent(body) };
         post.Headers.TryAddWithoutValidation("Cookie", session + "; " + antiforgery);
         return await _admin.SendAsync(post);
     }
@@ -76,7 +76,7 @@ public sealed class BlindInviteWebPathTests(BlindInviteWorld world) : IAsyncLife
         BlindInvitation.TryParse(text, out _).Should().BeTrue();
         html.Should().Contain("data:image/png;base64,", "and its QR code");
 
-        var later = await _admin.GetAsync("/BlindNodes");
+        var later = await _admin.GetAsync("/Admin/BlindNodes");
 
         later.StatusCode.Should().Be(HttpStatusCode.OK);
         var laterHtml = WebUtility.HtmlDecode(await later.Content.ReadAsStringAsync());

@@ -40,20 +40,21 @@
     </sl-button>
 </div>
 <div class="card" style="padding:0;overflow:hidden;margin-bottom:24px;">
-    <table class="version-table">
+    @* The rows are built by admin.js; they carry the classes and the data-label of the stacked layout (site.css, Admin): below a card of 560px a row stacks, nothing is hidden. *@
+    <table class="version-table admin-stack-sm">
         <thead>
             <tr>
-                <th>Label</th>
+                <th class="col-name">Label</th>
                 <th>Prefix</th>
                 <th>Priority</th>
                 <th>Enabled</th>
                 <th>Status</th>
                 <th>Last used</th>
-                <th style="text-align:right;">Actions</th>
+                <th class="col-actions">Actions</th>
             </tr>
         </thead>
         <tbody id="chat-keys-body">
-            <tr><td colspan="7" class="text-muted text-sm" style="text-align:center;padding:16px;">Loading…</td></tr>
+            <tr><td colspan="7" class="col-empty text-muted text-sm">Loading…</td></tr>
         </tbody>
     </table>
 </div>
@@ -66,19 +67,19 @@
     </sl-button>
 </div>
 <div class="card" style="padding:0;overflow:hidden;margin-bottom:24px;">
-    <table class="version-table">
+    <table class="version-table admin-stack-sm">
         <thead>
             <tr>
-                <th>Label</th>
+                <th class="col-name">Label</th>
                 <th>Model ID</th>
-                <th style="text-align:center;">Text</th>
-                <th style="text-align:center;">Vision</th>
-                <th style="text-align:center;">Image gen</th>
-                <th style="text-align:right;">Actions</th>
+                <th class="col-center">Text</th>
+                <th class="col-center">Vision</th>
+                <th class="col-center">Image gen</th>
+                <th class="col-actions">Actions</th>
             </tr>
         </thead>
         <tbody id="chat-models-body">
-            <tr><td colspan="6" class="text-muted text-sm" style="text-align:center;padding:16px;">Loading…</td></tr>
+            <tr><td colspan="6" class="col-empty text-muted text-sm">Loading…</td></tr>
         </tbody>
     </table>
 </div>

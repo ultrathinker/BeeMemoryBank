@@ -1,11 +1,15 @@
-// The encryption page (docs/design/step-b-spec.md 10.9, 11.2): follows "Encrypt this node" while it runs, and walks the two steps of
+// The Database encryption page of the Admin area (docs/design/step-b-spec.md 10.9, 11.2): follows "Encrypt this node" while it runs, and walks the two steps of
 // "Start unlocked after a restart".
 (function () {
     var data = {};
     var pageData = document.getElementById('page-data');
-    if (pageData) {
-        try { data = JSON.parse(pageData.textContent) || {}; } catch (e) { data = {}; }
-    }
+    if (pageData) data = { running: pageData.dataset.running === 'true', phrase: pageData.dataset.phrase };
+
+    // The pages of the Admin area are swapped in by the single-page navigation: the polling below dies with the page that started it, or it would send the NEXT page
+    // to the address of the progress when the encryption ends.
+    var stopped = false;
+    var pageSignal = window.bmbGetPageSignal ? window.bmbGetPageSignal() : null;
+    if (pageSignal) pageSignal.addEventListener('abort', function () { stopped = true; });
 
     // ---- progress ----------------------------------------------------------------------------------------------------------------
     var panel = document.getElementById('seal-progress');
@@ -32,15 +36,17 @@
     }
 
     function poll() {
+        if (stopped) return;
         fetch('/api-proxy/vault/seal/progress', { credentials: 'same-origin' })
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (p) {
+                if (stopped) return;
                 if (!p) { setTimeout(poll, 3000); return; }
                 if (p.phase === 'running') { show(p); setTimeout(poll, 1000); return; }
-                if (p.phase === 'done') { show(p); setTimeout(function () { location.href = location.pathname + '?card=card-database-encryption&msg=' + encodeURIComponent('This node\'s database is encrypted.') + '#card-database-encryption'; }, 1200); return; }
+                if (p.phase === 'done') { show(p); setTimeout(function () { location.href = location.pathname + '?msg=' + encodeURIComponent('This node\'s database is encrypted.') + '#card-database-encryption'; }, 1200); return; }
                 if (p.phase === 'failed') {
                     var msg = (p.step === 'locked' ? 'Encrypted, but kept locked (' : 'Not encrypted (') + p.error_code + '): ' + (p.error || '');
-                    location.href = location.pathname + '?card=card-database-encryption&err=' + encodeURIComponent(msg) + '#card-database-encryption';
+                    location.href = location.pathname + '?err=' + encodeURIComponent(msg) + '#card-database-encryption';
                     return;
                 }
                 // idle: the node is not encrypting (yet, or any more): nothing to follow

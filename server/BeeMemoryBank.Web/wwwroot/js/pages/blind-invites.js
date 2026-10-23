@@ -46,6 +46,9 @@
             left.textContent = Math.floor(seconds / 60) + ':' + ('0' + (seconds % 60)).slice(-2);
         };
         timer = setInterval(tick, 1000);
+        // The page is swapped out by the single-page navigation: the countdown dies with it.
+        var pageSignal = window.bmbGetPageSignal ? window.bmbGetPageSignal() : null;
+        if (pageSignal) pageSignal.addEventListener('abort', function () { clearInterval(timer); });
         tick();
     }
 })();

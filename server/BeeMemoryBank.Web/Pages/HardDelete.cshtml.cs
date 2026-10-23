@@ -1,14 +1,4 @@
-using BeeMemoryBank.Web.Services;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.RazorPages;
-
 namespace BeeMemoryBank.Web.Pages;
 
-[Authorize(Roles = "superadmin")]
-public class HardDeleteModel : PageModel
-{
-    public void OnGet()
-    {
-    }
-}
+/// <summary><c>/HardDelete</c> of earlier versions: the page is <c>/Admin/HardDelete</c> now.</summary>
+public class HardDeleteRedirectModel() : LegacyPageRedirectModel(Admin.AdminRoutes.HardDelete);

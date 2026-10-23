@@ -15,14 +15,15 @@ public class OsAutoUnlockModel(ApiClient api) : AdminPageModel(api)
     /// <summary>What the node says about its database (docs/design/step-b-spec.md 6.7); null when it did not answer.</summary>
     public VaultStatusDto? VaultStatus { get; private set; }
 
-    /// <summary>The role of this node (spec 11.0): on a <c>server</c> the way to turn this on is the checkbox of the encryption page, not this page.</summary>
+    /// <summary>The role of this node (spec 11.0): on a <c>server</c> the way to turn this on is the switch of the Database encryption page, not this page.</summary>
     public string VaultRole => VaultStatus?.AutoUnlock?.Role ?? "desktop";
 
     /// <summary>
-    /// True when this page offers the switch: the system has a secret store to use, and the node is not a server (docs/design/step-b-spec.md 11.2: on a server the
-    /// checkbox of the encryption page turns it on). A slot made earlier still shows, so that it can be turned off.
+    /// True when this node is a server with no slot of this kind: the page has no switch for it and says where the server's own switch is (docs/design/step-b-spec.md
+    /// 11.2: on a server the switch of the Database encryption page turns it on). It does not depend on whether the system has a secret store: a Linux server has
+    /// none (<see cref="OsAutoUnlockSupported"/> is false), and it is the node that most needs the sentence. A slot made earlier still shows, so that it can be turned off.
     /// </summary>
-    public bool Offered => OsAutoUnlockSupported && (VaultRole != "server" || OsAutoUnlockEnabled);
+    public bool ServerHasNoSwitch => VaultRole == "server" && !OsAutoUnlockEnabled;
 
     public async Task OnGetAsync()
     {

@@ -1,4 +1,11 @@
 (function () {
+    // The page is swapped in and out by the single-page navigation (site-spa.js), which aborts the page signal before it replaces the content. What this script starts
+    // later (a request, a timer) must end with the page: a late answer would otherwise write into, or put a toast on, whatever page is shown by then. Every listener
+    // below is on an element of the page, which goes with the page; there is none on the document or the window.
+    const pageSignal = window.bmbGetPageSignal ? window.bmbGetPageSignal() : null;
+    const fetchOpts = pageSignal ? { signal: pageSignal } : {};
+    const gone = () => !!(pageSignal && pageSignal.aborted);
+
     let currentPage = 1;
     let totalCount = 0;
 
@@ -28,6 +35,7 @@
     let sortDir = 'asc';
 
     async function loadList() {
+        if (gone()) return;
         if (!loadingOverlay || !tableContainer || !pageSizeSelect || !filterInput || !statusSelect) return;
         loadingOverlay.style.display = 'block';
         tableContainer.style.opacity = '0.5';
@@ -38,20 +46,24 @@
 
         try {
             const url = `/api-proxy/hard-delete/list?page=${currentPage}&pageSize=${pageSize}&filter=${encodeURIComponent(filter)}&status=${status}`;
-            const r = await fetch(url);
+            const r = await fetch(url, fetchOpts);
             if (!r.ok) throw new Error('Failed to load list');
             const data = await r.json();
+            if (gone()) return;
 
             totalCount = data.totalCount;
             currentItems = data.items || [];
             sortAndRender();
             updatePagination();
         } catch (e) {
+            if (gone()) return;   // the page was left (the request was aborted, or answered late): there is nobody to tell
             console.error(e);
             toast('danger', 'Error loading list');
         } finally {
-            loadingOverlay.style.display = 'none';
-            tableContainer.style.opacity = '1';
+            if (!gone()) {
+                loadingOverlay.style.display = 'none';
+                tableContainer.style.opacity = '1';
+            }
         }
     }
 
@@ -115,8 +127,8 @@
                     <span class="item-title">${escapeHtml(item.title)}</span>
                 </td>
                 <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
-                <td><span style="font-size:12px;color:var(--sl-color-neutral-500);">${date}</span></td>
-                <td style="text-align:right;font-size:12px;color:var(--sl-color-neutral-500);">${sizeStr}</td>
+                <td class="hide-lt-620"><span style="font-size:12px;color:var(--sl-color-neutral-500);">${date}</span></td>
+                <td class="hide-lt-620" style="text-align:right;font-size:12px;color:var(--sl-color-neutral-500);">${sizeStr}</td>
                 <td style="text-align:right; white-space:nowrap;">
                     ${item.status === 'D' ? `
                         <sl-button variant="success" size="small" outline circle title="Restore" class="btn-restore-row" style="margin-right:4px;">
@@ -177,20 +189,23 @@
         if (item.type === 'folder') {
             try {
                 // bmb-busy-exempt: a read (a POST only because of its body); the dialog shows its own spinner while the preview loads
-                const r = await fetch('/api-proxy/hard-delete/folder/preview', {
+                const r = await fetch('/api-proxy/hard-delete/folder/preview', Object.assign({
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ path: item.path })
-                });
+                }, fetchOpts));
                 if (r.ok) {
                     const p = await r.json();
+                    if (gone()) return;
                     previewText.innerHTML = `This will delete <strong>${p.articlesCount}</strong> articles, <strong>${p.subfoldersCount}</strong> folders, and <strong>${p.mediaCount}</strong> media files.`;
                 } else {
                     previewText.textContent = 'Failed to load folder preview.';
                 }
             } catch (e) {
+                if (gone()) return;
                 previewText.textContent = 'Error loading preview.';
             }
+            if (gone()) return;
         } else {
             previewText.innerHTML = `Deleting article: <strong>${escapeHtml(item.title)}</strong><br><span style="font-size:11px;">Path: ${escapeHtml(item.path)}</span>`;
         }
@@ -222,10 +237,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: body
                 })).body || {};
+                if (gone()) return;   // the page was left while it ran: bmbBusy says so once (success below); the deletion itself is not taken back
                 toast('success', `Hard delete successful. Deleted ${res.deletedArticles} articles, ${res.deletedFolders} folders, ${res.deletedMedia} media files.`);
                 dlgDelete?.hide();
                 loadList();
-            }, { long: true, title: 'Deleting for good', text: 'Please wait. Do not close this page.', quiet: true });
+            }, { long: true, title: 'Deleting for good', text: 'Please wait. Do not close this page.', success: lateNotice });
         });
     }
 
@@ -237,6 +253,10 @@
     const btnRestoreCancel = document.getElementById('btn-restore-cancel');
     const btnRestoreConfirm = document.getElementById('btn-restore-confirm');
     let restoreItem = null;
+
+    // bmbBusy.run shows this text next to the button when it has some; the page shows its own toast when it is there, so nothing is said then. When the page was left
+    // the toast has no place any more, and the text makes bmbBusy say once, on the screen, that what was started has finished (what a request that was sent cannot be taken back).
+    function lateNotice() { return gone() ? 'finished' : ''; }
 
     function openRestoreDialog(item) {
         restoreItem = item;
@@ -264,12 +284,15 @@
                 const extra = item.type === 'folder' && data.restoredSubfolderCount > 0
                     ? ` (+ ${data.restoredSubfolderCount} subfolder${data.restoredSubfolderCount === 1 ? '' : 's'})`
                     : '';
+                if (gone()) return;
                 toast('success', `Restored: ${name}${extra}`);
                 dlgRestore?.hide();
                 loadList();
-            }, { long: true, title: 'Restoring', text: 'Please wait. Do not close this page.', quiet: true });
+            }, { long: true, title: 'Restoring', text: 'Please wait. Do not close this page.', success: lateNotice });
         });
     }
+
+    if (pageSignal) pageSignal.addEventListener('abort', () => clearTimeout(debounceTimer));
 
     if (filterInput) {
         filterInput.addEventListener('sl-input', () => {
@@ -316,9 +339,10 @@
         auditContainer.style.display = 'none';
         auditBody.innerHTML = '';
         try {
-            const r = await fetch(`/api-proxy/hard-delete/audit?page=${auditPage}&pageSize=${auditPageSize}`);
+            const r = await fetch(`/api-proxy/hard-delete/audit?page=${auditPage}&pageSize=${auditPageSize}`, fetchOpts);
             if (r.ok) {
                 const data = await r.json();
+                if (gone()) return;
                 auditTotal = data.totalCount;
                 renderAudit(data.items);
                 auditContainer.style.display = 'block';
@@ -328,8 +352,8 @@
                 if (auditPrev) auditPrev.disabled = auditPage <= 1;
                 if (auditNext) auditNext.disabled = auditPage * auditPageSize >= auditTotal;
             }
-        } catch (e) { console.error(e); }
-        finally { auditLoading.style.display = 'none'; }
+        } catch (e) { if (!gone()) console.error(e); }
+        finally { if (!gone()) auditLoading.style.display = 'none'; }
     }
 
     if (dlgAudit) dlgAudit.addEventListener('sl-show', () => { auditPage = 1; loadAudit(); });
@@ -351,7 +375,7 @@
 
             tr.innerHTML = `
                 <td>${date}</td>
-                <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(item.entityIdentifier)}">${entity}</td>
+                <td class="col-entity" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(item.entityIdentifier)}">${entity}</td>
                 <td>${counts}</td>
                 <td>${escapeHtml(actor)}</td>
             `;
@@ -360,6 +384,7 @@
     }
 
     function toast(variant, message) {
+        if (gone()) return Promise.resolve();   // never onto the page that replaced this one
         const alert = Object.assign(document.createElement('sl-alert'), {
             variant: variant,
             closable: true,
@@ -377,5 +402,5 @@
     Promise.all([
         customElements.whenDefined('sl-select'),
         customElements.whenDefined('sl-input'),
-    ]).then(() => loadList());
+    ]).then(() => { if (!gone()) loadList(); });
 })();

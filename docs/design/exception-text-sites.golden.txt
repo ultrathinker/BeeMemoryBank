@@ -179,7 +179,7 @@ server/BeeMemoryBank.Cli/Commands/SyncActivationCommand.cs 2
 server/BeeMemoryBank.Cli/Commands/UserCommand.cs 1
 server/BeeMemoryBank.Cli/Commands/VaultCommand.cs 7
 server/BeeMemoryBank.Cli/Program.cs 1
-server/BeeMemoryBank.Web/Pages/BlindNodes.cshtml.cs 2
+server/BeeMemoryBank.Web/Pages/Admin/BlindNodes.cshtml.cs 2
 server/BeeMemoryBank.Web/Pages/RecoverAccess.cshtml.cs 2
 server/BeeMemoryBank.Web/Services/ApiClient.BlindNodes.cs 1
 server/BeeMemoryBank.Web/Services/ApiClient.Users.cs 1

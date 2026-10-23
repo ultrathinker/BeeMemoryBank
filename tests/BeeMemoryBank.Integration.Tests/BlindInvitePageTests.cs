@@ -12,7 +12,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.DependencyInjection;
 using ApiClient = WebApp::BeeMemoryBank.Web.Services.ApiClient;
-using BlindNodesModel = WebApp::BeeMemoryBank.Web.Pages.BlindNodesModel;
+using BlindNodesModel = WebApp::BeeMemoryBank.Web.Pages.Admin.BlindNodesModel;
 
 namespace BeeMemoryBank.Integration.Tests;
 

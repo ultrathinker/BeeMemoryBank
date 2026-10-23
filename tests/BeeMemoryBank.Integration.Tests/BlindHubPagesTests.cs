@@ -137,7 +137,7 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
     [Fact]
     public async Task TheBlindNodesPage_ListsTheHubsWithTheirMode_AndNotTheOtherNodes()
     {
-        var html = await PageAsync("/BlindNodes");
+        var html = await PageAsync("/Admin/BlindNodes");
 
         html.Should().Contain("Hubs for blind copies");
         var hubs = html[html.IndexOf("id=\"hubs\"", StringComparison.Ordinal)..html.IndexOf("Connected blind nodes", StringComparison.Ordinal)];
@@ -147,9 +147,9 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ThePairingPage_OffersTheCallableNodes_EachWithItsMode()
+    public async Task TheAndroidBlindCopyCard_OffersTheCallableNodes_EachWithItsMode()
     {
-        var html = await PageAsync("/AndroidBlindCopy");
+        var html = await PageAsync("/Admin/BlindNodes");
 
         html.Should().Contain("Server Normal (hub, normal certificate, https://hub-a.example.org)");
         html.Should().Contain("Server Pinned (hub, pinned certificate, https://hub-b.example.org:8443)");
@@ -159,10 +159,10 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    /// <summary>The cells and buttons of one row of the Trusted Nodes table.</summary>
+    /// <summary>The cells and buttons of one row of the Trusted Nodes table (the card above it that offers superadmin to old peers names them too: look from the table on).</summary>
     private static string Row(string html, string name)
     {
-        var at = html.IndexOf($"<strong>{name}</strong>", StringComparison.Ordinal);
+        var at = html.IndexOf($">{name}</strong>", html.IndexOf("<table", StringComparison.Ordinal), StringComparison.Ordinal);   // the name carries a title (the node id and the date), so the tag has an attribute
         at.Should().BeGreaterThan(0, $"the row of {name} is on the page");
         var end = html.IndexOf("</tr>", at, StringComparison.Ordinal);
         return html[at..end];

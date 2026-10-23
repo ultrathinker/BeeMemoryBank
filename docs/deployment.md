@@ -311,7 +311,7 @@ of this computer instead (the Windows or macOS key store). On a server that swit
 *409 role_server*; on a desktop the server routes answer *409 role_desktop*. A plain server (one that was never encrypted) can
 use the option too, with the same warnings.
 
-**Turning it on** (superadmin, a person and not an agent, vault unlocked): *Admin → Database encryption* (the encryption page), or
+**Turning it on** (superadmin, a person and not an agent, vault unlocked): *Admin → Database encryption* (`/Admin/StorageProtection`), or
 `bmb vault auto-unlock enable`. It asks twice. First a warning with *Cancel* as the default; then the master password and the
 phrase `START UNLOCKED`, typed exactly. The API route behind it is `POST /api/keys/server-auto-unlock/enable` with
 `{ "password": "…", "confirmation": "START UNLOCKED" }`; `GET …/status` and `POST …/disable` sit beside it. An audit line

@@ -12,8 +12,10 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Recovery;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.DependencyInjection;
-using AndroidBlindCopyModel = WebApp::BeeMemoryBank.Web.Pages.AndroidBlindCopyModel;
+using BlindNodesModel = WebApp::BeeMemoryBank.Web.Pages.Admin.BlindNodesModel;
 using ApiClient = WebApp::BeeMemoryBank.Web.Services.ApiClient;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -247,18 +249,23 @@ public class BlindPhonePairingTests : IAsyncLifetime
         (await ListenersAsync()).Should().Equal([_listener]);
     }
 
-    /// <summary>The Windows page: pick the listener, paste the phone's code, get the call code as text and QR.</summary>
+    /// <summary>The page of the Admin area (the card "Add an Android blind copy" of Blind nodes), as its handlers are driven: pick the listener, paste the phone's code, get the call code as text and QR.</summary>
+    private BlindNodesModel NewPage() => new(new ApiClient(_client))
+    {
+        PageContext = new PageContext { HttpContext = new DefaultHttpContext { Request = { Scheme = "https", Host = new HostString("mem.example.org") } } }
+    };
+
     [Fact]
     public async Task ThePage_OffersTheListener_AndShowsTheCallCode()
     {
-        var page = new AndroidBlindCopyModel(new ApiClient(_client));
-        await page.OnGetAsync();
+        var page = NewPage();
+        await page.OnGetAsync(null, null, null, null);
         page.Listeners!.Select(l => l.NodeId).Should().Equal([_listener]);
 
         var phone = PhoneCode();
-        await page.OnPostAsync(phone.ToString(), _listener);
+        await page.OnPostPairPhoneAsync(phone.ToString(), _listener);
 
-        page.ErrorMessage.Should().BeNull();
+        page.PhoneError.Should().BeNull();
         BlindCallCode.TryParse(page.Paired!.CallCode, out var call).Should().BeTrue();
         call!.IsAuthenticBy(phone.Secret).Should().BeTrue();
         page.CallCodeQr.Should().StartWith("data:image/png;base64,");
@@ -267,12 +274,12 @@ public class BlindPhonePairingTests : IAsyncLifetime
     [Fact]
     public async Task ThePage_ShowsWhyAPairingWasRefused()
     {
-        var page = new AndroidBlindCopyModel(new ApiClient(_client));
+        var page = NewPage();
 
-        await page.OnPostAsync("not a phone code", _listener);
+        await page.OnPostPairPhoneAsync("not a phone code", _listener);
 
         page.Paired.Should().BeNull();
-        page.ErrorMessage.Should().Contain("not the code of an Android blind copy");
+        page.PhoneError.Should().Contain("not the code of an Android blind copy");
         page.Listeners.Should().NotBeNull("the form is shown again");
     }
 

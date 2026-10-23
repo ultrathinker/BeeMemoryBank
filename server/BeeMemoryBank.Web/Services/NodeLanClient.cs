@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace BeeMemoryBank.Web.Services;
 
 /// <summary>
-/// Talks to the desktop node's <c>/node/lan</c> endpoints for the Connect page and the "Devices on my network" card: status,
+/// Talks to the desktop node's <c>/node/lan</c> endpoints for the Connect a device page and the "Devices on my network" page: status,
 /// open and close the temporary door, switch the permanent setting, and add or remove the firewall rule. Those endpoints live
 /// in the node's front process, not the Api, so the address comes from the node's <c>.runtime.json</c> in the data directory,
 /// and the request carries the internal key the front checks.

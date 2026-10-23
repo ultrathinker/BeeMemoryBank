@@ -24,10 +24,22 @@ public abstract class AdminPageModel(ApiClient api) : PageModel
     [BindProperty(Name = "err", SupportsGet = true)]
     public string? ErrorMessage { get; set; }
 
+    /// <summary>What an error also says, one line each (the devices to blame): the message area lists them under <see cref="ErrorMessage"/>. Empty for most pages.</summary>
+    public IReadOnlyList<string> ErrorItems { get; protected set; } = [];
+
+    /// <summary>The technical line of an error, small and last in the message area; null when there is none.</summary>
+    public string? ErrorDetail { get; protected set; }
+
     /// <summary>The list entry of this page: its title and icon, which the template shows. A page that is not in the catalog cannot be drawn.</summary>
     public AdminPageInfo Info =>
         AdminPageCatalog.Find(RouteData.Values["page"] as string)
         ?? throw new InvalidOperationException($"{GetType().Name} ({RouteData.Values["page"]}) is not in AdminPageCatalog: add it, the index and the template read it.");
+
+    /// <summary>
+    /// The scripts of the page besides <c>admin.js</c> (their addresses under <c>/js/pages/</c>). The template loads them, in the Scripts section the single-page
+    /// navigation executes after a swap: a page of the area has no script tag of its own.
+    /// </summary>
+    public virtual IReadOnlyList<string> PageScripts => [];
 
     /// <summary>Ends a handler: this page again, with the message of the action. A handler with nothing to say passes nothing.</summary>
     protected IActionResult Back(string? msg = null, string? err = null) => RedirectToPage(null, null, new { msg, err });

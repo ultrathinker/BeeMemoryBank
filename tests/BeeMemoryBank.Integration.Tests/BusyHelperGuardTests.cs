@@ -187,8 +187,8 @@ public class BusyHelperGuardTests
             Assert.DoesNotContain("bmb-busy-modal", text);
         }
 
-        // The page that has its own <html> (no layout) loads the helper itself.
-        foreach (var page in new[] { "Setup.cshtml", "Connect.cshtml", Path.Combine("Shared", "_Layout.cshtml") })
+        // The page that has its own <html> (no layout) loads the helper itself. (Connect a device had one too until it became a page of the Admin area, in 2.7.2.)
+        foreach (var page in new[] { "Setup.cshtml", Path.Combine("Shared", "_Layout.cshtml") })
             Assert.Contains("/js/bmb-busy.js", File.ReadAllText(Path.Combine(web, "Pages", page)));
     }
 

@@ -92,24 +92,25 @@
             .then(function (r) { return r.json(); })
             .then(function (keys) {
                 if (!Array.isArray(keys) || keys.length === 0) {
-                    keysBody.innerHTML = '<tr><td colspan="7" class="text-muted text-sm" style="text-align:center;padding:16px;">No keys. Add one to enable AI chat.</td></tr>';
+                    keysBody.innerHTML = '<tr><td colspan="7" class="col-empty text-muted text-sm">No keys. Add one to enable AI chat.</td></tr>';
                     return;
                 }
                 keysBody.innerHTML = keys.map(function (k) {
                     var st = keyStatus(k);
+                    // the classes and data-label of the stacked layout (site.css): the header row is hidden below a card of 560px, so each cell names itself
                     return '<tr>'
-                        + '<td><strong>' + esc(k.label) + '</strong></td>'
-                        + '<td><code class="text-sm">' + esc(k.keyPrefix) + '</code></td>'
-                        + '<td class="text-muted text-sm">' + (k.priority || 0) + '</td>'
-                        + '<td><sl-switch data-key-id="' + k.id + '" class="switch-chat-key" ' + (k.enabled ? 'checked' : '') + '></sl-switch></td>'
-                        + '<td class="text-sm" style="color:' + st.color + ';"' + (st.title ? ' title="' + esc(st.title) + '"' : '') + '>' + st.label + '</td>'
-                        + '<td class="text-muted text-sm">' + rel(k.lastUsedAt) + '</td>'
-                        + '<td style="text-align:right;"><sl-icon-button name="trash" label="Delete" class="btn-delete-chat-key" data-key-id="' + k.id + '"></sl-icon-button></td>'
+                        + '<td class="col-name"><strong>' + esc(k.label) + '</strong></td>'
+                        + '<td data-label="Prefix"><code class="text-sm">' + esc(k.keyPrefix) + '</code></td>'
+                        + '<td class="text-muted text-sm" data-label="Priority">' + (k.priority || 0) + '</td>'
+                        + '<td data-label="Enabled"><sl-switch data-key-id="' + k.id + '" class="switch-chat-key" ' + (k.enabled ? 'checked' : '') + '></sl-switch></td>'
+                        + '<td class="text-sm" data-label="Status" style="color:' + st.color + ';"' + (st.title ? ' title="' + esc(st.title) + '"' : '') + '>' + st.label + '</td>'
+                        + '<td class="text-muted text-sm" data-label="Last used">' + rel(k.lastUsedAt) + '</td>'
+                        + '<td class="col-actions"><div class="row-actions"><sl-icon-button name="trash" label="Delete" class="btn-delete-chat-key" data-key-id="' + k.id + '"></sl-icon-button></div></td>'
                         + '</tr>';
                 }).join('');
             })
             .catch(function () {
-                if (keysBody) keysBody.innerHTML = '<tr><td colspan="7" class="text-muted text-sm">Failed to load keys.</td></tr>';
+                if (keysBody) keysBody.innerHTML = '<tr><td colspan="7" class="col-empty text-muted text-sm">Failed to load keys.</td></tr>';
             });
     }
 
@@ -123,27 +124,27 @@
             .then(function (models) {
                 modelsCache = Array.isArray(models) ? models : [];
                 if (modelsCache.length === 0) {
-                    modelsBody.innerHTML = '<tr><td colspan="6" class="text-muted text-sm" style="text-align:center;padding:16px;">No models. Add one (with the Text capability) to enable AI chat.</td></tr>';
+                    modelsBody.innerHTML = '<tr><td colspan="6" class="col-empty text-muted text-sm">No models. Add one (with the Text capability) to enable AI chat.</td></tr>';
                     loadDefaults();
                     return;
                 }
                 modelsBody.innerHTML = modelsCache.map(function (m) {
                     return '<tr>'
-                        + '<td><strong>' + esc(m.label) + '</strong></td>'
-                        + '<td><code class="text-sm">' + esc(m.modelId) + '</code></td>'
-                        + '<td style="text-align:center;"><sl-checkbox disabled ' + (m.isText ? 'checked' : '') + '></sl-checkbox></td>'
-                        + '<td style="text-align:center;"><sl-checkbox disabled ' + (m.isVision ? 'checked' : '') + '></sl-checkbox></td>'
-                        + '<td style="text-align:center;"><sl-checkbox disabled ' + (m.isImageGen ? 'checked' : '') + '></sl-checkbox></td>'
-                        + '<td style="text-align:right;">'
+                        + '<td class="col-name"><strong>' + esc(m.label) + '</strong></td>'
+                        + '<td class="wrap-anywhere" data-label="Model ID"><code class="text-sm">' + esc(m.modelId) + '</code></td>'
+                        + '<td class="col-center" data-label="Text"><sl-checkbox disabled ' + (m.isText ? 'checked' : '') + '></sl-checkbox></td>'
+                        + '<td class="col-center" data-label="Vision"><sl-checkbox disabled ' + (m.isVision ? 'checked' : '') + '></sl-checkbox></td>'
+                        + '<td class="col-center" data-label="Image gen"><sl-checkbox disabled ' + (m.isImageGen ? 'checked' : '') + '></sl-checkbox></td>'
+                        + '<td class="col-actions"><div class="row-actions">'
                         + '<sl-icon-button name="pencil" label="Edit" class="btn-edit-chat-model" data-edit-id="' + m.id + '"></sl-icon-button>'
                         + '<sl-icon-button name="trash" label="Delete" class="btn-delete-chat-model" data-model-id="' + m.id + '"></sl-icon-button>'
-                        + '</td>'
+                        + '</div></td>'
                         + '</tr>';
                 }).join('');
                 loadDefaults();
             })
             .catch(function () {
-                if (modelsBody) modelsBody.innerHTML = '<tr><td colspan="6" class="text-muted text-sm">Failed to load models.</td></tr>';
+                if (modelsBody) modelsBody.innerHTML = '<tr><td colspan="6" class="col-empty text-muted text-sm">Failed to load models.</td></tr>';
             });
     }
 

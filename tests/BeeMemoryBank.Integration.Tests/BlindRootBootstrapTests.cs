@@ -80,7 +80,7 @@ public class BlindRootBootstrapTests : IAsyncLifetime
     {
         using var console = _blind.CreateClient();
         var code = (await console.GetFromJsonAsync<JsonElement>("/api/blind/pair-code")).GetProperty("code").GetString()!;
-        var page = new WebApp::BeeMemoryBank.Web.Pages.BlindNodesModel(new WebApp::BeeMemoryBank.Web.Services.ApiClient(_pcClient));
+        var page = new WebApp::BeeMemoryBank.Web.Pages.Admin.BlindNodesModel(new WebApp::BeeMemoryBank.Web.Services.ApiClient(_pcClient));
 
         var result = await page.OnPostAddAsync(code);
 

@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The Web page "Blind nodes" (add a blind node by its pair code, reseed, disconnect) through the real
+/// The Admin page "Blind nodes" (add a blind node by its pair code, reseed, disconnect) through the real
 /// Web host in front of a real Api: how the operator gets to it, and what the page tells them.
 /// </summary>
 public sealed class BlindNodesPageTests : IAsyncLifetime
@@ -75,26 +75,28 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     // ── how the operator gets there ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task TheAdminPages_LinkToBlindNodes_ForASuperadmin()
+    public async Task TheAdminIndex_ListsBlindNodes_AndThePageHoldsTheFunction_NotALinkToAnotherPage()
     {
         var index = await (await _admin.GetAsync("/Admin")).Content.ReadAsStringAsync();
         var page = await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync();
 
         index.Should().Contain("href=\"/Admin/BlindNodes\"", "the Admin index lists the page of the blind nodes");
-        page.Should().Contain("href=\"/BlindNodes\"",
-            "the page that adds a blind node had no link anywhere: the owner had to type its address");
-        (await _admin.GetAsync("/BlindNodes")).StatusCode.Should().Be(HttpStatusCode.OK);
+        page.Should().Contain("id=\"invite\"").And.Contain("handler=Add").And.Contain("handler=Invite").And.Contain("id=\"android-blind-copy\"",
+            "the invitation, the pair code and the phone are on this page: it was a stub with a button to a second page");
+        page.Should().NotContain("href=\"/BlindNodes\"").And.NotContain("href=\"/AndroidBlindCopy\"");
     }
 
     [Fact]
     public async Task ARegularUser_GetsNeitherTheAdminPageNorTheBlindNodesPage_SoNeitherLinkIsShown()
     {
         var admin = await _bob.GetAsync("/Admin");
-        var blind = await _bob.GetAsync("/BlindNodes");
+        var blind = await _bob.GetAsync("/Admin/BlindNodes");
+        var old = await _bob.GetAsync("/BlindNodes");
 
         admin.StatusCode.Should().NotBe(HttpStatusCode.OK);
         blind.StatusCode.Should().NotBe(HttpStatusCode.OK);
-        (await admin.Content.ReadAsStringAsync()).Should().NotContain("href=\"/BlindNodes\"");
+        old.StatusCode.Should().NotBe(HttpStatusCode.OK);
+        (await admin.Content.ReadAsStringAsync()).Should().NotContain("href=\"/Admin/BlindNodes\"");
     }
 
     /// <summary>
@@ -107,7 +109,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     [Fact]
     public async Task TheBlindNodesPage_SaysWhatABlindNodeSees_ForBothStatesOfMetadataEncryption()
     {
-        var html = Flat(await (await _admin.GetAsync("/BlindNodes")).Content.ReadAsStringAsync());
+        var html = Flat(await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync());
 
         html.Should().NotContain("are visible to it");
         html.Should().Contain("id=\"blind-sees\"").And.Contain("With metadata encryption on").And.Contain("2.6.2 or later")
@@ -121,7 +123,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     {
         var html = Flat(await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync());
 
-        html.Should().Contain("href=\"/BlindNodes\"");
+        html.Should().NotContain("href=\"/BlindNodes\"", "the page holds what it describes");
         var invitation = html.IndexOf("invitation", StringComparison.Ordinal);
         var pair = html.IndexOf("pair code", StringComparison.Ordinal);
         invitation.Should().BeGreaterThan(0);
@@ -139,7 +141,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     [Fact]
     public async Task TheBlindNodesPage_InvitationCard_SaysWhatIsSentBeforeTheConfirmation_AndNotThatNothingIs()
     {
-        var html = Flat(await (await _admin.GetAsync("/BlindNodes")).Content.ReadAsStringAsync());
+        var html = Flat(await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync());
 
         html.Should().Contain("id=\"invite\"");
         foreach (var old in NothingCopy) html.Should().NotContainEquivalentOf(old);
@@ -167,10 +169,10 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         var web = Path.Combine("server", "BeeMemoryBank.Web", "Pages");
 
         // The page models and views, including the sentence of the refusal that no rendered page test reaches without a real invitation.
-        foreach (var file in new[] { Path.Combine(web, "BlindNodes.cshtml"), Path.Combine(web, "BlindNodes.cshtml.cs"), Path.Combine(web, "Admin", "BlindNodes.cshtml") })
+        foreach (var file in new[] { Path.Combine(web, "Admin", "BlindNodes.cshtml"), Path.Combine(web, "Admin", "BlindNodes.cshtml.cs") })
             foreach (var old in NothingCopy)
                 Source(file).Should().NotContainEquivalentOf(old, $"{file} must not say that nothing is sent when the redemption already sends the device's own data to this node");
-        Source(web, "BlindNodes.cshtml.cs").Should().Contain("Nothing of your memory bank was sent to that device");
+        Source(web, "Admin", "BlindNodes.cshtml.cs").Should().Contain("Nothing of your memory bank was sent to that device");
 
         Source("server", "BeeMemoryBank.Api", "Services", "Blind", "BlindInviteService.cs").Should().NotContain("nothing reaches the device before the confirmation")
             .And.Contain("What flows the other way is not nothing");
@@ -200,7 +202,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         using (var api = _api.CreateClient())
             await BlindNodeAlarmsTests.JudgedAlarmsAsync(api);
 
-        var page = WebUtility.HtmlDecode(await (await _admin.GetAsync("/BlindNodes")).Content.ReadAsStringAsync());
+        var page = WebUtility.HtmlDecode(await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync());
 
         page.Should().Contain("This blind node runs a newer sync protocol than this PC. Update this PC");
         page.Should().NotContain("runs an older sync protocol");
@@ -215,13 +217,13 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     /// <summary>Posts a form of the page the way the browser does (antiforgery), follows one redirect, returns the page shown.</summary>
     private async Task<(HttpStatusCode Status, string Html)> SubmitAsync(string handler, Dictionary<string, string> fields)
     {
-        var form = await _admin.GetAsync("/BlindNodes");
+        var form = await _admin.GetAsync("/Admin/BlindNodes");
         var html = await form.Content.ReadAsStringAsync();
         var session = string.Join("; ", _admin.DefaultRequestHeaders.GetValues("Cookie"));
         var antiforgery = form.Headers.TryGetValues("Set-Cookie", out var set)
             ? string.Join("; ", set.Select(c => c.Split(';')[0])) : "";
         var body = new Dictionary<string, string>(fields) { ["__RequestVerificationToken"] = Token.Match(html).Groups[1].Value };
-        using var post = new HttpRequestMessage(HttpMethod.Post, $"/BlindNodes?handler={handler}")
+        using var post = new HttpRequestMessage(HttpMethod.Post, $"/Admin/BlindNodes?handler={handler}")
         {
             Content = new FormUrlEncodedContent(body),
         };
@@ -245,7 +247,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     {
         foreach (var fragment in fragments)
             html.Should().Contain(fragment);
-        html.Should().Contain("blind-error", "the message is the alert at the top of the page");
+        html.Should().Contain("admin-page-error", "the message is the alert under the title of the page");
     }
 
     [Fact]

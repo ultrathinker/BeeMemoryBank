@@ -8,13 +8,13 @@ using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Sync;
 using Microsoft.Extensions.DependencyInjection;
 using ApiClient = WebApp::BeeMemoryBank.Web.Services.ApiClient;
-using PromotePasswordPeersModel = WebApp::BeeMemoryBank.Web.Pages.PromotePasswordPeersModel;
+using TrustedNodesModel = WebApp::BeeMemoryBank.Web.Pages.Admin.TrustedNodesModel;
 
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-42 for rows recorded before "whoever knows the master password is a superadmin": the Admin
-/// page lists them and promotes the confirmed ones, one <c>whitelist_update</c> each — never a blind
+/// BMB-42 for rows recorded before "whoever knows the master password is a superadmin": the card of the
+/// Trusted Nodes page lists them and promotes the confirmed ones, one <c>whitelist_update</c> each — never a blind
 /// node, never a revoked one, never a row that is already a superadmin. And a re-join with the same key
 /// raises the row by itself.
 /// </summary>
@@ -48,13 +48,15 @@ public class PasswordPeerPromotionTests : IAsyncLifetime
         var blind = await AddRowAsync(BlindNodeId.NewId(), isSuperadmin: false);
         var revoked = await AddRowAsync(Guid.NewGuid(), isSuperadmin: false, status: "R");
 
-        var page = new PromotePasswordPeersModel(new ApiClient(_client));
+        var page = new TrustedNodesModel(new ApiClient(_client));
         await page.OnGetAsync();
-        page.Candidates.Select(c => c.NodeId).Should().Equal([oldPhone],
+        page.PasswordPeersToPromote.Select(c => c.NodeId).Should().Equal([oldPhone],
             "only an active, non-blind device that is not a superadmin yet is offered");
 
         // A tampered form naming everything must still promote only the candidate.
-        await page.OnPostAsync([oldPhone, admin, blind, revoked]);
+        var result = await page.OnPostPromotePasswordPeersAsync([oldPhone, admin, blind, revoked]);
+
+        result.Should().BeOfType<Microsoft.AspNetCore.Mvc.RedirectToPageResult>().Which.RouteValues!["msg"].Should().Be("1 device(s) granted superadmin.");
 
         (await RowAsync(oldPhone)).IsSuperadmin.Should().BeTrue();
         (await RowAsync(blind)).IsSuperadmin.Should().BeFalse("a blind node is never a superadmin");

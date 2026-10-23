@@ -45,21 +45,23 @@
         else
         {
             <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px;">
-                <table class="version-table">
+                @* Below a card of 560px (site.css, Admin) the header rows, the group "Result counts" with its four columns among them, are hidden and a row stacks: the name, then one
+                   line per number with its own label, so that the four counts keep what the group said ("0 results" ... "100+ results"). *@
+                <table class="version-table admin-stack-sm">
                     <thead>
                         <tr>
-                            <th>Search type</th>
+                            <th class="col-name">Search type</th>
                             <th>Requests</th>
                             <th>p50 (ms)</th>
                             <th>p95 (ms)</th>
-                            <th colspan="4" style="text-align:center;">Result counts</th>
+                            <th colspan="4" class="col-center">Result counts</th>
                         </tr>
                         <tr>
                             <th></th><th></th><th></th><th></th>
-                            <th style="text-align:center;">0</th>
-                            <th style="text-align:center;">1–10</th>
-                            <th style="text-align:center;">11–100</th>
-                            <th style="text-align:center;">100+</th>
+                            <th class="col-center">0</th>
+                            <th class="col-center">1–10</th>
+                            <th class="col-center">11–100</th>
+                            <th class="col-center">100+</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -67,14 +69,14 @@
                         {
                             var label = row.TryGetProperty("searchType", out var stEl) && stEl.ValueKind == JsonValueKind.String ? stEl.GetString() : "?";
                             <tr>
-                                <td><strong>@label</strong></td>
-                                <td>@(row.TryGetProperty("count", out var cEl) ? cEl.GetInt64().ToString("N0") : "0")</td>
-                                <td>@FmtMs(row, "p50Ms")</td>
-                                <td>@FmtMs(row, "p95Ms")</td>
-                                <td style="text-align:center;">@BucketVal(row, "bucketZero")</td>
-                                <td style="text-align:center;">@BucketVal(row, "bucketOneToTen")</td>
-                                <td style="text-align:center;">@BucketVal(row, "bucketElevenToHundred")</td>
-                                <td style="text-align:center;">@BucketVal(row, "bucketOverHundred")</td>
+                                <td class="col-name"><strong>@label</strong></td>
+                                <td data-label="Requests">@(row.TryGetProperty("count", out var cEl) ? cEl.GetInt64().ToString("N0") : "0")</td>
+                                <td data-label="p50 (ms)">@FmtMs(row, "p50Ms")</td>
+                                <td data-label="p95 (ms)">@FmtMs(row, "p95Ms")</td>
+                                <td class="col-center" data-label="0 results">@BucketVal(row, "bucketZero")</td>
+                                <td class="col-center" data-label="1–10 results">@BucketVal(row, "bucketOneToTen")</td>
+                                <td class="col-center" data-label="11–100 results">@BucketVal(row, "bucketElevenToHundred")</td>
+                                <td class="col-center" data-label="100+ results">@BucketVal(row, "bucketOverHundred")</td>
                             </tr>
                         }
                     </tbody>

@@ -10,9 +10,22 @@
     }
     @if (!string.IsNullOrEmpty(Model.ErrorMessage))
     {
-        <sl-alert variant="danger" open closable class="card-message" role="alert">
+        <sl-alert variant="danger" open closable class="card-message" role="alert" id="admin-page-error">
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             @Model.ErrorMessage
+            @if (Model.ErrorItems.Count > 0)
+            {
+                <ul style="margin:8px 0 0 18px;padding:0;">
+                    @foreach (var item in Model.ErrorItems)
+                    {
+                        <li>@item</li>
+                    }
+                </ul>
+            }
+            @if (!string.IsNullOrEmpty(Model.ErrorDetail))
+            {
+                <div class="text-muted text-sm" style="margin-top:8px;">Technical detail: @Model.ErrorDetail</div>
+            }
         </sl-alert>
     }
 </div>

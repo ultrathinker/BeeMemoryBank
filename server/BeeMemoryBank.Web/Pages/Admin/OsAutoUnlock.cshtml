@@ -18,28 +18,27 @@
         asks for the password again.
     </p>
     <p>
-        On a node whose database is encrypted (<a href="/Admin/StorageProtection">Storage protection</a>), auto-unlock still means the computer opens your notes at start without your
-        password. On a server, the way to turn it on is the checkbox on the encryption page, so this page only shows it, and lets you turn it off.
+        On a node whose database is encrypted (<a href="/Admin/StorageProtection">Database encryption</a>), auto-unlock still means the computer opens your notes at start without your
+        password. On a server, the way to turn it on is the switch <em>Start unlocked after a restart</em> on <a href="/Admin/StorageProtection">Database encryption</a>, so this page only shows it, and lets you turn it off.
     </p>
 }
 
-@if (!Model.OsAutoUnlockSupported)
+@* The role is asked first: a Linux server has no secret store either, and it is the server that is told where its switch is. *@
+@if (Model.ServerHasNoSwitch)
+{
+    <div class="card mt-md" id="os-auto-unlock-server" style="max-width:640px;">
+        <p class="text-muted text-sm" style="margin:0;">
+            This node is a server: it has no switch here. Whether it opens its vault by itself after a restart is the switch <em>Start unlocked after a restart</em> on
+            <a href="/Admin/StorageProtection">Database encryption</a>. OS auto-unlock is not on now.
+        </p>
+    </div>
+}
+else if (!Model.OsAutoUnlockSupported)
 {
     <div class="card mt-md" id="os-auto-unlock-unsupported" style="max-width:640px;">
         <p class="text-muted text-sm" style="margin:0;">
             This computer has no secret store this node can use for auto-unlock (it is offered with the Windows and macOS apps), so there is nothing to switch here.
         </p>
-    </div>
-}
-else if (!Model.Offered)
-{
-    <div class="card mt-md" id="os-auto-unlock-server" style="max-width:640px;">
-        <p class="text-muted text-sm" style="margin:0 0 12px;">
-            This node is a server: auto-unlock is turned on from the encryption page, not here. It is not on now.
-        </p>
-        <sl-button href="/VaultEncryption" variant="default" size="small">
-            <sl-icon slot="prefix" name="lock"></sl-icon> Open the encryption page
-        </sl-button>
     </div>
 }
 else

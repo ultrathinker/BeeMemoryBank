@@ -5,9 +5,9 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The Web side of "Encrypt this node" (docs/design/step-b-spec.md 10.1, 11, red test 15.3.2 for the Web start page): the Admin page names the database
-/// encryption and leads to <c>/VaultEncryption</c>; that page shows the preflight with its blockers in words, the server checkbox with both warnings of 11.2
-/// on a node that is not a desktop, and is the superadmin's alone. Through the real Web host in front of a real Api.
+/// The Web side of "Encrypt this node" (docs/design/step-b-spec.md 10.1, 11, red test 15.3.2 for the Web start page): the Admin page "Database encryption" shows the
+/// preflight with its blockers in words and, on a node that is not a desktop, the server checkbox with both warnings of 11.2, and is the superadmin's alone. It is
+/// one page (release 2.7.2): the address <c>/VaultEncryption</c> only sends on to it. Through the real Web host in front of a real Api.
 /// </summary>
 public sealed class VaultEncryptionPageTests : IAsyncLifetime
 {
@@ -44,20 +44,20 @@ public sealed class VaultEncryptionPageTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_admin_area_has_a_database_encryption_page_that_leads_to_the_encryption_page()
+    public async Task The_admin_area_has_a_database_encryption_page_that_holds_Encrypt_this_node_itself()
     {
         (await GetAsync("/Admin")).Should().Contain("href=\"/Admin/StorageProtection\"", "the index lists it");
         var html = await GetAsync("/Admin/StorageProtection");
 
         html.Should().Contain("Database encryption");
-        html.Should().Contain("href=\"/VaultEncryption\"");
-        html.Should().Contain("a plain file", "this node's database is not encrypted yet");
+        html.Should().Contain("Encrypt this node").And.Contain("a plain file", "this node's database is not encrypted yet");
+        html.Should().NotContain("href=\"/VaultEncryption\"", "there is no second page behind a button");
     }
 
     [Fact]
     public async Task The_encryption_page_of_a_plain_node_shows_its_preflight_in_words_and_the_server_checkbox_with_both_warnings()
     {
-        var html = await GetAsync("/VaultEncryption");
+        var html = await GetAsync("/Admin/StorageProtection");
 
         html.Should().Contain("Database encryption");
         html.Should().Contain("Activate the new sync format first", "the test node has not switched metadata encryption on: the blocker is named in words");
@@ -73,10 +73,13 @@ public sealed class VaultEncryptionPageTests : IAsyncLifetime
     {
         using var anonymous = _web.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
 
-        using var response = await anonymous.GetAsync("/VaultEncryption");
+        foreach (var address in new[] { "/Admin/StorageProtection", "/VaultEncryption" })
+        {
+            using var response = await anonymous.GetAsync(address);
 
-        response.StatusCode.Should().BeOneOf(HttpStatusCode.Redirect, HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden, HttpStatusCode.NotFound);
-        (await response.Content.ReadAsStringAsync()).Should().NotContain("Strongly not recommended");
+            response.StatusCode.Should().BeOneOf(HttpStatusCode.Redirect, HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden, HttpStatusCode.NotFound);
+            (await response.Content.ReadAsStringAsync()).Should().NotContain("Strongly not recommended");
+        }
     }
 
     [Fact]

@@ -58,6 +58,16 @@ public class SiteSpaNavigationTests
     // what the page that is left takes with it
     [InlineData("the_timers_of_a_page_that_is_left_die_with_it")]
     [InlineData("the_script_of_the_page_hears_its_own_clicks_only_while_the_page_is_there")]
+    // what a page with requests of its own leaves running when it is left: Hard Delete (its script is run for real, against fake elements and requests)
+    [InlineData("a_hard_delete_list_that_fails_after_the_page_was_left_writes_nothing_to_the_new_page")]
+    [InlineData("a_hard_delete_list_that_arrives_after_the_page_was_left_writes_nothing")]
+    [InlineData("the_hard_delete_page_still_loads_draws_and_reports_while_it_is_there")]
+    [InlineData("an_audit_log_that_arrives_after_the_page_was_left_writes_nothing")]
+    [InlineData("the_typing_delay_of_the_filter_dies_with_the_page")]
+    [InlineData("a_hard_delete_that_ends_after_the_page_was_left_is_not_taken_back_and_says_so_once")]
+    // the rows admin.js builds as strings for AI / Chat
+    [InlineData("the_rows_of_the_ai_chat_tables_carry_the_classes_and_labels_of_the_stacked_layout")]
+    [InlineData("the_empty_and_the_failed_states_of_the_ai_chat_tables_are_sentences_that_wrap")]
     public void TheNavigationDoesWhatItSays(string scenario)
     {
         var result = JsonSerializer.Deserialize<JsonElement>(Run(scenario));
