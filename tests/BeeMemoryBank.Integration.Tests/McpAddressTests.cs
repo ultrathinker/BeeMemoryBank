@@ -3,6 +3,7 @@ extern alias WebApp;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Http;
 using WebApp::BeeMemoryBank.Web.Services;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -163,6 +164,70 @@ public class McpAddressTests
 }
 
 /// <summary>
+/// The address the browser used to open a page, for the pages that print one back. Behind the node's front, <c>Request.Host</c> is the
+/// Web process's own internal loopback port; the browser's authority is the last <c>X-Forwarded-Host</c>.
+/// </summary>
+public class BrowserAuthorityTests
+{
+    private static HttpRequest Request(string host, string? forwardedHost = null, string scheme = "http", string? forwardedProto = null)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Scheme = scheme;
+        context.Request.Host = new HostString(host);
+        if (forwardedHost is not null) context.Request.Headers["X-Forwarded-Host"] = forwardedHost;
+        if (forwardedProto is not null) context.Request.Headers["X-Forwarded-Proto"] = forwardedProto;
+        return context.Request;
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1:63676", "127.0.0.1:5310", "http://127.0.0.1:5310")]
+    [InlineData("127.0.0.1:63676", "evil.example, 127.0.0.1:5310", "http://127.0.0.1:5310")]
+    [InlineData("127.0.0.1:63676", "evil.example,127.0.0.1:5310,", "http://127.0.0.1:5310")]
+    [InlineData("127.0.0.1:63676", "[::1]:5310", "http://[::1]:5310")]
+    [InlineData("127.0.0.1:63676", "[2001:db8::1]", "http://[2001:db8::1]")]
+    [InlineData("127.0.0.1:63676", "localhost:65535", "http://localhost:65535")]
+    [InlineData("127.0.0.1:63676", "bee.example.com", "http://bee.example.com")]
+    [InlineData("127.0.0.1:63676", "192.168.1.20:5311", "http://192.168.1.20:5311")]
+    public void BehindTheNodeFront_TheBrowsersAuthorityIsTheLastForwardedHost(string host, string forwarded, string expected) =>
+        BrowserAuthority.Origin(Request(host, forwarded), behindNodeFront: true).Should().Be(expected);
+
+    [Theory]
+    [InlineData("127.0.0.1:5310 x")]
+    [InlineData("evil.example/path")]
+    [InlineData("user@evil.example")]
+    [InlineData("evil.example\"><script>")]
+    [InlineData("bad host")]
+    [InlineData("")]
+    [InlineData(" , ")]
+    [InlineData("127.0.0.1:99999")]
+    [InlineData("127.0.0.1:0")]
+    [InlineData("127.0.0.1:")]
+    [InlineData("127.0.0.1:53x0")]
+    [InlineData(":5310")]
+    [InlineData("2001:db8::1")]
+    [InlineData("[::1")]
+    [InlineData("[::1]x")]
+    [InlineData("[127.0.0.1]:5310")]
+    [InlineData("[::1]:70000")]
+    [InlineData("evil.example, 127.0.0.1:99999")]   // the nearest hop is the only one believed: a bad last value is not replaced by an earlier one
+    public void BehindTheNodeFront_AForwardedHostThatIsNotAPlainAuthority_FallsBackToTheRequestsOwnHost(string forwarded) =>
+        BrowserAuthority.Origin(Request("127.0.0.1:63676", forwarded), behindNodeFront: true).Should().Be("http://127.0.0.1:63676");
+
+    [Fact]
+    public void WithNoForwardedHost_TheRequestsOwnHostIsUsed() =>
+        BrowserAuthority.Origin(Request("127.0.0.1:63676"), behindNodeFront: true).Should().Be("http://127.0.0.1:63676");
+
+    [Fact]
+    public void WhenNotBehindTheNodeFront_TheHeaderIsNotTrusted() =>
+        BrowserAuthority.Origin(Request("bee.example.com", "evil.example"), behindNodeFront: false).Should().Be("http://bee.example.com");
+
+    [Fact]
+    public void TheSchemeFollowsTheForwardedProtoAProxyLeftOnTheRequest() =>
+        BrowserAuthority.Origin(Request("127.0.0.1:63676", "192.168.1.20:5311", forwardedProto: "https"), behindNodeFront: true)
+            .Should().Be("https://192.168.1.20:5311");
+}
+
+/// <summary>
 /// The same decisions through the real Web host: what the Profile page hands to its script
 /// (<c>profile-page-data</c>) for each way a node can be run, and what a signed-in user's request looks like.
 /// </summary>
@@ -244,6 +309,39 @@ public sealed class ProfileMcpAddressPageTests : IAsyncLifetime
         var data = await ProfileDataAsync();
 
         data.GetProperty("mcpUrl").GetString().Should().Be("http://localhost/mcp", "the test host is http://localhost");
+    }
+
+    [Fact]
+    public async Task BehindTheNodeFront_ThePagePrintsTheFrontsAddress_NotTheWebProcessesInternalPort()
+    {
+        // What the desktop app does: the Web process is addressed by its own loopback port (here the test host, "localhost"),
+        // the authority the browser used reaches it only in X-Forwarded-Host. The snippet used to carry the internal port and
+        // Claude Code reported 404 on /mcp, because only the front (5310) puts /mcp next to the page.
+        _web.WithSetting("BMB_BEHIND_LOOPBACK_PROXY", "1");
+
+        var data = await ProfileDataAsync(r => r.Headers.TryAddWithoutValidation("X-Forwarded-Host", "127.0.0.1:5310"));
+
+        data.GetProperty("mcpUrl").GetString().Should().Be("http://127.0.0.1:5310/mcp");
+    }
+
+    [Fact]
+    public async Task BehindTheNodeFront_AForwardedHostTheClientMadeUp_IsNotTheOneThatIsPrinted()
+    {
+        _web.WithSetting("BMB_BEHIND_LOOPBACK_PROXY", "1");
+
+        var data = await ProfileDataAsync(r => r.Headers.TryAddWithoutValidation("X-Forwarded-Host", "evil.example, 127.0.0.1:5310"));
+
+        data.GetProperty("mcpUrl").GetString().Should().Be("http://127.0.0.1:5310/mcp", "the front appends the authority it saw; the last value is the nearest hop");
+    }
+
+    [Fact]
+    public async Task WithoutTheNodeFront_TheForwardedHostIsNotTrusted_TheAddressStaysTheRequestsOwn()
+    {
+        // A header a client can send must not choose the address printed in a snippet when no node front vouches for it
+        // (the header still marks the request as proxied, so the page's own host is printed).
+        var data = await ProfileDataAsync(r => r.Headers.TryAddWithoutValidation("X-Forwarded-Host", "evil.example"));
+
+        data.GetProperty("mcpUrl").GetString().Should().Be("http://localhost/mcp");
     }
 
     [Fact]

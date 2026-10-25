@@ -424,6 +424,61 @@ public class NodeFrontTests : IAsyncDisposable
         result.Size.Should().Be(largeData.Length);
     }
 
+    /// <summary>
+    /// The contract the Web pages rely on to print an address the person can really use (the AI-assistant snippet on the Profile page,
+    /// the address of a blind-node invitation): behind the front, the Web process is addressed by its OWN loopback port (its Host is not
+    /// the browser's), and the authority the browser used travels in X-Forwarded-Host, as the LAST value, even when the client sent one of
+    /// its own. Before this was pinned, the Profile page printed the Web process's internal port and the snippet pointed at an address
+    /// with no /mcp behind it.
+    /// </summary>
+    [Fact]
+    public async Task TheWebProcess_SeesItsOwnHost_AndTheBrowsersAuthorityInTheLastForwardedHost()
+    {
+        var apiStub = await StartStubServerAsync(app =>
+            app.MapFallback((HttpContext ctx) => Results.Ok(new { server = "api" })));
+        var webStub = await StartStubServerAsync(app =>
+            app.MapFallback((HttpContext ctx) => Results.Ok(new
+            {
+                server = "web",
+                host = ctx.Request.Host.Value,
+                forwardedHost = ctx.Request.Headers["X-Forwarded-Host"].ToArray(),
+            })));
+
+        var dummyChildren = new Dictionary<string, ReadyFileInfo>
+        {
+            { "Api", new ReadyFileInfo(111, apiStub.Urls.ToList(), "BeeMemoryBank.Api", "1.0.0", DateTime.UtcNow) },
+            { "Web", new ReadyFileInfo(222, webStub.Urls.ToList(), "BeeMemoryBank.Web", "1.0.0", DateTime.UtcNow) }
+        };
+        var (_, proxyUrl) = await StartProxyServerAsync(apiStub.Urls.First(), webStub.Urls.First(), dummyChildren);
+        var browserAuthority = new Uri(proxyUrl).Authority;
+        using var client = new HttpClient();
+
+        foreach (var spoof in new string?[] { null, "evil.example", "evil.example, other.example:99" })
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{proxyUrl}/Profile");
+            if (spoof != null) request.Headers.TryAddWithoutValidation("X-Forwarded-Host", spoof);
+
+            var response = await client.SendAsync(request);
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            var echo = await response.Content.ReadFromJsonAsync<HostEchoResponse>();
+
+            echo!.Server.Should().Be("web");
+            echo.Host.Should().Be(new Uri(webStub.Urls.First()).Authority,
+                "YARP addresses the Web process by its own loopback port, not by the authority the browser used");
+            echo.Host.Should().NotBe(browserAuthority);
+            var last = echo.ForwardedHost.SelectMany(v => v.Split(',')).Select(v => v.Trim()).Last(v => v.Length > 0);
+            last.Should().Be(browserAuthority,
+                $"the last X-Forwarded-Host is what the front itself saw, whatever the client sent first (client sent: {spoof ?? "nothing"})");
+        }
+    }
+
+    private class HostEchoResponse
+    {
+        public string? Server { get; set; }
+        public string? Host { get; set; }
+        public string[] ForwardedHost { get; set; } = [];
+    }
+
     private class DummyResponse
     {
         public string? Server { get; set; }

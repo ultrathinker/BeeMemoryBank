@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.7.3 (2026-10-25)
+
+A small fix release. Nothing is added to the data, the protocol or the database schema (it stays at version 42), and no action is needed for databases or blind copies.
+
+### Fixed
+
+- **Desktop apps: the connection snippet for an AI assistant printed an address that does not work.** In the Windows app, the Windows service and the macOS app, the Profile page showed the port of the app's internal web process (a random port) in the snippet that connects Claude Code or another assistant to the node over MCP. That process has no `/mcp`, so the assistant reported 404. The page now prints the address the browser used, which is where the app answers (port 5310 by default). A snippet you already pasted is repaired by replacing the port in it with 5310, or by creating the snippet again. Docker and reverse-proxy setups are not affected.
+- **Admin > Blind nodes: the address a friend's device will call.** The invitation form started from the same internal address and now starts from the address the browser used.
+
 #### 2.7.2 (2026-10-23)
 
 A fix and tidy-up release for the web pages of Admin. Nothing is added to the data, the protocol or the database schema (it stays at version 42), and no action is needed for databases or blind copies. Two things change on the screen. First, an Admin page that shows a wide table, such as Trusted Nodes with its nine columns, was held to the width of the reading column (880 pixels), so the table scrolled sideways inside its card even on a wide screen; such a page now uses the width the window has, up to 1240 pixels, while text and the other cards keep their width. Second, six functions that opened a second page from a button now live on their own Admin page: you no longer click through to another page to do the work.

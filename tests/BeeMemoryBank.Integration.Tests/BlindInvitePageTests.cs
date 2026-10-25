@@ -10,6 +10,7 @@ using BeeMemoryBank.Sync.Blind;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using ApiClient = WebApp::BeeMemoryBank.Web.Services.ApiClient;
 using BlindNodesModel = WebApp::BeeMemoryBank.Web.Pages.Admin.BlindNodesModel;
@@ -71,6 +72,25 @@ public sealed class BlindInvitePageTests(BlindInviteWorld world)
         await again.OnGetAsync(null, null, null, null);
         again.Issued.Should().BeNull("a second visit does not show the string again");
         again.OpenInvites.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task BehindTheNodeFront_TheFormStartsFromTheAddressTheBrowserUsed_NotTheWebProcessesInternalPort()
+    {
+        await world.ResetAsync();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["BMB_BEHIND_LOOPBACK_PROXY"] = "1" })
+            .Build();
+        var services = new ServiceCollection().AddSingleton<IConfiguration>(configuration).BuildServiceProvider();
+        var context = new DefaultHttpContext { RequestServices = services };
+        context.Request.Scheme = "http";
+        context.Request.Host = new HostString("127.0.0.1:63676");
+        context.Request.Headers["X-Forwarded-Host"] = "127.0.0.1:5310";
+        var page = new BlindNodesModel(new ApiClient(world.Hub.Admin)) { PageContext = new PageContext { HttpContext = context } };
+
+        await page.OnGetAsync(null, null, null, null);
+
+        page.InviteAddress.Should().Be("http://127.0.0.1:5310", "the internal port of the Web process is an address no friend's device can call");
     }
 
     [Fact]

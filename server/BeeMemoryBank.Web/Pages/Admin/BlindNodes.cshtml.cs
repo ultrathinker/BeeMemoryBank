@@ -86,8 +86,9 @@ public class BlindNodesModel(ApiClient api) : AdminPageModel(api)
     {
         Invites = await Api.ListBlindInvitesAsync();
         InviteDefaults = await Api.GetBlindInviteDefaultsAsync();
-        // The address a friend's device will call: what the operator declared for this node, else the address this page was opened at.
-        InviteAddress ??= InviteDefaults?.Address ?? $"{Request.Scheme}://{Request.Host}";
+        // The address a friend's device will call: what the operator declared for this node, else the address this page was opened at
+        // (behind the node's front that is the address the browser used, not this process's own internal port: see BrowserAuthority).
+        InviteAddress ??= InviteDefaults?.Address ?? BrowserAuthority.Origin(Request);
         InviteSourceName ??= InviteDefaults?.SourceName;
         if (InviteDefaults is { } d && InviteLifetime == 30) InviteLifetime = d.DefaultLifetime;
     }

@@ -18,20 +18,19 @@ public class ProfileModel(IConfiguration configuration) : PageModel
     // (plain Docker, where the API port is not even published) instead of printing a dead URL.
     public McpAddress Mcp => McpAddressResolver.Resolve(new McpAddressInputs(
         ConfiguredUrl: configuration["BMB_MCP_URL"],
-        BehindNodeFront: !string.IsNullOrEmpty(configuration["BMB_BEHIND_LOOPBACK_PROXY"]),
+        BehindNodeFront: BehindNodeFront,
         ViaReverseProxy: ArrivedThroughProxy(HttpContext.Request),
         PublishedApiPort: configuration["BMB_API_PUBLISHED_PORT"],
-        BrowseOrigin: BrowseOrigin(HttpContext.Request)));
+        BrowseOrigin: BrowseOrigin(HttpContext.Request, BehindNodeFront)));
+
+    private bool BehindNodeFront => !string.IsNullOrEmpty(configuration[BrowserAuthority.BehindNodeFrontSetting]);
 
     // Base origin the user is currently browsing from (scheme://host[:port]). Honours
     // X-Forwarded-Proto so it is correct behind a reverse proxy with TLS termination, mirroring
-    // the pattern in Shared/_HttpsRequiredAlert.cshtml.
-    public static string BrowseOrigin(HttpRequest request)
-    {
-        var forwarded = request.Headers["X-Forwarded-Proto"].FirstOrDefault()?.Split(',')[0].Trim();
-        var scheme = forwarded is "http" or "https" ? forwarded : request.Scheme;
-        return $"{scheme}://{request.Host}";
-    }
+    // the pattern in Shared/_HttpsRequiredAlert.cshtml. Behind the node's front the host is the one
+    // the browser used (X-Forwarded-Host), not this process's own internal port: see BrowserAuthority.
+    public static string BrowseOrigin(HttpRequest request, bool behindNodeFront = false) =>
+        BrowserAuthority.Origin(request, behindNodeFront);
 
     // A proxy in front of the page announces itself in these headers; with trusted proxies the
     // forwarded-headers middleware moves them to X-Original-*, so look for both. Only used to
