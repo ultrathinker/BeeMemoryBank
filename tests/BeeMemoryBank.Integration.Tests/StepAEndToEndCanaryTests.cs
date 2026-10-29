@@ -324,6 +324,59 @@ public sealed class StepAEndToEndCanaryTests : IAsyncLifetime
 
     // ─── steps ──────────────────────────────────────────────────────────────
 
+    [Fact]
+    public async Task AnArticleAuthoringScope_WaitsForABaselineSnapshotCutover()
+    {
+        using var cutover = await EventWriteGate.Instance.QuiesceAsync();
+        using var scope = _pc.Services.CreateScope();
+
+        var authoring = scope.ServiceProvider.GetRequiredService<IEventLogger>().BeginAuthoringAsync();
+
+        authoring.IsCompletedSuccessfully.Should().BeFalse(
+            "a baseline snapshot has excluded new event writes before it starts VACUUM");
+        cutover.Dispose();
+        using var entered = await authoring;
+    }
+
+    /// <summary>
+    /// The event-write admission is reentrant inside one authoring operation: once the outer scope holds it, a nested
+    /// BeginAuthoringAsync on the same flow (a copy, an import, a composite endpoint scope over many writes) goes straight
+    /// in even with a cutover holding new writes off. A nested call that queued its own admission instead would wait for
+    /// the cutover while the cutover waits for the outer scope — both until the node shuts down.
+    /// </summary>
+    [Fact]
+    public async Task ANestedAuthoringScope_PassesACutoverItsOuterScopeAlreadyHolds()
+    {
+        using var scope = _pc.Services.CreateScope();
+        var logger = scope.ServiceProvider.GetRequiredService<IEventLogger>();
+
+        // A write in flight, so the cutover below really waits while the outer scope is already inside.
+        var inFlight = await EventWriteGate.Instance.EnterAsync();
+        var outer = await logger.BeginAuthoringAsync();
+        var cutover = EventWriteGate.Instance.QuiesceAsync();
+        ValueTask<IDisposable>? pending = null;
+        try
+        {
+            var waited = DateTime.UtcNow;
+            while (!EventWriteGate.Instance.IsQuiescing && DateTime.UtcNow - waited < TimeSpan.FromSeconds(30))
+                await Task.Delay(10);
+            EventWriteGate.Instance.IsQuiescing.Should().BeTrue("the cutover holds new writes off");
+
+            pending = logger.BeginAuthoringAsync();
+            pending.Value.IsCompletedSuccessfully.Should().BeTrue(
+                "the nested scope is inside the operation the outer admission already covers");
+        }
+        finally
+        {
+            // The nested scope of the unfixed code finishes only once the cutover lets go: release the writers first,
+            // then the cutover, then it — nothing stays behind for the next test either way.
+            outer.Dispose();
+            inFlight.Dispose();
+            (await cutover).Dispose();
+            if (pending is { } entered) (await entered).Dispose();
+        }
+    }
+
     /// <summary>One scheduler pass for a blind node: the sync, then what <see cref="BlindNodeManager"/> does after it.</summary>
     private async Task CycleAsync(BlindNodeManager manager, Guid blindId)
     {

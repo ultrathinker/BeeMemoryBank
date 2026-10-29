@@ -799,7 +799,11 @@ public sealed class AdminPagesTests : IAsyncLifetime
     public async Task LockServer_IsTheOnePageWhoseButtonLeadsToAnAction_AndTheActionStillAnswers()
     {
         // /Lock is an action, not a page that holds a function: it locks the node and signs out. The page explains what it does and what comes back.
-        (await GetAsync("/Admin/LockServer")).Should().Contain("href=\"/Lock\"");
+        // The button POSTs (a link to /Lock only shows a confirmation page): a form to /Lock with the antiforgery token, and no link that a prefetch could follow.
+        var page = await GetAsync("/Admin/LockServer");
+        page.Should().NotContain("href=\"/Lock\"");
+        Regex.IsMatch(page, "<form[^>]*method=\"post\"[^>]*action=\"/Lock\"|<form[^>]*action=\"/Lock\"[^>]*method=\"post\"").Should().BeTrue("the Lock Server button is a POST to /Lock");
+        page.Should().Contain("__RequestVerificationToken");
     }
 
     [Fact]

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.7.4 (2026-10-29)
+
+A tidy-up and stability release. Nothing is added to the data, the protocol or the database schema (it stays at version 42), and no action is needed for databases or blind copies. The Admin pages that 2.7.2 merged get their last rough edges smoothed, one rare failure when a note is saved at the moment a blind-copy snapshot is made is gone, and the failures of a few tests that failed by chance were traced and cured.
+
+### Fixed
+
+- **Hard Delete opens on a vault with no notes.** The page said an error instead of "nothing to delete".
+- **Opening `/Lock` no longer locks the node.** A link, or a browser's page preview, could lock it. The page now asks first and locks only on the button. The Lock Server button in Admin, and the Tags page of a locked node, work as before.
+- **A note saved at the moment of a baseline snapshot could fail with HTTP 409** on a node that serves blind copies. Local writes now wait for the snapshot's copy. The snapshot, in turn, waits at most five seconds for a long write (an import or a copy of a big tree) and is asked for again at the next tick, so a long import no longer holds every other write off.
+- **Joining a network from a snapshot.** A phone whose join fails late takes back everything it had imported, so a retry starts clean. A joining node's clock now starts above every imported note, even for a very old vault; before, its first edits could lose to the imported ones.
+- **Fewer false blind-node notices.** A silent blind node gives no notice while this computer's vault is locked or the computer has no network; a blind node that flips between "older" and "newer" version gives one notice instead of one every two checks.
+- **The Desktop update window says it is still working** while an update is unpacked, instead of standing still at about 70 %.
+- **Docker builds no longer send gigabytes of build output to the builder.** The ignore file now skips every nested `bin` and `obj` folder, not only the ones at the root.
+
+### Changed
+
+- **Admin pages.** Blind nodes opens with a short introduction and the actions; the long explanations are folded under "Details". Select lists and text boxes look like the other input fields. Hard Delete uses one width. OS Auto-Unlock shows its warning once. A failed Change URL says why in one sentence, with the technical code folded under "Technical detail", and says that only a superadmin node can announce a new address to the others. Remote Accounts is linked from Trusted Nodes, and the Re-key report from Data key rotation.
+- The setting that says how long a blind node waits to switch databases has an upper limit of ten minutes.
+
 #### 2.7.3 (2026-10-25)
 
 A small fix release. Nothing is added to the data, the protocol or the database schema (it stays at version 42), and no action is needed for databases or blind copies.

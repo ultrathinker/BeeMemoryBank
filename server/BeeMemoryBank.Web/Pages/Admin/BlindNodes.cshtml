@@ -7,29 +7,37 @@
         key. It is an off-site safe for your data. If every full node were lost, the blind node still holds what a restore needs; only you can open it, with your master password.
     </p>
     <p>
-        To let a friend keep a copy on their own device (the <strong>Blind copy</strong> app on a phone, a PC or a Mac), make an <strong>invitation</strong> below:
-        you get one line of text and a QR code that work once, for a few minutes. Send them to your friend by a channel you trust. Their app asks to join and shows a
-        short <strong>match code</strong>; you compare it with the one shown here and confirm with your master password. Until you confirm, no vault content and no usable key of your memory bank is sent to their device.
-        Asking to join already sends this node their device id, public key, name, platform, version and their own backup key; the node keeps that backup key encrypted until you decide. You
-        can withdraw an invitation that has not been used.
+        Use the actions below to invite a copy or add one. Open <em>Details</em> for how invitations, pair codes and hubs work and what a blind node can see.
     </p>
-    <p>
-        The older way is the <strong>pair code</strong>, and it is the only way for a blind node on a server (Docker or a service): its own console shows the code, and you paste it in
-        the box below. This PC checks the node's key, checks that every other device already sees this PC as a superadmin and runs a current version, and then sends the
-        node its first copy. A phone in &ldquo;Blind copy&rdquo; mode can still be added the older way too, with the code it shows (the card &ldquo;Add an Android blind copy&rdquo;). Each blind copy's
-        status and alarms are listed at the end of the page, where you can also reseed a blind node (send it a fresh copy) or disconnect it.
-    </p>
-    <p>
-        The page also lists the <em>hubs</em> for blind copies: the full nodes a blind copy (on a PC, a Mac or a phone) is allowed to call. You set a hub up under
-        <a href="/Admin/TrustedNodes">Trusted Nodes</a>, with &ldquo;Let blind copies call this node&rdquo;.
-    </p>
-    <p class="text-muted text-sm" id="blind-sees">
-        <strong>What it can see.</strong> With metadata encryption on &mdash; the default for a network set up with 2.6.2 or later &mdash; a blind node sees
-        no titles, no paths, no folder, tag or file names and no shape of your tree: only that something changed (how many changes, how big, when,
-        and which of your devices made them), plus the names and addresses of your devices. On an older network where metadata encryption has not
-        been switched on yet (<a href="/Admin/MetadataEncryption">Metadata Encryption</a>), a blind node can still see titles, paths, tags and file names, but never the text
-        of a note or what is inside a file.
-    </p>
+    <details id="blind-node-details">
+        <summary><strong>Details</strong></summary>
+        <div class="admin-notes" style="margin-top:12px;">
+            <p>
+                To let a friend keep a copy on their own device (the <strong>Blind copy</strong> app on a phone, a PC or a Mac), make an <strong>invitation</strong> below:
+                you get one line of text and a QR code that work once, for a few minutes. Send them to your friend by a channel you trust. Their app asks to join and shows a
+                short <strong>match code</strong>; you compare it with the one shown here and confirm with your master password. Until you confirm, no vault content and no usable key of your memory bank is sent to their device.
+                Asking to join already sends this node their device id, public key, name, platform, version and their own backup key; the node keeps that backup key encrypted until you decide. You
+                can withdraw an invitation that has not been used.
+            </p>
+            <p>
+                The older way is the <strong>pair code</strong>, and it is the only way for a blind node on a server (Docker or a service): its own console shows the code, and you paste it in
+                the box below. This PC checks the node's key, checks that every other device already sees this PC as a superadmin and runs a current version, and then sends the
+                node its first copy. A phone in &ldquo;Blind copy&rdquo; mode can still be added the older way too, with the code it shows (the card &ldquo;Add an Android blind copy&rdquo;). Each blind copy's
+                status and alarms are listed at the end of the page, where you can also reseed a blind node (send it a fresh copy) or disconnect it.
+            </p>
+            <p>
+                The page also lists the <em>hubs</em> for blind copies: the full nodes a blind copy (on a PC, a Mac or a phone) is allowed to call. You set a hub up under
+                <a href="/Admin/TrustedNodes">Trusted Nodes</a>, with &ldquo;Let blind copies call this node&rdquo;.
+            </p>
+            <p class="text-muted text-sm" id="blind-sees">
+                <strong>What it can see.</strong> With metadata encryption on &mdash; the default for a network set up with 2.6.2 or later &mdash; a blind node sees
+                no titles, no paths, no folder, tag or file names and no shape of your tree: only that something changed (how many changes, how big, when,
+                and which of your devices made them), plus the names and addresses of your devices. On an older network where metadata encryption has not
+                been switched on yet (<a href="/Admin/MetadataEncryption">Metadata Encryption</a>), a blind node can still see titles, paths, tags and file names, but never the text
+                of a note or what is inside a file.
+            </p>
+        </div>
+    </details>
 }
 
 @if (Model.WarningMessage != null)
@@ -94,7 +102,7 @@
                       help-text="This node's public https address. It is checked now: it must lead back to this very node."></sl-input>
             <div>
                 <label for="invite-lifetime" class="text-sm" style="display:block;margin-bottom:4px;">Valid for</label>
-                <select id="invite-lifetime" name="lifetime" style="width:100%;padding:8px;">
+                <select id="invite-lifetime" name="lifetime">
                     @foreach (var minutes in Model.InviteDefaults?.Lifetimes ?? [15, 30, 60])
                     {
                         <option value="@minutes" selected="@(minutes == Model.InviteLifetime)">@minutes minutes</option>

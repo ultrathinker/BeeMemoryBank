@@ -984,8 +984,15 @@ public sealed partial class BlindSeedService(
     /// <summary>Configuration key for <see cref="DefaultCutoverDrainWait"/>.</summary>
     public const string CutoverDrainWaitSecondsKey = "BeeMemoryBank:BlindSeed:CutoverDrainWaitSeconds";
 
+    /// <summary>The longest drain wait the setting may ask for: a switch that waits longer than this holds the blind node's maintenance mode for a stuck reader that is not going to leave.</summary>
+    public static readonly TimeSpan MaxCutoverDrainWait = TimeSpan.FromMinutes(10);
+
+    /// <summary>The drain wait for a configured number of seconds: at least a second (0 or less would be no wait at all), at most <see cref="MaxCutoverDrainWait"/>.</summary>
+    public static TimeSpan CutoverDrainWaitOf(int seconds) =>
+        TimeSpan.FromSeconds(Math.Clamp(seconds, 1, (int)MaxCutoverDrainWait.TotalSeconds));
+
     private readonly TimeSpan _cutoverDrainWait =
-        TimeSpan.FromSeconds(Math.Max(1, config.GetValue(CutoverDrainWaitSecondsKey, (int)DefaultCutoverDrainWait.TotalSeconds)));
+        CutoverDrainWaitOf(config.GetValue(CutoverDrainWaitSecondsKey, (int)DefaultCutoverDrainWait.TotalSeconds));
 
     /// <summary>The drain wait this instance actually uses.</summary>
     public TimeSpan CutoverDrainWait => _cutoverDrainWait;

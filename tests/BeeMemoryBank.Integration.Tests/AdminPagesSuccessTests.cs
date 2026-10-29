@@ -329,6 +329,26 @@ public sealed class AdminPagesSuccessTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AFailedChangeNodeAddress_ShowsTheApiSentenceAndKeepsItsCodeAsTechnicalDetail()
+    {
+        var peer = await AddPeerAsync("Office server", superadmin: true);
+        _scripted.Answer("PUT", $"/api/whitelist/{peer}/address",
+            """{"error":"The address did not answer as this node.","code":"address_mismatch"}""", HttpStatusCode.BadRequest);
+
+        var done = await PostAsync("/Admin/TrustedNodes", "ChangeNodeAddress",
+            ("nodeId", peer.ToString()), ("newApiAddress", "https://office.example:5311"), ("password", AdminPassword));
+
+        var target = WebUtility.UrlDecode(done);
+        target.Should().Contain("err=The address did not answer as this node.");
+        target.Should().Contain("detail=address_mismatch");
+        target.Should().NotContain("{\"error\"");
+
+        var page = await GetAsync(target);
+        Regex.IsMatch(page, @"<details(?![^>]*\bopen)[^>]*>\s*<summary>Technical detail</summary>\s*address_mismatch\s*</details>")
+            .Should().BeTrue("the code is kept in a collapsed detail, not in the sentence");
+    }
+
+    [Fact]
     public async Task OsAutoUnlockIsSwitchedOnAndOff_AndTheWordsNameTheAccountOfTheSystemTheNodeRunsOn_WithTheNodeAnswerScripted()
     {
         // Switching it on writes a secret into the secret store of the account the tests run as: the node's answer is scripted, the words are the page's.

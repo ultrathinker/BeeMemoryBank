@@ -554,7 +554,10 @@ to 30 seconds each.
    preserved (they were populated in step 1).
 6. Set `sync_position[producer] = cp_seq` so subsequent pulls only fetch tail events.
 7. Initialize Lamport clock: `min(snapshot.lamport, local + MAX_CLOCK_ADVANCE)` where
-   `MAX_CLOCK_ADVANCE = 1_000_000` (clock-skew attack mitigation). The value is also kept as the
+   `MAX_CLOCK_ADVANCE = 1_000_000` (clock-skew attack mitigation of the manifest's unsigned claim),
+   then raised to the highest `lamport_ts` of the rows that were actually imported (`SnapshotJoin.MaxImportedLamport`;
+   a snapshot with a row at or above 2^53 is refused and the join is taken back), so a joiner of an old vault never
+   stamps its first edits below the versions it holds. The result is also kept as the
    durable floor `lamport_floor` in `tbl_migration_marker`: the joiner holds no event that carries
    it, and every start initializes the clock from `max(MAX(tbl_event.lamport_ts), floor)`.
 8. `MarkInitialSyncCompletedAsync` on `tbl_node_identity`.

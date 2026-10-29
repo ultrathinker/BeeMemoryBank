@@ -161,6 +161,8 @@ BeeMemoryBank.Sync.DekRotation.RewrapTally
 BeeMemoryBank.Sync.DependencyInjection
 BeeMemoryBank.Sync.DependencyInjection+NoOpRestoreInitiator
 BeeMemoryBank.Sync.EventLogger
+BeeMemoryBank.Sync.EventLogger+AuthoringFlow
+BeeMemoryBank.Sync.EventLogger+AuthoringScope
 BeeMemoryBank.Sync.JoinAbortClient
 BeeMemoryBank.Sync.JoinAbortOutcome
 BeeMemoryBank.Sync.JoinSnapshotCipher

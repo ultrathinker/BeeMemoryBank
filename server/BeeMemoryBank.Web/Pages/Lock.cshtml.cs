@@ -11,7 +11,16 @@ namespace BeeMemoryBank.Web.Pages;
 [Authorize(Roles = "superadmin")]
 public class LockModel(ApiClient api) : PageModel
 {
-    public async Task<IActionResult> OnGetAsync()
+    public IActionResult OnGet()
+    {
+        var role = User.FindFirst(ClaimTypes.Role)?.Value;
+        if (role != UserRoles.Superadmin)
+            return Forbid();
+
+        return Page();
+    }
+
+    public async Task<IActionResult> OnPostAsync()
     {
         var role = User.FindFirst(ClaimTypes.Role)?.Value;
         if (role != UserRoles.Superadmin)

@@ -919,6 +919,10 @@ public class BlindPairingSeedTests : IAsyncLifetime
     [Fact]
     public async Task PushGap_AfterCompactionCutsTheBlindNodeOff_IsDetected_AndReseeds()
     {
+        // This is the scheduler's decision path exercised explicitly below. Hold its
+        // push-on-save loop off so it cannot advance the blind peer between the
+        // compaction and the deliberately observed PushGap.
+        using var schedulerPause = await _pc.Services.GetRequiredService<SyncScheduler>().PauseAsync();
         await AddBlindNodeAsync();
         var blindId = (await IdentityAsync(_blind)).NodeId;
         using (var scope = _pc.Services.CreateScope())

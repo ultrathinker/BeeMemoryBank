@@ -12,14 +12,9 @@
         password prompt, using a secret that the operating system keeps for this @os user account (@(isMac ? "the macOS Keychain" : "Windows DPAPI")). It is meant for a server node that
         runs unattended and has to come back by itself after a restart or a power cut.
     </p>
-    <p class="admin-warning">
-        <strong>The price: anyone who can use this @os account can open the vault without a password.</strong> And since the key then sits next to the data, a stolen disk is only as safe
-        as that account (and as disk encryption, if you use it). Turn it on only on a machine you trust and control physically. Turning it off takes effect at the next start: the vault
-        asks for the password again.
-    </p>
     <p>
         On a node whose database is encrypted (<a href="/Admin/StorageProtection">Database encryption</a>), auto-unlock still means the computer opens your notes at start without your
-        password. On a server, the way to turn it on is the switch <em>Start unlocked after a restart</em> on <a href="/Admin/StorageProtection">Database encryption</a>, so this page only shows it, and lets you turn it off.
+        password. @if (!Model.ServerHasNoSwitch && Model.OsAutoUnlockSupported) { <text>Read the <a href="#os-auto-unlock-risk">warning below</a> before enabling it. Turning it off takes effect at the next start: the vault asks for the password again. </text> }On a server, the way to turn it on is the switch <em>Start unlocked after a restart</em> on <a href="/Admin/StorageProtection">Database encryption</a>, so this page only shows it, and lets you turn it off.
     </p>
 }
 
@@ -44,17 +39,16 @@ else if (!Model.OsAutoUnlockSupported)
 else
 {
     <div class="card mt-md" style="max-width:640px;">
-        <sl-alert variant="warning" open style="margin-bottom:16px;">
+        <sl-alert id="os-auto-unlock-risk" variant="warning" open style="margin-bottom:16px;">
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             <strong>Anyone with access to this @os user account will be able to open the
-            vault without a password</strong> once this is enabled. Only enable it on a machine
+            vault without a password</strong> once this is enabled. The key then sits next to the data, so a stolen disk
+            is only as safe as that account (and as disk encryption, if you use it). Only enable it on a machine
             you trust and control physically.
             @if (Model.VaultStatus is { IsSealed: true })
             {
                 <div id="os-auto-unlock-sealed-warning" style="margin-top:8px;">
                     Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without your password.
-                    If someone gets this computer or its disk, their protection rests only on your @os account password
-                    (and on disk encryption, if you use it).
                 </div>
             }
         </sl-alert>
@@ -74,7 +68,7 @@ else
             <sl-badge variant="neutral" pill style="margin-bottom:12px;">not configured</sl-badge>
             <form data-busy="short" method="post" asp-page-handler="EnableAutoUnlock">
                 <sl-button type="submit" variant="primary" size="small" class="btn-confirm-click"
-                           data-confirm="Enable OS auto-unlock? Anyone with access to this @os account will be able to open the vault without a password.@(Model.VaultStatus is { IsSealed: true } ? " Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without your password. If someone gets this computer or its disk, their protection rests only on your " + os + " account password (and on disk encryption, if you use it)." : "")">
+                           data-confirm="Enable OS auto-unlock?">
                     <sl-icon slot="prefix" name="key"></sl-icon> Enable auto-unlock
                 </sl-button>
             </form>

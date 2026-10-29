@@ -19,6 +19,10 @@
         <li>A snapshot of this node is taken automatically before anything is changed.</li>
     </ul>
     <p>It takes two steps: <em>propose</em> (with your master password), then <em>confirm</em> (with your master password again), which starts the re-encryption.</p>
+    <p class="text-muted text-sm">
+        Rotating the key here is not the same as the offline re-key of the desktop app (Manage storages, Re-key), which rebuilds the whole database under new keys. The checklist
+        that follows an offline re-key is kept on the <a href="/RekeyReport">Re-key report</a>.
+    </p>
 }
 
 <partial name="_PendingDekRotations" model="Model.PeerPendingRotations" />

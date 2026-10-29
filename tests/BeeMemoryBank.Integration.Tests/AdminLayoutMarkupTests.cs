@@ -202,4 +202,38 @@ public sealed class AdminLayoutMarkupTests
         rule.Should().Contain("display: flex").And.Contain("flex-wrap: wrap");
         Css().Should().Contain(".admin-scope .admin-fields > * { flex: 1 1 14rem; min-width: 0; }");
     }
+
+    [Fact]
+    public void ANativeSelectOrTextarea_OfTheAdminArea_ReadsTheTokensOfTheShoelaceInput()
+    {
+        // 2.7.4: a select and a textarea looked unlike the inputs around them. They take height, border, radius, colours and the focus ring from the tokens sl-input reads.
+        var rule = RuleOf(Css(), ".admin-scope select, .admin-scope textarea {");
+        rule.Should().Contain("var(--sl-input-border-color)").And.Contain("var(--sl-input-border-radius-medium)").And.Contain("var(--sl-input-background-color)").And.Contain("width: 100%");
+        Css().Should().Contain(".admin-scope select { height: var(--sl-input-height-medium);");
+        RuleOf(Css(), ".admin-scope select:focus, .admin-scope textarea:focus {").Should().Contain("var(--sl-input-border-color-focus)").And.Contain("var(--sl-input-focus-ring-color)");
+        // no field carries a padding of its own that the stylesheet would lose to
+        Page("BlindNodes").Should().NotContain("<select id=\"invite-lifetime\" name=\"lifetime\" style=");
+    }
+
+    [Fact]
+    public void TheHardDeletePage_HasOneRightEdge_ForItsFilterItsTableAndItsButtons()
+    {
+        // The filter card was capped at the reading width, the table card was not, and the audit button sat at the edge of the page: three edges.
+        Css().Should().Contain(".admin-scope[data-admin-page=\"/Admin/HardDelete\"] .admin-body .card { max-width: none; }");
+        var page = Page("HardDelete");
+        page.Should().Contain("id=\"hard-delete-filter\"").And.Contain("id=\"table-container\"").And.Contain("id=\"btn-open-audit\"");
+        page.Should().NotContain("max-width", "no block of the page sets a width of its own");
+    }
+
+    [Fact]
+    public void TheBlindNodesPage_IsAShortIntro_AndTheLongExplanationsAreFoldedUnderDetails_WithoutScript()
+    {
+        var page = Page("BlindNodes");
+        var about = page[page.IndexOf("@section About", StringComparison.Ordinal)..page.IndexOf("@if (Model.WarningMessage", StringComparison.Ordinal)];
+        about.Should().Contain("<details id=\"blind-node-details\">").And.Contain("<summary><strong>Details</strong></summary>");
+        about.Should().NotContain("<script").And.NotContain("onclick");
+        // the paragraphs outside the fold are the intro only
+        var outside = about.Replace(about[about.IndexOf("<details", StringComparison.Ordinal)..], "");
+        Regex.Matches(outside, "<p[ >]").Count.Should().BeLessThanOrEqualTo(2);
+    }
 }

@@ -413,19 +413,37 @@ public sealed class BlindNodeAlarmsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ALockedVault_GivesTheAlarmsWithoutNames()
+    public async Task ALockedVault_GivesTheAlarmsWithoutNames_AndNoNoticeForASilentNode()
     {
         var session = _pc.Services.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>();
         var service = new BlindAlarmService(_clock, invisible: null, session, unreachableSince: null);
         var silent = Node(quietFor: TimeSpan.FromDays(4));
-        service.Judge([silent]).Alarms.Should().ContainSingle().Which.Name.Should().Be(silent.DisplayName);
+        var before = service.Judge([silent]).Alarms.Should().ContainSingle().Subject;
+        (before.Name, before.Notify).Should().Be((silent.DisplayName, true));
 
         using var api = _pc.CreateClient();
         (await api.PostAsync("/api/session/lock", null)).EnsureSuccessStatusCode();
 
         var report = service.Judge([silent]);
         report.Locked.Should().BeTrue();
-        report.Alarms.Should().ContainSingle("an alarm needs no key: it is still raised").Which.Name.Should().BeNull();
+        var alarm = report.Alarms.Should().ContainSingle("an alarm needs no key: the page still says it").Subject;
+        alarm.Name.Should().BeNull();
+        // A locked PC cannot sign in to any peer, so every server blind node is silent for it after three days; that is the lock, not the nodes (BMB-183).
+        (alarm.Notify, alarm.Banner).Should().Be((false, true));
+    }
+
+    [Fact]
+    public async Task ALockedVault_StillNotifiesAboutAProtocolTheBlindNodeDeclared()
+    {
+        var session = _pc.Services.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>();
+        var service = new BlindAlarmService(_clock, invisible: null, session, unreachableSince: null);
+        var tooOld = Node(quietFor: TimeSpan.Zero, protocol: SyncProtocolVersion.Current - 1, protocolSeenAt: Now);
+        using var api = _pc.CreateClient();
+        (await api.PostAsync("/api/session/lock", null)).EnsureSuccessStatusCode();
+
+        var alarm = service.Judge([tooOld]).Alarms.Should().ContainSingle().Subject;
+
+        (alarm.Kind, alarm.Notify, alarm.Name).Should().Be((BlindAlarmKinds.OldProtocol, true, null));
     }
 
     [Fact]

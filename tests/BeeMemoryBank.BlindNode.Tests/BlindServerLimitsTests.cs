@@ -1,5 +1,6 @@
 using System.Text;
 using BeeMemoryBank.Api.Middleware;
+using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Api.Services.BlindBackup;
 using BeeMemoryBank.Api.Services.BlindLimits;
 using BeeMemoryBank.Sync;
@@ -34,6 +35,38 @@ public sealed class BlindServerLimitsTests : IDisposable
         var paused = BlindNodeLimits.FromEnvironment(name => name == BlindNodeLimits.StoredEnvName ? "0" : "");
         paused.Problem.Should().BeNull();
         paused.Limits.Should().Be(new BlindNodeLimits(0, null));
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(-30, 1)]
+    [InlineData(1, 1)]
+    [InlineData(10, 10)]
+    [InlineData(600, 600)]
+    [InlineData(601, 600)]
+    [InlineData(int.MaxValue, 600)]
+    public void TheCutoverDrainWait_IsAtLeastASecond_AndAtMostTenMinutes(int configured, int expectedSeconds) =>
+        BlindSeedService.CutoverDrainWaitOf(configured).Should().Be(TimeSpan.FromSeconds(expectedSeconds));
+
+    [Theory]
+    [InlineData("7", 7)]
+    [InlineData("0", 1)]
+    [InlineData("99999", 600)]
+    public async Task TheCutoverDrainWaitSetting_IsTheOneTheSeedServiceUses(string configured, int expectedSeconds)
+    {
+        using var node = new ConfiguredBlindNodeFactory(BlindSeedService.CutoverDrainWaitSecondsKey, configured);
+        await node.InitializeNodeAsync();
+
+        node.Services.GetRequiredService<BlindSeedService>().CutoverDrainWait.Should().Be(TimeSpan.FromSeconds(expectedSeconds));
+    }
+
+    [Fact]
+    public async Task WithNoSetting_TheCutoverDrainWaitIsTheDefault()
+    {
+        using var node = new BeeMemoryBank.Integration.Tests.BlindNodeFactory();
+        await node.InitializeNodeAsync();
+
+        node.Services.GetRequiredService<BlindSeedService>().CutoverDrainWait.Should().Be(BlindSeedService.DefaultCutoverDrainWait);
     }
 
     [Fact]

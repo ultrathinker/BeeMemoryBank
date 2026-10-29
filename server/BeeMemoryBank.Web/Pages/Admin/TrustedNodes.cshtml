@@ -18,6 +18,9 @@
         <strong>Revoking is not eviction.</strong> It stops this network accepting the device, but a device that already holds the vault key still holds it. To
         lock such a device out for good, revoke it and then <a href="/Admin/DekRotation">rotate the data key</a>.
     </p>
+    <p>
+        To mirror selected folders read-only from a different Bee Memory Bank, use <a href="/RemoteAccounts">Remote Accounts</a>.
+    </p>
 }
 
 @if (Model.PasswordPeersToPromote.Count > 0)
@@ -267,6 +270,9 @@ else
     <form data-busy="short" method="post" asp-page-handler="ChangeNodeAddress" class="sl-form">
         <input type="hidden" id="change-url-node-id" name="nodeId" />
         <p id="change-url-node-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
+        <p id="change-url-announce" class="text-muted text-sm" style="margin:0 0 16px;">
+            The new address is announced to the other nodes only when this node is a superadmin of the network. On any other node the other nodes refuse the change and keep the old address.
+        </p>
         <div style="margin-bottom:16px;">
             <sl-input id="change-url-input" name="newApiAddress" label="New API Address" placeholder="https://example.com" required></sl-input>
         </div>

@@ -208,7 +208,9 @@ public sealed class BlindAlarmService
         var awakeSince = Interlocked.Read(ref _awakeSinceTicks);
         var copiesHeard = _unreachableSince == null || (awakeSince != 0 && now - new DateTime(awakeSince, DateTimeKind.Utc) >= CopyGrace);
         var alarms = Evaluate(now, nodes, _unreachableSince?.Invoke() ?? new Dictionary<Guid, DateTime>(), copiesHeard, _policy);
-        if (locked) alarms = alarms.Select(a => a with { Name = null }).ToList();
+        // A locked vault cannot sign in to any peer (the node's identity key is wrapped under the master key), so the silence of a blind node is not the node's:
+        // the page still says it, but no notice goes out for it (and none names the node). What the node declared (a protocol) is still worth one.
+        if (locked) alarms = alarms.Select(a => a with { Name = null, Notify = a.Notify && a.Kind != BlindAlarmKinds.Silent }).ToList();
         return new BlindAlarmReport(BlindAlarmReport.Judged, locked, alarms);
     }
 

@@ -121,4 +121,13 @@ public class HardDeleteServiceTests : TestFixture
         deleted.Items.Should().NotContain(i => i.Title == "Alpha");
         deleted.Items.Should().Contain(i => i.Title == "Beta");
     }
+
+    [Fact]
+    public async Task List_EmptyVault_ReturnsAnEmptyPage()
+    {
+        var page = await _hardDeleteService.ListAsync(1, 100, null, HardDeleteStatusFilter.All, CancellationToken.None);
+
+        page.Items.Should().BeEmpty();
+        page.TotalCount.Should().Be(0);
+    }
 }

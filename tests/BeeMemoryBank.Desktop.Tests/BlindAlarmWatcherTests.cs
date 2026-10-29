@@ -291,6 +291,21 @@ public sealed class BlindAlarmWatcherTests
     }
 
     [Fact]
+    public async Task ABlindNodeThatFlipsBetweenOlderAndNewer_IsOneEpisode_NotANoticeEveryTwoPolls()
+    {
+        var watcher = await PastTheGraceAsync();
+        // Two polls each: long enough for either kind to be raised on its own, which is what a flip every two polls did before.
+        foreach (var kind in new[] { "old_protocol", "old_protocol", "pc_too_old", "pc_too_old", "old_protocol", "old_protocol", "pc_too_old", "pc_too_old" })
+        {
+            _next = Judged(new BlindAlarmEntry(kind, NodeA, "Attic box", null, kind == "old_protocol" ? 3 : 5, true, true));
+            await PollAsync(watcher);
+        }
+
+        _notifier.Notices.Should().ContainSingle("the two kinds are one mismatch between this computer and that node");
+        watcher.AttentionCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task DuringTheStartGrace_NothingIsShown_ButTheTrayAlreadyKnows()
     {
         var watcher = Make();

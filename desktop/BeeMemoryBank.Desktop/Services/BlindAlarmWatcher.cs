@@ -328,10 +328,14 @@ public sealed class BlindAlarmWatcher : IDisposable
     }
 
     // The protocol the node declared is not part of the key: a blind node that keeps changing its answer would otherwise start a new
-    // episode, and with it a new notice, every few polls. One "needs an update" per node and kind, until it is gone for good.
+    // episode, and with it a new notice, every few polls. Nor is which side is the older one: a node that answers 3, then 5, then 3 flips
+    // between "needs an update" and "update this computer", and both are one problem to the person: the two do not match. One notice per
+    // node and problem, until it is gone for good; the text is that of the latest answer.
     private static string KeyOf(BlindAlarmEntry alarm) => string.Join('|',
-        alarm.Kind, alarm.NodeId.ToString("D"),
+        ProblemOf(alarm.Kind), alarm.NodeId.ToString("D"),
         alarm.Since?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? "");
+
+    private static string ProblemOf(string kind) => kind is "old_protocol" or "pc_too_old" ? "protocol_mismatch" : kind;
 
     /// <summary>A stand-in for an episode known only from the store: enough to be counted and cleared, never shown as it is.</summary>
     private static BlindAlarmEntry Restored(string key)

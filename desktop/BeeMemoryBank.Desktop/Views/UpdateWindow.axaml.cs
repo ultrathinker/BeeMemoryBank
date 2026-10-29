@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using BeeMemoryBank.Desktop.Services;
 
 namespace BeeMemoryBank.Desktop.Views;
@@ -20,6 +21,11 @@ public partial class UpdateWindow : Window
     private readonly Func<Task> _applyUpdate;
     private Mode _mode;
 
+    // The percent of the download and when it last moved: it stands still while the library unpacks what it downloaded (BMB-32), and the window then says so.
+    private int _lastPercent = -1;
+    private DateTime _lastPercentChangeUtc;
+    private readonly DispatcherTimer _stallTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+
     public UpdateWindow()
     {
         // Designer fallback only.
@@ -35,11 +41,20 @@ public partial class UpdateWindow : Window
         InitializeComponent();
 
         _updates.Progress += OnProgress;
+        _stallTimer.Tick += (_, _) =>
+        {
+            if (_mode == Mode.Checking) ShowChecking(_updates.CurrentProgress);
+            else _stallTimer.Stop();
+        };
         Closing += (_, _) =>
         {
             if (_mode == Mode.Checking) _updates.CancelCheck();
         };
-        Closed += (_, _) => _updates.Progress -= OnProgress;
+        Closed += (_, _) =>
+        {
+            _stallTimer.Stop();
+            _updates.Progress -= OnProgress;
+        };
     }
 
     /// <summary>Runs (or joins) a check and shows how it ended.</summary>
@@ -99,12 +114,18 @@ public partial class UpdateWindow : Window
     {
         if (progress?.FoundVersion is { } version)
         {
-            Show(Mode.Checking, $"Downloading version {version}",
-                $"{progress.Percent}%. You can keep working; close this window to stop the download.",
-                progress: progress.Percent, primary: null, secondary: "Cancel");
+            if (progress.Percent != _lastPercent)
+            {
+                _lastPercent = progress.Percent;
+                _lastPercentChangeUtc = DateTime.UtcNow;
+            }
+            var view = UpdateProgressText.For(version, progress.Percent, DateTime.UtcNow - _lastPercentChangeUtc);
+            Show(Mode.Checking, view.Title, view.Body, progress: view.Progress, primary: null, secondary: "Cancel");
+            _stallTimer.Start();
         }
         else
         {
+            _lastPercent = -1;
             Show(Mode.Checking, "Checking for updates",
                 "Looking for a new version of Bee Memory Bank...",
                 progress: -1, primary: null, secondary: "Cancel");

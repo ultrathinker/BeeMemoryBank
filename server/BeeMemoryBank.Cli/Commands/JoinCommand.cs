@@ -313,8 +313,9 @@ public static class JoinCommand
 
 
         // From the first row written here to the end of the snapshot step, any failure takes the node back to "not
-        // joined" (SnapshotJoin.RollbackPartialNode), the way the phone does: a retry then starts clean instead of hitting
-        // "already initialized", and nothing half-made is left that says it joined.
+        // joined" (NodeResetService.DiscardPendingSetupAsync: every table and the media files go), and a process that is cut
+        // here is wiped by the next start (SealIntent): a retry then starts clean instead of hitting "already initialized",
+        // and nothing half-made is left that says it joined.
         var remote = joinResponse.RemoteNode;
         long cpSeq;
         long articleCount;

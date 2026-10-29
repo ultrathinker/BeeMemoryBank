@@ -35,27 +35,73 @@ public class EventLogger(
 
     /// <summary>
     /// Enters the authoring barrier and refuses, before the caller changed anything, while the new metadata key of the last DEK
-    /// rotation is not published. Deliberately not <c>async</c>: the barrier's ambient flow is set in the caller's context.
+    /// rotation is not published. Deliberately not <c>async</c>: the flow that counts the operation's nested scopes is raised in
+    /// the caller's context, before the first await.
     /// </summary>
     public ValueTask<IDisposable> BeginAuthoringAsync()
     {
+        var flow = Flow.Value;
+        var nested = flow is not null && Volatile.Read(ref flow.Depth) > 0;
+        if (nested) Interlocked.Increment(ref flow!.Depth);
+        else { flow = new AuthoringFlow { Depth = 1 }; Flow.Value = flow; }
         var entering = barrier?.EnterShared() ?? new ValueTask<IDisposable>(NullAuthoringScope.Instance);
-        return RefuseWhilePendingAsync(entering);
+        return RefuseWhilePendingAsync(entering, flow, nested);
     }
 
-    private async ValueTask<IDisposable> RefuseWhilePendingAsync(ValueTask<IDisposable> entering)
+    private async ValueTask<IDisposable> RefuseWhilePendingAsync(ValueTask<IDisposable> entering, AuthoringFlow flow, bool nested)
     {
-        var scope = await entering;
+        IDisposable? scope = null;
         try
         {
+            scope = await entering;
             ThrowIfPublishPending();
+            // The outermost scope of the flow takes the event-write admission that covers the whole operation; a nested one (a
+            // copy, an import, a composite endpoint scope hold one outer scope over writes that each begin their own) is already
+            // inside it. A nested call that queued a second admission instead would let a cutover block a write the cutover is
+            // itself waiting for — both forever.
+            var eventWrite = nested ? null : await EventWriteGate.Instance.EnterAdmissionAsync();
+            return new AuthoringScope(scope, eventWrite, flow);
         }
         catch
         {
-            scope.Dispose();
+            scope?.Dispose();
+            LeaveFlow(flow);
             throw;
         }
-        return scope;
+    }
+
+    // The authoring scopes of one logical flow, the way the barrier counts the shared scopes of one flow: a copy or an import
+    // holds one outer scope over writes that each open their own, and only the outermost of them holds the event-write admission.
+    // The flow object survives an await that fails (the slot must not keep a count the caller's context cannot see), which is why
+    // the count lives here and not in the AsyncLocal slot itself.
+    private sealed class AuthoringFlow
+    {
+        public int Depth;
+    }
+
+    private static readonly AsyncLocal<AuthoringFlow?> Flow = new();
+
+    private static void LeaveFlow(AuthoringFlow flow)
+    {
+        if (Interlocked.Decrement(ref flow.Depth) == 0 && ReferenceEquals(Flow.Value, flow)) Flow.Value = null;
+    }
+
+    /// <summary>
+    /// Keeps the metadata authoring barrier and the event-write admission together. A baseline
+    /// snapshot excludes this scope before it starts its SQLite copy, so a local write cannot race
+    /// that copy after it has passed the metadata-key check.
+    /// </summary>
+    private sealed class AuthoringScope(IDisposable metadataAuthoring, IDisposable? eventWrite, AuthoringFlow flow) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            eventWrite?.Dispose();
+            LeaveFlow(flow);
+            metadataAuthoring.Dispose();
+        }
     }
 
     /// <summary>Nothing is sealed between the DEK commit of a rotation and the publication of its new key (spec 4.4).</summary>

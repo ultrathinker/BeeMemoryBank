@@ -109,4 +109,28 @@ public sealed class OsAutoUnlockPageTests : IAsyncLifetime
         body.Should().Contain("Disable auto-unlock").And.Contain("handler=DisableAutoUnlock");
         body.Should().NotContain("os-auto-unlock-server");
     }
+
+    [Fact]
+    public async Task ADesktopWithASecretStore_SaysTheDangerOnce_AndTheExplanationLinksToIt()
+    {
+        (_node.Role, _node.Supported, _node.Enabled) = ("desktop", true, false);
+        using var response = await _admin.GetAsync("/Admin/OsAutoUnlock");
+        var html = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
+
+        System.Text.RegularExpressions.Regex.Matches(html, "Anyone with access to this").Should().HaveCount(1, "one warning, in the card of the switch");
+        html.Should().NotContain("admin-warning").And.Contain("id=\"os-auto-unlock-risk\"").And.Contain("href=\"#os-auto-unlock-risk\"");
+        System.Text.RegularExpressions.Regex.Replace(html, @"\s+", " ").Should().Contain("a stolen disk is only as safe as that account", "what the old explanation said about the disk is in the one warning");
+        html.Should().Contain("Turning it off takes effect at the next start");
+        System.Text.RegularExpressions.Regex.Match(html, "data-confirm=\"Enable OS auto-unlock[^\"]*\"").Value.Should().NotContain("Anyone with access", "the confirmation does not repeat the warning a third time");
+    }
+
+    [Fact]
+    public async Task AServer_HasNoWarningToLinkTo()
+    {
+        (_node.Role, _node.Supported, _node.Enabled) = ("server", false, false);
+        using var response = await _admin.GetAsync("/Admin/OsAutoUnlock");
+        var html = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
+
+        html.Should().NotContain("os-auto-unlock-risk", "the page offers no switch here, so there is no warning and no link to it");
+    }
 }

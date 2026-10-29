@@ -1961,10 +1961,32 @@ sl-input.bmb-secret::part(input) {
 .admin-scope .admin-body { min-width: 0; }
 .admin-scope .admin-body .card { max-width: 880px; }
 
+/* Native fields are used for values that may be copied verbatim (pair and invitation codes). They take the look of a Shoelace input from the tokens the input itself
+   reads (height, border, radius, colours, focus ring), so the two cannot drift apart in any theme. */
+.admin-scope select, .admin-scope textarea {
+    box-sizing: border-box;
+    width: 100%;
+    border: var(--sl-input-border-width, 1px) solid var(--sl-input-border-color);
+    border-radius: var(--sl-input-border-radius-medium);
+    background-color: var(--sl-input-background-color);
+    color: var(--sl-input-color);
+    font-family: var(--sl-input-font-family);
+    font-size: var(--sl-input-font-size-medium);
+}
+.admin-scope select { height: var(--sl-input-height-medium); padding: 0 var(--sl-input-spacing-medium); }
+.admin-scope textarea { padding: 0.5em var(--sl-input-spacing-medium); resize: vertical; }
+.admin-scope select:focus, .admin-scope textarea:focus {
+    outline: none;
+    border-color: var(--sl-input-border-color-focus);
+    box-shadow: 0 0 0 var(--sl-focus-ring-width) var(--sl-input-focus-ring-color);
+}
+
 /* A page whose table is wider than the reading column (Trusted Nodes has nine columns) uses the room the window has,
    up to 1240px, instead of scrolling inside a card 880px wide. Prose and the other cards keep their width. */
 .admin-scope .admin-page:has(.admin-body > .card > table) { max-width: min(100%, 1240px); }
 .admin-scope .admin-body .card:has(> table) { max-width: none; }
+/* Hard Delete has filters, its table and its action row on one wide page. */
+.admin-scope[data-admin-page="/Admin/HardDelete"] .admin-body .card { max-width: none; }
 
 /* A table card is a size container: its columns follow the width of the CARD (the window minus the tree minus the padding of the page), not of the window, so a laptop
    with the tree open and a phone get the same answer at the same card width. The table keeps what matters (the name, the status, the last contact, the buttons) and

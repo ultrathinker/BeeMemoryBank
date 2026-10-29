@@ -105,6 +105,47 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
         ((int)response.StatusCode).Should().BeGreaterThanOrEqualTo(300, "the old page has no handler for a POST: the forms post to the Admin page");
     }
 
+    [Fact]
+    public async Task Lock_GetOnlyShowsTheConfirmation_AndPostLocksTheNode()
+    {
+        using var get = await _admin.GetAsync("/Lock");
+
+        get.StatusCode.Should().Be(HttpStatusCode.OK, "a GET must never lock the node");
+        var html = await get.Content.ReadAsStringAsync();
+        var token = Regex.Match(html, "__RequestVerificationToken[^>]*value=\"([^\"]+)\"").Groups[1].Value;
+        token.Should().NotBeNullOrEmpty("the confirmation form must use antiforgery protection");
+
+        using var post = await _admin.PostAsync("/Lock", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = token,
+        }));
+
+        post.StatusCode.Should().Be(HttpStatusCode.Found);
+        post.Headers.Location!.OriginalString.Should().Be("/Login");
+    }
+
+    [Fact]
+    public async Task TheTagsPage_OfALockedNode_SendsThePersonToTheSignIn_NotToTheLockConfirmation()
+    {
+        // It used to redirect to /Lock, which locked and signed out on a GET; /Lock now asks first, and a person who only wants to sign in must not be asked to lock.
+        _api.Services.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>().Lock();
+
+        using var response = await _admin.GetAsync("/Tags");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Found);
+        WebUtility.UrlDecode(response.Headers.Location!.OriginalString).Should().Be("/Login?returnUrl=/Tags");
+    }
+
+    [Fact]
+    public async Task ThePagesNothingLinkedTo_AreReachedFromTheAdminPageWhereAPersonLooksForThem()
+    {
+        // /RemoteAccounts (read-only mirrors from another node) from Trusted Nodes; /RekeyReport (the checklist after an offline re-key) from DEK Rotation.
+        (await (await _admin.GetAsync("/Admin/TrustedNodes")).Content.ReadAsStringAsync()).Should().Contain("href=\"/RemoteAccounts\"");
+        (await (await _admin.GetAsync("/Admin/DekRotation")).Content.ReadAsStringAsync()).Should().Contain("href=\"/RekeyReport\"");
+        (await _admin.GetAsync("/RemoteAccounts")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _admin.GetAsync("/RekeyReport")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
     // ---------------------------------------------------------------- Hard Delete
 
     [Fact]
@@ -132,6 +173,21 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
 
         js.Should().Contain("/api-proxy/hard-delete/list").And.Contain("/api-proxy/hard-delete/folder/preview").And.Contain("/api-proxy/hard-delete/audit");
         js.Should().NotContain("'/HardDelete").And.NotContain("\"/HardDelete");
+    }
+
+    [Fact]
+    public async Task HardDeleteOfAnEmptyVault_ListsNothing_AndTheScriptSaysThereIsNothingToDelete()
+    {
+        // The list of a vault without an article or a folder used to fail with a 409 (a Dapper error), and the page never loaded.
+        using var list = await _admin.GetAsync("/api-proxy/hard-delete/list?page=1&pageSize=100&filter=&status=All");
+
+        list.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await list.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        body.GetProperty("totalCount").GetInt32().Should().Be(0);
+        body.GetProperty("items").GetArrayLength().Should().Be(0);
+
+        var js = await (await _admin.GetAsync("/js/pages/hard-delete.js")).Content.ReadAsStringAsync();
+        js.Should().Contain("Nothing to delete: this vault has no articles or folders yet.");
     }
 
     // ---------------------------------------------------------------- Trusted Nodes: the card that grants superadmin to the devices that joined with the password
@@ -233,7 +289,9 @@ public sealed class AdminNoSecondPageSourceTests
         "/Profile",        // a person makes their own agent key on their own Profile
         "/Network",        // the network map in the main menu (read-only)
         "/Login",          // the sign-in page
-        "/Lock",           // an action: it locks the node and signs out (a GET with a side effect, kept on purpose)
+        "/Lock",           // confirmation page for the lock action
+        "/RemoteAccounts", // mirrors folders read-only from ANOTHER Bee Memory Bank: a function of any signed-in user, linked from Trusted Nodes
+        "/RekeyReport",    // the checklist after an offline re-key: the desktop app opens it once, this is the way back to it
         "/Setup",          // where a wiped node goes (Reset This Node)
         "/connect/ca.crt", // a file, the certificate of this node, not a page
     ];

@@ -6,6 +6,7 @@ using BeeMemoryBank.Core.IO;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Sqlite;
+using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind.Format2;
 using BeeMemoryBank.Sync.Metadata;
 using BeeMemoryBank.TestSupport;
@@ -271,6 +272,39 @@ public class BaselineProducerTests : IAsyncLifetime
 
         _node.Held.Held = false;
         (await ProduceAsync()).Manifest.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// A long local operation (an import, a copy) holds its write admission for its whole run. The cut must not wait for it with the gate
+    /// closed: that would hold off every other local write for as long. It gives up after a short wait, says "a write is running", gives
+    /// the gate back, and works once the operation is over.
+    /// </summary>
+    [Fact]
+    public async Task Is_refused_after_a_short_wait_while_a_long_write_is_in_flight_and_does_not_keep_the_other_writes_waiting()
+    {
+        using var logging = _node.Services.CreateScope();
+        var longWrite = await logging.ServiceProvider.GetRequiredService<IEventLogger>().BeginAuthoringAsync();
+        try
+        {
+            var started = DateTime.UtcNow;
+            var refusal = await FluentActions.Awaiting(() => ProduceAsync(p => p.QuiesceWait = TimeSpan.FromMilliseconds(300)))
+                .Should().ThrowAsync<BaselineRefusedException>();
+
+            refusal.Which.Reason.Should().Be(BaselineRefusal.EventsHeld, "the scheduler keeps the request and asks again at the next tick");
+            refusal.Which.Message.Should().Contain("write is still running");
+            (DateTime.UtcNow - started).Should().BeLessThan(TimeSpan.FromSeconds(30), "the wait is bounded");
+            ProducedDirectories().Should().BeEmpty("a refused run leaves no half baseline");
+            EventWriteGate.Instance.IsQuiescing.Should().BeFalse("the cut that gave up has let the gate go");
+
+            // Another flow's local write goes in at once: the timed-out cut no longer holds _cutover.
+            using var other = await EventWriteGate.Instance.EnterAdmissionAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            longWrite.Dispose();
+        }
+
+        (await ProduceAsync()).Manifest.Should().NotBeNull("with the long write over, the cut goes through");
     }
 
     [Fact]

@@ -73,8 +73,31 @@ public sealed class BaselineProducer(
     /// <summary>Test seam: the chunk size of the container (the default is 4 MiB).</summary>
     internal int ChunkSize { get; set; } = ChunkedContainer.DefaultChunkSize;
 
+    /// <summary>
+    /// How long the cut waits for the local writes in flight. A long operation (an import, a copy of a big tree) holds its write admission for
+    /// its whole run, and while the cut waits for it the gate is closed to every other local write: waiting without a limit would freeze them
+    /// all for that long. A cut that cannot start in time is refused as "writes in flight" and asked for again at the next tick.
+    /// </summary>
+    internal TimeSpan QuiesceWait { get; set; } = TimeSpan.FromSeconds(5);
+
     /// <summary>Produces one baseline. Scoped like the repositories it reads; <see cref="BaselineProducerRunner"/> makes the scope and runs one at a time.</summary>
     public Task<BaselineFiles> ProduceAsync(string reason, CancellationToken ct = default) => ProduceCoreAsync(reason, ct);
+
+    // The gate's own cancellation puts everything back (the cut's lock is released, the writes go on), so a timeout here leaves nothing held.
+    private async Task<IDisposable> QuiesceWithinAsync(CancellationToken ct)
+    {
+        using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        wait.CancelAfter(QuiesceWait);
+        try
+        {
+            return await EventWriteGate.Instance.QuiesceAsync(wait.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new BaselineRefusedException(BaselineRefusal.EventsHeld,
+                "A local write is still running (an import or a copy can take minutes): the baseline waits and is asked for again at the next tick.");
+        }
+    }
 
     private async Task<BaselineFiles> ProduceCoreAsync(string reason, CancellationToken ct)
     {
@@ -112,7 +135,7 @@ public sealed class BaselineProducer(
             long logHead, lamport;
             List<BlindManifestPosition> pulled;
             int schemaVersion;
-            using (await EventWriteGate.Instance.QuiesceAsync(ct))
+            using (await QuiesceWithinAsync(ct))
             {
                 logHead = await events.GetMaxSequenceAsync();
                 lamport = clock.Current;

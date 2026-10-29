@@ -305,16 +305,16 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     [Theory]
     // a code that is not a pair code at all (BlindPairCode.Parse)
     [InlineData(400, """{"error":"Not a blind node pair code."}""",
-        "not a valid pair code|Copy the whole code again|Pairing|Technical detail: Not a blind node pair code.")]
+        "not a valid pair code|Copy the whole code again|Pairing|Technical detail|Not a blind node pair code.")]
     // the address in the code does not answer
     [InlineData(502, """{"error":"Could not reach the blind node at https://192.168.1.75:5610 with the key in its code (No route to host)."}""",
-        "could not reach the blind node at https://192.168.1.75:5610|running|firewall|Renew code|Technical detail: Could not reach")]
+        "could not reach the blind node at https://192.168.1.75:5610|running|firewall|Renew code|Technical detail|Could not reach")]
     // something else answers at that address
     [InlineData(502, """{"error":"The node at https://192.168.1.75:5610 is not the one in the pair code."}""",
         "answered as a different node|Copy the pair code again|press Add")]
     // the code has expired or was used (the blind node refuses the seed)
     [InlineData(502, """{"error":"The blind node refused the seed (401): {}"}""",
-        "did not accept this pair code|expired or was already used|Renew code|Technical detail: The blind node refused the seed (401)")]
+        "did not accept this pair code|expired or was already used|Renew code|Technical detail|The blind node refused the seed (401)")]
     [InlineData(502, """{"error":"The blind node refused the seed (409): {\"error\":\"Another seed is in progress.\"}"}""",
         "still receiving another copy|Wait a few minutes|press Add again")]
     [InlineData(502, """{"error":"The blind node refused the seed (507): A seed of this size needs about 900 MB free here; 100 MB are."}""",
@@ -325,7 +325,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     [InlineData(403, """{"error":"Session is locked","code":"session_locked"}""", "vault on this computer is locked|Unlock")]
     [InlineData(403, """{"error":"Superadmin required"}""", "Only a superadmin|Sign in as a superadmin")]
     // the Api itself failed
-    [InlineData(500, """{"error":"boom"}""", "error 500|Add again|Admin → Search diagnostics|Technical detail: boom")]
+    [InlineData(500, """{"error":"boom"}""", "error 500|Add again|Admin → Search diagnostics|Technical detail|boom")]
     public async Task AFailedAdd_SaysWhatIsWrongAndWhatToDo_AndKeepsThePairCode(int status, string body, string expected)
     {
         _scripted.Add = ((HttpStatusCode)status, body);
@@ -353,7 +353,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
 
         status.Should().Be(HttpStatusCode.OK);
         // The technical line is the kind of failure, not the exception's own text (which carries the address that was dialled): BMB-306/307 fix round 3, G3.
-        ShowsInOrder(html, "server on this computer did not answer", "restart Bee Memory Bank", "Technical detail: no answer: connection refused");
+        ShowsInOrder(html, "server on this computer did not answer", "restart Bee Memory Bank", "Technical detail", "no answer: connection refused");
         html.Should().NotContain("localhost:5300");
         html.Should().Contain($">{PairCode}</textarea>");
     }
@@ -362,7 +362,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     [InlineData(404, "{}", "not in the list any more|add it again with a new pair code")]
     [InlineData(502, """{"error":"The blind node refused the seed (401): {}"}""", "no longer accepts this computer|Renew code|press Add")]
     [InlineData(502, """{"error":"The blind node refused the seed (507): no room"}""", "free disk space|press Reseed again")]
-    [InlineData(500, """{"error":"Connection refused"}""", "could not reach the blind node|firewall|press Reseed again|Technical detail: Connection refused")]
+    [InlineData(500, """{"error":"Connection refused"}""", "could not reach the blind node|firewall|press Reseed again|Technical detail|Connection refused")]
     [InlineData(403, """{"error":"Session is locked","code":"session_locked"}""", "vault on this computer is locked|Unlock")]
     public async Task AFailedReseed_SaysWhatIsWrongAndWhatToDo(int status, string body, string expected)
     {

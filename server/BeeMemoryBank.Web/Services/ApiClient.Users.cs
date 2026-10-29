@@ -64,13 +64,24 @@ public partial class ApiClient
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<(bool ok, string? error)> ChangeNodeAddressAsync(Guid nodeId, string newApiAddress, string password)
+    public async Task<(bool Ok, string? Error, string? Code)> ChangeNodeAddressAsync(Guid nodeId, string newApiAddress, string password)
     {
         var resp = await http.PutAsync($"/api/whitelist/{nodeId}/address",
             Body(new { newApiAddress, password }));
-        if (resp.IsSuccessStatusCode) return (true, null);
+        if (resp.IsSuccessStatusCode) return (true, null, null);
         var body = await resp.Content.ReadAsStringAsync();
-        return (false, body);
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            var error = root.TryGetProperty("error", out var errorProperty) ? errorProperty.GetString() : null;
+            var code = root.TryGetProperty("code", out var codeProperty) ? codeProperty.GetString() : null;
+            return (false, error, code);
+        }
+        catch (JsonException)
+        {
+            return (false, null, null);
+        }
     }
 
     /// <summary>

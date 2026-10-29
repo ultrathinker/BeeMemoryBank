@@ -106,7 +106,10 @@
         if (!listBody) return;
         listBody.innerHTML = '';
         if (items.length === 0) {
-            listBody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--sl-color-neutral-500);">No items found matching the filters.</td></tr>';
+            // No filter set and nothing in the list: the vault itself is empty, which is not "nothing matched".
+            const unfiltered = !(filterInput && filterInput.value) && (!statusSelect || statusSelect.value === 'All');
+            listBody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--sl-color-neutral-500);">'
+                + (unfiltered ? 'Nothing to delete: this vault has no articles or folders yet.' : 'No items found matching the filters.') + '</td></tr>';
             return;
         }
 

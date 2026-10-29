@@ -28,7 +28,8 @@ public abstract class AdminPageModel(ApiClient api) : PageModel
     public IReadOnlyList<string> ErrorItems { get; protected set; } = [];
 
     /// <summary>The technical line of an error, small and last in the message area; null when there is none.</summary>
-    public string? ErrorDetail { get; protected set; }
+    [BindProperty(Name = "detail", SupportsGet = true)]
+    public string? ErrorDetail { get; set; }
 
     /// <summary>The list entry of this page: its title and icon, which the template shows. A page that is not in the catalog cannot be drawn.</summary>
     public AdminPageInfo Info =>
@@ -42,7 +43,7 @@ public abstract class AdminPageModel(ApiClient api) : PageModel
     public virtual IReadOnlyList<string> PageScripts => [];
 
     /// <summary>Ends a handler: this page again, with the message of the action. A handler with nothing to say passes nothing.</summary>
-    protected IActionResult Back(string? msg = null, string? err = null) => RedirectToPage(null, null, new { msg, err });
+    protected IActionResult Back(string? msg = null, string? err = null, string? detail = null) => RedirectToPage(null, null, new { msg, err, detail });
 
     // ---- what two pages show alike ---------------------------------------------------------------------------------------------------------------------
 

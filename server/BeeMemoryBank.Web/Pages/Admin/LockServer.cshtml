@@ -44,8 +44,11 @@
             </p>
         }
     }
-    <sl-button variant="warning" size="small" href="/Lock" class="btn-confirm-click"
-        data-confirm="Lock the server? The decryption key will be cleared from memory. All users will need to re-authenticate to access encrypted content.">
-        <sl-icon slot="prefix" name="lock"></sl-icon> Lock Server
-    </sl-button>
+    @* A POST with the antiforgery token: a link or a prefetch of /Lock only shows its confirmation page, it never locks. *@
+    <form method="post" asp-page="/Lock" data-busy-exempt="signs everyone out: the answer is the sign-in page">
+        <sl-button type="submit" variant="warning" size="small" class="btn-confirm-click"
+            data-confirm="Lock the server? The decryption key will be cleared from memory. All users will need to re-authenticate to access encrypted content.">
+            <sl-icon slot="prefix" name="lock"></sl-icon> Lock Server
+        </sl-button>
+    </form>
 </div>

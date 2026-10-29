@@ -358,9 +358,8 @@ public class NodeSetupService
         catch (Exception ex)
         {
             // Roll the node back to "uninitialized" so a retry starts clean instead of hitting
-            // "Node already initialized". Safe to do here: the snapshot table import is wrapped in
-            // a transaction that already rolled back on failure, so NO content rows were committed —
-            // only the identity/slot/user/whitelist/sync-position rows created above persist.
+            // "Node already initialized". The snapshot table import is one transaction, but it commits
+            // before the steps that follow it, so the rollback empties the imported content as well.
             _logger.LogError(ex, "Snapshot import failed — rolling back the partial node so a retry can start clean.");
             try { RollbackPartialNode(); }
             catch (Exception rbEx) { _logger.LogError(rbEx, "Rollback of partial node failed; a manual reset may be required."); }
@@ -378,25 +377,9 @@ public class NodeSetupService
         return identity;
     }
 
-    // Deletes the rows a failed join leaves behind, returning the node to "uninitialized".
-    // FK order matters (tbl_user -> tbl_key_slot). Content tables are intentionally untouched:
-    // the snapshot import is transactional, so on failure nothing was committed there.
-    private void RollbackPartialNode()
-    {
-        using var conn = _dbFactory.CreateConnection();
-        using var tx = conn.BeginTransaction();
-        using var cmd = conn.CreateCommand();
-        cmd.Transaction = tx;
-        // All-or-nothing: a crash mid-rollback must not leave a half-deleted "Frankenstein" node.
-        cmd.CommandText = @"
-            DELETE FROM tbl_sync_position;
-            DELETE FROM tbl_whitelist;
-            DELETE FROM tbl_user;
-            DELETE FROM tbl_key_slot;
-            DELETE FROM tbl_node_identity;";
-        cmd.ExecuteNonQuery();
-        tx.Commit();
-    }
+    // Deletes the rows a failed join leaves behind, returning the node to "uninitialized": the identity, keys, users and peers, and the content the
+    // snapshot import already committed (the steps after it can fail). One shared routine, the same for every join (SnapshotJoin).
+    private void RollbackPartialNode() => SnapshotJoin.RollbackPartialNode(_dbFactory);
 
     private void WriteMigrationMarker()
     {

@@ -19,21 +19,17 @@ public sealed class BlindContactProjectionTests : IAsyncLifetime
     private const string Password = "blindProjectionPw1!";
     private const string Address = "https://blind.projection.test:5610";
     private readonly BmbWebApplicationFactory _pc = new();
-
-    private sealed class NoNetwork : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
-            throw new HttpRequestException("No network in this test.");
-    }
+    private IDisposable? _schedulerPause;
 
     public async Task InitializeAsync()
     {
-        _pc.RouteOutboundHttpThrough(new NoNetwork());   // the host's own loop dials the row below: it reaches nothing
         await _pc.InitializeNodeAsync("PC", Password);
+        _schedulerPause = await _pc.Services.GetRequiredService<SyncScheduler>().PauseAsync();
     }
 
     public Task DisposeAsync()
     {
+        _schedulerPause?.Dispose();
         _pc.Dispose();
         return Task.CompletedTask;
     }

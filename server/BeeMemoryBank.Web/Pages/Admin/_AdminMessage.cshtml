@@ -24,7 +24,10 @@
             }
             @if (!string.IsNullOrEmpty(Model.ErrorDetail))
             {
-                <div class="text-muted text-sm" style="margin-top:8px;">Technical detail: @Model.ErrorDetail</div>
+                <details class="text-muted text-sm" style="margin-top:8px;">
+                    <summary>Technical detail</summary>
+                    @Model.ErrorDetail
+                </details>
             }
         </sl-alert>
     }

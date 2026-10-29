@@ -3,7 +3,8 @@ namespace BeeMemoryBank.Sync;
 /// <summary>
 /// Lets one operation replace the database file under this process with no event write in flight
 /// (a blind node's reseed cutover, review L-stage1 #4). Every event write — <see cref="EventApplier.ApplyAsync"/>
-/// and a blind node's log trim — runs inside <see cref="EnterAsync"/>; <see cref="QuiesceAsync"/>
+/// and a blind node's log trim — and every local authoring operation (EventLogger.BeginAuthoringAsync,
+/// for the whole of its scope) runs inside the gate; <see cref="QuiesceAsync"/>
 /// holds new writes off and waits for the ones already running, so nothing lands in the file being
 /// replaced after its last events were read.
 ///
@@ -26,9 +27,16 @@ public sealed class EventWriteGate
     public bool IsQuiescing { get; private set; }
 
     /// <summary>An ordinary event write. Waits while a cutover holds the gate.</summary>
-    public async Task<IDisposable> EnterAsync(CancellationToken ct = default)
+    public Task<IDisposable> EnterAsync(CancellationToken ct = default) =>
+        Inside.Value ? Task.FromResult<IDisposable>(Passed.Instance) : EnterAdmissionAsync(ct);
+
+    /// <summary>
+    /// The one admission a whole authoring operation opens with (EventLogger.BeginAuthoringAsync): whether
+    /// a call is the operation's outermost scope is the caller's knowledge, so this entry does not look at
+    /// the owner mark and always takes a real admission.
+    /// </summary>
+    public async Task<IDisposable> EnterAdmissionAsync(CancellationToken ct = default)
     {
-        if (Inside.Value) return Passed.Instance;
         await _cutover.WaitAsync(ct);
         lock (_lock) _writers++;
         _cutover.Release();

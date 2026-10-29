@@ -3,3 +3,19 @@
 @{
     ViewData["Title"] = "Lock";
 }
+
+<partial name="_Sidebar" />
+<div id="page-content">
+    <main class="main-content">
+        <div class="card" style="max-width:560px;">
+            <h1 style="margin-top:0;">Lock this node?</h1>
+            <p>Locking clears the vault key from memory and signs everyone out. You will need to sign in and unlock the vault again before reading encrypted content.</p>
+            <form method="post" data-busy-exempt="signs everyone out: the answer is the sign-in page">
+                <sl-button type="submit" variant="warning">
+                    <sl-icon slot="prefix" name="lock"></sl-icon> Lock now
+                </sl-button>
+                <sl-button href="/Admin/LockServer" variant="default" style="margin-left:8px;">Cancel</sl-button>
+            </form>
+        </div>
+    </main>
+</div>

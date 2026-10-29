@@ -75,10 +75,10 @@ public class TrustedNodesModel(ApiClient api) : AdminPageModel(api)
 
     public async Task<IActionResult> OnPostChangeNodeAddressAsync(Guid nodeId, string newApiAddress, string password)
     {
-        var (ok, error) = await Api.ChangeNodeAddressAsync(nodeId, newApiAddress, password);
+        var (ok, error, code) = await Api.ChangeNodeAddressAsync(nodeId, newApiAddress, password);
         return ok
             ? Back(msg: "Node address updated")
-            : Back(err: error ?? "Failed to update node address");
+            : Back(err: error ?? "Failed to update node address", detail: code);
     }
 
     /// <summary>"Let blind copies call this node": the Api verifies the address and the certificate and publishes the row.</summary>

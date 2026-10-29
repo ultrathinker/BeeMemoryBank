@@ -63,6 +63,28 @@ public class UnreachablePeersTests
         peers.FailingSince().Should().BeEmpty();
     }
 
+    /// <summary>BMB-183: a computer with no network at all fails every call, and says nothing about the peers it calls.</summary>
+    [Fact]
+    public void WhileThisComputerHasNoNetwork_TheStreakDoesNotGrow_ButTheBackOffDoes()
+    {
+        var up = true;
+        var peers = new UnreachablePeers(() => up);
+        var node = Guid.NewGuid();
+        peers.NoteFailure(node, T0, Interval);
+
+        up = false;
+        for (var i = 1; i <= 8; i++) peers.NoteFailure(node, T0.AddHours(i * 0.5), Interval);   // four hours without a network
+
+        peers.FailingSince()[node].Should().Be(T0.AddHours(4), "the streak starts at the latest failure, not at the first one of the train ride");
+        peers.ShouldSkip(node, T0.AddHours(4).AddMinutes(1)).Should().BeTrue("the pause still grew: the peer is not asked every cycle");
+
+        up = true;   // the network is back and the peer really is down: the streak runs on from the last failure, and now grows
+        var back = T0.AddHours(4).AddMinutes(20);
+        peers.NoteFailure(node, back, Interval);
+        peers.NoteFailure(node, back.AddMinutes(20), Interval);
+        peers.FailingSince()[node].Should().Be(T0.AddHours(4));
+    }
+
     /// <summary>BMB-77: a night the PC slept through is not a night the peer was down.</summary>
     [Fact]
     public void AGapLongerThanTheStreakBreak_MeansThisComputerWasAsleep_SoTheStreakStartsAgain()

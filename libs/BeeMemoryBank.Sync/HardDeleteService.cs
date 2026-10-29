@@ -75,8 +75,14 @@ public class HardDeleteService(
                 SELECT COUNT(*) FROM tbl_article WHERE 1=1 {statusFilter} {articleSearch}
             )";
 
-        var items = (await conn.QueryAsync<HardDeleteListItem>(sql, new { pageSize, offset, f })).ToList();
         var totalCount = await conn.ExecuteScalarAsync<int>(countSql, new { f });
+        // SQLite exposes BLOB types for an empty UNION over the GUID columns. Dapper builds its
+        // immutable-record materializer from that schema even when there are no rows, then rejects
+        // it before returning the empty sequence. Do not ask it to materialize an empty vault.
+        if (totalCount == 0)
+            return new PagedList<HardDeleteListItem>([], totalCount, page, pageSize);
+
+        var items = (await conn.QueryAsync<HardDeleteListItem>(sql, new { pageSize, offset, f })).ToList();
 
         return new PagedList<HardDeleteListItem>(items, totalCount, page, pageSize);
     }

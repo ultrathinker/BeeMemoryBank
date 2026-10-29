@@ -14,5 +14,16 @@ public sealed class NullLamportClock : ILamportClock
 
     public void Update(long remoteTs) { } // no-op: no sync, no remote clocks
 
+    public void RaiseTo(long value)
+    {
+        long current;
+        do
+        {
+            current = Interlocked.Read(ref _current);
+            if (current >= value) return;
+        }
+        while (Interlocked.CompareExchange(ref _current, value, current) != current);
+    }
+
     public long Current => Interlocked.Read(ref _current);
 }
