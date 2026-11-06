@@ -230,7 +230,9 @@ def main():
         full = subprocess.Popen([a.full_exe], env=env, stdout=open(os.path.join(a.work, 'full-node.log'), 'w'),
                                 stderr=subprocess.STDOUT, creationflags=0x08000000, cwd=os.path.dirname(a.full_exe))
         check('PC (full node) starts', bool(wait_for(lambda: http('GET', full_url + '/health')[0] == 200, 'full node', 90)))
-        http('POST', full_url + '/api/init/standalone', fh, {'adminUsername': 'admin', 'displayName': 'E2E PC', 'password': 'E2e-test-password-1'})
+        http('POST', full_url + '/api/init/standalone', fh,
+             {'adminUsername': 'admin', 'displayName': 'E2E PC', 'password': 'E2e-test-password-1',
+              'passwordHint': 'the blue folder by the window'})
         s, _ = http('POST', full_url + '/api/session/unlock', fh, {'password': 'E2e-test-password-1'})
         check('PC unlocked', s == 200)
         for i in range(3):

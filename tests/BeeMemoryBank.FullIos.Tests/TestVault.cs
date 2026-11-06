@@ -8,6 +8,9 @@ internal sealed class TestVault : IAsyncDisposable
 {
     public const string Password = "Correct-Horse-9";
 
+    /// <summary>The mandatory password hint used by the tests.</summary>
+    public const string Hint = "A test hint, not the password";
+
     public required ServiceProvider Services { get; init; }
     public required FullNodePaths Paths { get; init; }
     public FullVault Vault => new(Services);
@@ -25,7 +28,7 @@ internal sealed class TestVault : IAsyncDisposable
     public static async Task<(TestVault Vault, string RecoveryKey)> CreateAsync(string name)
     {
         var vault = await PrepareAsync(name);
-        var recovery = await vault.Vault.CreateAsync("Test iPhone", Password);
+        var recovery = await vault.Vault.CreateAsync("Test iPhone", Password, Hint);
         return (vault, recovery);
     }
 

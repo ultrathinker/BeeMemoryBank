@@ -233,6 +233,8 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         // Self-service. The subject is always the caller (forwarded X-User-Id), never a chosen
         // target — which is exactly why these cannot be expressed as an endpoint filter.
         "POST /api/users/me/change-password",
+        // The Profile page's soft "Add a password hint": the caller's own row only.
+        "POST /api/users/me/password-hint",
 
         // A user provisions and revokes their OWN MCP agents; the handler compares the caller to
         // agent.OwnerUserId. ?all=true on the listing is the superadmin-only part, and that is a
@@ -283,6 +285,11 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         // account. It still requires the internal key (only the Web layer reaches it) and is NOT in
         // PublicSurface.
         "POST /api/session/recover-access",
+
+        // "Show my password hint" (BMB-336): the caller is nobody yet, and a username is not a credential.
+        // Anonymous from the person's side, and only the Web layer reaches it: it requires the internal key,
+        // is NOT in PublicSurface, and has its own per-address and per-username throttle.
+        "POST /api/session/password-hint",
 
         // Peer-to-peer sync. Authenticated by the Ed25519 challenge/response bearer token issued
         // by /api/sync/authenticate; a browser user never calls these.
@@ -472,6 +479,9 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         // target. /me/stamp in particular is revalidated on every Web request for every signed-in
         // user — gating it would sign out everyone who is not a superadmin.
         "GET /api/users/me/stamp",
+        // The Profile page reads the caller's own hint; it is shown to anyone who types their username on the
+        // anonymous sign-in page anyway, so reading it back is not privileged.
+        "GET /api/users/me/password-hint",
         "GET /api/chat/settings/auto-approve",
 
         // Chat, for a user who has chat access: their own conversations, messages and attachments
@@ -728,11 +738,11 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
         if (pattern.Contains("snapshots"))
             return new { };
         if (pattern.Contains("keys") && pattern.Contains("change-password"))
-            return new { currentPassword = "x", newPassword = "y" };
+            return new { currentPassword = "x", newPassword = "y", passwordHint = "A test hint" };
         if (pattern.Contains("keys") && pattern.Contains("add-recovery"))
             return new { password = "x" };
         if (pattern.Contains("change-password"))
-            return new { currentPassword = "x", newPassword = "y" };
+            return new { currentPassword = "x", newPassword = "y", passwordHint = "A test hint" };
         if (pattern.Contains("folder") || pattern.Contains("move"))
             return new { path = "/test", destinationPath = "/test2" };
         if (pattern.Contains("articles"))

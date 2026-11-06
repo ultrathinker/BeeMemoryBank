@@ -56,6 +56,7 @@
         document.getElementById('add-username').value = '';
         document.getElementById('add-display-name').value = '';
         document.getElementById('add-password').value = '';
+        document.getElementById('add-password-hint').value = '';
         document.getElementById('add-role').value = 'user';
         document.getElementById('dlg-add-user')?.show();
         setTimeout(function () { document.getElementById('add-username')?.focus(); }, 100);
@@ -66,15 +67,17 @@
         var username = document.getElementById('add-username').value.trim();
         var displayName = document.getElementById('add-display-name').value.trim();
         var password = document.getElementById('add-password').value;
+        var passwordHint = (document.getElementById('add-password-hint').value || '').trim();
         var role = document.getElementById('add-role').value;
 
         if (!username) { showDlgError('add-user-error', 'Username is required.'); return; }
         if (!displayName) displayName = username;
         var pwdErr = validatePasswordClient(password);
         if (pwdErr) { showDlgError('add-user-error', pwdErr); return; }
+        if (!passwordHint) { showDlgError('add-user-error', 'A password hint is required: it is what the sign-in page shows if this person forgets the password.'); return; }
 
         var btn = document.getElementById('btn-add-user-submit');
-        var result = await postJson('/api-proxy/users', { username: username, displayName: displayName, password: password, role: role }, 'POST', btn);
+        var result = await postJson('/api-proxy/users', { username: username, displayName: displayName, password: password, role: role, passwordHint: passwordHint }, 'POST', btn);
         if (result.ok) {
             window.location = '?msg=' + encodeURIComponent("User '" + username + "' created");
         } else {
@@ -87,6 +90,7 @@
         document.getElementById('cp-user-id').value = userId;
         document.getElementById('cp-user-name').textContent = 'User: ' + username;
         document.getElementById('cp-new-password').value = '';
+        document.getElementById('cp-password-hint').value = '';
         document.getElementById('dlg-change-password')?.show();
         setTimeout(function () { document.getElementById('cp-new-password')?.focus(); }, 100);
     }
@@ -95,11 +99,13 @@
         hideDlgError('change-password-error');
         var id = document.getElementById('cp-user-id').value;
         var newPassword = document.getElementById('cp-new-password').value;
+        var passwordHint = (document.getElementById('cp-password-hint').value || '').trim();
         var pwdErr = validatePasswordClient(newPassword);
         if (pwdErr) { showDlgError('change-password-error', pwdErr); return; }
+        if (!passwordHint) { showDlgError('change-password-error', 'A password hint is required: it is what the sign-in page shows if this person forgets the password.'); return; }
 
         var btn = document.getElementById('btn-change-password-submit');
-        var result = await postJson('/api-proxy/users/' + id + '/change-password', { newPassword: newPassword }, 'POST', btn);
+        var result = await postJson('/api-proxy/users/' + id + '/change-password', { newPassword: newPassword, passwordHint: passwordHint }, 'POST', btn);
         if (result.ok) {
             window.location = '?msg=' + encodeURIComponent('Password changed');
         } else {

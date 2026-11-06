@@ -30,18 +30,28 @@ var initNameOpt = new Option<string>("--name", "Node name") { IsRequired = true 
 var initPasswordOpt = new Option<string?>("--password",
     "Master password. Visible in the process list and the shell history: prefer --password-stdin, or leave it out to be asked.");
 var initPasswordStdinOpt = new Option<bool>("--password-stdin", "Read the master password from the first line of stdin");
+var initHintOpt = new Option<string?>("--hint",
+    "Password hint (required): shown on the sign-in page if the master password is forgotten. Asked for when left out.");
+var initSavedKeyOpt = new Option<bool>("--i-saved-the-key",
+    "Confirm that you wrote down the recovery key this command prints. Without it the command asks on the terminal; " +
+    "an unattended run with redirected stdin cannot answer, so the node stays gated, the first web sign-in shows a new " +
+    "key (a second recovery slot) and asks again.");
 
 var initCmd = new Command("init", "Initial node setup");
 initCmd.AddOption(initNameOpt);
 initCmd.AddOption(initPasswordOpt);
 initCmd.AddOption(initPasswordStdinOpt);
-initCmd.SetHandler(async (data, name, password, passwordStdin) =>
+initCmd.AddOption(initHintOpt);
+initCmd.AddOption(initSavedKeyOpt);
+initCmd.SetHandler(async (data, name, password, passwordStdin, hint, savedKey) =>
 {
     var resolved = BeeMemoryBank.Cli.PasswordInput.Resolve(password, passwordStdin, "Master password: ",
         Console.In, Console.IsInputRedirected, Console.Error);
     if (resolved is null) Environment.Exit(1);
-    Environment.Exit(await InitCommand.HandleAsync(data, name, resolved!));
-}, dataOption, initNameOpt, initPasswordOpt, initPasswordStdinOpt);
+    var resolvedHint = BeeMemoryBank.Cli.PasswordHintInput.Resolve(hint, "Password hint: ");
+    if (resolvedHint is null) Environment.Exit(1);
+    Environment.Exit(await InitCommand.HandleAsync(data, name, resolved!, resolvedHint, savedKey));
+}, dataOption, initNameOpt, initPasswordOpt, initPasswordStdinOpt, initHintOpt, initSavedKeyOpt);
 
 // bmb init reset — host-only node wipe. The web UI has the same operation on the superadmin-only
 // Admin page; this is the fallback for when nobody can sign in any more.
@@ -71,6 +81,12 @@ var joinNameOpt = new Option<string>("--name", "Name of this node") { IsRequired
 var joinAllowInsecureOpt = new Option<bool>("--allow-insecure-http",
     "Allow joining over plain HTTP to non-loopback hosts. Off by default — plain HTTP " +
     "lets a network attacker MITM the join and inject peer pubkeys. Use only on trusted LAN.");
+var joinHintOpt = new Option<string?>("--hint",
+    "Password hint (required): shown on the sign-in page if the master password is forgotten. Asked for when left out.");
+var joinSavedKeyOpt = new Option<bool>("--i-saved-the-key",
+    "Confirm that you wrote down the recovery key this command prints. Without it the command asks on the terminal; " +
+    "an unattended run with redirected stdin cannot answer, so the node stays gated, the first web sign-in shows a new " +
+    "key (a second recovery slot) and asks again.");
 
 var joinCmd = new Command("join", "Join a node to an existing BeeMemoryBank network");
 joinCmd.AddOption(joinRemoteOpt);
@@ -79,13 +95,24 @@ joinCmd.AddOption(joinPasswordOpt);
 joinCmd.AddOption(joinPasswordStdinOpt);
 joinCmd.AddOption(joinNameOpt);
 joinCmd.AddOption(joinAllowInsecureOpt);
-joinCmd.SetHandler(async (data, remote, password, name, allowInsecure, code, passwordStdin) =>
+joinCmd.AddOption(joinHintOpt);
+joinCmd.AddOption(joinSavedKeyOpt);
+// One InvocationContext instead of nine handler parameters: this beta of System.CommandLine has no overload that wide.
+joinCmd.SetHandler(async (System.CommandLine.Invocation.InvocationContext context) =>
 {
-    var resolved = BeeMemoryBank.Cli.PasswordInput.Resolve(password, passwordStdin, "Network master password: ",
+    var parsed = context.ParseResult;
+    var data = parsed.GetValueForOption(dataOption);
+    var resolved = BeeMemoryBank.Cli.PasswordInput.Resolve(parsed.GetValueForOption(joinPasswordOpt),
+        parsed.GetValueForOption(joinPasswordStdinOpt), "Network master password: ",
         Console.In, Console.IsInputRedirected, Console.Error);
     if (resolved is null) Environment.Exit(1);
-    Environment.Exit(await JoinCommand.HandleAsync(data, remote ?? "", resolved!, name, allowInsecure, joinCode: code));
-}, dataOption, joinRemoteOpt, joinPasswordOpt, joinNameOpt, joinAllowInsecureOpt, joinCodeOpt, joinPasswordStdinOpt);
+    var resolvedHint = BeeMemoryBank.Cli.PasswordHintInput.Resolve(parsed.GetValueForOption(joinHintOpt), "Password hint: ");
+    if (resolvedHint is null) Environment.Exit(1);
+    Environment.Exit(await JoinCommand.HandleAsync(data, parsed.GetValueForOption(joinRemoteOpt) ?? "", resolved!,
+        parsed.GetValueForOption(joinNameOpt), parsed.GetValueForOption(joinAllowInsecureOpt),
+        joinCode: parsed.GetValueForOption(joinCodeOpt), passwordHint: resolvedHint,
+        iSavedTheKey: parsed.GetValueForOption(joinSavedKeyOpt)));
+});
 root.AddCommand(joinCmd);
 
 // ─── bmb status ─────────────────────────────────────────────────────────────
@@ -297,13 +324,16 @@ root.AddCommand(restoreCmd);
 var userNameOpt = new Option<string>("--user", "Username of the superadmin whose password to reset") { IsRequired = true };
 var recoveryKeyStdinOpt = new Option<bool>("--recovery-key-stdin",
     "Read the recovery key (line 1) and the new password (line 2) from stdin instead of asking on the terminal");
+var userHintOpt = new Option<string?>("--hint",
+    "Password hint (required): shown on the sign-in page if the password is forgotten. Required with --recovery-key-stdin, asked for otherwise.");
 var userResetPasswordCmd = new Command("reset-password", "Set a new password for a superadmin, proving it with a recovery key");
 userResetPasswordCmd.AddOption(userNameOpt);
 userResetPasswordCmd.AddOption(recoveryKeyStdinOpt);
-userResetPasswordCmd.SetHandler(async (data, user, keyStdin) =>
+userResetPasswordCmd.AddOption(userHintOpt);
+userResetPasswordCmd.SetHandler(async (data, user, keyStdin, hint) =>
 {
-    Environment.Exit(await UserCommand.HandleResetPasswordAsync(data, user, keyStdin));
-}, dataOption, userNameOpt, recoveryKeyStdinOpt);
+    Environment.Exit(await UserCommand.HandleResetPasswordAsync(data, user, keyStdin, hint));
+}, dataOption, userNameOpt, recoveryKeyStdinOpt, userHintOpt);
 
 var userCmd = new Command("user", "User management");
 userCmd.AddCommand(userResetPasswordCmd);

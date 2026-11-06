@@ -31,6 +31,9 @@ public sealed class SealedVaultMiddleware(RequestDelegate next)
         ("POST", "/api/session/unlock"),
         ("POST", "/api/session/login"),
         ("POST", "/api/session/recover-access"),
+        // The sign-in page's hint lookup: a person who cannot sign in needs it exactly while this database is closed, so it reads
+        // the pre-unlock mirror file and never opens a connection (SessionEndpoints).
+        ("POST", "/api/session/password-hint"),
         ("GET", "/api/vault/status"),
         // A restore of this node (the whole network, or its own) ends with the vault locked, and the page that started it asks how it went: the
         // route answers from memory with a coarse status, for a caller who has not signed in (SnapshotEndpoints).

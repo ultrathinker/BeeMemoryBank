@@ -54,7 +54,7 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
 
     private Task<HttpResponseMessage> RecoverAsync(string username, string key, string newPassword = NewPassword, string ip = ClientIp) =>
         _client.PostAsJsonAsync("/api/session/recover-access",
-            new { username, recoveryKey = key, newPassword, clientIp = ip });
+            new { username, recoveryKey = key, newPassword, clientIp = ip, passwordHint = "A test hint" });
 
     private async Task<bool> IsUnlockedAsync() =>
         (await (await _client.GetAsync("/api/session/status")).Content.ReadFromJsonAsync<JsonElement>())
@@ -102,7 +102,7 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
     }
 
     private async Task CreateUserAsync(string username, string password, string role) =>
-        (await _client.PostAsJsonAsync("/api/users", new { username, password, displayName = username, role })).EnsureSuccessStatusCode();
+        (await _client.PostAsJsonAsync("/api/users", new { username, password, displayName = username, role, passwordHint = "A test hint" })).EnsureSuccessStatusCode();
 
     // ── it works for the owner ────────────────────────────────────────────────────────────────
 
@@ -257,7 +257,7 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
         await bare.InitializeNodeAsync(password: "BareNodePass123");
 
         var resp = await bareClient.PostAsJsonAsync("/api/session/recover-access",
-            new { username = "admin", recoveryKey = _recoveryKey, newPassword = NewPassword, clientIp = ClientIp });
+            new { username = "admin", recoveryKey = _recoveryKey, newPassword = NewPassword, clientIp = ClientIp, passwordHint = "A test hint" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await resp.Content.ReadAsStringAsync()).Should().Be(
@@ -271,7 +271,7 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
         using var freshClient = fresh.CreateClient();
 
         var resp = await freshClient.PostAsJsonAsync("/api/session/recover-access",
-            new { username = "admin", recoveryKey = _recoveryKey, newPassword = NewPassword, clientIp = ClientIp });
+            new { username = "admin", recoveryKey = _recoveryKey, newPassword = NewPassword, clientIp = ClientIp, passwordHint = "A test hint" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -387,7 +387,7 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
         using var keyless = _api.CreateDefaultClient();
 
         var resp = await keyless.PostAsJsonAsync("/api/session/recover-access",
-            new { username = "admin", recoveryKey = _recoveryKey, newPassword = NewPassword, clientIp = ClientIp });
+            new { username = "admin", recoveryKey = _recoveryKey, newPassword = NewPassword, clientIp = ClientIp, passwordHint = "A test hint" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
         PublicSurface.Allows("POST", "/api/session/recover-access").Should().BeFalse(
@@ -403,7 +403,7 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
         using var http = blind.CreateClient();
 
         var resp = await http.PostAsJsonAsync("/api/session/recover-access",
-            new { username = "admin", recoveryKey = _recoveryKey, newPassword = NewPassword, clientIp = ClientIp });
+            new { username = "admin", recoveryKey = _recoveryKey, newPassword = NewPassword, clientIp = ClientIp, passwordHint = "A test hint" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "a blind node has no users, no session endpoints and nobody to reset");
     }

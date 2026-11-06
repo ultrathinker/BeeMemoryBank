@@ -107,7 +107,7 @@ J='Content-Type: application/json'
 
 # test1 becomes a standalone node
 curl -X POST http://127.0.0.1:5013/api/init/standalone -H "$J" -H "X-Internal-Key: $K1" \
-     -d "{\"adminUsername\":\"admin\",\"displayName\":\"test1\",\"password\":\"$P\"}"
+     -d "{\"adminUsername\":\"admin\",\"displayName\":\"test1\",\"password\":\"$P\",\"passwordHint\":\"the blue folder by the window\"}"
 
 # and must be UNLOCKED before it can accept a join: the join writes a signed whitelist event,
 # which needs the master DEK. A locked node answers the joiner with a bare 403 that says nothing
@@ -117,7 +117,7 @@ curl -X POST http://127.0.0.1:5013/api/session/unlock -H "$J" -H "X-Internal-Key
 
 # test2 joins over the compose network
 curl -X POST http://127.0.0.1:5014/api/init/join -H "$J" -H "X-Internal-Key: $K2" \
-     -d "{\"adminUsername\":\"admin\",\"displayName\":\"test2\",\"remoteUrl\":\"http://test1:5300\",\"password\":\"$P\"}"
+     -d "{\"adminUsername\":\"admin\",\"displayName\":\"test2\",\"remoteUrl\":\"http://test1:5300\",\"password\":\"$P\",\"passwordHint\":\"the blue folder by the window\"}"
 
 # test1 does not learn how to reach test2 from a join — give it the address so sync is two-way
 NODE2=$(curl -s -H "X-Internal-Key: $K1" -H "X-User-Role: superadmin" \

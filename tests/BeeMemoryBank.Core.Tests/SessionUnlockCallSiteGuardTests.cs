@@ -66,6 +66,16 @@ public class SessionUnlockCallSiteGuardTests
             "Desktop update restart: re-installs the master DEK the same user's running node handed over " +
             "minutes earlier (DPAPI, one-shot, expiring, sentinel-verified). Unlocking IS the feature.",
 
+        ["server/BeeMemoryBank.Cli/Commands/InitCommand.cs"] =
+            "bmb init: owns the whole process and has just created this node's only key slot. It unlocks to mint the " +
+            "recovery key a new node owes (the slot is encrypted by the seal that follows) and, after sealing, to " +
+            "record that the person confirmed they saved it; it locks again immediately in both cases.",
+
+        ["server/BeeMemoryBank.Cli/Commands/JoinCommand.cs"] =
+            "bmb join: the same position as bmb init - a private process, a node it has just created, no other " +
+            "caller to open the vault for. It unlocks to mint the recovery key before the seal and to record the " +
+            "confirmation after it, and locks again immediately.",
+
         ["server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs"] =
             "POST /api/session/unlock and /login — the human unlock. This is the endpoint the flag exists for.",
 

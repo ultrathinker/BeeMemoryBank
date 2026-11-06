@@ -21,10 +21,10 @@ public partial class ApiClient
     /// point: key slots are node-local, so a successful change leaves every peer still accepting
     /// the old password — including at its own join endpoint — and the API names how many.</para>
     /// </summary>
-    public async Task<(bool Ok, string? Message)> ChangeMasterPasswordAsync(string oldPassword, string newPassword)
+    public async Task<(bool Ok, string? Message)> ChangeMasterPasswordAsync(string oldPassword, string newPassword, string passwordHint)
     {
         var resp = await http.PostAsync("/api/keys/change-password",
-            Body(new { oldPassword, newPassword }));
+            Body(new { oldPassword, newPassword, passwordHint }));
         if (!resp.IsSuccessStatusCode)
             return (false, null);
 
@@ -178,11 +178,11 @@ public partial class ApiClient
         return await resp.Content.ReadFromJsonAsync<List<UserDto>>(JsonOpts);
     }
 
-    public async Task<(UserDto? User, string? Error, int StatusCode)> CreateUserAsync(string username, string displayName, string password, string role, bool chatAccess = true)
+    public async Task<(UserDto? User, string? Error, int StatusCode)> CreateUserAsync(string username, string displayName, string password, string role, string passwordHint, bool chatAccess = true)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/users")
         {
-            Content = Body(new { username, displayName, password, role, chatAccess })
+            Content = Body(new { username, displayName, password, role, chatAccess, passwordHint })
         };
 
         var resp = await http.SendAsync(request);
@@ -212,10 +212,10 @@ public partial class ApiClient
         catch { return (false, "Failed to delete user", (int)resp.StatusCode); }
     }
 
-    public async Task<(bool Ok, string? Error)> ChangeOwnPasswordAsync(string oldPassword, string newPassword)
+    public async Task<(bool Ok, string? Error)> ChangeOwnPasswordAsync(string oldPassword, string newPassword, string passwordHint)
     {
         var resp = await http.PostAsync("/api/users/me/change-password",
-            Body(new { oldPassword, newPassword }));
+            Body(new { oldPassword, newPassword, passwordHint }));
         if (resp.IsSuccessStatusCode) return (true, null);
         try
         {
@@ -225,11 +225,11 @@ public partial class ApiClient
         catch { return (false, "Failed to change password"); }
     }
 
-    public async Task<(bool Ok, string? Error, int StatusCode)> ChangeUserPasswordAsync(int id, string newPassword)
+    public async Task<(bool Ok, string? Error, int StatusCode)> ChangeUserPasswordAsync(int id, string newPassword, string passwordHint)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, $"/api/users/{id}/change-password")
         {
-            Content = Body(new { newPassword })
+            Content = Body(new { newPassword, passwordHint })
         };
 
         var resp = await http.SendAsync(request);

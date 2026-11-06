@@ -223,6 +223,10 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
 
         unlocked.Should().BeTrue("the unlock tried the wipe again and it went through");
         NoLeftover(node.Dir);
+        // The unlock returns when the database is open; the post-unlock work (inbox import and the mirror rewrite) runs after it
+        // and publishes Open when it ends. Wait for that end rather than for the moment the task was scheduled.
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (node.Gate.State != VaultState.Open && DateTime.UtcNow < until) await Task.Delay(20);
         node.Gate.State.Should().Be(VaultState.Open);
     }
 

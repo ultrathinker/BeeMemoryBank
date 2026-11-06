@@ -21,6 +21,9 @@
     <PackageVersion Include="Avalonia.Controls.WebView" Version="12.1.0" />
     <PackageVersion Include="Avalonia.Desktop" Version="12.1.2" />
     <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.1.2" />
+    <!-- Headless rendering for the desktop shell's contrast tests (tests/BeeMemoryBank.Desktop.Tests). The XUnit adapter package
+         (Avalonia.Headless.XUnit) is not used: it is built for xunit.v3, and this repository's test projects run xunit 2.9. -->
+    <PackageVersion Include="Avalonia.Headless" Version="12.1.2" />
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.2" />
     <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" />
     <PackageVersion Include="BouncyCastle.Cryptography" Version="2.7.0" />

@@ -32,7 +32,8 @@ Mac app, the Windows service) answers this computer only by default: its front d
   closes by itself once the device has joined (it stays up two more minutes, serving only the abort of a join that
   then fails on the device, so the other computer can be told to forget it). It shows a **join code**: the address, the token and the
   pin of the node's certificate key. A phone pastes it under **Join**; another computer pastes it on its
-  first-run page under **Connect to another device**, or runs `bmb join --code <code>`. The joiner sends
+  first-run page under **Connect to another device**, or runs `bmb join --code <code>` (it asks for the master password and
+  the mandatory password hint; `--hint` supplies the latter without the prompt). The joiner sends
   the master password only to a server holding the pinned key, so no certificate has to be trusted first.
   The door is not announced by mDNS: a node is found on the network only while Devices on my network is
   on, and a node that only opens this door is joined by its code. To keep two computers in step after

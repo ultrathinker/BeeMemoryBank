@@ -12,6 +12,14 @@ public class User
     public string PasswordHash { get; set; } = "";
     public string Role { get; set; } = UserRoles.User;
     public int? KeySlotId { get; set; }
+
+    /// <summary>
+    /// The hint the person wrote for this password, shown on the sign-in page while the vault is locked (there is no
+    /// e-mail recovery). Plain text on purpose - the sign-in page needs it before any key exists - but node-local:
+    /// never in a sync payload (tbl_user is not replicated), never in a snapshot's plaintext log, never in audit text
+    /// and never in a log line. Null for users created before release 2.7.5 and for internal callers with no person.
+    /// </summary>
+    public string? PasswordHint { get; set; }
     public bool IsActive { get; set; } = true;
 
     /// <summary>Node-local flag controlling whether this user may use the AI chat feature;

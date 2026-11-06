@@ -62,7 +62,7 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
     }
 
     public async Task<IActionResult> OnPostStandaloneAsync(
-        string adminUsername, string displayName, string password, string confirmPassword)
+        string adminUsername, string displayName, string password, string confirmPassword, string passwordHint)
     {
         adminUsername = adminUsername?.Trim() ?? "";
         displayName = displayName?.Trim() ?? "";
@@ -85,7 +85,17 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
             return Page();
         }
 
-        var (ok, error) = await api.InitStandaloneAsync(adminUsername, displayName, password);
+        // Mandatory: no e-mail recovery, so the sign-in page must have a hint to show. Checked here first so a
+        // missing hint costs no request; the node checks the same rule again.
+        if (PasswordHintPolicy.Validate(passwordHint, password, adminUsername) is { } hintProblem)
+        {
+            ErrorMessage = hintProblem;
+            Step = "form";
+            Mode = "standalone";
+            return Page();
+        }
+
+        var (ok, error) = await api.InitStandaloneAsync(adminUsername, displayName, password, passwordHint);
         if (!ok)
         {
             ErrorMessage = error ?? "Initialization failed.";
@@ -104,7 +114,7 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
     /// for a node at a real name (a reverse proxy with a public certificate).
     /// </summary>
     public async Task<IActionResult> OnPostJoinAsync(
-        string joinAdminUsername, string joinDisplayName, string remoteUrl, string joinPassword, string? joinCode = null)
+        string joinAdminUsername, string joinDisplayName, string remoteUrl, string joinPassword, string passwordHint, string? joinCode = null)
     {
         joinAdminUsername = joinAdminUsername?.Trim() ?? "";
         joinDisplayName = joinDisplayName?.Trim() ?? "";
@@ -142,7 +152,16 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
             return Page();
         }
 
-        var (ok, error) = await api.InitJoinAsync(joinAdminUsername, joinDisplayName, remoteUrl, joinPassword,
+        // A join creates this node's first administrator too, so it owes a hint (the node checks it again).
+        if (PasswordHintPolicy.Validate(passwordHint, joinPassword, joinAdminUsername) is { } hintProblem)
+        {
+            ErrorMessage = hintProblem;
+            Step = "form";
+            Mode = "join";
+            return Page();
+        }
+
+        var (ok, error) = await api.InitJoinAsync(joinAdminUsername, joinDisplayName, remoteUrl, joinPassword, passwordHint,
             joinCode.Length > 0 ? joinCode : null);
         if (!ok)
         {

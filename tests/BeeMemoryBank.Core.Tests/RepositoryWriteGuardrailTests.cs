@@ -132,6 +132,11 @@ public class RepositoryWriteGuardrailTests
         new("server/BeeMemoryBank.Api/Services/Recovery/RecoveryRestoreService.cs", "INodeIdentityRepository", "MarkInitialSyncCompletedAsync",
             "Marks this node's own first pull as done (tbl_node_identity.initial_sync_completed, no LamportTs/SourceNodeId) — the interface's doc comment lists it as node-local, never synced."),
 
+        // The recovery-key step's flags (release 2.7.5): node-local tbl_node_identity settings, no
+        // LamportTs/SourceNodeId, never announced to peers, so there is no sync event to log.
+        new("server/BeeMemoryBank.Api/Endpoints/KeyEndpoints.cs", "INodeIdentityRepository", "SetRecoveryKeyAcknowledgedAtAsync", NodeLocalSettingReason),
+        new("server/BeeMemoryBank.Api/Endpoints/KeyEndpoints.cs", "INodeIdentityRepository", "SetRecoveryKeyNoticeDismissedAtAsync", NodeLocalSettingReason),
+
         // /api/join is reached AFTER the joining node already exists, by the node it is joining —
         // that side is past bootstrap, so it earns its allow-list entries individually below rather
         // than sharing BootstrapReason.

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using BeeMemoryBank.Storage.PreUnlock;
 using BeeMemoryBank.Storage.Sealed;
 
 namespace BeeMemoryBank.Storage.Boot;
@@ -26,6 +27,8 @@ public static class BootStoreServiceCollectionExtensions
         services.TryAddSingleton<BootStoreWriter>(sp => new BootStoreWriter(sp.GetRequiredService<BootStoreConnectionFactory>()));
         services.TryAddSingleton<RelayInbox>(sp => new RelayInbox(sp.GetRequiredService<BootStoreConnectionFactory>()));
         services.TryAddSingleton<IRelayInbox>(sp => sp.GetRequiredService<RelayInbox>());
+        // The hint mirror lives beside the boot store: both answer questions a closed node has before any key exists.
+        services.TryAddSingleton(new PasswordHintFile(Path.Combine(dataPath, PasswordHintFile.FileName)));
         return services;
     }
 }

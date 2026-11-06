@@ -53,6 +53,7 @@ public sealed class SetupAutoSignInTests : IAsyncLifetime
                 ["displayName"] = "Test PC",
                 ["password"] = "SetupPass123",
                 ["confirmPassword"] = "SetupPass123",
+                ["passwordHint"] = "A test hint",
                 ["__RequestVerificationToken"] = TokenField.Match(html).Groups[1].Value,
             }),
         };
@@ -66,10 +67,13 @@ public sealed class SetupAutoSignInTests : IAsyncLifetime
         var session = created.Headers.GetValues("Set-Cookie").Where(c => c.StartsWith("bee_session=")).ToList();
         session.Should().NotBeEmpty("the new admin is signed in right away");
 
+        // A new node owes the blocking recovery-key step: the first page of that session is the gate, not the app.
+        // (RecoveryKeyGateTests walks the rest: the key, the confirmation, and the tree that opens afterwards.)
         using var tree = new HttpRequestMessage(HttpMethod.Get, "/Tree");
         tree.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", session.Select(c => c.Split(';')[0])));
         using var opened = await browser.SendAsync(tree);
-        opened.StatusCode.Should().Be(HttpStatusCode.OK, "the tree opens without another login");
+        opened.StatusCode.Should().Be(HttpStatusCode.Redirect, "the session is signed in, but the recovery-key step comes first");
+        opened.Headers.Location!.OriginalString.Should().StartWith("/RecoveryKeyGate");
     }
 
     private static string Cookies(HttpResponseMessage response) =>

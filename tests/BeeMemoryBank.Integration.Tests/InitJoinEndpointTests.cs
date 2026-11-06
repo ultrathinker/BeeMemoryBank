@@ -60,6 +60,7 @@ public class InitJoinEndpointTests : IAsyncLifetime
         var joinResp = await clientB.PostAsJsonAsync("/api/init/join", new
         {
             adminUsername = "admin",
+            passwordHint = "A test hint",
             displayName = "NodeB",
             remoteUrl = "http://node-a", // arbitrary — RouteOutboundHttpThrough ignores the host
             password = MasterPassword
@@ -92,6 +93,10 @@ public class InitJoinEndpointTests : IAsyncLifetime
             whitelistEntry.Should().NotBeNull();
             whitelistEntry!.DisplayName.Should().Be("NodeA");
             whitelistEntry.IsSuperadmin.Should().BeTrue();
+
+            // A join creates this node's first administrator, so the node owes the blocking recovery-key step.
+            (await scopeB.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetRecoveryKeyRequiredAsync())
+                .Should().BeTrue("a joined node has never shown its administrator a recovery key");
         }
 
         // Review revsrv F10: the archive the join downloaded was made in the joiner's data folder (owner-only), and is gone.

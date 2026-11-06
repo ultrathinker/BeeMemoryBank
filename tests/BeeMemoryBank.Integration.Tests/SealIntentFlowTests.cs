@@ -136,7 +136,7 @@ public sealed class SealIntentFlowTests
             services.Replace(ServiceDescriptor.Singleton<ISealIntents>(_ => recorder = new RecordingIntents(new SealIntents(dir), dir))));
         using (var client = node.Client())
         {
-            var response = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Intent node", password = "Intent-setup-pw-1" });
+            var response = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Intent node", password = "Intent-setup-pw-1", passwordHint = "A test hint"});
             response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         }
 
@@ -200,7 +200,7 @@ public sealed class SealIntentFlowTests
         using (var scope = node.Services.CreateScope())
             (await scope.ServiceProvider.GetRequiredService<InitializationService>().IsClaimedAsync()).Should().BeFalse("the start wiped the cut setup");
         ReadableIn(dir, [canary]).Should().BeFalse();
-        var again = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Second try", password = "Intent-setup-pw-2" });
+        var again = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Second try", password = "Intent-setup-pw-2", passwordHint = "A test hint"});
         again.StatusCode.Should().Be(HttpStatusCode.OK, await again.Content.ReadAsStringAsync());
         VaultStoreFiles.DetectMode(dir).Should().Be(VaultStoreMode.Sealed);
         SealIntent.IsPending(dir).Should().BeFalse();
@@ -240,7 +240,7 @@ public sealed class SealIntentFlowTests
         using (var client = joiner.Client())
         {
             var response = await client.PostAsJsonAsync("/api/init/join",
-                new { adminUsername = "admin", displayName = "Intent joiner", remoteUrl = "http://host", password = Password }, JsonOpts);
+                new { adminUsername = "admin", displayName = "Intent joiner", remoteUrl = "http://host", password = Password, passwordHint = "A test hint" }, JsonOpts);
             response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         }
         images.Labels.Should().Contain("before-snapshot").And.HaveCountGreaterThan(8);
@@ -274,7 +274,7 @@ public sealed class SealIntentFlowTests
         using var client = joiner.Client();
 
         var response = await client.PostAsJsonAsync("/api/init/join",
-            new { adminUsername = "admin", displayName = "Failed joiner", remoteUrl = "http://host", password = Password }, JsonOpts);
+            new { adminUsername = "admin", displayName = "Failed joiner", remoteUrl = "http://host", password = Password, passwordHint = "A test hint" }, JsonOpts);
 
         response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
         var error = (await response.Content.ReadFromJsonAsync<JsonElement>(JsonOpts)).GetProperty("error").GetString();
@@ -310,7 +310,7 @@ public sealed class SealIntentFlowTests
         using var node = SealedApiNode.PlainOver(dir, services => services.RemoveAll<ISealIntents>());
         using var client = node.Client();
 
-        var response = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Cannot", password = "Intent-setup-pw-3" });
+        var response = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Cannot", password = "Intent-setup-pw-3", passwordHint = "A test hint"});
 
         response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
         (await response.Content.ReadAsStringAsync()).Should().Contain("cannot be set up");
@@ -399,7 +399,7 @@ public sealed class SealIntentRestoreTests(BaselineRestoreFixture src)
         try
         {
             using var client = target.CreateClient();
-            (await client.PostAsJsonAsync("/api/restore/backup", new { path = folder, password = Who.Password, adminUsername = "admin", displayName = "Restored PC" }))
+            (await client.PostAsJsonAsync("/api/restore/backup", new { path = folder, password = Who.Password, adminUsername = "admin", displayName = "Restored PC", passwordHint = "A test hint" }))
                 .EnsureSuccessStatusCode();
             var progress = await RestoreWizardWait.UntilEndAsync(client);
             progress.GetProperty("state").GetString().Should().Be("failed", "a decrypted copy that stays makes the restore repair-required, never done: " + progress);

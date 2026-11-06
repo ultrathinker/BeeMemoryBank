@@ -181,7 +181,7 @@ mkdir -p "$data1"
 printf '%s' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" > "$auto_key_file"
 chmod 0400 "$auto_key_file"
 start_node
-expect 200 POST /api/init/standalone "{\"adminUsername\":\"admin\",\"displayName\":\"Gate node\",\"password\":\"$password\"}"
+expect 200 POST /api/init/standalone "{\"adminUsername\":\"admin\",\"displayName\":\"Gate node\",\"password\":\"$password\",\"passwordHint\":\"the blue folder by the window\"}"
 # A node that is set up is encrypted and closed from the start (BMB-306): the setup ran the migration over the empty vault, and the sign-in opens it.
 call GET /api/vault/status
 [ "$(field mode)" = sealed ] || fail "a new node is not sealed after its setup: $body"

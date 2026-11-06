@@ -92,6 +92,7 @@ public class JoinPeerTlsEndpointTests : IAsyncLifetime
         var resp = await joinerClient.PostAsJsonAsync("/api/init/join", new
         {
             adminUsername = "admin",
+            passwordHint = "A test hint",
             displayName = "Joiner",
             remoteUrl = "http://host", // arbitrary: RouteOutboundHttpThrough ignores the host
             password = Password
@@ -153,6 +154,7 @@ public class JoinPeerTlsEndpointTests : IAsyncLifetime
         var init = await joinerClient.PostAsJsonAsync("/api/init/join", new
         {
             adminUsername = "admin",
+            passwordHint = "A test hint",
             displayName = "Joiner2",
             remoteUrl = "http://host",
             password = Password

@@ -39,7 +39,8 @@ public sealed class RestoreWizardOpenCopyTests(RestoreSourceFixture source)
 
         (await client.PostAsJsonAsync("/api/restore/backup", new
         {
-            path = source.BackupFolder, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC"
+            path = source.BackupFolder, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
         var progress = await RestoreWizardWait.UntilEndAsync(client);
 
@@ -78,7 +79,7 @@ public sealed class RestoreWizardEncryptedEndTests(BaselineRestoreFixture src)
     }
 
     private static object Start(string folder) =>
-        new { path = folder, password = BaselineRestoreFixture.Password, adminUsername = "admin", displayName = "Restored PC" };
+        new { path = folder, password = BaselineRestoreFixture.Password, adminUsername = "admin", displayName = "Restored PC", passwordHint = "A test hint" };
 
     [Fact]
     public async Task A_wizard_restore_ends_with_an_encrypted_node_with_metadata_encryption_on_that_the_password_opens()

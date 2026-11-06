@@ -37,10 +37,10 @@ public partial class ApiClient(HttpClient http)
         }
     }
 
-    public async Task<(bool Ok, string? Error)> InitStandaloneAsync(string adminUsername, string displayName, string password)
+    public async Task<(bool Ok, string? Error)> InitStandaloneAsync(string adminUsername, string displayName, string password, string passwordHint)
     {
         var resp = await http.PostAsync("/api/init/standalone",
-            Body(new { adminUsername, displayName, password }));
+            Body(new { adminUsername, displayName, password, passwordHint }));
         if (resp.IsSuccessStatusCode)
             return (true, null);
         var body = await resp.Content.ReadAsStringAsync();
@@ -55,10 +55,10 @@ public partial class ApiClient(HttpClient http)
     }
 
     /// <param name="joinCode">The join code from the other computer's "Connect a device" card; when given it replaces <paramref name="remoteUrl"/>.</param>
-    public async Task<(bool Ok, string? Error)> InitJoinAsync(string adminUsername, string displayName, string remoteUrl, string password, string? joinCode = null)
+    public async Task<(bool Ok, string? Error)> InitJoinAsync(string adminUsername, string displayName, string remoteUrl, string password, string passwordHint, string? joinCode = null)
     {
         var resp = await http.PostAsync("/api/init/join",
-            Body(new { adminUsername, displayName, remoteUrl, password, joinCode }));
+            Body(new { adminUsername, displayName, remoteUrl, password, joinCode, passwordHint }));
         if (resp.IsSuccessStatusCode)
             return (true, null);
         var body = await resp.Content.ReadAsStringAsync();
@@ -129,13 +129,13 @@ public partial class ApiClient(HttpClient http)
     /// the browser's address for the node's per-IP throttle and its audit log.
     /// </summary>
     public async Task<RecoverAccessResult> RecoverAccessAsync(
-        string username, string recoveryKey, string newPassword, string? clientIp)
+        string username, string recoveryKey, string newPassword, string passwordHint, string? clientIp)
     {
         HttpResponseMessage resp;
         try
         {
             resp = await http.PostAsync("/api/session/recover-access",
-                Body(new { username, recoveryKey, newPassword, clientIp }));
+                Body(new { username, recoveryKey, newPassword, passwordHint, clientIp }));
         }
         catch (HttpRequestException)
         {

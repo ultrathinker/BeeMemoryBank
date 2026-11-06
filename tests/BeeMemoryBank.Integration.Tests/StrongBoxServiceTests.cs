@@ -56,5 +56,11 @@ public class StrongBoxServiceTests
         public Task<string?> GetBrandNameAsync() => throw new NotSupportedException();
         public Task SetBrandNameAsync(string? brandName) => throw new NotSupportedException();
         public Task SetCanGenerateEmbeddingsAsync(bool enabled) => throw new NotSupportedException();
+        public Task<bool> GetRecoveryKeyRequiredAsync() => throw new NotSupportedException();
+        public Task SetRecoveryKeyRequiredAsync(bool required) => throw new NotSupportedException();
+        public Task<DateTime?> GetRecoveryKeyAcknowledgedAtAsync() => throw new NotSupportedException();
+        public Task SetRecoveryKeyAcknowledgedAtAsync(DateTime acknowledgedAt) => throw new NotSupportedException();
+        public Task<DateTime?> GetRecoveryKeyNoticeDismissedAtAsync() => throw new NotSupportedException();
+        public Task SetRecoveryKeyNoticeDismissedAtAsync(DateTime dismissedAt) => throw new NotSupportedException();
     }
 }

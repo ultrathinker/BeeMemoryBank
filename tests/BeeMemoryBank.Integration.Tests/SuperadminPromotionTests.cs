@@ -37,6 +37,7 @@ public class SuperadminPromotionTests : IAsyncLifetime
     {
         var resp = await _client.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username = "bob",
             password = BobPassword,
             displayName = "Bob",

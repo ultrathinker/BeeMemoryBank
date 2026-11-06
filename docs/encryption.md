@@ -539,6 +539,13 @@ point therefore leaves the node unlockable with the password it had and never wi
 trigger set in the vault (migration `040_sealed_unlock_material.sql`) bumps `unlock_material_version` inside the writing
 transaction, and a watcher compares it with the boot store every 10 seconds and rewrites it when it is behind.
 
+**The password-hint mirror.** One question is asked while the database is closed and cannot wait for an unlock: *what hint did this
+person write?* The sign-in page reads a small derived file, `beememorybank.hints.json`, beside the boot store. It is rewritten from
+`tbl_user` at every unlock and every close, and after every change to a user, a password or a hint (a deleted user disappears with the
+next rewrite). It holds the hints in clear and an HMAC-SHA-256 of each lower-cased user name under a random salt; it does not list
+the names. It is not part of a backup, a snapshot or a join archive: a restored database rebuilds it at the first unlock. Anyone who
+can read the data folder can read the hints, which is why every hint form says never to put a secret in one.
+
 **Wrappers and DEK rotation.** A door may yield an older master key (a peer that accepted a rotation rewraps each user's slot at that
 user's next login). The boot store therefore keeps a wrapper for every master key some door may still yield, and no other. After
 a rotation the *initiator* has exactly one wrapper, under the new key, so a node the rotation left out, which still holds the old

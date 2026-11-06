@@ -78,9 +78,14 @@
             var oldPw = document.getElementById('cp-old').value;
             var newPw = document.getElementById('cp-new').value;
             var confirmPw = document.getElementById('cp-confirm').value;
+            var newHint = (document.getElementById('cp-hint').value || '').trim();
 
             if (!oldPw || !newPw || !confirmPw) {
                 showAlert('danger', 'All fields are required.');
+                return;
+            }
+            if (!newHint) {
+                showAlert('danger', 'A password hint is required: it is what the sign-in page shows if you forget the password.');
                 return;
             }
             if (newPw !== confirmPw) {
@@ -97,12 +102,13 @@
                 return bmbBusy.request('/api-proxy/users/me/change-password', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
+                    body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw, passwordHint: newHint })
                 }).then(function () {
                     showAlert('success', 'Password changed successfully.');
                     document.getElementById('cp-old').value = '';
                     document.getElementById('cp-new').value = '';
                     document.getElementById('cp-confirm').value = '';
+                    document.getElementById('cp-hint').value = '';
                 });
             }, { quiet: true, error: function (err) { showAlert('danger', err.message || 'Failed to change password.'); } });
         });
@@ -253,4 +259,38 @@
             customElements.whenDefined('sl-dialog').then(function () { dlg.show(); });
         }
     }
+
+    // The soft "Add a password hint" prompt for accounts created before hints existed: saving does not touch
+    // the password or the key slot, only the text the sign-in page shows.
+    var btnSaveHint = document.getElementById('btn-save-password-hint');
+    if (btnSaveHint) {
+        btnSaveHint.addEventListener('click', function () {
+            var alertEl = document.getElementById('hint-alert');
+            var hint = (document.getElementById('profile-password-hint').value || '').trim();
+            function showHintAlert(variant, message) {
+                if (!alertEl) return;
+                var icon = variant === 'success' ? 'check-circle' : 'exclamation-triangle';
+                alertEl.innerHTML = '<sl-alert variant="' + variant + '" open closable><sl-icon slot="icon" name="' + icon + '"></sl-icon>' + escapeHtml(message) + '</sl-alert>';
+                alertEl.style.display = 'block';
+            }
+            if (!hint) {
+                showHintAlert('danger', 'Write a hint first; it is what the sign-in page shows if you forget the password.');
+                return;
+            }
+            bmbBusy.run(btnSaveHint, function () {
+                return bmbBusy.request('/api-proxy/users/me/password-hint', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ passwordHint: hint })
+                }).then(function () {
+                    showHintAlert('success', 'Password hint saved.');
+                    var missing = document.getElementById('missing-password-hint');
+                    if (missing) missing.style.display = 'none';
+                }, function (err) {
+                    showHintAlert('danger', (err && err.message) || 'Failed to save the password hint.');
+                });
+            });
+        });
+    }
+
 })();

@@ -37,7 +37,7 @@ public sealed class MasterPasswordChangeSignInTests : IAsyncLifetime
     {
         using (var change = new HttpRequestMessage(HttpMethod.Post, "/api/keys/change-password")
         {
-            Content = JsonContent.Create(new { oldPassword = OldPassword, newPassword = NewPassword })
+            Content = JsonContent.Create(new { oldPassword = OldPassword, newPassword = NewPassword, passwordHint = "A test hint" })
         })
         {
             // What the web forwards for a signed-in superadmin.

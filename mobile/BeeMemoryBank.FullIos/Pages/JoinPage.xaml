@@ -15,6 +15,8 @@
                 <Label Text="Master password" Style="{StaticResource Section}" />
                 <Entry x:Name="PasswordEntry" IsPassword="True" Placeholder="The master password of your memory bank" ReturnType="Next" AutomationId="PasswordEntry" />
                 <Label Style="{StaticResource Muted}" Text="With a join code it goes only to the computer that made the code: the code pins that computer's key." />
+                <Label Text="Password hint (required). If you forget your password, we will show this hint on the sign-in page, because there is no e-mail recovery. Write it so that other people cannot work out your password from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it." Style="{StaticResource Muted}" />
+                <Entry x:Name="HintEntry" Placeholder="Password hint" ReturnType="Next" AutomationId="PasswordHintEntry" />
                 <Label Text="Name of this iPhone" Style="{StaticResource Section}" />
                 <Entry x:Name="NameEntry" Placeholder="iPhone" ReturnType="Done" Completed="OnJoin" AutomationId="NameEntry" />
                 <Label x:Name="ErrorLabel" Style="{StaticResource Error}" IsVisible="False" />

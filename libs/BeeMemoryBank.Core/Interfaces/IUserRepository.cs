@@ -60,6 +60,15 @@ public interface IUserRepository
     Task<string?> GetSecurityStampAsync(int id);
 
     /// <summary>
+    /// The stored password hint of an active user, or null when the user does not exist or has none - the sign-in
+    /// page asks this while the vault is locked, so it reads only tbl_user and never needs a key.
+    /// </summary>
+    Task<string?> GetPasswordHintAsync(string username);
+
+    /// <summary>Stores (or clears, with null) the hint of one user without touching any other column.</summary>
+    Task SetPasswordHintAsync(int id, string? hint);
+
+    /// <summary>
     /// Regenerates the node-local security stamp (new random value) for a user. Called on
     /// every identity-affecting change to invalidate outstanding Web cookies on next
     /// revalidation. Returns the new stamp.

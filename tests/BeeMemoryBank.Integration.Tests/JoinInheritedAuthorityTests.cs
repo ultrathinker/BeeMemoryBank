@@ -52,6 +52,7 @@ public class JoinInheritedAuthorityTests : IAsyncLifetime
         var joinResp = await joinerClient.PostAsJsonAsync("/api/init/join", new
         {
             adminUsername = "admin",
+            passwordHint = "A test hint",
             displayName = "Joiner",
             remoteUrl = "http://host",
             password = MasterPassword

@@ -127,6 +127,15 @@
                 <sl-input id="add-password" name="password" label="Password" type="password" password-toggle required autocomplete="new-password"
                     help-text="At least 8 characters, with an uppercase letter, a lowercase letter, and a digit."></sl-input>
             </div>
+            <p class="text-sm text-muted" style="margin:0 0 6px 0;" id="add-password-hint-intro">
+                Password hint (required). If this person forgets their password, we will show this hint on the sign-in page,
+                because there is no e-mail recovery. Write it so that other people cannot work out the password from it.
+                Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it.
+            </p>
+            <div style="margin-bottom:16px;">
+                <sl-input id="add-password-hint" name="passwordHint" label="Password hint" required maxlength="120"
+                    autocomplete="off" help-text="3 to 120 characters."></sl-input>
+            </div>
             <div style="margin-bottom:16px;">
                 <sl-select id="add-role" name="role" label="Role" value="user"
                     help-text="Custom roles carry their own folder rules — manage them on the Roles page.">
@@ -150,6 +159,15 @@
             <div style="margin-bottom:16px;">
                 <sl-input id="cp-new-password" name="newPassword" label="New Password" type="password" password-toggle required autocomplete="new-password"
                     help-text="At least 8 characters, with an uppercase letter, a lowercase letter, and a digit."></sl-input>
+            </div>
+            <p class="text-sm text-muted" style="margin:0 0 6px 0;" id="cp-password-hint-intro">
+                Password hint (required). If this person forgets their password, we will show this hint on the sign-in page,
+                because there is no e-mail recovery. Write it so that other people cannot work out the password from it.
+                Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it.
+            </p>
+            <div style="margin-bottom:16px;">
+                <sl-input id="cp-password-hint" name="passwordHint" label="Password hint" required maxlength="120"
+                    autocomplete="off" help-text="3 to 120 characters."></sl-input>
             </div>
         </form>
         <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-change-password">Cancel</sl-button>

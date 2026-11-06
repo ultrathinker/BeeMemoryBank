@@ -67,4 +67,26 @@ public interface INodeIdentityRepository
     /// node init -- see <see cref="Models.NodeIdentity.CanGenerateEmbeddings"/>.
     /// </summary>
     Task SetCanGenerateEmbeddingsAsync(bool enabled);
+
+    /// <summary>
+    /// Whether this node still owes its first administrator the blocking recovery-key step: set by
+    /// /api/init/standalone and /api/init/join, cleared only by an acknowledgement. A node that existed
+    /// before release 2.7.5 answers false, so an upgrade never gates anybody. Node-local, never synced.
+    /// </summary>
+    Task<bool> GetRecoveryKeyRequiredAsync();
+
+    /// <summary>Records that a new node owes the recovery-key step (one-way; there is no reason to unset it).</summary>
+    Task SetRecoveryKeyRequiredAsync(bool required);
+
+    /// <summary>When a superadmin confirmed they saved the recovery key this node showed, or null.</summary>
+    Task<DateTime?> GetRecoveryKeyAcknowledgedAtAsync();
+
+    /// <summary>Records the confirmation; a second call keeps the first instant.</summary>
+    Task SetRecoveryKeyAcknowledgedAtAsync(DateTime acknowledgedAt);
+
+    /// <summary>When an operator dismissed the "no recovery key has been issued" notice, or null.</summary>
+    Task<DateTime?> GetRecoveryKeyNoticeDismissedAtAsync();
+
+    /// <summary>Records the dismissal of the no-recovery-key notice.</summary>
+    Task SetRecoveryKeyNoticeDismissedAtAsync(DateTime dismissedAt);
 }

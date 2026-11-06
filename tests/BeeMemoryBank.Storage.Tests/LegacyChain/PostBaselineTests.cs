@@ -3,14 +3,15 @@ using BeeMemoryBank.Storage.Sqlite;
 namespace BeeMemoryBank.Storage.Tests.Squash;
 
 /// <summary>
-/// The first migrations after the baseline (release 2.7): 041, the table of the invitations to a blind copy, and 042, the kind of node that redeemed (an app copy or a server blind node)
-/// with the pair code a server node sends. The squash tests keep them out of their comparisons with the old chain (<c>SchemaDump</c>); this class is where they are checked, on every way a
+/// The first migrations after the baseline: 041, the table of the invitations to a blind copy, 042, the kind of node that redeemed (an app copy or a server blind node)
+/// with the pair code a server node sends, and 043, the password hint and the node-level recovery-key flags. The squash tests keep them out of their comparisons with the old chain (<c>SchemaDump</c>); this class is where they are checked, on every way a
 /// database can arrive at them.
 /// </summary>
 public class PostBaselineTests : SquashTestBase
 {
     private const string FortyOne = "BeeMemoryBank.Storage.Migrations.041_blind_invite.sql";
     private const string FortyTwo = "BeeMemoryBank.Storage.Migrations.042_blind_invite_server.sql";
+    private const string FortyThree = "BeeMemoryBank.Storage.Migrations.043_password_hint.sql";
 
     /// <summary>The trigger as 041 made it: what a database has between 041 and 042.</summary>
     private const string Trigger041 =
@@ -40,11 +41,11 @@ public class PostBaselineTests : SquashTestBase
     }
 
     [Fact]
-    public async Task A_new_database_records_the_baseline_041_and_042()
+    public async Task A_new_database_records_the_baseline_041_042_and_043()
     {
         var path = await CurrentSchemaDbAsync(NewDbPath());
 
-        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo)]);
+        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree)]);
     }
 
     [Fact]
@@ -121,13 +122,13 @@ public class PostBaselineTests : SquashTestBase
 
         await RunNewRunnerAsync(path);
 
-        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42);
+        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43);
         Query<long>(path, "SELECT COUNT(*) FROM tbl_blind_invite").Should().Be(0);
         var appliedAt = Query<string>(path, "SELECT applied_at FROM tbl_migration WHERE version = 42");
 
         await RunNewRunnerAsync(path);
 
-        LedgerRows(path).Should().Be(3);
+        LedgerRows(path).Should().Be(4);
         Query<string>(path, "SELECT applied_at FROM tbl_migration WHERE version = 42").Should().Be(appliedAt, "042 is not applied again");
     }
 
@@ -143,7 +144,7 @@ public class PostBaselineTests : SquashTestBase
 
         await RunNewRunnerAsync(path);
 
-        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo)]);
+        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree)]);
         Query<string>(path, "SELECT kind FROM tbl_blind_invite").Should().Be("device", "an invitation of 041 was an app copy's");
         Query<long>(path, "SELECT length(backup_key_enc) FROM tbl_blind_invite").Should().Be(5, "the key the owner has not decided on yet is still there");
         Query<long>(path, "SELECT pair_code_enc IS NULL FROM tbl_blind_invite").Should().Be(1);
@@ -160,7 +161,7 @@ public class PostBaselineTests : SquashTestBase
 
         await RunNewRunnerAsync(path);
 
-        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo)], "the 39 old rows became the baseline's, and 041 and 042 followed");
+        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree)], "the 39 old rows became the baseline's, and 041, 042 and 043 followed");
         Query<long>(path, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'tbl_blind_invite'").Should().Be(1);
     }
 
@@ -212,6 +213,36 @@ public class PostBaselineTests : SquashTestBase
         Run(path, "UPDATE tbl_blind_invite SET state = 'confirming', confirming_at = '2026-10-01T00:00:00Z'");
 
         Query<long>(path, "SELECT pair_code_enc IS NOT NULL FROM tbl_blind_invite").Should().Be(1, "an interrupted confirmation needs the code to be finished");
+    }
+
+    [Fact]
+    public async Task A_new_database_has_the_password_hint_and_the_recovery_key_flags()
+    {
+        var path = await CurrentSchemaDbAsync(NewDbPath());
+
+        Query<long>(path, "SELECT COUNT(*) FROM pragma_table_info('tbl_user') WHERE name = 'password_hint' AND type = 'TEXT' AND \"notnull\" = 0")
+            .Should().Be(1, "the hint is nullable: users that existed before it, and internal callers, have none");
+        Query<string>(path, "SELECT group_concat(name) FROM pragma_table_info('tbl_node_identity') WHERE name LIKE 'recovery_key_%' ORDER BY cid")
+            .Should().Be("recovery_key_required,recovery_key_acknowledged_at,recovery_key_notice_dismissed_at");
+        Query<long>(path, "SELECT \"notnull\" FROM pragma_table_info('tbl_node_identity') WHERE name = 'recovery_key_required'").Should().Be(1);
+        Query<string>(path, "SELECT dflt_value FROM pragma_table_info('tbl_node_identity') WHERE name = 'recovery_key_required'").Should().Be("0",
+            "an upgraded node is not gated");
+    }
+
+    [Fact]
+    public async Task A_database_of_043_that_is_rolled_back_to_the_baseline_gets_the_columns_again_and_keeps_its_rows()
+    {
+        var path = await CurrentSchemaDbAsync(NewDbPath());
+        Run(path, "ALTER TABLE tbl_user DROP COLUMN password_hint; " +
+                  "ALTER TABLE tbl_node_identity DROP COLUMN recovery_key_required; " +
+                  "ALTER TABLE tbl_node_identity DROP COLUMN recovery_key_acknowledged_at; " +
+                  "ALTER TABLE tbl_node_identity DROP COLUMN recovery_key_notice_dismissed_at");
+        SetLedger(path, [(40, BaselineName), (41, FortyOne), (42, FortyTwo)]);
+
+        await RunNewRunnerAsync(path);
+
+        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43);
+        Query<long>(path, "SELECT COUNT(*) FROM pragma_table_info('tbl_user') WHERE name = 'password_hint'").Should().Be(1);
     }
 
     [Fact]

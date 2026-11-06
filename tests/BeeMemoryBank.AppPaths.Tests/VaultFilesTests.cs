@@ -49,6 +49,7 @@ public sealed class VaultFilesTests : IDisposable
     [InlineData("api.ready", true)]
     [InlineData("network.settings.json", true)]
     [InlineData("network.listening.json", true)]
+    [InlineData("beememorybank.hints.json", true)]
     [InlineData("beememorybank.db", false)]
     [InlineData("beememorybank.db-wal", false)]
     [InlineData(".internal-key", false)]

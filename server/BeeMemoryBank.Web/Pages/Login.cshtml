@@ -158,9 +158,47 @@ else
             </sl-button>
         </form>
 
-        <p class="text-sm" style="margin-top:16px;text-align:center;">
-            <a id="forgot-password-link" href="/RecoverAccess">Forgot your password? Use a recovery key</a>
-        </p>
+        @* "Forgot your password?" is two options now: the hint the person wrote when they created the password,
+           and the recovery key for when the hint is not enough. Both are anonymous by necessity. The hint is
+           text a person typed, so it is rendered with Razor's encoding. *@
+        <details id="forgot-panel" class="forgot-panel" style="margin-top:16px;" open="@(Model.HintAttempted ? "open" : null)">
+            <summary id="forgot-password-link" style="cursor:pointer;text-align:center;">
+                Forgot your password?
+            </summary>
+            <div style="margin-top:12px;">
+                <p class="text-sm text-muted" style="margin:0 0 8px 0;">
+                    Show the hint you wrote when you created your password, or use a recovery key.
+                </p>
+                <form data-busy="short" method="post" asp-page-handler="ShowHint" class="sl-form">
+                    <div style="margin-bottom:12px;">
+                        <sl-input name="hintUsername" label="Your username" required autocomplete="username"></sl-input>
+                    </div>
+                    <sl-button type="submit" variant="default" style="width:100%;">
+                        <sl-icon slot="prefix" name="lightbulb"></sl-icon> Show my password hint
+                    </sl-button>
+                </form>
+
+                @if (Model.ShownHint is { Length: > 0 } hint)
+                {
+                    <sl-alert id="password-hint-result" variant="primary" open style="margin-top:12px;">
+                        <sl-icon slot="icon" name="lightbulb"></sl-icon>
+                        <strong>Your password hint</strong>
+                        <div id="password-hint-text" style="margin-top:6px;white-space:pre-wrap;">@hint</div>
+                    </sl-alert>
+                }
+                else if (Model.HintAttempted)
+                {
+                    <sl-alert id="password-hint-message" variant="warning" open style="margin-top:12px;">
+                        <sl-icon slot="icon" name="question-circle"></sl-icon>
+                        @(Model.HintMessage ?? "No hint is available for this account. Use a recovery key, or ask an administrator to reset the password.")
+                    </sl-alert>
+                }
+
+                <p class="text-sm" style="margin:14px 0 0 0;text-align:center;">
+                    <a id="recover-access-link" href="/RecoverAccess">Use a recovery key instead</a>
+                </p>
+            </div>
+        </details>
 
     </div>
 }

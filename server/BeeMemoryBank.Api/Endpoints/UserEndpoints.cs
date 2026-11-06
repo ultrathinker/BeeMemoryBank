@@ -54,7 +54,12 @@ public static class UserEndpoints
         {
             try
             {
-                var user = await userService.CreateUserAsync(req.Username, req.DisplayName, req.Password, req.Role, req.ChatAccess);
+                // Mandatory at every entry point that has a person: there is no e-mail recovery, so the sign-in page
+                // must be able to show a hint. The service keeps accepting null for seeds and tools.
+                if (PasswordHintPolicy.Validate(req.PasswordHint, req.Password, req.Username) is { } hintProblem)
+                    return Results.BadRequest(new ErrorResponse(hintProblem));
+
+                var user = await userService.CreateUserAsync(req.Username, req.DisplayName, req.Password, req.Role, req.ChatAccess, req.PasswordHint);
                 var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
                 await auditRepo.LogAsync("user", user.Id.ToString(), "user_created", "web",
                     $"User '{user.Username}' (role={user.Role}) created by user {actor}");
@@ -70,7 +75,16 @@ public static class UserEndpoints
         {
             try
             {
-                var appliedPw = await userService.UpdateUserAsync(id, req.DisplayName, req.Role, req.Password, req.ChatAccess);
+                // A promotion that sets a password is also a password creation point, so it needs a hint too.
+                if (!string.IsNullOrWhiteSpace(req.Password))
+                {
+                    var target = await userRepo.GetByIdAsync(id);
+                    if (target is null) return Results.NotFound(new ErrorResponse("User not found"));
+                    if (PasswordHintPolicy.Validate(req.PasswordHint, req.Password, target.Username) is { } hintProblem)
+                        return Results.BadRequest(new ErrorResponse(hintProblem));
+                }
+
+                var appliedPw = await userService.UpdateUserAsync(id, req.DisplayName, req.Role, req.Password, req.ChatAccess, req.PasswordHint);
                 var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
                 // Report what actually happened, not what was asked: a password is only applied
                 // when it provisions a key slot for a promotion, and is ignored otherwise.
@@ -119,6 +133,42 @@ public static class UserEndpoints
             }
         }).RequireSuperadmin();
 
+        // GET /api/users/me/password-hint — the signed-in caller's own hint (null when they have none). The person wrote
+        // it for themselves and it is already shown to anyone who types their name on the sign-in page, so reading it
+        // back needs no confirmation.
+        group.MapGet("/me/password-hint", async (HttpContext ctx, IUserRepository users) =>
+        {
+            var userIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
+            if (!int.TryParse(userIdStr, out var userId))
+                return Results.Json(new ErrorResponse("User not identified"), statusCode: 401);
+            var user = await users.GetByIdAsync(userId);
+            if (user is null) return Results.NotFound(new ErrorResponse("User not found"));
+            return Results.Ok(new CurrentPasswordHintResponse(await users.GetPasswordHintAsync(user.Username)));
+        });
+
+        // POST /api/users/me/password-hint — the Profile page's soft "Add a password hint" for accounts created before
+        // hints existed (and for a hint that no longer fits). Nothing is forced on such an account until its next
+        // password change; this lets its owner close the gap now. Any signed-in user, acting on themselves only.
+        group.MapPost("/me/password-hint", async (SetPasswordHintRequest req, HttpContext ctx, UserService userService) =>
+        {
+            var userIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
+            if (!int.TryParse(userIdStr, out var userId))
+                return Results.Json(new ErrorResponse("User not identified"), statusCode: 401);
+            try
+            {
+                await userService.SetPasswordHintAsync(userId, req.PasswordHint);
+                return Results.Ok();
+            }
+            catch (KeyNotFoundException)
+            {
+                return Results.NotFound(new ErrorResponse("User not found"));
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new ErrorResponse(ex.Message));
+            }
+        });
+
         // Self-service password change — any authenticated user can change their own password.
         // Not RequireSuperadmin: the rule here is "acting on yourself", which the filter cannot
         // express — it is the forwarded X-User-Id, not the role, that decides who is affected.
@@ -130,11 +180,16 @@ public static class UserEndpoints
 
             try
             {
+                var caller = await users.GetByIdAsync(userId);
+                if (caller is null) return Results.NotFound(new ErrorResponse("User not found"));
+                if (PasswordHintPolicy.Validate(req.PasswordHint, req.NewPassword, caller.Username) is { } hintProblem)
+                    return Results.BadRequest(new ErrorResponse(hintProblem));
+
                 using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
-                await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword, stop.Token);
+                await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword, stop.Token, req.PasswordHint);
                 // A superadmin's password is a master password: rebuild this node's strong recovery
                 // box with it while it is in memory (plan 6.3). Background; the response does not wait.
-                if ((await users.GetByIdAsync(userId))?.KeySlotId != null)
+                if (caller.KeySlotId != null)
                     _ = recovery.OnPasswordChanged(req.NewPassword);
                 return Results.Ok();
             }
@@ -160,12 +215,17 @@ public static class UserEndpoints
         .SingleFlight("user-password:{userId}", "The password change of this user", ctx =>
             int.TryParse(ctx.HttpContext.Request.Headers["X-User-Id"].FirstOrDefault(), out var userId) ? "user-password:" + userId : null);
 
-        group.MapPost("/{id:int}/change-password", async (int id, ChangeUserPasswordRequest req, UserService userService, HttpContext ctx, IAuditLogRepository auditRepo) =>
+        group.MapPost("/{id:int}/change-password", async (int id, ChangeUserPasswordRequest req, UserService userService, IUserRepository userRepo, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
             try
             {
+                var target = await userRepo.GetByIdAsync(id);
+                if (target is null) return Results.NotFound(new ErrorResponse("User not found"));
+                if (PasswordHintPolicy.Validate(req.PasswordHint, req.NewPassword, target.Username) is { } hintProblem)
+                    return Results.BadRequest(new ErrorResponse(hintProblem));
+
                 using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
-                await userService.AdminChangePasswordAsync(id, req.NewPassword, stop.Token);
+                await userService.AdminChangePasswordAsync(id, req.NewPassword, stop.Token, req.PasswordHint);
                 // Admin password reset bypasses old-password verification — high-impact
                 // and silent to the target user. Logged so target/reviewer can spot it.
                 var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";

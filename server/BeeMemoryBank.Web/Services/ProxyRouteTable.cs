@@ -181,6 +181,8 @@ public static class ProxyRouteTable
 
         // ── User & role administration (superadmin; /me/* password change is per-user) ──
         ["users/me/change-password"] = new("/api/users/me/change-password", [new("POST", null)]),
+        // The Profile page's soft "Add a password hint": the caller's own row only.
+        ["users/me/password-hint"] = new("/api/users/me/password-hint", [new("POST", null)]),
         ["users"] = new("/api/users",
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin), new("PUT", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
         ["restrictions"] = new("/api/restrictions",

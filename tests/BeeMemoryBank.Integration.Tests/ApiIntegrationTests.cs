@@ -267,6 +267,7 @@ public class ApiIntegrationTests : IAsyncLifetime
     {
         var resp = await _client.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username, password = "UserPass123", displayName = username, role = "user"
         });
         resp.EnsureSuccessStatusCode();
@@ -454,7 +455,8 @@ public class ApiIntegrationTests : IAsyncLifetime
         var change = await _client.PostAsJsonAsync("/api/keys/change-password", new
         {
             oldPassword = Password,
-            newPassword = "newPassword123"
+            newPassword = "newPassword123",
+            passwordHint = "the sign-in note"
         });
         change.EnsureSuccessStatusCode();
 
@@ -466,7 +468,7 @@ public class ApiIntegrationTests : IAsyncLifetime
         oldUnlock.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
 
         // New password works
-        var newUnlock = await _client.PostAsJsonAsync("/api/session/unlock", new { password = "newPassword123" });
+        var newUnlock = await _client.PostAsJsonAsync("/api/session/unlock", new { password = "newPassword123", passwordHint = "A test hint" });
         newUnlock.EnsureSuccessStatusCode();
     }
 

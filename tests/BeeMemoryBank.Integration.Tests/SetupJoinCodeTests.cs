@@ -119,6 +119,7 @@ public sealed class SetupJoinCodeTests : IAsyncLifetime
                 ["joinAdminUsername"] = "admin",
                 ["joinDisplayName"] = "NodeB",
                 ["joinPassword"] = "doorJoinPassword123",
+                ["passwordHint"] = "the join hint",
                 ["__RequestVerificationToken"] = token,
             }),
         };

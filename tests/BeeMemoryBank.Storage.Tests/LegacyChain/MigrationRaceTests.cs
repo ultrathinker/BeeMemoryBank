@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Storage.Tests.Squash;
 
 /// <summary>
-/// Two programs that start together on a database that lacks migrations 041 / 042 (the CLI next to a node, two containers on one volume).
+/// Two programs that start together on a database that lacks migrations 041 / 042 / 043 (the CLI next to a node, two containers on one volume).
 /// Both read the ledger, both decide that 041 is missing; the second one gets the write lock after the first has committed, and must find the
 /// row there instead of running the migration again and failing on <c>UNIQUE constraint failed: tbl_migration.version</c>.
 /// </summary>
@@ -18,6 +18,7 @@ public class MigrationRaceTests : SquashTestBase
         (40, BaselineName),
         (41, "BeeMemoryBank.Storage.Migrations.041_blind_invite.sql"),
         (42, "BeeMemoryBank.Storage.Migrations.042_blind_invite_server.sql"),
+        (43, "BeeMemoryBank.Storage.Migrations.043_password_hint.sql"),
     ];
 
     /// <summary>A database of the current schema whose ledger stops where a database of release 2.6.x or a node that was killed after the baseline does.</summary>
@@ -54,7 +55,7 @@ public class MigrationRaceTests : SquashTestBase
     /// <summary>The runners are held at the gap between "I read the ledger" and "I open my transaction" until all of them are there.</summary>
     private static async Task RunTogetherAsync(string path, int runners)
     {
-        var gates = new Dictionary<int, Barrier> { [41] = new(runners), [42] = new(runners) };
+        var gates = new Dictionary<int, Barrier> { [41] = new(runners), [42] = new(runners), [43] = new(runners) };
         void Gate(int version)
         {
             if (gates.TryGetValue(version, out var gate)) gate.SignalAndWait(TimeSpan.FromSeconds(20));
@@ -120,7 +121,7 @@ public class MigrationRaceTests : SquashTestBase
             catch (SqliteException ex) { failures.Add($"iteration {i}: {ex.Message}"); }
             finally { factories.ForEach(f => f.Dispose()); }
             SqliteConnection.ClearAllPools();
-            if (!FullLedger(path).SequenceEqual(Expected)) failures.Add($"iteration {i}: the ledger is not 40, 41, 42");
+            if (!FullLedger(path).SequenceEqual(Expected)) failures.Add($"iteration {i}: the ledger is not 40, 41, 42, 43");
         }
         Assert.True(failures.Count == 0, $"every runner of every one of the {iterations} iterations must start; {failures.Count} iterations did not: {string.Join(" | ", failures.Take(5))}");
     }

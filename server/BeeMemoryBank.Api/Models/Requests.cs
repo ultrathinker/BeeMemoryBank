@@ -30,7 +30,7 @@ public record UnprotectArticleRequest(string Passphrase);
 public record ChangeArticlePassphraseRequest(string OldPassphrase, string NewPassphrase, string? Hint = null);
 public record UnlockArticleRequest(string Passphrase);
 
-public record ChangePasswordRequest(string OldPassword, string NewPassword);
+public record ChangePasswordRequest(string OldPassword, string NewPassword, string? PasswordHint = null);
 
 public record UpdateWhitelistEntryRequest(
     string? DisplayName = null,
@@ -91,15 +91,22 @@ public record JoinAbortRequest(string MasterPassword, Guid NodeId, string Ed2551
 public record LoginRequest(string Username, string Password);
 
 /// <param name="ClientIp">The browser's address as the Web layer saw it; for the throttle and the audit log only.</param>
-public record RecoverAccessRequest(string Username, string RecoveryKey, string NewPassword, string? ClientIp = null);
+public record RecoverAccessRequest(string Username, string RecoveryKey, string NewPassword, string? ClientIp = null, string? PasswordHint = null);
+
+/// <param name="ClientIp">The browser's address as the Web layer saw it; for the per-client throttle only.</param>
+/// <summary>POST /api/session/password-hint: the sign-in page's "Show my password hint", anonymous.</summary>
+public record PasswordHintRequest(string Username, string? ClientIp = null);
+
+/// <summary>POST /api/users/me/password-hint: the signed-in person adds or replaces their own hint.</summary>
+public record SetPasswordHintRequest(string PasswordHint);
 
 public record SessionSettingsRequest(int ExpireHours, bool SlidingExpiration);
 
-public record CreateUserRequest(string Username, string DisplayName, string Password, string Role, bool ChatAccess = true);
+public record CreateUserRequest(string Username, string DisplayName, string Password, string Role, bool ChatAccess = true, string? PasswordHint = null);
 
-public record UpdateUserRequest(string DisplayName, string? Role = null, string? Password = null, bool? ChatAccess = null);
+public record UpdateUserRequest(string DisplayName, string? Role = null, string? Password = null, bool? ChatAccess = null, string? PasswordHint = null);
 
-public record ChangeUserPasswordRequest(string NewPassword);
+public record ChangeUserPasswordRequest(string NewPassword, string? PasswordHint = null);
 
 public record AddAclEntryRequest(Guid FolderId, string Effect, bool IsReadOnly = false);
 
@@ -165,14 +172,14 @@ public static class SnapshotRestoreModes
     }
 }
 
-public record InitStandaloneRequest(string AdminUsername, string DisplayName, string Password);
+public record InitStandaloneRequest(string AdminUsername, string DisplayName, string Password, string? PasswordHint = null);
 
 /// <param name="JoinCode">
 /// The join code another computer's "Connect a device" card shows (address, one-time token, certificate pin). When given, the
 /// code's address is used instead of <paramref name="RemoteUrl"/> (which may then be empty), every request of the join goes only to a
 /// server holding the pinned key, and <c>/api/join</c> carries the code's token. Null: the address and the ordinary certificate check.
 /// </param>
-public record InitJoinRequest(string AdminUsername, string DisplayName, string RemoteUrl, string Password, string? JoinCode = null);
+public record InitJoinRequest(string AdminUsername, string DisplayName, string RemoteUrl, string Password, string? JoinCode = null, string? PasswordHint = null);
 
 public record ResetRequest(string MasterPassword);
 

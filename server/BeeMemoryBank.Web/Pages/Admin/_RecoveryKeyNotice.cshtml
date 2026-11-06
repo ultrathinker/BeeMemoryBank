@@ -1,0 +1,20 @@
+@model BeeMemoryBank.Web.Models.RecoveryKeyStatusDto?
+@*
+    An upgraded node (one that existed before release 2.7.5) has no recovery key and is not gated: its administrator
+    gets this notice instead, on the Admin pages and on the tree, until a key is issued or the notice is dismissed.
+    A new node that has already confirmed its key, and any node that holds a recovery slot, show nothing.
+*@
+@if (Model is { Required: false, HasRecoveryKey: false, NoticeDismissed: false } && User.IsInRole("superadmin"))
+{
+    <sl-alert id="recovery-key-notice" variant="warning" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="key"></sl-icon>
+        <strong>No recovery key has been issued for this node.</strong><br />
+        There is no e-mail recovery: without a recovery key, a forgotten superadmin password cannot be recovered.
+        <a href="/Admin/RecoveryKey">Issue one now</a> and keep it somewhere safe, away from this computer.
+        <form method="post" asp-page="/Admin/Index" asp-page-handler="DismissRecoveryKeyNotice" data-busy="short" style="margin-top:10px;">
+            <sl-button type="submit" size="small" variant="warning" outline>
+                I have handled this &mdash; dismiss
+            </sl-button>
+        </form>
+    </sl-alert>
+}

@@ -117,6 +117,17 @@
                            TextColor="{StaticResource TextColor}"
                            PlaceholderColor="{StaticResource SecondaryTextColor}" />
 
+                    <Label Text="Password hint (required). If you forget your password, we will show this hint on the sign-in page, because there is no e-mail recovery. Write it so that other people cannot work out your password from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it."
+                           FontSize="12"
+                           TextColor="{StaticResource SecondaryTextColor}"
+                           LineBreakMode="WordWrap" />
+                    <Entry x:Name="NewPasswordHintEntry"
+                           AutomationId="NewPasswordHintEntry"
+                           Placeholder="Password hint"
+                           BackgroundColor="{StaticResource SurfaceColor}"
+                           TextColor="{StaticResource TextColor}"
+                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
+
                     <Label x:Name="ChangeErrorLabel"
                            TextColor="{StaticResource ErrorColor}"
                            FontSize="13"

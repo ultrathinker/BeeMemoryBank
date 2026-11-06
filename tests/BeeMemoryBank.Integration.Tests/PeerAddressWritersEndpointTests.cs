@@ -267,6 +267,7 @@ public class JoinRemoteTextTests : IAsyncLifetime
         var response = await _client.PostAsJsonAsync("/api/init/join", new
         {
             adminUsername = "admin", displayName = "Joiner", remoteUrl = "http://host.example", password = "Joiner-password-1",
+            passwordHint = "A test hint",
         });
         return (response.StatusCode, await response.Content.ReadAsStringAsync());
     }

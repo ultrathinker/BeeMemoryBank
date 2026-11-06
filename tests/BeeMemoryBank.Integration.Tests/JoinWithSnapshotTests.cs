@@ -326,7 +326,7 @@ public class JoinWithSnapshotTests : IAsyncLifetime
 
         using var conn = _joinerFactory.CreateConnection();
         (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_article")).Should().Be(1);
-        (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(3, "the joiner's own ledger (the baseline, 041 and 042) is not replaced by the snapshot's");
+        (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(4, "the joiner's own ledger (the baseline, 041, 042 and 043) is not replaced by the snapshot's");
     }
 
     [Fact]
@@ -346,7 +346,7 @@ public class JoinWithSnapshotTests : IAsyncLifetime
         (await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(39, "the joiner's ledger is its own");
     }
 
-    /// <summary>Release 2.7 added 041 and 042, so its snapshots carry schema 42: a node that stops at 40 (2.6.1 to 2.6.4) is told to upgrade first, as for any newer schema.</summary>
+    /// <summary>Release 2.7 added 041 and 042 and release 2.7.5 adds 043, so their snapshots carry schema 43: a node that stops at 40 (2.6.1 to 2.6.4) is told to upgrade first, as for any newer schema.</summary>
     [Fact]
     public async Task A_snapshot_of_a_2_7_node_is_refused_by_a_node_that_stops_at_schema_40()
     {
@@ -354,11 +354,11 @@ public class JoinWithSnapshotTests : IAsyncLifetime
         await InsertProducerFolderAndArticleAsync();
         var info = await _producerSnapshot.CreateAsync(filterSecrets: true, sign: true, cpSequenceNum: 10);
         var path = _producerSnapshot.GetSnapshotPath(info.FileName);
-        (await MigrationVersionOfAsync(path)).Should().Be(42, "041 and 042 are the migrations after the baseline");
+        (await MigrationVersionOfAsync(path)).Should().Be(43, "041, 042 and 043 are the migrations after the baseline");
 
         var act = async () => await _joinerSnapshot.RestoreForJoinAsync(path, await File.ReadAllBytesAsync($"{path}.sig"), _producerPubKey);
 
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*schema version 42*this node is on version 40*Upgrade this node first*");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*schema version 43*this node is on version 40*Upgrade this node first*");
     }
 
     private async Task InsertProducerFolderAndArticleAsync()

@@ -401,6 +401,9 @@ app.UseAuthorization();
 // A valid cookie on a locked vault (after an update or reboot) goes to /Login before the page
 // renders, instead of showing the tree and logging out on the first click.
 app.UseMiddleware<BeeMemoryBank.Web.Middleware.LockedVaultRedirectMiddleware>();
+// A NEW node's first administrator confirms the recovery key before any other page (release 2.7.5). Web only:
+// the API, MCP and agents are untouched, so an unattended node never gets stuck on this step.
+app.UseMiddleware<BeeMemoryBank.Web.Middleware.RecoveryKeyGateMiddleware>();
 
 // ─── API-Proxy routes (for browser JavaScript) ───────────────────────────
 // Reverse-proxy route handlers live in server/BeeMemoryBank.Web/Endpoints/*.cs and are wired up

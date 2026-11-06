@@ -58,7 +58,7 @@ public class KeyEndpointsAuthTests : IAsyncLifetime
         using var plain = UserClient();
 
         var resp = await plain.PostAsJsonAsync("/api/keys/change-password",
-            new { oldPassword = Password, newPassword = "someOtherPassword1" });
+            new { oldPassword = Password, newPassword = "someOtherPassword1", passwordHint = "A test hint" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }

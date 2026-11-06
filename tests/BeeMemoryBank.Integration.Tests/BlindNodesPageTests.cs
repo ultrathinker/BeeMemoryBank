@@ -33,6 +33,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         (await api.PostAsJsonAsync("/api/users", new
         {
             username = "bob", password = BobPassword, displayName = "Bob", role = "user",
+            passwordHint = "the blue folder by the window",
         })).EnsureSuccessStatusCode();
         _web.RouteOutboundHttpThrough(_scripted = new ScriptedApi(_api.Server.CreateHandler()));
         _admin = await WebLogin.LoginAsync(_web, "admin", AdminPassword);

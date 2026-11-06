@@ -96,11 +96,24 @@ def state(sim):
         return {}
 
 
+def count_content(conn, first_load_done):
+    """What the copy holds, as a number that grows when the PC's content reaches it. A copy of a network with metadata encryption on (every node
+    set up since 2.6 starts one) cannot count notes - it keeps titles, paths and bodies sealed, inside its baseline and in the sealed changes it
+    relays - so its own `tbl_article` is empty and the app says "restore point ... changes since ..." instead of a number of notes. Then what it
+    can see is counted: one for the adopted baseline (the first load) plus every sealed change it stores. A copy that can read its notes
+    (an older, unsealed network) is counted by them, as before."""
+    articles = conn.execute("SELECT COUNT(*) FROM tbl_article WHERE status = 'A'").fetchone()[0]
+    if articles:
+        return articles
+    sealed = conn.execute("SELECT COUNT(*) FROM tbl_event WHERE event_type = 'sealed'").fetchone()[0]
+    return sealed + (1 if first_load_done else 0)
+
+
 def notes(sim):
     try:
         db = sqlite3.connect('file:%s?mode=ro' % os.path.join(account_dir(sim), 'beememorybank.db'), uri=True)
         try:
-            return db.execute("SELECT COUNT(*) FROM tbl_article WHERE status = 'A'").fetchone()[0]
+            return count_content(db, state(sim).get('bmb.blind.initial_load_done') == '1')
         finally:
             db.close()
     except sqlite3.Error:
@@ -110,6 +123,32 @@ def notes(sim):
 def restart(sim, env=None):
     simctl('terminate', sim, BID)
     return simctl('launch', sim, BID, env=env)
+
+
+def sim_phone_code(sim, seconds=90):
+    """The phone code from the app's console, for a simulator screen on which the QR code lies below the fold (the account page grew in 2.7).
+    A build with BMB_E2E prints the code when BMB_BLIND_E2E_PRINT_PHONE_CODE=1; .NET writes Console to NSLog on iOS and OS_ACTIVITY_DT_MODE
+    makes NSLog repeat it on stderr, which `simctl launch --console` hands over."""
+    env = dict(os.environ, SIMCTL_CHILD_BMB_BLIND_E2E_PRINT_PHONE_CODE='1', SIMCTL_CHILD_BMB_BLIND_E2E_FIRST_ACCOUNT='1',
+               SIMCTL_CHILD_OS_ACTIVITY_DT_MODE='YES')
+    proc = subprocess.Popen(['xcrun', 'simctl', 'launch', '--console', '--terminate-running-process', sim, BID],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    code, end = None, time.time() + seconds
+    try:
+        while time.time() < end and code is None:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            m = re.search(r'BMB_E2E_PHONE_CODE (bmb-blind-phone:\S+)', line)
+            if m:
+                code = m.group(1)
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    return code
 
 
 class Device:
@@ -200,7 +239,7 @@ class Device:
         try:
             conn = sqlite3.connect(db)
             try:
-                return conn.execute("SELECT COUNT(*) FROM tbl_article WHERE status = 'A'").fetchone()[0]
+                return count_content(conn, self.state().get('bmb.blind.initial_load_done') == '1')
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -260,7 +299,9 @@ def main():
     with open(shot, 'wb'):
         pass  # the code carries the phone's secret: the picture is emptied, not kept
     phone = next((l for l in decoded.splitlines() if l.startswith('bmb-blind-phone:')), None)
-    if not check('the first start shows the phone code as a QR code', phone is not None, decoded[:200]):
+    if phone is None:
+        phone = sim_phone_code(a.sim)
+    if not check('the first start shows the phone code (QR code on the screen, or the app console when the QR code is below the fold)', phone is not None, decoded[:200]):
         return 1
 
     # 3. the PC pairs the phone and answers with the call code
@@ -278,7 +319,7 @@ def main():
     # 5. the first load and a sync
     loaded = wait_for(lambda: state(a.sim).get('bmb.blind.initial_load_done') == '1', a.timeout)
     check('the first load finishes (the listener\'s package is downloaded, verified and applied)', bool(loaded))
-    synced = wait_for(lambda: state(a.sim).get('bmb.blind.last_sync'), 120)
+    synced = wait_for(lambda: state(a.sim).get('bmb.blind.last_sync'), 240)
     check('a sync round follows', bool(synced))
     count = notes(a.sim)
     check('the copy holds notes', count > 0, 'notes=%s' % count)

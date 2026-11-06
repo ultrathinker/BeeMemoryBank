@@ -52,9 +52,9 @@ public class NodeSetupService
         _logger = logger;
     }
 
-    public async Task<NodeIdentity> InitAsync(string name, string password)
+    public async Task<NodeIdentity> InitAsync(string name, string password, string? passwordHint = null)
     {
-        await _initSvc.InitializeAsync(name, name, password, canGenerateEmbeddings: false);
+        await _initSvc.InitializeAsync(name, name, password, canGenerateEmbeddings: false, passwordHint: passwordHint);
 
         var identity = await _nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node identity not found after init.");
@@ -67,8 +67,11 @@ public class NodeSetupService
     /// computer's Connect page, every request of the join — the master password first of all — goes
     /// only to a server holding the key the code pins, and <c>/api/join</c> carries the code's token.
     /// </summary>
-    public async Task<NodeIdentity> JoinAsync(string name, string remoteUrl, string password, JoinCode? code = null)
+    public async Task<NodeIdentity> JoinAsync(string name, string remoteUrl, string password, JoinCode? code = null, string? passwordHint = null)
     {
+        // A join creates this phone's first administrator with the network password. The screens that have a person
+        // enforce the mandatory hint; this service layer still accepts null for tests and internal callers, like
+        // UserService does.
         if (await _initSvc.IsInitializedAsync())
             throw new InvalidOperationException("Node already initialized. Delete the database to re-join.");
 
@@ -246,6 +249,7 @@ public class NodeSetupService
                 Username = name,
                 DisplayName = name,
                 PasswordHash = UserService.HashPassword(password),
+                PasswordHint = passwordHint == null ? null : PasswordHintPolicy.NormalizeAndValidate(passwordHint, password, name),
                 Role = UserRoles.Superadmin,
                 KeySlotId = localSlotId,
                 IsActive = true,

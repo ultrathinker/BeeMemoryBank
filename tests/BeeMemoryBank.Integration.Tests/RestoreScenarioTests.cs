@@ -605,7 +605,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     {
         (await client.PostAsJsonAsync("/api/restore/backup", new
         {
-            path = folder, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC"
+            path = folder, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
         var progress = await WaitForRestoreAsync(client);
         progress.GetProperty("state").GetString().Should().Be("boxes_remaining", progress.ToString());
@@ -670,7 +671,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     {
         using var target = new RecoveryTestFactory();
         using var client = target.CreateClient();
-        var start = new { path = source.BackupFolder, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC" };
+        var start = new { path = source.BackupFolder, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC", passwordHint = "A test hint" };
 
         (await client.PostAsJsonAsync("/api/restore/backup", start)).EnsureSuccessStatusCode();
         await Task.Delay(300); // the strong box's derivation is running now
@@ -814,7 +815,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         var start = await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
             address = "https://blind.test", code, password = RestoreSourceFixture.Password,
-            adminUsername = "admin", displayName = "Restored PC"
+            adminUsername = "admin", displayName = "Restored PC",
+            passwordHint = "A test hint",
         });
         start.StatusCode.Should().Be(HttpStatusCode.Accepted, await start.Content.ReadAsStringAsync());
         var progress = await WaitForRestoreAsync(targetClient);
@@ -927,7 +929,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
 
         var start = await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = new string('N', 201)
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = new string('N', 201),
+            passwordHint = "A test hint",
         });
 
         start.StatusCode.Should().Be(HttpStatusCode.BadRequest, "a name that long would make the claim too large for the blind node, after the restore had committed");
@@ -968,7 +971,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
 
         var start = await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = name
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = name,
+            passwordHint = "A test hint",
         });
         start.StatusCode.Should().Be(HttpStatusCode.Accepted, await start.Content.ReadAsStringAsync());
         (await WaitForRestoreAsync(targetClient)).GetProperty("state").GetString().Should().Be("done");
@@ -996,7 +1000,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         using var targetClient = target.CreateClient();
         var start = await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "Restored PC"
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "Restored PC",
+            passwordHint = "A test hint",
         });
         start.StatusCode.Should().Be(HttpStatusCode.Accepted, await start.Content.ReadAsStringAsync());
 
@@ -1044,7 +1049,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         using var targetClient = target.CreateClient();
         (await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC"
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
 
         (await WaitForRestoreAsync(targetClient)).GetProperty("state").GetString().Should().Be("done");
@@ -1358,7 +1364,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         using var targetClient = target.CreateClient();
         (await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC"
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
 
         (await WaitForRestoreAsync(targetClient)).GetProperty("state").GetString().Should().Be("done");
@@ -1422,7 +1429,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
 
         (await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code = FakeCode(), password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC"
+            address = "https://blind.test", code = FakeCode(), password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
 
         var progress = await WaitForRestoreAsync(targetClient);
@@ -1445,7 +1453,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         var start = await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
             address, code = realCode ? FakeCode() : "AAAA-BBBB-CCCC-DDDD", pin, password = RestoreSourceFixture.Password,
-            adminUsername = "admin", displayName = "PC"
+            adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         });
 
         start.StatusCode.Should().Be(HttpStatusCode.BadRequest);
@@ -1471,7 +1480,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
 
         (await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC"
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
 
         var progress = await WaitForRestoreAsync(targetClient);
@@ -1513,7 +1523,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         (await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
             address = "https://blind.test", code = FakeCode(), password = RestoreSourceFixture.Password,
-            adminUsername = "admin", displayName = "PC"
+            adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
 
         var progress = await WaitForRestoreAsync(targetClient);
@@ -1557,7 +1568,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         using var targetClient = target.CreateClient();
         (await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC"
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
 
         var progress = await WaitForRestoreAsync(targetClient);
@@ -1588,7 +1600,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         using var targetClient = target.CreateClient();
         (await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC"
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
 
         await hold.Arrived.Task.WaitAsync(TimeSpan.FromMinutes(3)); // the restore has committed; the claim is on the wire
@@ -1615,7 +1628,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         using var targetClient = target.CreateClient();
         (await targetClient.PostAsJsonAsync("/api/restore/blind", new
         {
-            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC"
+            address = "https://blind.test", code, password = RestoreSourceFixture.Password, adminUsername = "admin", displayName = "PC",
+            passwordHint = "A test hint",
         })).EnsureSuccessStatusCode();
 
         var progress = await WaitForRestoreAsync(targetClient);

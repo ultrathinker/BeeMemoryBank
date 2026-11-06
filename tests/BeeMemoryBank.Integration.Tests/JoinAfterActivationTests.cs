@@ -102,7 +102,7 @@ public class JoinAfterActivationTests : IAsyncLifetime
         joiner.RouteOutboundHttpThrough(wire);
         using var client = joiner.CreateClient();
         var response = await client.PostAsJsonAsync("/api/init/join",
-            new { adminUsername = "admin", displayName = name, remoteUrl = "http://host", password = StepANode.Password }, JsonOpts);
+            new { adminUsername = "admin", displayName = name, remoteUrl = "http://host", password = StepANode.Password, passwordHint = "A test hint" }, JsonOpts);
         return (response, joiner, wire);
     }
 

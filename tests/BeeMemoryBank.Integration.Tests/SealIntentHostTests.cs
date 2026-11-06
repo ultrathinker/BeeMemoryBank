@@ -70,7 +70,7 @@ public sealed class SealIntentHostTests : IDisposable
             status.GetProperty("files").EnumerateArray().Select(f => f.GetString()).Should().Contain(VaultStoreFiles.Database);
             status.GetProperty("message").GetString().Should().Contain("interrupted").And.Contain(VaultStoreFiles.Database).And.NotContain(dir);
             using (var health = await client.GetAsync("/health")) health.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
-            using (var setup = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Nope", password = "Intent-setup-pw-4" }))
+            using (var setup = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Nope", password = "Intent-setup-pw-4", passwordHint = "A test hint" }))
             {
                 setup.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, "no setup is served over what the cut one left");
                 (await setup.Content.ReadAsStringAsync()).Should().Contain("vault_broken");
@@ -158,7 +158,7 @@ public sealed class SealIntentHostTests : IDisposable
         Directory.CreateDirectory(media);
         File.WriteAllText(Path.Combine(media, "other-operation.enc"), "written by the operation that is running");
 
-        using var response = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Second", password = "Intent-setup-pw-5" });
+        using var response = await client.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "Second", password = "Intent-setup-pw-5", passwordHint = "A test hint"});
 
         response.IsSuccessStatusCode.Should().BeFalse("a second operation cannot begin over the first");
         File.ReadAllText(SealIntent.PathFor(dir)).Should().Be(markerBefore, "the running operation's marker is not touched");

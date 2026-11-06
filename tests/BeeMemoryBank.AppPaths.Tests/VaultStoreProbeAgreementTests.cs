@@ -195,6 +195,8 @@ public sealed class VaultStoreProbeAgreementTests : IClassFixture<VaultStoreProb
         }
         VaultStoreProbe.BootApplicationId.Should().Be(VaultStoreFiles.BootApplicationId);
         VaultStoreProbe.Companions.Should().Equal(VaultStoreFiles.Companions);
+        VaultFiles.PasswordHintMirrorFileName.Should().Be(BeeMemoryBank.Storage.PreUnlock.PasswordHintFile.FileName,
+            "the copy that must skip the derived hint mirror and the storage that writes it name the same file");
         VaultStoreProbe.IsBootStore(Path.Combine(_corpus.Root, "boot-for-agreement.db")).Should().BeTrue();
         VaultStoreProbe.IsBootStore(Pool.PlainMain).Should().BeFalse();
     }

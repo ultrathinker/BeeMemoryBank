@@ -73,7 +73,11 @@ public class InitializationService(
     public async Task<bool> IsClaimedAsync()
         => await nodeRepo.GetAsync() is not null || (await keySlotRepo.GetAllAsync()).Count > 0;
 
-    public async Task InitializeAsync(string adminUsername, string nodeDisplayName, string password, bool canGenerateEmbeddings = true)
+    /// <param name="passwordHint">
+    /// The hint a person wrote for the first administrator's password. Null is for internal callers (the migrator, the
+    /// seed generator, self-checks) that have no person; the Web setup and the CLI refuse to continue without one.
+    /// </param>
+    public async Task InitializeAsync(string adminUsername, string nodeDisplayName, string password, bool canGenerateEmbeddings = true, string? passwordHint = null)
     {
         if (await IsInitializedAsync())
             throw new InvalidOperationException("Node is already initialized.");
@@ -140,6 +144,7 @@ public class InitializationService(
                 Username = adminUsername.Trim(),
                 DisplayName = adminUsername.Trim(),
                 PasswordHash = HashPassword(password),
+                PasswordHint = passwordHint == null ? null : PasswordHintPolicy.NormalizeAndValidate(passwordHint, password, adminUsername),
                 Role = UserRoles.Superadmin,
                 KeySlotId = slotId,
                 IsActive = true,

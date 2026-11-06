@@ -57,9 +57,18 @@ else
                 <sl-input name="newPassword" label="New password" type="password" required password-toggle
                           autocomplete="new-password"></sl-input>
             </div>
-            <div style="margin-bottom:20px;">
+            <div style="margin-bottom:16px;">
                 <sl-input name="confirmPassword" label="Repeat the new password" type="password" required password-toggle
                           autocomplete="new-password"></sl-input>
+            </div>
+            <p class="text-sm text-muted" style="margin:0 0 6px 0;" id="recover-password-hint-intro">
+                Password hint (required). If you forget your password, we will show this hint on the sign-in page,
+                because there is no e-mail recovery. Write it so that other people cannot work out your password
+                from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it.
+            </p>
+            <div style="margin-bottom:20px;">
+                <sl-input name="passwordHint" label="Password hint" required maxlength="120"
+                          autocomplete="off" help-text="3 to 120 characters."></sl-input>
             </div>
             <sl-button type="submit" variant="primary" style="width:100%;">
                 <sl-icon slot="prefix" name="key"></sl-icon> Set new password

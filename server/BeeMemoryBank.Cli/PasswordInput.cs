@@ -60,7 +60,7 @@ public static class PasswordInput
         return password;
     }
 
-    private static string ReadWithoutEcho(Func<ConsoleKeyInfo> readKey)
+        private static string ReadWithoutEcho(Func<ConsoleKeyInfo> readKey)
     {
         var chars = new List<char>();
         while (true)
@@ -71,5 +71,33 @@ public static class PasswordInput
             if (!char.IsControl(key.KeyChar)) chars.Add(key.KeyChar);
         }
         return new string(chars.ToArray());
+    }
+}
+
+
+/// <summary>
+/// Where a command that creates or replaces a password gets its mandatory hint. A hint is not a secret, so
+/// <c>--hint</c> is the ordinary way (a script supplies it); a person at a terminal is asked for it when the
+/// option is left out. A redirected stdin is never read for it: the first line there is the password.
+/// </summary>
+public static class PasswordHintInput
+{
+    public static string? Resolve(
+        string? hint, string prompt, TextReader? stdin = null, bool? stdinIsRedirected = null, TextWriter? error = null)
+    {
+        error ??= Console.Error;
+        var given = hint?.Trim();
+        if (!string.IsNullOrEmpty(given)) return given;
+
+        if (stdinIsRedirected ?? Console.IsInputRedirected)
+        {
+            error.WriteLine("Error: --hint is required when stdin is not a terminal (the hint is shown on the sign-in page if the password is forgotten).");
+            return null;
+        }
+
+        error.Write(prompt);
+        var typed = (stdin ?? Console.In).ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(typed)) error.WriteLine("No password hint given.");
+        return string.IsNullOrEmpty(typed) ? null : typed;
     }
 }

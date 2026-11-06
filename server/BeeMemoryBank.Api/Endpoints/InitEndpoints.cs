@@ -75,11 +75,16 @@ public static class InitEndpoints
                 try { Core.Services.UserService.ValidatePassword(req.Password); }
                 catch (ArgumentException ex) { return Results.BadRequest(new ErrorResponse(ex.Message)); }
 
+                // Mandatory: there is no e-mail recovery, so the person must have written a hint the sign-in page
+                // can show while the vault is still locked. The policy's sentence is safe to return verbatim.
+                if (PasswordHintPolicy.Validate(req.PasswordHint, req.Password, req.AdminUsername) is { } hintProblem)
+                    return Results.BadRequest(new ErrorResponse(hintProblem));
+
                 if (CannotEncrypt(ctx.RequestServices) is { } cannot) return cannot;
                 try
                 {
                     // The seal intent begins inside, before the first write; SealNewNodeAsync ends it with the encrypted database.
-                    await initSvc.InitializeAsync(req.AdminUsername, req.DisplayName, req.Password);
+                    await initSvc.InitializeAsync(req.AdminUsername, req.DisplayName, req.Password, passwordHint: req.PasswordHint);
                 }
                 catch
                 {
@@ -157,6 +162,10 @@ public static class InitEndpoints
                 // a weaker local KEK than the rest of the cluster requires.
                 try { Core.Services.UserService.ValidatePassword(req.Password); }
                 catch (ArgumentException ex) { return Results.BadRequest(new ErrorResponse(ex.Message)); }
+
+                // A join also creates this node's first administrator, so it also owes a hint.
+                if (PasswordHintPolicy.Validate(req.PasswordHint, req.Password, req.AdminUsername) is { } hintProblem)
+                    return Results.BadRequest(new ErrorResponse(hintProblem));
 
                 if (code == null
                     && (!Uri.TryCreate(req.RemoteUrl, UriKind.Absolute, out var uri) ||
@@ -387,6 +396,7 @@ public static class InitEndpoints
                         Username = req.AdminUsername.Trim(),
                         DisplayName = req.AdminUsername.Trim(),
                         PasswordHash = UserService.HashPassword(req.Password),
+                        PasswordHint = PasswordHintPolicy.NormalizeAndValidate(req.PasswordHint!, req.Password, req.AdminUsername),
                         Role = UserRoles.Superadmin,
                         KeySlotId = localSlotId,
                         IsActive = true,
@@ -672,6 +682,10 @@ public static class InitEndpoints
         {
             if (sealing is null)
                 throw new FreshNodeSealingException("This node was started without the encrypted-database services, so it cannot be encrypted.", nodeIsEncrypted: false);
+
+            // From here on this node owes its first administrator the blocking recovery-key step (release 2.7.5). Written
+            // before the seal, into the same database the seal encrypts; a setup that is taken back whole keeps nothing.
+            await services.GetRequiredService<INodeIdentityRepository>().SetRecoveryKeyRequiredAsync(true);
 
             // Not cancelled by the caller going away: a setup that stops half-way is the one case that would leave a node in the open.
             await sealing.SealAsync(masterPassword, activateMetadata, CancellationToken.None);

@@ -81,6 +81,7 @@ public class InitJoinAbortTests : IAsyncLifetime
         var resp = await client.PostAsJsonAsync("/api/init/join", new
         {
             adminUsername = "admin",
+            passwordHint = "A test hint",
             displayName = "Failing joiner",
             remoteUrl = "http://host",
             password = MasterPassword
@@ -149,6 +150,7 @@ public class InitJoinAbortTests : IAsyncLifetime
         var resp = await client.PostAsJsonAsync("/api/init/join", new
         {
             adminUsername = "admin",
+            passwordHint = "A test hint",
             displayName = "Failing joiner",
             remoteUrl = "http://host",
             password = MasterPassword

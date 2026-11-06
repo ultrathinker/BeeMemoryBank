@@ -200,4 +200,61 @@ public class NodeIdentityRepository(DbConnectionFactory factory) : BaseRepositor
         public int ExpireHours { get; set; }
         public bool SlidingExpiration { get; set; }
     }
+
+    // The recovery-key gate of release 2.7.5. Node-local, like the master-password notice: a new node owes the step,
+    // an upgraded one does not, and nothing here is ever announced to peers.
+    public async Task<bool> GetRecoveryKeyRequiredAsync()
+    {
+        using var conn = OpenConnection();
+        return await conn.ExecuteScalarAsync<long?>(
+            "SELECT recovery_key_required FROM tbl_node_identity LIMIT 1") is long value && value != 0;
+    }
+
+    public async Task SetRecoveryKeyRequiredAsync(bool required)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_node_identity SET recovery_key_required = @required WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)",
+            new { required = required ? 1 : 0 });
+    }
+
+    public async Task<DateTime?> GetRecoveryKeyAcknowledgedAtAsync()
+    {
+        using var conn = OpenConnection();
+        var value = await conn.ExecuteScalarAsync<string?>(
+            "SELECT recovery_key_acknowledged_at FROM tbl_node_identity LIMIT 1");
+        return ParseOptionalTimestamp(value);
+    }
+
+    public async Task SetRecoveryKeyAcknowledgedAtAsync(DateTime acknowledgedAt)
+    {
+        using var conn = OpenConnection();
+        // COALESCE keeps the FIRST confirmation: a second click or a slow retry must not move the instant the step
+        // was completed, which is what a later audit reads.
+        await conn.ExecuteAsync(
+            "UPDATE tbl_node_identity SET recovery_key_acknowledged_at = COALESCE(recovery_key_acknowledged_at, @at) " +
+            "WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)",
+            new { at = acknowledgedAt.ToString("O") });
+    }
+
+    public async Task<DateTime?> GetRecoveryKeyNoticeDismissedAtAsync()
+    {
+        using var conn = OpenConnection();
+        var value = await conn.ExecuteScalarAsync<string?>(
+            "SELECT recovery_key_notice_dismissed_at FROM tbl_node_identity LIMIT 1");
+        return ParseOptionalTimestamp(value);
+    }
+
+    public async Task SetRecoveryKeyNoticeDismissedAtAsync(DateTime dismissedAt)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_node_identity SET recovery_key_notice_dismissed_at = @at WHERE rowid = (SELECT rowid FROM tbl_node_identity LIMIT 1)",
+            new { at = dismissedAt.ToString("O") });
+    }
+
+    private static DateTime? ParseOptionalTimestamp(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : DateTime.Parse(value, null, System.Globalization.DateTimeStyles.RoundtripKind);
 }

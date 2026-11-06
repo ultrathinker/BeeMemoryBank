@@ -490,6 +490,7 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
     {
         var createUser = await _client.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username = "teammate", password = "teammatePwd123!", displayName = "Teammate", role = "user"
         });
         createUser.EnsureSuccessStatusCode();

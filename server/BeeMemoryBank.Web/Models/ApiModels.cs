@@ -150,6 +150,16 @@ public record RecoverAccessResult(RecoverAccessOutcome Outcome, string? Message 
 
 public record LoginResponse(int UserId, string Username, string DisplayName, string Role, bool IsUnlocked, string? MigratedSyntheticUsername = null, string? SecurityStamp = null);
 
+/// <summary>How the node answered the anonymous password-hint lookup. <see cref="NoHint"/> covers an unknown name and a user without one alike.</summary>
+public enum PasswordHintLookupOutcome { Found, NoHint, TooManyAttempts, Invalid, Unavailable }
+
+/// <param name="Hint">The stored hint for <see cref="PasswordHintLookupOutcome.Found"/>; null otherwise.</param>
+/// <param name="Message">The node's one sentence for <see cref="PasswordHintLookupOutcome.NoHint"/> (and a rule message for <see cref="PasswordHintLookupOutcome.Invalid"/>).</param>
+public record PasswordHintLookupResult(PasswordHintLookupOutcome Outcome, string? Hint = null, string? Message = null);
+
+/// <summary>The recovery-key state of the node, as GET /api/keys/recovery-status reports it (no key material).</summary>
+public record RecoveryKeyStatusDto(bool Required, bool Acknowledged, bool HasRecoveryKey, bool NoticeDismissed);
+
 public record UserDto(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt, bool ChatAccess);
 
 public record AclEntryDto(int Id, Guid FolderId, string FolderPath, string Effect, DateTime CreatedAt, bool IsReadOnly = false);

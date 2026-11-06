@@ -141,7 +141,7 @@ server/BeeMemoryBank.Api/Endpoints/SessionEndpoints.cs 2
 server/BeeMemoryBank.Api/Endpoints/SnapshotEndpoints.cs 8
 server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs 1
 server/BeeMemoryBank.Api/Endpoints/UpdateEndpoints.cs 3
-server/BeeMemoryBank.Api/Endpoints/UserEndpoints.cs 8
+server/BeeMemoryBank.Api/Endpoints/UserEndpoints.cs 9
 server/BeeMemoryBank.Api/Endpoints/VaultEndpoints.cs 3
 server/BeeMemoryBank.Api/Endpoints/WhitelistEndpoints.cs 5
 server/BeeMemoryBank.Api/Helpers/ExceptionStatusMap.cs 13
@@ -170,8 +170,8 @@ server/BeeMemoryBank.Api/Services/SnapshotService.NetworkRestore.cs 1
 server/BeeMemoryBank.Api/Startup/BrokenStartHost.cs 4
 server/BeeMemoryBank.Cli/CliServiceProvider.cs 1
 server/BeeMemoryBank.Cli/Commands/DekRotateCommand.cs 4
-server/BeeMemoryBank.Cli/Commands/InitCommand.cs 1
-server/BeeMemoryBank.Cli/Commands/JoinCommand.cs 1
+server/BeeMemoryBank.Cli/Commands/InitCommand.cs 2
+server/BeeMemoryBank.Cli/Commands/JoinCommand.cs 2
 server/BeeMemoryBank.Cli/Commands/RekeyCommand.cs 2
 server/BeeMemoryBank.Cli/Commands/SnapshotCommand.cs 5
 server/BeeMemoryBank.Cli/Commands/StatusCommand.cs 1
@@ -180,6 +180,8 @@ server/BeeMemoryBank.Cli/Commands/UserCommand.cs 1
 server/BeeMemoryBank.Cli/Commands/VaultCommand.cs 7
 server/BeeMemoryBank.Cli/Program.cs 1
 server/BeeMemoryBank.Web/Pages/Admin/BlindNodes.cshtml.cs 2
+server/BeeMemoryBank.Web/Pages/Login.cshtml.cs 2
 server/BeeMemoryBank.Web/Pages/RecoverAccess.cshtml.cs 2
 server/BeeMemoryBank.Web/Services/ApiClient.BlindNodes.cs 1
+server/BeeMemoryBank.Web/Services/ApiClient.PasswordHint.cs 1
 server/BeeMemoryBank.Web/Services/ApiClient.Users.cs 1

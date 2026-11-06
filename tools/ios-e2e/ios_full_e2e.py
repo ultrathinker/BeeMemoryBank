@@ -255,7 +255,9 @@ def main():
     try:
         if not check('the computer (throwaway full node) starts', node.start(), node.log):
             return
-        s, b = node.http('POST', '/api/init/standalone', {'adminUsername': 'admin', 'displayName': 'e2e computer', 'password': node.password})
+        s, b = node.http('POST', '/api/init/standalone',
+                         {'adminUsername': 'admin', 'displayName': 'e2e computer', 'password': node.password,
+                          'passwordHint': 'the blue folder by the window'})
         check('the computer gets a vault', s == 200, b[:200])
         s, b = node.http('POST', '/api/session/unlock', {'password': node.password})
         check('the computer unlocks', s == 200, b[:200])
@@ -298,8 +300,12 @@ def main():
         on_computer = node.text(shared)
         check('the conflict ends the same on both sides', on_phone != '' and on_phone == on_computer,
               'phone=%r computer=%r' % (on_phone, on_computer))
-        check('the losing version is kept on the computer (tbl_conflict_version)', isinstance(node.conflict_versions(), int) and node.conflict_versions() >= 1,
-              str(node.conflict_versions()))
+        kept = node.conflict_versions()
+        if isinstance(kept, str) and 'not a database' in kept:
+            # A node set up since 2.6 is born with an encrypted database: its tables cannot be read from outside the process.
+            say('SKIP the losing version is kept on the computer (tbl_conflict_version) - the database of the throwaway node is encrypted')
+        else:
+            check('the losing version is kept on the computer (tbl_conflict_version)', isinstance(kept, int) and kept >= 1, str(kept))
 
         say('5. lock and unlock')
         r = phone.launch('07-wrong-password', password='Wrong-password-1', unlock='1')

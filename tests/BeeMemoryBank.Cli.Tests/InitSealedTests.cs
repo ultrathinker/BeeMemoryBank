@@ -18,6 +18,7 @@ namespace BeeMemoryBank.Cli.Tests;
 public sealed class InitSealedTests : IDisposable
 {
     private const string Password = "InitSealedPw1x";
+    private const string Hint = "The node name and a reminder";
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "bmb_cli_init_sealed_" + Guid.NewGuid().ToString("N"));
 
     public InitSealedTests()
@@ -47,11 +48,40 @@ public sealed class InitSealedTests : IDisposable
     }
 
     [Fact]
+    public async Task Init_withoutAHint_IsRefused_AndWritesNothing()
+    {
+        var output = new StringWriter();
+
+        var exit = await InitCommand.HandleAsync(_dir, "admin", Password, passwordHint: "", output: output);
+
+        exit.Should().Be(1);
+        output.ToString().Should().Contain("password hint is required");
+        Directory.Exists(_dir).Should().BeFalse("a refused setup is refused before the folder is even made");
+    }
+
+    [Fact]
+    public async Task Init_storesTheHint_AndTheRecoveryKeyItPrintsOpensTheVault()
+    {
+        var output = new StringWriter();
+
+        (await InitCommand.HandleAsync(_dir, "admin", Password, Hint, output: output)).Should().Be(0, output.ToString());
+        output.ToString().Should().Contain("Recovery key (write it down");
+
+        CliSealed.Set(Password, false);
+        await using var services = await CliServiceProvider.CreateAsync(_dir);
+        using var scope = services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetPasswordHintAsync("admin")).Should().Be(Hint);
+        (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetRecoveryKeyRequiredAsync()).Should().BeTrue();
+        (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetRecoveryKeyAcknowledgedAtAsync())
+            .Should().BeNull("stdin is redirected here, so the command could not ask the person to confirm");
+    }
+
+    [Fact]
     public async Task Init_leaves_an_encrypted_database_a_boot_store_and_no_file_of_the_setup_in_the_open()
     {
         var output = new StringWriter();
 
-        (await InitCommand.HandleAsync(_dir, "admin", Password, output)).Should().Be(0, output.ToString());
+        (await InitCommand.HandleAsync(_dir, "admin", Password, Hint, output: output)).Should().Be(0, output.ToString());
 
         output.ToString().Should().Contain("successfully initialized").And.Contain("encrypted");
         VaultStoreFiles.DetectMode(_dir).Should().Be(VaultStoreMode.Sealed);
@@ -64,7 +94,7 @@ public sealed class InitSealedTests : IDisposable
     [Fact]
     public async Task The_password_of_the_init_opens_the_node_and_the_node_has_metadata_encryption_on()
     {
-        (await InitCommand.HandleAsync(_dir, "admin", Password, new StringWriter())).Should().Be(0);
+        (await InitCommand.HandleAsync(_dir, "admin", Password, Hint, output: new StringWriter())).Should().Be(0);
 
         CliSealed.Set(Password, false);
         await using var services = await CliServiceProvider.CreateAsync(_dir);
@@ -79,7 +109,7 @@ public sealed class InitSealedTests : IDisposable
     [Fact]
     public async Task A_wrong_password_does_not_open_the_node_a_command_line_init_made()
     {
-        (await InitCommand.HandleAsync(_dir, "admin", Password, new StringWriter())).Should().Be(0);
+        (await InitCommand.HandleAsync(_dir, "admin", Password, Hint, output: new StringWriter())).Should().Be(0);
 
         CliSealed.Set("not the password", false);
         var open = async () => await CliServiceProvider.CreateAsync(_dir);
@@ -90,11 +120,11 @@ public sealed class InitSealedTests : IDisposable
     [Fact]
     public async Task A_second_init_over_the_node_is_refused_and_changes_nothing()
     {
-        (await InitCommand.HandleAsync(_dir, "admin", Password, new StringWriter())).Should().Be(0);
+        (await InitCommand.HandleAsync(_dir, "admin", Password, Hint, output: new StringWriter())).Should().Be(0);
 
         CliSealed.Set(Password, false);
         var output = new StringWriter();
-        (await InitCommand.HandleAsync(_dir, "other", "AnotherPw1x", output)).Should().Be(1);
+        (await InitCommand.HandleAsync(_dir, "other", "AnotherPw1x", Hint, output: output)).Should().Be(1);
 
         output.ToString().Should().Contain("already");
         await using var services = await CliServiceProvider.CreateAsync(_dir);
@@ -109,7 +139,7 @@ public sealed class InitSealedTests : IDisposable
     [Fact]
     public async Task The_first_article_written_after_the_init_is_sealed_content_not_clear_metadata()
     {
-        (await InitCommand.HandleAsync(_dir, "admin", Password, new StringWriter())).Should().Be(0);
+        (await InitCommand.HandleAsync(_dir, "admin", Password, Hint, output: new StringWriter())).Should().Be(0);
         CliSealed.Set(Password, false);
 
         (await ArticleCommand.HandleCreateAsync(_dir, MetadataCanaries.Ascii("title"), "/Work", "body text", Password)).Should().Be(0);

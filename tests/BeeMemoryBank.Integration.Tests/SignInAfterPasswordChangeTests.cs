@@ -45,7 +45,7 @@ public sealed class SignInAfterPasswordChangeTests : IAsyncLifetime
 
         using (var change = new HttpRequestMessage(HttpMethod.Post, "/api/users/me/change-password")
         {
-            Content = JsonContent.Create(new { oldPassword = OldPassword, newPassword = NewPassword })
+            Content = JsonContent.Create(new { oldPassword = OldPassword, newPassword = NewPassword, passwordHint = "A test hint" })
         })
         {
             change.Headers.Add("X-User-Id", "1");

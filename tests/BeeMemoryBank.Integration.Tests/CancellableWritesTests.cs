@@ -94,7 +94,7 @@ public sealed class CancellableWritesTests : IAsyncLifetime
 
     private async Task<int> RegularUserAsync(string username)
     {
-        var resp = await _client.PostAsJsonAsync("/api/users", new { username, password = UserPassword, displayName = username, role = "user" });
+        var resp = await _client.PostAsJsonAsync("/api/users", new { username, password = UserPassword, displayName = username, role = "user", passwordHint = "A test hint" });
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32();
     }
@@ -174,11 +174,11 @@ public sealed class CancellableWritesTests : IAsyncLifetime
     {
         const string changed = "changed-writes-Pw-2";
 
-        await AbortedPostAsync("/api/keys/change-password", new { oldPassword = Password, newPassword = changed });
+        await AbortedPostAsync("/api/keys/change-password", new { oldPassword = Password, newPassword = changed, passwordHint = "A test hint" });
 
         (await MasterPasswordWorksAsync(Password)).Should().BeTrue("the key slot was not touched");
         (await MasterPasswordWorksAsync(changed)).Should().BeFalse();
-        (await _client.PostAsJsonAsync("/api/keys/change-password", new { oldPassword = Password, newPassword = changed })).EnsureSuccessStatusCode();
+        (await _client.PostAsJsonAsync("/api/keys/change-password", new { oldPassword = Password, newPassword = changed, passwordHint = "A test hint" })).EnsureSuccessStatusCode();
         (await MasterPasswordWorksAsync(changed)).Should().BeTrue("control: the same call from a client that stays does change it");
     }
 
@@ -187,7 +187,7 @@ public sealed class CancellableWritesTests : IAsyncLifetime
     {
         var id = await RegularUserAsync("bob");
 
-        await AbortedPostAsync("/api/users/me/change-password", new { oldPassword = UserPassword, newPassword = "NewUserPass456" }, id);
+        await AbortedPostAsync("/api/users/me/change-password", new { oldPassword = UserPassword, newPassword = "NewUserPass456", passwordHint = "A test hint" }, id);
 
         (await UserPasswordWorksAsync("bob", UserPassword)).Should().BeTrue();
         (await UserPasswordWorksAsync("bob", "NewUserPass456")).Should().BeFalse();
@@ -198,11 +198,11 @@ public sealed class CancellableWritesTests : IAsyncLifetime
     {
         var id = await RegularUserAsync("carol");
 
-        await AbortedPostAsync($"/api/users/{id}/change-password", new { newPassword = "ResetPass789" });
+        await AbortedPostAsync($"/api/users/{id}/change-password", new { newPassword = "ResetPass789", passwordHint = "A test hint" });
 
         (await UserPasswordWorksAsync("carol", UserPassword)).Should().BeTrue("the reset looked at its token before it wrote anything");
         (await UserPasswordWorksAsync("carol", "ResetPass789")).Should().BeFalse();
-        (await _client.PostAsJsonAsync($"/api/users/{id}/change-password", new { newPassword = "ResetPass789" })).EnsureSuccessStatusCode();
+        (await _client.PostAsJsonAsync($"/api/users/{id}/change-password", new { newPassword = "ResetPass789", passwordHint = "A test hint" })).EnsureSuccessStatusCode();
         (await UserPasswordWorksAsync("carol", "ResetPass789")).Should().BeTrue("control: the same call from a client that stays does reset it");
     }
 

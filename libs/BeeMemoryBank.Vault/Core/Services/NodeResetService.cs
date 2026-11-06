@@ -1,4 +1,5 @@
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Storage.PreUnlock;
 using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Data.Sqlite;
@@ -197,15 +198,15 @@ public sealed class NodeResetService(
 
     /// <summary>
     /// The end of the reset of a sealed node (spec 13.1): the gate closes (the boot store is not rewritten: it is about to go), the session forgets
-    /// its key, the boot store and the two databases - empty tables now - are deleted, and the gate is a plain gate again. Nothing here removes
-    /// <c>snapshots/</c> or anything else.
+    /// its key, the boot store, the two databases - empty tables now - and the derived password-hint mirror are deleted, and the gate is a plain
+    /// gate again. Nothing here removes <c>snapshots/</c> or anything else.
     /// </summary>
     private async Task ReturnToPlainAsync(CancellationToken ct)
     {
         await gate!.CloseAsync(VaultGate.ResetReason, ct);
         session.Lock();
         SqliteConnection.ClearAllPools();
-        foreach (var name in new[] { VaultStoreFiles.Boot, VaultStoreFiles.Database, VaultStoreFiles.Chat })
+        foreach (var name in new[] { VaultStoreFiles.Boot, VaultStoreFiles.Database, VaultStoreFiles.Chat, PasswordHintFile.FileName })
             foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
             {
                 var path = Path.Combine(dataPath, name + suffix);

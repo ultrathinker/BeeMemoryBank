@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Boot;
+using BeeMemoryBank.Storage.PreUnlock;
 using BeeMemoryBank.Storage.Sealed;
 using Dapper;
 using Microsoft.Extensions.Logging;
@@ -11,9 +12,10 @@ namespace BeeMemoryBank.Vault.Sealed;
 
 /// <summary>
 /// Keeps the boot store's copies in step with the open sealed database (docs/design/step-b-spec.md 4.3): the doors (key slots and the
-/// wrapped DEK of auto-unlock agents), the database-key wrappers (3.4), and the identity and whitelist mirrors. Every member except
-/// <see cref="WriteNewBootStoreAsync"/> is a no-op unless the gate says the node is sealed, so a plain node and a blind host never
-/// create or touch a boot store through it.
+/// wrapped DEK of auto-unlock agents), the database-key wrappers (3.4), and the identity and whitelist mirrors. The password-hint
+/// mirror beside the boot store is rewritten in the same pass (<see cref="PasswordHintFile"/>), because the sign-in page must be able
+/// to show a hint while the database is closed. Every member except <see cref="WriteNewBootStoreAsync"/> is a no-op unless the gate says
+/// the node is sealed, so a plain node and a blind host never create or touch a boot store through it.
 /// </summary>
 public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
 {
@@ -25,6 +27,7 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
     private readonly IVaultGate? _gate;
     private readonly ISealedVaultKeys? _vaultKeys;
     private readonly Func<byte[][]>? _candidateDeks;
+    private readonly PasswordHintFile _hints;
     private readonly ILogger? _logger;
 
     // One rewrite or wrapper change at a time: they all end in the same boot transaction rules.
@@ -34,7 +37,8 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
     /// <param name="vaultKeys">The open vault's database key, for the wrappers; null in tests that do not create wrappers.</param>
     /// <param name="candidateDeks">Clones of every DEK the session holds, current first (<c>SessionService.GetCandidateDeks</c>); the mirror clears them.</param>
     public UnlockMaterialMirror(IDbConnectionFactory vault, BootStore boot, BootDoorStore doors, BootDbKeyStore wrappers, BootStoreWriter writer,
-        IVaultGate? gate = null, ISealedVaultKeys? vaultKeys = null, Func<byte[][]>? candidateDeks = null, ILogger<UnlockMaterialMirror>? logger = null)
+        IVaultGate? gate = null, ISealedVaultKeys? vaultKeys = null, Func<byte[][]>? candidateDeks = null, ILogger<UnlockMaterialMirror>? logger = null,
+        PasswordHintFile? hintFile = null)
     {
         _vault = vault;
         _boot = boot;
@@ -45,6 +49,9 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
         _vaultKeys = vaultKeys;
         _candidateDeks = candidateDeks;
         _logger = logger;
+        // Beside the boot store: the two files answer the same pre-unlock questions and share a directory and a lifetime.
+        _hints = hintFile ?? new PasswordHintFile(Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(boot.FilePath)) ?? ".", PasswordHintFile.FileName));
     }
 
     private bool Sealed => _gate is { IsSealed: true };
@@ -159,6 +166,9 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
         await store.SetMetaAsync(BootMetaKeys.SeqFloor, (sealedState.MaxSequence + 1).ToString(CultureInfo.InvariantCulture), ct).ConfigureAwait(false);
         await store.SetMetaAsync(BootMetaKeys.SealedHead, "", ct).ConfigureAwait(false);
         await store.SetMetaAsync(BootMetaKeys.CleanClose, "0", ct).ConfigureAwait(false);
+        // The hint mirror belongs to the same data folder as this boot store (the migration target's, on a seal).
+        var hintPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(bootPath))!, PasswordHintFile.FileName);
+        await new PasswordHintFile(hintPath).ReplaceAsync(sealedState.Hints, ct).ConfigureAwait(false);
         await store.CheckpointAsync(ct).ConfigureAwait(false);
     }
 
@@ -204,8 +214,11 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
             var plan = new BootRewrite(state.Doors, candidateFingerprints.Count > 0 ? candidateFingerprints[0] : null, candidateFingerprints, add,
                 state.Identity, state.Whitelist, state.Version);
             var result = await _writer.RewriteAsync(plan, ct).ConfigureAwait(false);
-            _logger?.LogDebug("The boot store was rewritten: {Doors} doors, {Wrappers} wrappers kept, {Pruned} pruned.",
-                result.Doors, result.WrapperFingerprints.Count, result.WrappersPruned);
+            // The whole file is replaced from this one consistent read of tbl_user: a renamed, deleted or newly hinted account
+            // cannot survive from an older copy.
+            await _hints.ReplaceAsync(state.Hints, ct).ConfigureAwait(false);
+            _logger?.LogDebug("The boot store was rewritten: {Doors} doors, {Wrappers} wrappers kept, {Pruned} pruned; {Hints} hint(s) mirrored.",
+                result.Doors, result.WrapperFingerprints.Count, result.WrappersPruned, state.Hints.Count);
         }
         finally
         {
@@ -228,7 +241,7 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
 
     /// <summary>Everything the boot store copies, read from one vault connection.</summary>
     private sealed record SealedState(IReadOnlyList<BootDoor> Doors, BootIdentity? Identity,
-        IReadOnlyList<IReadOnlyDictionary<string, object?>> Whitelist, string Version, long MaxSequence);
+        IReadOnlyList<IReadOnlyDictionary<string, object?>> Whitelist, IReadOnlyList<PasswordHintEntry> Hints, string Version, long MaxSequence);
 
     private static async Task<SealedState> ReadSealedStateAsync(IDbConnectionFactory vault)
     {
@@ -261,10 +274,22 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
         foreach (var w in await connection.QueryAsync("SELECT * FROM tbl_whitelist", transaction: transaction).ConfigureAwait(false))
             whitelist.Add(new Dictionary<string, object?>(((IDictionary<string, object>)w).Select(p => new KeyValuePair<string, object?>(p.Key, p.Value)), StringComparer.Ordinal));
 
+        // Only active accounts with a hint: the file is a mirror, not an archive, and a deleted or released account keeps no old hint.
+        var hints = (await connection.QueryAsync<HintRecord>(
+                "SELECT username AS Username, password_hint AS Hint FROM tbl_user WHERE is_active = 1 AND password_hint IS NOT NULL AND password_hint <> '' ORDER BY username",
+                transaction: transaction).ConfigureAwait(false))
+            .Select(h => new PasswordHintEntry(h.Username, h.Hint)).ToList();
+
         var version = await connection.ExecuteScalarAsync<string?>("SELECT value FROM tbl_migration_marker WHERE key = 'unlock_material_version'", transaction: transaction)
             .ConfigureAwait(false) ?? "0";
         var max = await connection.ExecuteScalarAsync<long?>("SELECT MAX(sequence_num) FROM tbl_event", transaction: transaction).ConfigureAwait(false) ?? 0;
-        return new SealedState(doors, identity, whitelist, version, max);
+        return new SealedState(doors, identity, whitelist, hints, version, max);
+    }
+
+    private sealed class HintRecord
+    {
+        public string Username { get; set; } = "";
+        public string Hint { get; set; } = "";
     }
 
     private sealed class SlotRecord

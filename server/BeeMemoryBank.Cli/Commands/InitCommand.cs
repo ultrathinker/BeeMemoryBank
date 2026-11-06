@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,9 +16,19 @@ public static class InitCommand
         string dataPath,
         string name,
         string password,
+        string passwordHint,
+        bool iSavedTheKey = false,
         TextWriter? output = null)
     {
         output ??= Console.Out;
+
+        // Mandatory at every entry point with a person: the sign-in page has nothing else to show. The policy's
+        // sentence is safe to print.
+        if (PasswordHintPolicy.Validate(passwordHint, password, name) is { } hintProblem)
+        {
+            await output.WriteLineAsync($"Error: {hintProblem}");
+            return 1;
+        }
         using var flow = BeeMemoryBank.AppPaths.SealIntent.Flow.Enter();   // what a take-back may remove is what THIS command began
         await using var services = await CliServiceProvider.CreateAsync(dataPath, forFreshSeal: true);
         using var scope = services.CreateScope();
@@ -40,11 +51,34 @@ public static class InitCommand
         var sealing = scope.ServiceProvider.GetRequiredService<FreshNodeSealing>();
 
         // CLI init: use node name as admin username (admin can rename via Profile later). The seal intent begins inside, before the first write.
-        try { await initSvc.InitializeAsync(name, name, password); }
+        try { await initSvc.InitializeAsync(name, name, password, passwordHint: passwordHint); }
         catch
         {
             await scope.ServiceProvider.GetRequiredService<NodeResetService>().DiscardPendingSetupAsync("cli init: the vault could not be written");
             throw;
+        }
+
+        // A new node owes the blocking recovery-key step. Written while the database is still plain: after the seal it
+        // is encrypted and closed, and only an unlock could write to it.
+        var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
+        await nodeRepo.SetRecoveryKeyRequiredAsync(true);
+
+        // The recovery key is minted while the database is still plain and this process holds the password, so the
+        // slot is encrypted together with everything else by the seal below. Failure here is not fatal: the node can
+        // still be set up, and the web sign-in will then show the recovery-key step.
+        string? recoveryKey = null;
+        try
+        {
+            var session = scope.ServiceProvider.GetRequiredService<SessionService>();
+            if (await session.UnlockAsync(password))
+            {
+                recoveryKey = await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
+                session.Lock();
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            await output.WriteLineAsync($"Note: no recovery key could be issued now ({ex.Message}). Sign in to the web UI to issue one.");
         }
 
         try
@@ -76,7 +110,50 @@ public static class InitCommand
 
         await output.WriteLineAsync($"Node '{name}' successfully initialized in {dataPath}");
         await output.WriteLineAsync("Its database is encrypted under the master password you gave, and metadata encryption is on. The node starts locked: the password opens it.");
+
+        // The recovery-key step a new node owes (release 2.7.5). The CLI can finish it here - it has the key and a
+        // person at the terminal - so the web gate does not have to show it again. No e-mail recovery exists, so
+        // this is the one chance to keep the key.
+        if (recoveryKey is null)
+        {
+            await output.WriteLineAsync("No recovery key was issued. Sign in to the web UI: it will show one and ask you to save it.");
+            return 0;
+        }
+
+        await output.WriteLineAsync("");
+        await output.WriteLineAsync("Recovery key (write it down; it is shown only this once):");
+        await output.WriteLineAsync("  " + recoveryKey);
+        await output.WriteLineAsync("Without e-mail recovery, this key is the way back in if the master password is forgotten.");
+
+        var acknowledged = iSavedTheKey || ConfirmKeyWasSaved();
+        if (acknowledged)
+        {
+            // The node is sealed and closed now: open it for this one write, then lock it again.
+            var session = scope.ServiceProvider.GetRequiredService<SessionService>();
+            if (await session.UnlockAsync(password))
+            {
+                await nodeRepo.SetRecoveryKeyAcknowledgedAtAsync(DateTime.UtcNow);
+                session.Lock();
+                await output.WriteLineAsync("Recorded that you saved the recovery key.");
+            }
+            else
+            {
+                await output.WriteLineAsync("The confirmation could not be recorded; sign in to the web UI, where the recovery-key step will appear.");
+            }
+        }
+        else
+        {
+            await output.WriteLineAsync("Not confirmed. The node will ask for the key again in the web app. Sign in to the web UI: the recovery-key step will appear and you can save a key there.");
+        }
         return 0;
+    }
+
+    /// <summary>Asks for the confirmation when a person is at the terminal; a redirected stdin is never read.</summary>
+    private static bool ConfirmKeyWasSaved()
+    {
+        if (Console.IsInputRedirected) return false;
+        Console.Error.Write("Type 'yes' once you have written down the recovery key: ");
+        return string.Equals(Console.ReadLine()?.Trim(), "yes", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

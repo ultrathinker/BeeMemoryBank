@@ -57,6 +57,7 @@ public sealed class ProxyForwarderFixture : IAsyncLifetime
 
         (await api.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username = "bob",
             password = BobPassword,
             displayName = "Bob",

@@ -55,6 +55,11 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
     // refuse), and the node keeps its own per-username budget behind this per-IP one.
     private static readonly SlidingWindowRateLimiter RecoverAccessLimiter = new(5, TimeSpan.FromMinutes(15));
 
+    // "Show my password hint": no key derivation is spent, but the answer is still a username oracle ("this
+    // name has a hint"), so it is bounded per address here and again per address on the node. The node keeps no
+    // per-username budget: it would let a stranger lock a real person out of their own hint.
+    private static readonly SlidingWindowRateLimiter PasswordHintLimiter = new(10, TimeSpan.FromMinutes(15));
+
     public async Task InvokeAsync(HttpContext context)
     {
         if (context.Request.Method != HttpMethods.Post)
@@ -77,6 +82,7 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
             RateLimitedRoute.NodeReset => (ResetLimiter, "node reset", "reset"),
             RateLimitedRoute.Login => (LoginLimiter, "login", "login"),
             RateLimitedRoute.RecoverAccess => (RecoverAccessLimiter, "recovery-key reset", "recover"),
+            RateLimitedRoute.PasswordHint => (PasswordHintLimiter, "password hint", "hint"),
             _ => (null, "", "")
         };
         if (limiter == null)
@@ -109,6 +115,9 @@ public class PublicRateLimitMiddleware(RequestDelegate next, ILogger<PublicRateL
     /// without this a test that burns the budget would starve every later test of the same process.
     /// </summary>
     internal static void ResetRecoverAccessForTests() => RecoverAccessLimiter.ResetAll();
+
+    /// <summary>TEST-ONLY: drops every recorded "Show my password hint" attempt (the limiter is a process-wide static).</summary>
+    internal static void ResetPasswordHintForTests() => PasswordHintLimiter.ResetAll();
 
     /// <summary>
     /// Whether the completed request actually got in — the signal that this IP is a legitimate

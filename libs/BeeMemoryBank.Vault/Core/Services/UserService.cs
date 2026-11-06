@@ -197,9 +197,13 @@ public class UserService(
     // reset): new login hash, the user's key slot re-pointed at the new password, then the
     // revocations that make the old password stop meaning anything — security stamp (every web
     // cookie of this user is rejected at its next revalidation) and remote API tokens.
-    private async Task ReplacePasswordAsync(User user, string newPassword, byte[]? providedDek = null, CancellationToken ct = default)
+    private async Task ReplacePasswordAsync(User user, string newPassword, byte[]? providedDek = null, CancellationToken ct = default, string? passwordHint = null)
     {
         ValidatePassword(newPassword);
+        // A caller WITH a person replaces the hint; a caller without one (a seed or a tool) leaves the stored hint
+        // untouched rather than silently deleting something a person wrote.
+        if (passwordHint != null)
+            user.PasswordHint = PasswordHintPolicy.NormalizeAndValidate(passwordHint, newPassword, user.Username);
         user.PasswordHash = HashPassword(newPassword);
 
         // The last point at which the replacement can stop (BMB-311 fix round 3): the hash is only in this object, nothing is written. From the key slot on - the new slot
@@ -249,7 +253,11 @@ public class UserService(
         return true;
     }
 
-    public async Task<User> CreateUserAsync(string username, string displayName, string password, string role, bool chatAccess = true)
+    /// <param name="passwordHint">
+    /// The hint a person wrote for this password. Null is for internal callers (seeds, tools, tests) that have no
+    /// person; every HTTP endpoint, form, the CLI and the phone apps refuse to create a user without one.
+    /// </param>
+    public async Task<User> CreateUserAsync(string username, string displayName, string password, string role, bool chatAccess = true, string? passwordHint = null)
     {
         if (string.IsNullOrWhiteSpace(username))
             throw new ArgumentException("Username is required");
@@ -266,6 +274,7 @@ public class UserService(
             Username = username.Trim(),
             DisplayName = displayName.Trim(),
             PasswordHash = HashPassword(password),
+            PasswordHint = passwordHint == null ? null : PasswordHintPolicy.NormalizeAndValidate(passwordHint, password, username),
             Role = role,
             IsActive = true,
             ChatAccess = chatAccess,
@@ -280,11 +289,27 @@ public class UserService(
         return user;
     }
 
+    /// <summary>
+    /// Adds or replaces a hint without changing the password - the Profile page's soft prompt for accounts created
+    /// before hints existed. The password is not available here, so the "must not contain the password" rule cannot
+    /// run; the length, control-character and username rules still apply. Every password change that DOES know the
+    /// password re-checks the hint against it.
+    /// </summary>
+    public async Task SetPasswordHintAsync(int userId, string passwordHint)
+    {
+        var user = await userRepo.GetByIdAsync(userId)
+            ?? throw new KeyNotFoundException($"User {userId} not found");
+        var normalized = PasswordHintPolicy.NormalizeAndValidate(passwordHint, password: "", username: user.Username);
+        await userRepo.SetPasswordHintAsync(userId, normalized);
+        // A sealed node's sign-in page reads the pre-unlock mirror, not the closed database: save the new text there now.
+        await SlotDoors.RewriteAsync(mirror);
+    }
+
     /// <summary>Test seam: called after the new login hash is made and before anything is written (a test stops the replacement from here).</summary>
     internal Action? AfterHashForTests { get; set; }
 
     /// <param name="ct">Stops the change before it writes anything (see <see cref="ReplacePasswordAsync"/>); never in the middle of the key-slot rewrite.</param>
-    public async Task ChangePasswordAsync(int userId, string oldPassword, string newPassword, CancellationToken ct = default)
+    public async Task ChangePasswordAsync(int userId, string oldPassword, string newPassword, CancellationToken ct = default, string? passwordHint = null)
     {
         ct.ThrowIfCancellationRequested();
         var user = await userRepo.GetByIdAsync(userId)
@@ -297,18 +322,18 @@ public class UserService(
         // Bumps the security stamp: any outstanding Web cookie (this user's other sessions,
         // and this session too) is rejected on next revalidation. Self-service password
         // change therefore forces a re-login — intended.
-        await ReplacePasswordAsync(user, newPassword, ct: ct);
+        await ReplacePasswordAsync(user, newPassword, ct: ct, passwordHint: passwordHint);
     }
 
     /// <param name="ct">Stops the reset before it writes anything (see <see cref="ReplacePasswordAsync"/>); never in the middle of the key-slot rewrite.</param>
-    public async Task AdminChangePasswordAsync(int userId, string newPassword, CancellationToken ct = default)
+    public async Task AdminChangePasswordAsync(int userId, string newPassword, CancellationToken ct = default, string? passwordHint = null)
     {
         ct.ThrowIfCancellationRequested();
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
 
         // Admin reset bumps the stamp — logs out every session for this user (intended).
-        await ReplacePasswordAsync(user, newPassword, ct: ct);
+        await ReplacePasswordAsync(user, newPassword, ct: ct, passwordHint: passwordHint);
     }
 
     /// <summary>
@@ -331,9 +356,12 @@ public class UserService(
     /// <exception cref="ArgumentException">The new password breaks the password rules (says nothing
     /// about the key or the user).</exception>
     public async Task<RecoveryResetResult> ResetPasswordWithRecoveryKeyAsync(
-        string username, string recoveryKey, string newPassword)
+        string username, string recoveryKey, string newPassword, string? passwordHint = null)
     {
         ValidatePassword(newPassword);
+        // The hint is not a secret and its refusal says nothing about the key or the account, so it is checked
+        // before the expensive (and deliberately uniform) refusal path below.
+        var normalizedHint = passwordHint == null ? null : PasswordHintPolicy.NormalizeAndValidate(passwordHint, newPassword, username);
 
         // A key copied from a printout or an email tends to arrive with a line break or a space at
         // either end (or wrapped in the middle). The key itself is Base64 and holds no whitespace.
@@ -373,7 +401,7 @@ public class UserService(
                     user?.Id);
             }
 
-            await ReplacePasswordAsync(user, newPassword, dek);
+            await ReplacePasswordAsync(user, newPassword, dek, passwordHint: normalizedHint);
             return new RecoveryResetResult(RecoveryResetOutcome.Reset, user.Id);
         }
         finally
@@ -450,7 +478,7 @@ public class UserService(
     /// promotes a slot-less user to superadmin; in every other case it is ignored, and the
     /// caller (audit log) must not claim a password change that did not happen.
     /// </returns>
-    public async Task<bool> UpdateUserAsync(int userId, string displayName, string? role, string? password = null, bool? chatAccess = null)
+    public async Task<bool> UpdateUserAsync(int userId, string displayName, string? role, string? password = null, bool? chatAccess = null, string? passwordHint = null)
     {
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
@@ -526,6 +554,8 @@ public class UserService(
                 if (!string.IsNullOrWhiteSpace(password))
                 {
                     ValidatePassword(password);
+                    if (passwordHint != null)
+                        user.PasswordHint = PasswordHintPolicy.NormalizeAndValidate(passwordHint, password, user.Username);
                     user.KeySlotId = await CreateUserKeySlotAsync(password);
                     user.PasswordHash = HashPassword(password);
                     passwordChanged = true;

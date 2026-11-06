@@ -247,5 +247,7 @@ public class WebToApiIdentityTests
         public Task<Dictionary<string, int>> CountActiveUsersPerRoleAsync() => inner.CountActiveUsersPerRoleAsync();
         public Task<string?> GetSecurityStampAsync(int id) => inner.GetSecurityStampAsync(id);
         public Task<string> BumpSecurityStampAsync(int id) => inner.BumpSecurityStampAsync(id);
+        public Task<string?> GetPasswordHintAsync(string username) => inner.GetPasswordHintAsync(username);
+        public Task SetPasswordHintAsync(int id, string? hint) => inner.SetPasswordHintAsync(id, hint);
     }
 }

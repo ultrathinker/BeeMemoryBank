@@ -49,6 +49,7 @@ public class RoleEndpointsTests : IAsyncLifetime
     {
         var resp = await _client.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username,
             password = "UserPass123",
             displayName = username,
@@ -299,6 +300,7 @@ public class RoleEndpointsTests : IAsyncLifetime
     {
         var resp = await _client.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username = "bob",
             password = "UserPass123",
             displayName = "Bob",

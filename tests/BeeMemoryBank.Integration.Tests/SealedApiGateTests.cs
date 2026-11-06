@@ -158,6 +158,7 @@ public sealed class SealedApiGateTests(SealedNodeTemplate template) : IClassFixt
         {
             "GET /health", "GET /version", "GET /api/version", "GET /api/session/status", "GET /api/vault/status", "GET /api/snapshots/restore/progress",
             "POST /api/session/unlock", "POST /api/session/login", "POST /api/session/recover-access",
+            "POST /api/session/password-hint",
         };
         var blocked = new List<string>();
         var wrongStatus = new List<string>();
@@ -214,7 +215,7 @@ public sealed class SealedApiGateTests(SealedNodeTemplate template) : IClassFixt
         // A second, ordinary user (the vault is open for a moment to make it, then locked again).
         (await node.LoginAsync(client, SealedNodeTemplate.Password)).StatusCode.Should().Be(HttpStatusCode.OK);
         node.Gate.State.Should().Be(VaultState.Open);
-        (await client.PostAsJsonAsync("/api/users", new { username = "bob", password = "BobPass12345", displayName = "Bob", role = "user" })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/api/users", new { username = "bob", password = "BobPass12345", displayName = "Bob", role = "user", passwordHint = "A test hint" })).EnsureSuccessStatusCode();
         (await client.PostAsync("/api/session/lock", null)).EnsureSuccessStatusCode();
         node.Gate.State.Should().Be(VaultState.Closed);
 

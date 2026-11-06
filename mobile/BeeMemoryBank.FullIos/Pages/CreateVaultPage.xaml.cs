@@ -29,6 +29,12 @@ public partial class CreateVaultPage : ContentPage
 
         var name = FullVault.NodeName(NameEntry.Text, DeviceInfo.Current.Name);
         var password = PasswordEntry.Text!;
+        var passwordHint = (HintEntry.Text ?? "").Trim();
+        if (BeeMemoryBank.Core.Services.PasswordHintPolicy.Validate(passwordHint, password, name) is { } hintProblem)
+        {
+            ShowError(hintProblem);
+            return;
+        }
         // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up, so Create cannot be tapped twice; the whole error
         // is written under the button when it fails.
         string? recoveryKey = null;
@@ -37,7 +43,7 @@ public partial class CreateVaultPage : ContentPage
             // Off the main thread: the Argon2id derivations take seconds on a phone and the screen must keep moving.
             // Both fields are emptied whatever the creation ends in (SecretFields), not just when it works.
             recoveryKey = await SecretFields.RunAsync(
-                () => Task.Run(() => _vault.CreateAsync(name, password)), () => PasswordEntry.Text = "", () => RepeatEntry.Text = "");
+                () => Task.Run(() => _vault.CreateAsync(name, password, passwordHint)), () => PasswordEntry.Text = "", () => RepeatEntry.Text = "");
         }, new BusyOptions
         {
             Long = true,

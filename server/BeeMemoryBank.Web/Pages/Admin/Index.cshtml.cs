@@ -17,11 +17,14 @@ public class IndexModel(ApiClient api) : AdminPageModel(api)
     {
         await Task.WhenAll(
             LoadMasterPasswordNoticeAsync(),
+            LoadRecoveryKeyStatusAsync(),
             LoadPeerPendingRotationsAsync(),
             Api.GetRestoredPeersAsync().ContinueWith(t => RestoredPeers = t.Result));
     }
 
     public Task<IActionResult> OnPostDismissPasswordNoticeAsync() => DismissPasswordNoticeAsync();
+
+    public Task<IActionResult> OnPostDismissRecoveryKeyNoticeAsync() => DismissRecoveryKeyNoticeAsync();
 
     public Task<IActionResult> OnPostPeerAcceptDekRotationAsync(string eventId) => PeerAcceptDekRotationAsync(eventId);
 

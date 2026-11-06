@@ -12,7 +12,7 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
         @"id AS Id, username AS Username, display_name AS DisplayName,
           password_hash AS PasswordHash, role AS Role, key_slot_id AS KeySlotId,
           is_active AS IsActive, chat_access AS ChatAccess, created_at AS CreatedAt, last_login_at AS LastLoginAt,
-          security_stamp AS SecurityStamp";
+          security_stamp AS SecurityStamp, password_hint AS PasswordHint";
 
     public async Task<User?> GetByUsernameAsync(string username)
     {
@@ -45,8 +45,8 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
 
         using var conn = OpenConnection();
         return await conn.ExecuteScalarAsync<int>(
-            @"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, is_active, chat_access, created_at, last_login_at, security_stamp)
-              VALUES (@Username, @DisplayName, @PasswordHash, @Role, @KeySlotId, @IsActive, @ChatAccess, @CreatedAt, @LastLoginAt, @SecurityStamp);
+            @"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, is_active, chat_access, created_at, last_login_at, security_stamp, password_hint)
+              VALUES (@Username, @DisplayName, @PasswordHash, @Role, @KeySlotId, @IsActive, @ChatAccess, @CreatedAt, @LastLoginAt, @SecurityStamp, @PasswordHint);
               SELECT last_insert_rowid()",
             user);
     }
@@ -57,12 +57,13 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
         await conn.ExecuteAsync(
             @"UPDATE tbl_user SET display_name = @DisplayName, role = @Role,
               key_slot_id = @KeySlotId, password_hash = @PasswordHash,
-              is_active = @IsActive, chat_access = @ChatAccess
+              is_active = @IsActive, chat_access = @ChatAccess, password_hint = @PasswordHint
               WHERE id = @Id",
             new
             {
                 user.Id, user.DisplayName, user.Role,
                 user.KeySlotId, user.PasswordHash,
+                user.PasswordHint,
                 IsActive = user.IsActive ? 1 : 0,
                 ChatAccess = user.ChatAccess ? 1 : 0
             });
@@ -160,6 +161,25 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
             "UPDATE tbl_user SET security_stamp = @stamp WHERE id = @id",
             new { stamp, id });
         return stamp;
+    }
+
+    // The hint is read without any key: tbl_user is node-local plaintext, which is what lets the sign-in page show
+    // it while the vault is locked. Active users only, exactly like GetByUsernameAsync, so a deleted account's hint
+    // is not a way to probe who used to exist.
+    public async Task<string?> GetPasswordHintAsync(string username)
+    {
+        using var conn = OpenConnection();
+        return await conn.QuerySingleOrDefaultAsync<string?>(
+            "SELECT password_hint FROM tbl_user WHERE username = @username COLLATE NOCASE AND is_active = 1",
+            new { username });
+    }
+
+    public async Task SetPasswordHintAsync(int id, string? hint)
+    {
+        using var conn = OpenConnection();
+        await conn.ExecuteAsync(
+            "UPDATE tbl_user SET password_hint = @hint WHERE id = @id",
+            new { id, hint });
     }
 
     /// <summary>32 lowercase hex chars, matching the migration's lower(hex(randomblob(16))).</summary>

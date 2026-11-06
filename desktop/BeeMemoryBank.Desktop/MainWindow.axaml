@@ -71,6 +71,7 @@
                 <Button Content="Retry Startup" 
                         Click="OnRetryClick" 
                         Padding="16,10"
+                        Classes="accent"
                         Background="#F59E0B" 
                         Foreground="#111119"
                         FontWeight="SemiBold"

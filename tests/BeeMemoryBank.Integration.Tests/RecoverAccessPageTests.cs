@@ -107,6 +107,7 @@ public sealed class RecoverAccessPageTests : IAsyncLifetime
             ["RecoveryKey"] = key,
             ["NewPassword"] = password,
             ["ConfirmPassword"] = repeat ?? password,
+            ["PasswordHint"] = "A test hint",
         });
 
     private async Task<HttpResponseMessage> ApiLoginAsync(string username, string password) =>
@@ -121,8 +122,8 @@ public sealed class RecoverAccessPageTests : IAsyncLifetime
 
         page.StatusCode.Should().Be(HttpStatusCode.OK);
         var html = await page.Content.ReadAsStringAsync();
-        html.Should().Contain("Forgot your password? Use a recovery key");
-        html.Should().Contain("href=\"/RecoverAccess\"");
+        html.Should().Contain("Forgot your password?");
+        html.Should().Contain("href=\"/RecoverAccess\"").And.Contain("Use a recovery key instead");
     }
 
     [Fact]
@@ -132,7 +133,7 @@ public sealed class RecoverAccessPageTests : IAsyncLifetime
 
         page.StatusCode.Should().Be(HttpStatusCode.OK, "a person who cannot sign in has to be able to open it");
         var html = await page.Content.ReadAsStringAsync();
-        foreach (var field in new[] { "username", "recoveryKey", "newPassword", "confirmPassword" })
+        foreach (var field in new[] { "username", "recoveryKey", "newPassword", "confirmPassword", "passwordHint" })
             html.Should().Contain($"name=\"{field}\"");
         html.Should().Contain("type=\"password\"", "the key and the passwords are not shown on screen");
     }
@@ -248,7 +249,7 @@ public sealed class RecoverAccessPageTests : IAsyncLifetime
         (await weak.Content.ReadAsStringAsync()).Should().Contain("at least 8 characters");
 
         using var blank = await PostRecoverAsync("admin", "");
-        (await blank.Content.ReadAsStringAsync()).Should().Contain("fill in all four fields");
+        (await blank.Content.ReadAsStringAsync()).Should().Contain("fill in every field");
 
         _apiCalls.RecoverCalls.Should().Be(0, "a typo costs the node nothing and the owner no attempt");
         (await ApiLoginAsync("admin", AdminPassword)).StatusCode.Should().Be(HttpStatusCode.OK);

@@ -1,4 +1,47 @@
-# Forgot the password? Use a recovery key
+# Forgot the password? Use a hint or a recovery key
+
+Bee Memory Bank has **no e-mail recovery**. So a person must always have two ways back in: a **password hint**
+they wrote themselves, and a **recovery key** kept offline.
+
+## The password hint
+
+Every place that creates or replaces a password asks for a hint (3 to 120 characters; it may not contain the
+password, the username, or a line break). It is stored in the node's local user table in the clear, because the
+Sign In page has to show it **before the vault is unlocked**; it is never synchronized, never written to an audit
+line or a log, and the policy is the same in the web forms, the HTTP endpoints, the CLI and the phone apps.
+
+On the Sign In page, **Forgot your password?** opens two choices: **Show my password hint** (asks for the
+username) and **Use a recovery key** (below). The hint lookup is anonymous and node-local:
+`POST /api/session/password-hint`, 10 attempts per 15 minutes per client address, answered through the Web page
+only. An unknown username and a user without a hint get the same status, shape and sentence:
+*No hint is available for this account. Use a recovery key, or ask an administrator to reset the password.*
+There is deliberately no per-username counter: one lookup per name is all an enumerator needs, so it would stop
+nobody, while it would let anyone spend a real person's budget and keep that person from seeing their own hint.
+
+An encrypted node is **closed** after every restart, which is exactly when a password is forgotten, so the hint must
+be readable before anything is unlocked. A derived copy of the hints is kept in `beememorybank.hints.json` beside the
+boot store: the database stays authoritative and the file is rewritten from the user table at every unlock and lock,
+and after every change (a user without a hint is absent; a deleted user disappears at the next rewrite). It does not
+list user names - each entry is an HMAC-SHA-256 of the lower-cased name under a random salt stored in the file - but
+the **hint text is in clear**. Anyone who can read the node's data folder can read every hint, which is why the forms
+say never to put a secret in one. The file is not carried by a backup, a snapshot or a join archive; a restored
+database rebuilds it at its first unlock.
+
+The lookup still tells an observer that a given username HAS a hint (rate limited). The product accepts that:
+mandatory hints are an explicit decision. Accounts created before hints existed have none; the Profile page offers
+a soft **Add a password hint**, and nothing is forced on them until their next password change.
+
+**A new node.** After the first administrator is created by `/Setup` (or by `bmb init` / `bmb join` on the command
+line with its confirmation), the person is shown a recovery key **before the app** and must tick *I saved my
+recovery key*. `bmb init` and `bmb join` finish the step with `--i-saved-the-key` or a typed `yes`; an unattended
+run with redirected stdin cannot answer, so the node stays gated, the first web sign-in shows a new key (a second
+recovery slot) and asks again. The step cannot be skipped by typing another address: while it is pending, every
+Web page of a superadmin session is sent back to it. The API, MCP and agents keep working, so an unattended node
+is never stuck.
+A node that existed before this release is not gated; its Admin pages and the tree show a dismissible notice until
+a recovery key is issued.
+
+## The recovery key
 
 A **recovery key** is a second way into the vault's master key, issued once by a superadmin and kept offline
 (Admin → Recovery key → **Issue new recovery key**). It is stored as a key slot of type `recovery`; only a key
@@ -16,7 +59,8 @@ then enter
 1. the **username** of the administrator account,
 2. a **recovery key** of this node,
 3. a **new password**, twice (the usual rules: at least 8 characters, an upper-case letter, a lower-case letter
-   and a digit).
+   and a digit),
+4. a **password hint** for the new password (mandatory, same rules as everywhere).
 
 On success the page says *Password changed*; sign in with the new password as usual. Signing in is what
 unlocks the vault — the page itself signs nobody in and does not unlock anything.
@@ -25,7 +69,7 @@ unlocks the vault — the page itself signs nobody in and does not unlock anythi
 
 ```bash
 # the key on the first line of stdin, the new password on the second — never as arguments
-printf '%s\n%s\n' "$RECOVERY_KEY" "$NEW_PASSWORD" | bmb user reset-password --user admin --recovery-key-stdin --data /var/lib/beememorybank
+printf '%s\n%s\n' "$RECOVERY_KEY" "$NEW_PASSWORD" | bmb user reset-password --user admin --recovery-key-stdin --data /var/lib/beememorybank --hint "the blue folder by the window"
 # or, in a terminal, with no echo:
 bmb user reset-password --user admin
 ```
@@ -54,8 +98,8 @@ recovery keys keep working; make a new one if a card or paper copy was lost or s
 |---|---|
 | Per client address | 5 attempts per 15 minutes at the Web layer (its own budget, not the sign-in one); a successful reset clears it |
 | Per username | 5 attempts per 15 minutes at the node, counted for names that do not exist exactly as for those that do |
-| Typos | A new password that breaks the rules, or two that do not match, is said at once and costs no attempt |
-| Audit log | `user_password_recovery_reset` (user, client address) and `user_password_recovery_refused` (reason class `key` or `account`, address) — never the key, a password or a name that is not an account |
+| Typos | A new password that breaks the rules, a missing or invalid hint, or two passwords that do not match, is said at once and costs no attempt |
+| Audit log | `user_password_recovery_reset` (user, client address) and `user_password_recovery_refused` (reason class `key` or `account`, address) — never the key, a password, a hint or a name that is not an account |
 | Other nodes | Key slots are node-local, so other nodes still accept the old password. A `master_password_changed` event tells them, as the Admin → Master Password page does |
 
 The per-username budget means that someone who knows an administrator's username can keep that account's

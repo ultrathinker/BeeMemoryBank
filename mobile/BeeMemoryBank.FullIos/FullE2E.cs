@@ -11,7 +11,8 @@ namespace BeeMemoryBank.FullIos;
 /// the console the simulator attaches. The test vault's throwaway password comes the same way; it is never written anywhere.
 /// <list type="bullet">
 /// <item><c>BMB_E2E_SELFCHECK=1</c> the measuring run (FullSelfCheck) on a scratch vault first.</item>
-/// <item><c>BMB_E2E_PASSWORD</c> the test vault's password; <c>BMB_E2E_NAME</c> this node's name.</item>
+/// <item><c>BMB_E2E_PASSWORD</c> the test vault's password; <c>BMB_E2E_NAME</c> this node's name;
+/// <c>BMB_E2E_HINT</c> the password hint (a fixed sentence when absent).</item>
 /// <item><c>BMB_E2E_CREATE=1</c> a new vault; <c>BMB_E2E_JOIN=&lt;join code&gt;</c> join one (only on a phone without a vault).</item>
 /// <item><c>BMB_E2E_UNLOCK=1</c> open a locked vault with the password; <c>BMB_E2E_QUICK_UNLOCK=1</c> with Face ID instead;
 /// <c>BMB_E2E_QUICK_ENABLE=1</c> turn Face ID unlock on.</item>
@@ -41,17 +42,20 @@ internal static class FullE2E
         var sync = services.GetRequiredService<FullSync>();
         var password = Get("BMB_E2E_PASSWORD") ?? "";
         var name = Get("BMB_E2E_NAME") ?? "iPhone (e2e)";
+        // The e2e hook is not a person at a screen, so it uses a fixed sentence: it passes PasswordHintPolicy, does not
+        // contain the test password or the node name, and the runner can override it with BMB_E2E_HINT.
+        var hint = Get("BMB_E2E_HINT") ?? "the blue folder by the window";
 
         if (Get("BMB_E2E_CREATE") == "1")
             await Step("create", async () =>
             {
-                var key = await Task.Run(() => vault.CreateAsync(name, password));
+                var key = await Task.Run(() => vault.CreateAsync(name, password, hint));
                 return $"recovery key of {key.Length} characters shown";
             });
         if (Get("BMB_E2E_JOIN") is { } code)
             await Step("join", async () =>
             {
-                await Task.Run(() => vault.JoinAsync(name, code, password));
+                await Task.Run(() => vault.JoinAsync(name, code, password, hint));
                 return (await vault.IdentityAsync())?.NodeId.ToString() ?? "?";
             });
         if (Get("BMB_E2E_UNLOCK") == "1")

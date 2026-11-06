@@ -24,7 +24,7 @@ namespace BeeMemoryBank.Mobile.Platforms.Android;
 public class MainActivity : MauiAppCompatActivity
 {
     // ⚠ DEBUG-ONLY auto-unlock/auto-init via Intent extras for adb scripting:
-    //   adb shell am start -n ...MainActivity -e bmb_init_name "MyPhone" -e bmb_init_password "secret"
+    //   adb shell am start -n ...MainActivity -e bmb_init_name "MyPhone" -e bmb_init_password "secret" -e bmb_init_hint "the blue folder by the window"
     //   adb shell am start -n ...MainActivity -e bmb_unlock_password "secret"
     // Compiled out of Release builds because any app on the device, or anyone
     // with adb access, can otherwise bypass the unlock screen by sending an
@@ -34,6 +34,8 @@ public class MainActivity : MauiAppCompatActivity
 #if DEBUG
     public const string ExtraInitName = "bmb_init_name";
     public const string ExtraInitPassword = "bmb_init_password";
+    /// <summary>Optional: the password hint a person would have written (the headless path has no person, so it may be absent).</summary>
+    public const string ExtraInitHint = "bmb_init_hint";
     public const string ExtraUnlockPassword = "bmb_unlock_password";
 #endif
 
@@ -161,6 +163,7 @@ public class MainActivity : MauiAppCompatActivity
 
         var name = intent.GetStringExtra(ExtraInitName);
         var password = intent.GetStringExtra(ExtraInitPassword);
+        var hint = intent.GetStringExtra(ExtraInitHint);
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(password)) return;
 
         _autoInitDone = true;
@@ -174,7 +177,7 @@ public class MainActivity : MauiAppCompatActivity
                 var scopeFactory = services.GetRequiredService<IServiceScopeFactory>();
                 using var scope = scopeFactory.CreateScope();
                 var setupSvc = scope.ServiceProvider.GetRequiredService<NodeSetupService>();
-                await setupSvc.InitAsync(name, password);
+                await setupSvc.InitAsync(name, password, hint);
                 // Navigate on main thread; StatusPage.OnAppearing will start sync service
                 MainThread.BeginInvokeOnMainThread(async () =>
                 {

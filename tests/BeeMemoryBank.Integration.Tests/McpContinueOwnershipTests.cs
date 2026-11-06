@@ -70,6 +70,7 @@ public class McpContinueOwnershipTests : IAsyncLifetime
 
         var restrictedUser = await _adminClient.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username = "s6_restricted",
             displayName = "S6 Restricted",
             password = "s6RestrictedPassword",

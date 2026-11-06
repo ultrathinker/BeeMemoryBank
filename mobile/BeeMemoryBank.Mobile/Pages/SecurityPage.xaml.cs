@@ -273,6 +273,7 @@ public partial class SecurityPage : ContentPage
         var oldPwd     = OldPasswordEntry.Text ?? "";
         var newPwd     = NewPasswordEntry.Text ?? "";
         var confirmPwd = NewPasswordConfirmEntry.Text ?? "";
+        var newHint    = NewPasswordHintEntry.Text?.Trim() ?? "";
 
         if (string.IsNullOrEmpty(oldPwd) || string.IsNullOrEmpty(newPwd))
         {
@@ -288,6 +289,14 @@ public partial class SecurityPage : ContentPage
             return;
         }
 
+        // The username check needs the row this page finds below; the service applies the whole policy again there.
+        if (BeeMemoryBank.Core.Services.PasswordHintPolicy.Validate(newHint, newPwd, username: null) is { } hintProblem)
+        {
+            ChangeErrorLabel.Text = hintProblem;
+            ChangeErrorLabel.IsVisible = true;
+            return;
+        }
+
         // A long operation (BMB-311): the key is derived and re-wrapped; the one busy helper puts up the pop-up and writes the result under the button.
         await BusyAction.RunAsync(sender as Button, async () =>
         {
@@ -299,12 +308,13 @@ public partial class SecurityPage : ContentPage
                 var users = await userRepo.ListActiveAsync();
                 var currentUser = users.FirstOrDefault(u => u.Role == UserRoles.Superadmin)
                     ?? throw new InvalidOperationException("No superadmin user found");
-                await userService.ChangePasswordAsync(currentUser.Id, oldPwd, newPwd);
+                await userService.ChangePasswordAsync(currentUser.Id, oldPwd, newPwd, passwordHint: newHint);
             });
 
             OldPasswordEntry.Text = "";
             NewPasswordEntry.Text = "";
             NewPasswordConfirmEntry.Text = "";
+            NewPasswordHintEntry.Text = "";
         }, new BusyOptions
         {
             Long = true,

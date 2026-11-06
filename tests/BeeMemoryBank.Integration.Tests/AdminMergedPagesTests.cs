@@ -28,7 +28,7 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
         using var api = _api.CreateClient();
         await _api.InitializeNodeAsync(displayName: "MergedNode", password: AdminPassword);
         (await api.PostAsJsonAsync("/api/session/unlock", new { password = AdminPassword })).EnsureSuccessStatusCode();
-        (await api.PostAsJsonAsync("/api/users", new { username = "bob", password = BobPassword, displayName = "Bob", role = "user" })).EnsureSuccessStatusCode();
+        (await api.PostAsJsonAsync("/api/users", new { username = "bob", password = BobPassword, displayName = "Bob", role = "user", passwordHint = "A test hint" })).EnsureSuccessStatusCode();
         _web.RouteOutboundHttpThrough(_api.Server.CreateHandler());
         _admin = await WebLogin.LoginAsync(_web, "admin", AdminPassword);
         _bob = await WebLogin.LoginAsync(_web, "bob", BobPassword);

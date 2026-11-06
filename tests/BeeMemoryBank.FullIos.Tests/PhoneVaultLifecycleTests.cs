@@ -131,7 +131,7 @@ public class PhoneVaultLifecycleTests
         /// <summary>A vault with a canary note, on a phone that joined a mesh which switched metadata encryption on (the migration needs it, spec 10.2).</summary>
         public async Task<Guid> CreateVaultWithCanaryAsync()
         {
-            await Vault.CreateAsync("Test iPhone", "Correct-Horse-9");
+            await Vault.CreateAsync("Test iPhone", "Correct-Horse-9", "A hint for the canary vault");
             // The note first: a node that has switched on metadata encryption writes nothing without a metadata key, and this test phone holds none.
             var id = await Notes.SaveAsync(null, Canary, "/", Canary + " in the body");
             Services.GetRequiredService<ISyncProtocolPolicy>().MarkActivated();
@@ -223,14 +223,14 @@ public class PhoneVaultLifecycleTests
         (await app.Lifecycle.UnlockWithPasswordAsync("wrong-password")).Should().BeFalse();
         app.Gate.State.Should().Be(GateState.Closed);
         (await app.Lifecycle.UnlockWithPasswordAsync(Password)).Should().BeTrue();
-        app.Gate.State.Should().Be(GateState.Open);
+        await WaitForOpenAsync(app);
         (await app.Notes.GetAsync(id))!.Body.Should().Contain(Canary);
 
         // Quick unlock with the fake Keychain.
         await app.Lifecycle.OnBackgroundAsync();
         app.Gate.State.Should().Be(GateState.Closed);
         (await quick.UnlockAsync("Open your memory bank")).Should().Be(QuickUnlockResult.Unlocked);
-        app.Gate.State.Should().Be(GateState.Open);
+        await WaitForOpenAsync(app);
         (await app.Notes.GetAsync(id))!.Body.Should().Contain(Canary);
 
         keychain.Calls.Should().BeGreaterThan(0);
@@ -413,7 +413,7 @@ public class PhoneVaultLifecycleTests
             services.GetService<IVaultGate>().Should().BeNull("while the button is hidden a plain phone has no gate");
             services.GetService<SealMigrationService>().Should().BeNull();
             File.Exists(Path.Combine(dir, VaultStoreFiles.Boot)).Should().BeFalse("no boot store is made on a plain phone");
-            (await new FullVault(services).CreateAsync("Test iPhone", Password)).Should().NotBeNullOrEmpty();
+            (await new FullVault(services).CreateAsync("Test iPhone", Password, TestVault.Hint)).Should().NotBeNullOrEmpty();
             await services.GetRequiredService<PhoneVaultLifecycle>().OnBackgroundAsync();
             new FullVault(services).IsUnlocked.Should().BeFalse("the background still locks a plain phone");
         }
@@ -421,5 +421,16 @@ public class PhoneVaultLifecycleTests
         {
             start.Lease.Dispose();
         }
+    }
+
+    /// <summary>
+    /// An unlock returns when the database is open; the post-unlock work (the inbox import and the mirror rewrite, spec 4.4 step 8) runs
+    /// after it and publishes Open when it ends. The test waits for that end instead of asserting on the moment the task was scheduled.
+    /// </summary>
+    private static async Task WaitForOpenAsync(PhoneApp app)
+    {
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (app.Gate.State != GateState.Open && DateTime.UtcNow < until) await Task.Delay(20);
+        app.Gate.State.Should().Be(GateState.Open, "the post-unlock work publishes Open when it ends");
     }
 }

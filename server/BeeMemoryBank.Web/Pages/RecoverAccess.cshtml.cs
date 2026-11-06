@@ -35,6 +35,10 @@ public class RecoverAccessModel(ApiClient api) : PageModel
     [BindProperty]
     public string ConfirmPassword { get; set; } = "";
 
+    /// <summary>The hint for the new password: mandatory here too, because this path replaces one.</summary>
+    [BindProperty]
+    public string PasswordHint { get; set; } = "";
+
     public bool Done { get; set; }
 
     public string? ErrorMessage { get; set; }
@@ -47,9 +51,10 @@ public class RecoverAccessModel(ApiClient api) : PageModel
     public async Task<IActionResult> OnPostAsync()
     {
         if (string.IsNullOrWhiteSpace(Username) || string.IsNullOrWhiteSpace(RecoveryKey)
-            || string.IsNullOrWhiteSpace(NewPassword) || string.IsNullOrWhiteSpace(ConfirmPassword))
+            || string.IsNullOrWhiteSpace(NewPassword) || string.IsNullOrWhiteSpace(ConfirmPassword)
+            || string.IsNullOrWhiteSpace(PasswordHint))
         {
-            ErrorMessage = "Please fill in all four fields.";
+            ErrorMessage = "Please fill in every field, including the password hint.";
             return Page();
         }
 
@@ -68,8 +73,15 @@ public class RecoverAccessModel(ApiClient api) : PageModel
             return Page();
         }
 
+        if (PasswordHintPolicy.Validate(PasswordHint, NewPassword, Username) is { } hintProblem)
+        {
+            ErrorMessage = hintProblem;
+            return Page();
+        }
+
         var result = await api.RecoverAccessAsync(
-            Username.Trim(), RecoveryKey, NewPassword, HttpContext.Connection.RemoteIpAddress?.ToString());
+            Username.Trim(), RecoveryKey, NewPassword, PasswordHint,
+            HttpContext.Connection.RemoteIpAddress?.ToString());
 
         switch (result.Outcome)
         {

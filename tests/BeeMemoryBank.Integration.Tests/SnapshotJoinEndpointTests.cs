@@ -315,6 +315,7 @@ public class SnapshotJoinEndpointTests : IAsyncLifetime
         var joinRequest = new
         {
             adminUsername = "admin",
+            passwordHint = "A test hint",
             displayName = "LocalJoiner",
             remoteUrl = "http://remote-node-address",
             password = "SecurePassword123!"

@@ -30,10 +30,21 @@ public static class JoinCommand
         TextWriter? output = null,
         string? joinCode = null,
         TimeSpan? requestTimeout = null,
-        TimeSpan? abortTimeout = null)
+        TimeSpan? abortTimeout = null,
+        string? passwordHint = null,
+        bool iSavedTheKey = false)
     {
         output ??= Console.Out;
         using var flow = BeeMemoryBank.AppPaths.SealIntent.Flow.Enter();   // what a take-back may remove is what THIS command began
+
+        // A join creates this node's first administrator, so it also owes the mandatory hint. The command line
+        // (Program) always supplies one; this layer still accepts null for tests and internal callers, like
+        // UserService does.
+        if (passwordHint != null && PasswordHintPolicy.Validate(passwordHint, password, displayName) is { } hintProblem)
+        {
+            await output.WriteLineAsync($"Error: {hintProblem}");
+            return 2;
+        }
 
         // A join code from the other computer's Connect a device card (address, one-time token, certificate pin) replaces the
         // address: the join goes only to the computer whose key the code pins, and /api/join carries the code's token.
@@ -344,6 +355,7 @@ public static class JoinCommand
                 Username = displayName,
                 DisplayName = displayName,
                 PasswordHash = UserService.HashPassword(password),
+                PasswordHint = passwordHint == null ? null : PasswordHintPolicy.NormalizeAndValidate(passwordHint, password, displayName),
                 Role = UserRoles.Superadmin,
                 KeySlotId = localSlotId,
                 IsActive = true,
@@ -509,6 +521,27 @@ public static class JoinCommand
             Array.Clear(snapshotDek);
         }
 
+        // A joined node owes the blocking recovery-key step. Written while the database is still plain: after the seal
+        // it is encrypted and closed, and only an unlock could write to it.
+        await nodeRepo.SetRecoveryKeyRequiredAsync(true);
+
+        // The recovery key is minted while the database is still plain, so the seal below encrypts its slot with
+        // everything else. Failure is not fatal: the web sign-in then shows the recovery-key step.
+        string? recoveryKey = null;
+        try
+        {
+            var session = scope.ServiceProvider.GetRequiredService<SessionService>();
+            if (await session.UnlockAsync(password))
+            {
+                recoveryKey = await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
+                session.Lock();
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            await output.WriteLineAsync($"Note: no recovery key could be issued now ({ex.Message}). Sign in to the web UI to issue one.");
+        }
+
         // The joined node is encrypted under the password it was given, like every node that is set up (BMB-306). It joined an activated node, so the
         // activation came with the snapshot and there is nothing to switch on.
         try
@@ -537,7 +570,47 @@ public static class JoinCommand
         await output.WriteLineAsync($"Imported {articleCount} note(s) from the snapshot (checkpoint {cpSeq}).");
         await output.WriteLineAsync("Start the services — synchronization continues from the snapshot automatically.");
 
+        // The recovery-key step a new node owes (release 2.7.5), finished here when the command holds the key.
+        if (recoveryKey is null)
+        {
+            await output.WriteLineAsync("No recovery key was issued. Sign in to the web UI: it will show one and ask you to save it.");
+            return 0;
+        }
+
+        await output.WriteLineAsync("");
+        await output.WriteLineAsync("Recovery key (write it down; it is shown only this once):");
+        await output.WriteLineAsync("  " + recoveryKey);
+        await output.WriteLineAsync("Without e-mail recovery, this key is the way back in if the master password is forgotten.");
+
+        var acknowledged = iSavedTheKey || ConfirmKeyWasSaved();
+        if (acknowledged)
+        {
+            // The node is sealed and closed now: open it for this one write, then lock it again.
+            var session = scope.ServiceProvider.GetRequiredService<SessionService>();
+            if (await session.UnlockAsync(password))
+            {
+                await nodeRepo.SetRecoveryKeyAcknowledgedAtAsync(DateTime.UtcNow);
+                session.Lock();
+                await output.WriteLineAsync("Recorded that you saved the recovery key.");
+            }
+            else
+            {
+                await output.WriteLineAsync("The confirmation could not be recorded; sign in to the web UI, where the recovery-key step will appear.");
+            }
+        }
+        else
+        {
+            await output.WriteLineAsync("Not confirmed. The node will ask for the key again in the web app. Sign in to the web UI: the recovery-key step will appear and you can save a key there.");
+        }
         return 0;
+    }
+
+    /// <summary>Asks for the confirmation when a person is at the terminal; a redirected stdin is never read.</summary>
+    private static bool ConfirmKeyWasSaved()
+    {
+        if (Console.IsInputRedirected) return false;
+        Console.Error.Write("Type 'yes' once you have written down the recovery key: ");
+        return string.Equals(Console.ReadLine()?.Trim(), "yes", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

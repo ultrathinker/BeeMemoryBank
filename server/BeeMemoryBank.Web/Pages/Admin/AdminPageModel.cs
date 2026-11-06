@@ -53,7 +53,24 @@ public abstract class AdminPageModel(ApiClient api) : PageModel
     /// <summary>Data-key rotations other nodes started that this one has not applied yet; shown on the index and on the DEK Rotation page.</summary>
     public List<PeerPendingDekRotationDto> PeerPendingRotations { get; protected set; } = [];
 
+    /// <summary>
+    /// The recovery-key state of this node (release 2.7.5). An upgraded node with no recovery slot gets the
+    /// dismissible "no recovery key has been issued" notice; a new node owes the blocking step, which the Web
+    /// middleware enforces.
+    /// </summary>
+    public RecoveryKeyStatusDto? RecoveryKeyStatus { get; protected set; }
+
     protected async Task LoadMasterPasswordNoticeAsync() => MasterPasswordNotice = await Api.GetMasterPasswordNoticeAsync();
+
+    protected async Task LoadRecoveryKeyStatusAsync() => RecoveryKeyStatus = await Api.GetRecoveryKeyStatusAsync();
+
+    protected async Task<IActionResult> DismissRecoveryKeyNoticeAsync()
+    {
+        var ok = await Api.DismissRecoveryKeyNoticeAsync();
+        return ok
+            ? Back(msg: "Recovery-key notice dismissed. It will not be shown again on this node; issue a key at any time from Admin -> Recovery key.")
+            : Back(err: "Failed to dismiss the recovery-key notice.");
+    }
 
     protected async Task LoadPeerPendingRotationsAsync() => PeerPendingRotations = await Api.GetPeerPendingDekRotationsAsync() ?? [];
 

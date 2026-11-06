@@ -69,6 +69,7 @@ builder.Services.AddSingleton<BeeMemoryBank.Api.Helpers.LongOperationGate>();
 // users, no session endpoints and nobody to reset, so it does not carry it.
 if (!role.IsBlind)
     builder.Services.AddSingleton<BeeMemoryBank.Api.Services.RecoveryAccessState>();
+    builder.Services.AddSingleton<BeeMemoryBank.Api.Services.PasswordHintState>();
 builder.Services.AddSingleton<BeeMemoryBank.Api.Services.IPublicHostValidator, BeeMemoryBank.Api.Services.DnsPublicHostValidator>();
 // BMB_SYNC_INTERVAL_SECONDS: override scheduler tick (default 60s). Useful for tests with
 // fast iteration; set to e.g. 5 to push/pull every 5s. Production should leave it unset.

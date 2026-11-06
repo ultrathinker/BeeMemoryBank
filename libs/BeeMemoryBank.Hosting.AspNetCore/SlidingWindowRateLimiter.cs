@@ -13,7 +13,9 @@ public enum RateLimitedRoute
     /// <summary>Verifies the master password and, on a match, WIPES THE NODE.</summary>
     NodeReset,
     /// <summary>"Forgot your password": checks a recovery key (an Argon2id derivation per recovery slot) and, on a match, replaces a superadmin's password.</summary>
-    RecoverAccess
+    RecoverAccess,
+    /// <summary>The sign-in page's "Show my password hint": anonymous, and must not become a username directory.</summary>
+    PasswordHint
 }
 
 /// <summary>
@@ -67,7 +69,10 @@ public static class RateLimitPath
 
         if (normalizedPath != LoginPath) return RateLimitedRoute.None;
 
-        return RateLimitedRoute.Login;
+        // "Show my password hint" is a second, anonymous lookup on the same page. It gets its own budget
+        // instead of sharing the sign-in one: a person checking a hint must not spend their password
+        // attempts, and a hint sweep must not look like sign-in failures.
+        return IsHandler("ShowHint") ? RateLimitedRoute.PasswordHint : RateLimitedRoute.Login;
     }
 
     /// <summary>

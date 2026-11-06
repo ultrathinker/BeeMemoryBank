@@ -142,6 +142,7 @@ public class AgentPermissionsTests : IAsyncLifetime
 
         var resp = await agentClient.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username = "newuser",
             password = "pass",
             displayName = "New User",
@@ -235,6 +236,7 @@ public class AgentPermissionsTests : IAsyncLifetime
         // Create a regular user whose scope has DenyList /Secret
         var createUser = await _adminClient.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username = "restricteduser",
             password = Password,
             displayName = "Restricted User",

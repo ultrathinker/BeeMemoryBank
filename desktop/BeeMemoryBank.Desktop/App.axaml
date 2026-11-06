@@ -1,10 +1,15 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="BeeMemoryBank.Desktop.App"
-             RequestedThemeVariant="Default">
-             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+             RequestedThemeVariant="Dark">
+             <!-- The shell is dark by design (every window paints #111119). "Default" followed the
+                  system theme, which on a light Windows repainted Fluent controls with light brushes
+                  over the dark windows - placeholder text vanished, a focused TextBox turned white,
+                  buttons lost their background on hover. DarkPalette.axaml then makes every control
+                  colour explicit, so even a forced Light variant stays readable. -->
 
     <Application.Styles>
         <FluentTheme />
+        <StyleInclude Source="avares://BeeMemoryBank.Desktop/Styles/DarkPalette.axaml" />
     </Application.Styles>
 </Application>

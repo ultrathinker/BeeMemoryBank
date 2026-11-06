@@ -5,9 +5,18 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 namespace BeeMemoryBank.Web.Pages;
 
 [Authorize]
-public class ProfileModel(IConfiguration configuration) : PageModel
+public class ProfileModel(IConfiguration configuration, ApiClient api) : PageModel
 {
     public string Username => User.Identity?.Name ?? "";
+
+    /// <summary>
+    /// The caller's own hint, read on GET. Null for an account created before hints existed (or for a node
+    /// that did not answer): the page then offers the soft "Add a password hint" prompt. Nothing is forced
+    /// on such an account until its next password change.
+    /// </summary>
+    public string? PasswordHint { get; private set; }
+
+    public async Task OnGetAsync() => PasswordHint = await api.GetMyPasswordHintAsync();
     public string DisplayName => User.FindFirst("DisplayName")?.Value ?? Username;
     public string Role => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value ?? "user";
 

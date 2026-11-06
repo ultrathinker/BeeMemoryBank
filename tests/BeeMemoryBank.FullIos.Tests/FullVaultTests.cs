@@ -90,7 +90,7 @@ public class FullVaultTests
         var (test, _) = await TestVault.CreateAsync("twice");
         await using var _2 = test;
 
-        var act = () => test.Vault.CreateAsync("Again", TestVault.Password);
+        var act = () => test.Vault.CreateAsync("Again", TestVault.Password, TestVault.Hint);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*already holds a memory bank*");
     }
 
@@ -121,7 +121,7 @@ public class FullVaultTests
     {
         await using var test = await TestVault.PrepareAsync("join-damaged");
 
-        var act = () => test.Vault.JoinAsync("iPhone", "bmb-join:?a=https%3A%2F%2F192.168.1.5%3A5311&s=short", TestVault.Password);
+        var act = () => test.Vault.JoinAsync("iPhone", "bmb-join:?a=https%3A%2F%2F192.168.1.5%3A5311&s=short", TestVault.Password, TestVault.Hint);
 
         await act.Should().ThrowAsync<ArgumentException>().WithMessage(JoinCode.NotValidMessage);
         (await test.Vault.GetStateAsync()).Should().Be(VaultState.NoVault);
@@ -132,7 +132,7 @@ public class FullVaultTests
     {
         await using var test = await TestVault.PrepareAsync("join-http");
 
-        var act = () => test.Vault.JoinAsync("iPhone", "http://192.168.1.5:5300", TestVault.Password);
+        var act = () => test.Vault.JoinAsync("iPhone", "http://192.168.1.5:5300", TestVault.Password, TestVault.Hint);
 
         await act.Should().ThrowAsync<ArgumentException>().WithMessage("*https*");
         (await test.Vault.GetStateAsync()).Should().Be(VaultState.NoVault);

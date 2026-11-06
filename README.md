@@ -432,14 +432,17 @@ sudo -u bmb curl -L -o /opt/beememorybank/data/model.onnx \
   https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx
 
 # Master password — asked on the terminal without echo, so it never enters bash history or `ps aux`
-# (a script can pipe it in with --password-stdin; --password "..." still works but warns)
+# (a script can pipe it in with --password-stdin; --password "..." still works but warns). The password
+# hint is mandatory; without --hint the command asks for it too.
 sudo -u bmb /opt/beememorybank/cli/bmb init \
-  --data /opt/beememorybank/data --name "MyServerNode"
+  --data /opt/beememorybank/data --name "MyServerNode" --hint "the blue folder by the window"
 ```
 
 > `bmb init --name X` creates a node named `X` AND a first user whose login is also `X`. If you want a separate username and node name, skip this step and use the Web Setup form after the services are running — it has separate fields.
 
 > Whichever you use (`bmb init`, the Web Setup form, a Docker start), the node you set up is **encrypted from its first day** (2.6.2): the database files are encrypted under the master password you gave, metadata encryption is on, and the node starts locked until the first sign-in. `bmb join` and the Setup page's "join" do the same, and join only a node that has metadata encryption on. See [docs/sealed-database.md](docs/sealed-database.md).
+
+> **No e-mail recovery.** Every form that creates or replaces a password asks for a **password hint** (3 to 120 characters, never containing the password or the username). The Sign In page shows it to anyone who types the username, so keep it vague enough that only you understand it. A **new node** then shows a **recovery key** once, before the app, and will not continue until you confirm you saved it; keep it offline. `bmb init` and `bmb join` print the key and ask for `--i-saved-the-key` (or a typed `yes`). A script should capture the printed key and pass `--i-saved-the-key`; an unattended run with redirected stdin cannot answer, so it leaves the node gated, and the first web sign-in shows a new key (a second recovery slot) and asks again. An upgraded node is not stopped: its Admin pages show a notice until a key is issued. See [docs/account-recovery.md](docs/account-recovery.md).
 
 #### 3. Shared API↔Web secret in one file
 
@@ -522,7 +525,7 @@ mkdir -p ~/bmb/data
 curl -L -o ~/bmb/data/model.onnx \
   https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/onnx/model_quantized.onnx
 
-~/bmb/cli/bmb init --data ~/bmb/data --name "MyMac"    # asks for the master password without echo
+~/bmb/cli/bmb init --data ~/bmb/data --name "MyMac" --hint "the blue folder by the window"    # the password is asked without echo
 
 INTERNAL_KEY=$(openssl rand -base64 32); echo "$INTERNAL_KEY"   # paste into both plists below
 ```
@@ -674,8 +677,8 @@ In Development mode `BMB_INTERNAL_KEY` is not required — both processes auto-g
 2. **Log in.** If you initialized via CLI (`bmb init --name "X"`), the login is `X` and the password is the master password. If via the Web Setup form, the login is whatever you typed there.
 3. **AI agent token** (optional): Profile → Agents → Create. Copy the bearer token (shown **once**).
 4. **MCP in your AI client** (Claude Code / Cursor / Windsurf): add `bee-memory-bank` with `Authorization: Bearer bee_xxxxx`.
-5. **Add a second node** (optional): on the other machine, after `dotnet publish`, run `bmb join --remote https://first-node --name "OtherNode" --data ./data` (it asks for the master password without echo; `--password-stdin` reads it from a pipe). The new node downloads a signed snapshot over TLS, verifies it, and joins the sync mesh. If anything fails, `bmb join` says why, exits non-zero and rolls the new node back, so it can be run again (with a new join code if you used `--code`: a code is spent by the first attempt). A failed join also asks the other computer to forget the new node (`POST /api/join/abort`, from 2.5.1). If that computer is older, or a reverse proxy in front of it does not forward the route, it keeps a never-synced member row: the message names it, and it should be revoked on that computer's Admin page because it holds back compaction. If the process itself is killed half-way, delete the new node's data folder and start over.
-6. **Keep a recovery key** (recommended): Admin → Recovery key → **Issue new recovery key**, and store it offline. If the administrator password is ever forgotten, the Sign In page's **Forgot your password? Use a recovery key** sets a new one (or `bmb user reset-password --user NAME --recovery-key-stdin`). See [docs/account-recovery.md](docs/account-recovery.md).
+5. **Add a second node** (optional): on the other machine, after `dotnet publish`, run `bmb join --remote https://first-node --name "OtherNode" --data ./data --hint "the blue folder by the window"` (it asks for the master password without echo; `--password-stdin` reads it from a pipe; without `--hint` it asks for the mandatory hint too). The new node downloads a signed snapshot over TLS, verifies it, and joins the sync mesh. If anything fails, `bmb join` says why, exits non-zero and rolls the new node back, so it can be run again (with a new join code if you used `--code`: a code is spent by the first attempt). A failed join also asks the other computer to forget the new node (`POST /api/join/abort`, from 2.5.1). If that computer is older, or a reverse proxy in front of it does not forward the route, it keeps a never-synced member row: the message names it, and it should be revoked on that computer's Admin page because it holds back compaction. If the process itself is killed half-way, delete the new node's data folder and start over.
+6. **Keep a recovery key** (recommended, and a new node shows one first): Admin → Recovery key → **Issue new recovery key**, and store it offline. If the administrator password is ever forgotten, the Sign In page's **Forgot your password?** shows the **password hint** first, and **Use a recovery key** sets a new password (or `bmb user reset-password --user NAME --recovery-key-stdin --hint "..."`). Both routes ask for a hint for the new password. See [docs/account-recovery.md](docs/account-recovery.md).
 
 #### HTTPS Reverse Proxy
 
@@ -771,11 +774,11 @@ Tip: take a snapshot via Admin → Snapshots → Create before updating, in case
 To add a second node (e.g., a VPS) to sync with your first:
 
 ```bash
-./publish/cli/bmb join --remote https://first-node.example.com --name "VPS-Node" --data /var/lib/beememorybank
+./publish/cli/bmb join --remote https://first-node.example.com --name "VPS-Node" --data /var/lib/beememorybank --hint "the blue folder by the window"
 ```
 
 For a computer on your own network, use the join code that the other computer shows under **Admin → Connect a device**
-instead of an address: `bmb join --code "bmb-join:?a=..." --name "Laptop" --data ...`. The code
+instead of an address: `bmb join --code "bmb-join:?a=..." --name "Laptop" --data ... --hint "the blue folder by the window"`. The code
 carries the address, a one-time token and the pin of that computer's certificate, so nothing has to be trusted first.
 
 ---

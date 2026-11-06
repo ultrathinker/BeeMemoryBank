@@ -70,7 +70,7 @@ public class JoinSuperadminDivergenceTests : IAsyncLifetime
     public async Task PasswordChangeOnJoinedNode_RaisesTheNoticeOnTheHost()
     {
         var change = await _joinerClient.PostAsJsonAsync("/api/keys/change-password",
-            new { oldPassword = MasterPassword, newPassword = MasterPassword + "-new" });
+            new { oldPassword = MasterPassword, newPassword = MasterPassword + "-new", passwordHint = "A test hint" });
         change.EnsureSuccessStatusCode();
 
         await SyncJoinerWithHostAsync();

@@ -40,12 +40,13 @@ dotnet publish server/BeeMemoryBank.Api/ -c Release -o publish/api
 dotnet publish server/BeeMemoryBank.Web/ -c Release -o publish/web
 dotnet publish server/BeeMemoryBank.Cli/ -c Release -o publish/cli
 
-# Option A: New network (the password is asked for; or --password-stdin reads its first line from stdin.
-# --password "..." still works, but sits in the process list and the shell history)
-bmb init --data /var/lib/beememorybank --name "MyNode"
+# Option A: New network (the password and the mandatory password hint are asked for; or --password-stdin
+# reads its first line from stdin, and --hint gives the hint without the prompt. --password "..." still
+# works, but sits in the process list and the shell history)
+bmb init --data /var/lib/beememorybank --name "MyNode" --hint "the blue folder by the window"
 
-# Option B: Join an existing network (same: asked for, or --password-stdin). Only a node that has metadata encryption on can be joined.
-bmb join --remote https://bmb.example.com --name "MyNode" --data /var/lib/beememorybank
+# Option B: Join an existing network (same: asked for, or --password-stdin and --hint). Only a node that has metadata encryption on can be joined.
+bmb join --remote https://bmb.example.com --name "MyNode" --data /var/lib/beememorybank --hint "the blue folder by the window"
 # Either way the new node is encrypted from its first day (2.6.2): an encrypted database under the master password, locked until the first sign-in.
 
 # Run (two processes)

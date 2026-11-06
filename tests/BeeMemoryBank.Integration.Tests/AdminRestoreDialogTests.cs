@@ -34,7 +34,7 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
     {
         Directory.CreateDirectory(_node.Dir);
         _apiClient = _node.Client();
-        (await _apiClient.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "WebNode", password = Password })).EnsureSuccessStatusCode();
+        (await _apiClient.PostAsJsonAsync("/api/init/standalone", new { adminUsername = "admin", displayName = "WebNode", password = Password, passwordHint = "A test hint" })).EnsureSuccessStatusCode();
         (await _apiClient.PostAsJsonAsync("/api/session/unlock", new { password = Password })).EnsureSuccessStatusCode();
         var created = await _apiClient.PostAsync("/api/snapshots", null);
         created.EnsureSuccessStatusCode();
@@ -42,6 +42,9 @@ public sealed class AdminRestoreDialogTests : IAsyncLifetime
 
         _web.RouteOutboundHttpThrough(_api.Server.CreateHandler());
         _admin = await WebLogin.LoginAsync(_web, "admin", Password);
+        // A node set up through /api/init/standalone owes the blocking recovery-key step; this fixture is about the
+        // restore dialog, so its person confirms the key first (RecoveryKeyGateTests drives the step itself).
+        (await _apiClient.PostAsync("/api/keys/recovery-acknowledge", null)).EnsureSuccessStatusCode();
     }
 
     public Task DisposeAsync()

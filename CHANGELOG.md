@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.7.5 (2026-11-06)
+
+A "getting back in" release. Bee Memory Bank has no e-mail recovery, so a new node now makes you save a recovery key, and every password comes with a hint. One database migration (043, schema 43) is added; it only adds columns and nothing needs doing for existing databases. A node on 2.7.4 cannot take a snapshot, a join archive or a blind-node package made by a 2.7.5 node (it says "Upgrade this node first"), so update blind nodes together with the full node; ordinary sync between versions is not affected.
+
+### Added
+
+- **A recovery key is shown when a node is created.** After the first administrator is set up (a new Windows profile, Setup in the browser, `bmb init`, `bmb join`) a window shows the recovery key with a Copy button and a box "I saved my recovery key". It cannot be closed, and typing another address does not skip it, until the box is ticked and Continue is pressed. A node that already exists is not blocked: it gets a notice in Admin, which can be closed, until a recovery key has been issued. `bmb init` and `bmb join` print the key once and ask for `--i-saved-the-key` or a typed yes; an unattended run without it leaves the step to the web app, which then issues a second key.
+- **A password hint is required wherever a password is created or replaced:** Setup (new node and joining node), Admin > Users (add a user, change a password), your own Profile, the master password, the recovery-key reset, `bmb init`, `bmb join`, `bmb user reset-password` (option `--hint`), and the iPhone and Android apps. One rule everywhere: 3 to 120 characters, and the hint may not contain the password or the user name. Accounts made before this release have no hint; Profile offers to add one, and the next password change asks for it.
+- **The sign-in page shows the hint.** "Forgot your password?" opens a small panel: enter the user name and press "Show my password hint", or use a recovery key instead. It works on a node that was restarted and is still closed, which is the moment it is needed: the hints are kept in a small file next to the boot store and are rebuilt from the database whenever the node is unlocked. A hint is plain text there, readable by anyone who can read the node's data folder, so never write anything secret in it. A name that is unknown and a name with no hint get the same answer, and one address can ask ten times in fifteen minutes.
+
+### Fixed
+
+- **Windows app: the "New profile" window and the other windows were unreadable on a light Windows theme** (hints and typed text invisible, Cancel and Create vanishing under the pointer). The windows are now dark on every theme.
+
+### Changed
+
+- iPhone packages: a script builds the development, Ad Hoc and App Store packages of both iPhone apps and checks them offline (`scripts/pack-ios-ipas.sh`, see `docs/blind-node/IOS-DISTRIBUTION.md`), and the iPhone end-to-end tools cope with a node whose database is encrypted.
+
 #### 2.7.4 (2026-10-29)
 
 A tidy-up and stability release. Nothing is added to the data, the protocol or the database schema (it stays at version 42), and no action is needed for databases or blind copies. The Admin pages that 2.7.2 merged get their last rough edges smoothed, one rare failure when a note is saved at the moment a blind-copy snapshot is made is gone, and the failures of a few tests that failed by chance were traced and cured.

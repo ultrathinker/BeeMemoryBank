@@ -78,13 +78,13 @@ internal sealed class SealedMirrorFixture : IAsyncDisposable
             });
     }
 
-    public async Task<long> AddUserAsync(string username, string role = "user", long? slotId = null)
+    public async Task<long> AddUserAsync(string username, string role = "user", long? slotId = null, string? hint = null)
     {
         using var c = Vault.CreateConnection();
         return await c.ExecuteScalarAsync<long>(
-            @"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, created_at)
-              VALUES (@username, @username, 'x', @role, @slotId, @now); SELECT last_insert_rowid()",
-            new { username, role, slotId, now = DateTime.UtcNow.ToString("o") });
+            @"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, created_at, password_hint)
+              VALUES (@username, @username, 'x', @role, @slotId, @now, @hint); SELECT last_insert_rowid()",
+            new { username, role, slotId, hint, now = DateTime.UtcNow.ToString("o") });
     }
 
     public async Task<long> AddAgentAsync(string name, long ownerId, bool withDek = true, string status = "A")

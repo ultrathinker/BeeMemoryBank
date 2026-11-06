@@ -46,6 +46,7 @@ public class ChatAccessAgentInheritanceTests : IAsyncLifetime
     {
         var createUser = await _adminClient.PostAsJsonAsync("/api/users", new
         {
+            passwordHint = "A test hint",
             username,
             password = Password,
             displayName = username,

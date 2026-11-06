@@ -6,6 +6,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Infrastructure.OsAutoUnlock;
+using BeeMemoryBank.Storage.PreUnlock;
 using BeeMemoryBank.Infrastructure.Secrets;
 using Microsoft.AspNetCore.Mvc;
 
@@ -197,6 +198,11 @@ public static class SessionEndpoints
             try { UserService.ValidatePassword(req.NewPassword); }
             catch (ArgumentException ex) { return Results.Json(new ErrorResponse(ex.Message), statusCode: 400); }
 
+            // This path replaces a password too, so it owes a hint. Checked before the throttle so a bad hint costs
+            // no attempt; it says nothing about the key or the account.
+            if (PasswordHintPolicy.Validate(req.PasswordHint, req.NewPassword, req.Username) is { } hintProblem)
+                return Results.Json(new ErrorResponse(hintProblem), statusCode: 400);
+
             var ip = RecoveryAccessState.NormalizeClientIp(req.ClientIp);
             if (!recoveryAccess.TryAcquire(ip, req.Username))
                 return Results.Json(new ErrorResponse("Too many attempts. Try again later."), statusCode: 429);
@@ -215,7 +221,7 @@ public static class SessionEndpoints
                 // touching the database (the door check above did the same Argon2id work as a right key).
                 result = sealedClosed && recoveryLease is null
                     ? new RecoveryResetResult(RecoveryResetOutcome.WrongKey, null)
-                    : await userService.ResetPasswordWithRecoveryKeyAsync(req.Username, req.RecoveryKey, req.NewPassword);
+                    : await userService.ResetPasswordWithRecoveryKeyAsync(req.Username, req.RecoveryKey, req.NewPassword, req.PasswordHint);
             }
             catch (System.Security.SecurityException ex)
             {
@@ -254,6 +260,43 @@ public static class SessionEndpoints
 
             recoveryAccess.Reset(ip, req.Username);
             return Results.Ok(new RecoverAccessResponse(true));
+        }).RequireNonAgent();
+
+        // POST /api/session/password-hint - the sign-in page's "Show my password hint". Anonymous by necessity: the person
+        // forgot their password, which is also why the hint exists. While the database is open it reads tbl_user (the hint
+        // is plaintext and node-local, like the username and the password hash). While a sealed node is closed - the case
+        // after every restart, which is exactly when a password is forgotten - it reads ONLY the derived pre-unlock
+        // mirror (PasswordHintFile), which the unlock-material mirror rewrites from tbl_user at every unlock and close;
+        // no database connection is opened and no key is needed.
+        //
+        // Every answer about a user with no hint and about a name nobody holds is the same: same status, same JSON
+        // shape, same words. It is still an oracle for "this username HAS a hint", which the product accepts: mandatory
+        // hints are an explicit decision, and the throttle above bounds it.
+        // The hint is returned as JSON and HTML-encoded by the page that renders it; it never reaches a log line.
+        group.MapPost("/password-hint", async (PasswordHintRequest req, IUserRepository userRepo, PasswordHintState throttle,
+            [FromServices] IVaultGate? gate = null, [FromServices] PasswordHintFile? hints = null) =>
+        {
+            var username = (req.Username ?? "").Trim();
+            // A missing name is a client bug, not a lookup: refuse it before spending a bucket.
+            if (username.Length == 0)
+                return Results.Json(new ErrorResponse("Username is required."), statusCode: 400);
+
+            var ip = RecoveryAccessState.NormalizeClientIp(req.ClientIp);
+            if (!throttle.TryAcquire(ip))
+                return Results.Json(new ErrorResponse("Too many attempts. Try again later."), statusCode: 429);
+
+            // A closed, opening or closing sealed node must not be touched through tbl_user: the mirror is the only source
+            // then (and a missing entry means the same generic answer as a user without a hint).
+            var hint = gate is { IsSealed: true, IsUsable: false }
+                ? hints is null ? null : await hints.FindAsync(username)
+                : await userRepo.GetPasswordHintAsync(username);
+            if (hint is null)
+                return Results.Ok(new PasswordHintResponse(null, PasswordHintState.NoHintMessage));
+
+            // A successful lookup forgives the address, like a good sign-in clears the login bucket. The Web layer's
+            // own PasswordHint bucket is never reset, so an address that only ever gets hits is still bounded there.
+            throttle.ResetIp(ip);
+            return Results.Ok(new PasswordHintResponse(hint, null));
         }).RequireNonAgent();
 
         group.MapPost("/lock", (SessionService session) =>

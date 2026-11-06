@@ -30,6 +30,7 @@
                     Click="OnPrimaryClick"
                     IsDefault="True"
                     Padding="20,10"
+                    Classes="accent"
                     Background="#F59E0B"
                     Foreground="#111119"
                     FontWeight="SemiBold"

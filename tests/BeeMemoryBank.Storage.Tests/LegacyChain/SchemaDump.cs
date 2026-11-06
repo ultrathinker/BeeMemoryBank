@@ -20,6 +20,18 @@ internal static class SchemaDump
     private const int FirstPostBaselineVersion = MigrationRunner.BaselineVersion + 1;
     private static readonly HashSet<string> PostBaselineTables = new(StringComparer.Ordinal) { "tbl_blind_invite" };
 
+    // Columns that migrations after the baseline ADD to tables the baseline already had (043, release 2.7.5: the password
+    // hint and the node-level recovery-key flags). They stay out of the dump for the same reason the whole table of 041
+    // does: the oracle is the schema the 39-file chain built, and PostBaselineTests checks these columns on their own.
+    private static readonly Dictionary<string, HashSet<string>> PostBaselineColumns = new(StringComparer.Ordinal)
+    {
+        ["tbl_user"] = new(StringComparer.Ordinal) { "password_hint" },
+        ["tbl_node_identity"] = new(StringComparer.Ordinal)
+        {
+            "recovery_key_required", "recovery_key_acknowledged_at", "recovery_key_notice_dismissed_at"
+        },
+    };
+
     private static readonly Regex Blanks = new(@"\s+", RegexOptions.Compiled);
     private static readonly Regex Timestamp = new(@"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?Z?", RegexOptions.Compiled);
 
@@ -40,9 +52,12 @@ internal static class SchemaDump
                 sb.Append("TABLE ").Append(name).Append(" | ").AppendLine(sql is not null && sql.StartsWith("CREATE VIRTUAL", StringComparison.OrdinalIgnoreCase) ? Normalize(sql) : "");
                 foreach (var c in conn.Query<(long Cid, string Name, string Type, long NotNull, string? Default, long Pk, long Hidden)>(
                     $"SELECT cid, name, type, \"notnull\", dflt_value, pk, hidden FROM pragma_table_xinfo('{name.Replace("'", "''")}')"))
+                {
+                    if (PostBaselineColumns.TryGetValue(name, out var added) && added.Contains(c.Name)) continue;
                     sb.Append("  COL ").Append(c.Cid).Append(' ').Append(c.Name).Append(" type=").Append(c.Type.ToUpperInvariant())
                       .Append(" notnull=").Append(c.NotNull).Append(" default=").Append(c.Default ?? "<none>")
                       .Append(" pk=").Append(c.Pk).Append(" hidden=").AppendLine(c.Hidden.ToString());
+                }
                 foreach (var f in conn.Query<(long Id, long Seq, string Table, string From, string? To, string OnUpdate, string OnDelete, string Match)>(
                     $"SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete, \"match\" FROM pragma_foreign_key_list('{name.Replace("'", "''")}') ORDER BY id, seq"))
                     sb.Append("  FK ").Append(f.Id).Append('.').Append(f.Seq).Append(' ').Append(f.From).Append(" -> ").Append(f.Table).Append('(').Append(f.To).Append(") upd=")
@@ -81,17 +96,23 @@ internal static class SchemaDump
         foreach (var table in RowTables(conn))
         {
             var lines = new List<string>();
+            var added = PostBaselineColumns.TryGetValue(table, out var addedColumns) ? addedColumns : null;
             using var cmd = conn.CreateCommand();
             cmd.CommandText = $"SELECT * FROM \"{table}\"";
             using (var reader = cmd.ExecuteReader())
                 while (reader.Read())
                 {
-                    var cells = new string[reader.FieldCount];
-                    for (var i = 0; i < cells.Length; i++)
+                    var cells = new List<string>(reader.FieldCount);
+                    for (var i = 0; i < reader.FieldCount; i++)
                     {
+                        // A column a migration after the baseline added is not part of the shape this dump compares with the
+                        // old chain: it is skipped here exactly as its COL line is skipped in Shape, so a row's digest
+                        // survives 043 (and any later additive migration) unchanged.
+                        if (added is not null && added.Contains(reader.GetName(i))) continue;
                         var v = reader.GetValue(i);
-                        cells[i] = v switch { DBNull => "<null>", byte[] b => Convert.ToHexString(b), _ => $"{v.GetType().Name}:{v}" };
-                        if (maskTimestamps) cells[i] = Timestamp.Replace(cells[i], "<ts>");
+                        var cell = v switch { DBNull => "<null>", byte[] b => Convert.ToHexString(b), _ => $"{v.GetType().Name}:{v}" };
+                        if (maskTimestamps) cell = Timestamp.Replace(cell, "<ts>");
+                        cells.Add(cell);
                     }
                     lines.Add(string.Join("\u001f", cells));
                 }

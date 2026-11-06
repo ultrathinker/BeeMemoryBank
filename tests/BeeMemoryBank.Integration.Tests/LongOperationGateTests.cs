@@ -218,7 +218,7 @@ public sealed class LongOperationGateTests : IAsyncLifetime
 
         var same = await api.SendAsync(Change("7"));
         var other = await api.SendAsync(Change("8"));
-        var noCaller = await api.PostAsJsonAsync("/api/users/me/change-password", new { oldPassword = "a", newPassword = "b" });
+        var noCaller = await api.PostAsJsonAsync("/api/users/me/change-password", new { oldPassword = "a", newPassword = "b", passwordHint = "A test hint" });
 
         Assert.Equal(HttpStatusCode.Conflict, same.StatusCode);
         Assert.NotEqual(HttpStatusCode.Conflict, other.StatusCode);       // another user: the handler ran

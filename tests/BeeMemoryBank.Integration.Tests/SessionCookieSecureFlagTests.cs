@@ -72,6 +72,7 @@ public sealed class SessionCookieSecureFlagTests
                 ["displayName"] = "Cookie PC",
                 ["password"] = "SetupPass123",
                 ["confirmPassword"] = "SetupPass123",
+                ["passwordHint"] = "A test hint",
                 ["__RequestVerificationToken"] = TokenField.Match(html).Groups[1].Value,
             }),
         };

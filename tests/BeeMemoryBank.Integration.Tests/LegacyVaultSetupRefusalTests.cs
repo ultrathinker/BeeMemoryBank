@@ -32,7 +32,8 @@ public class LegacyVaultSetupRefusalTests : IAsyncLifetime
 
     private static object StandaloneBody() => new
     {
-        adminUsername = "setupadmin", displayName = "Fresh setup", password = "Another-password-1"
+        adminUsername = "setupadmin", displayName = "Fresh setup", password = "Another-password-1",
+        passwordHint = "A test hint",
     };
 
     /// <summary>Rewrites this node's vault into the shape a pre-unification one has.</summary>

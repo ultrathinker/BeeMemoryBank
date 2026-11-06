@@ -40,7 +40,7 @@ public class UserResetPasswordCommandTests : IDisposable
     private async Task<(int Exit, string Output)> ResetAsync(string user, string stdin)
     {
         var output = new StringWriter();
-        var exit = await UserCommand.HandleResetPasswordAsync(_tempDir, user, recoveryKeyStdin: true, new StringReader(stdin), output);
+        var exit = await UserCommand.HandleResetPasswordAsync(_tempDir, user, recoveryKeyStdin: true, passwordHint: "A hint for the new password", input: new StringReader(stdin), output: output);
         return (exit, output.ToString());
     }
 
@@ -53,6 +53,22 @@ public class UserResetPasswordCommandTests : IDisposable
         var newOk = await users.AuthenticateAsync(NodeName, NewPassword) != null;
         var unlocks = await scope.ServiceProvider.GetRequiredService<SessionService>().UnlockAsync(NewPassword);
         return (oldOk, newOk, unlocks);
+    }
+
+    [Fact]
+    public async Task WithoutAHint_TheCommandRefusesBeforeItTouchesTheVault()
+    {
+        var key = await InitWithRecoveryKeyAsync();
+        var output = new StringWriter();
+
+        var exit = await UserCommand.HandleResetPasswordAsync(_tempDir, NodeName, recoveryKeyStdin: true,
+            passwordHint: null, input: new StringReader(key + "\n" + NewPassword + "\n"), output: output);
+
+        exit.Should().Be(1);
+        output.ToString().Should().Contain("--hint is required");
+        var (oldOk, newOk, _) = await ProbeAsync();
+        oldOk.Should().BeTrue("nothing was reset");
+        newOk.Should().BeFalse();
     }
 
     [Fact]

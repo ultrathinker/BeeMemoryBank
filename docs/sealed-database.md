@@ -441,4 +441,4 @@ secret **outside** the volume, back up with `docker compose stop` first, and use
 | `bmb vault seal --yes` | Encrypt this node (calls the running node; password from `--password-stdin` or a prompt). |
 | `bmb vault verify` | Check the encrypted database, the chat database and the boot store; leaves the database closed. |
 | `bmb vault auto-unlock status\|enable\|disable` | The server checkbox (calls the running node; `enable` prints both warnings and asks for the phrase). |
-| `bmb article ...`, `bmb agent ...`, `bmb user ...`, `bmb init reset`, `bmb snapshot create` | On an encrypted folder they ask for the master password (`--password-stdin`, or typed when asked) and open the database for the one command; without it they say so and do nothing. |
+| `bmb article ...`, `bmb agent ...`, `bmb user ...`, `bmb init reset`, `bmb snapshot create` | On an encrypted folder they ask for the master password (`--password-stdin`, or typed when asked) and open the database for the one command; without it they say so and do nothing. `bmb init`, `bmb join` and `bmb user reset-password` also need the mandatory password hint (`--hint`, or the prompt). |

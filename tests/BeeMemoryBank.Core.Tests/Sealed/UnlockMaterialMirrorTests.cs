@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
+using System.Text;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Boot;
+using BeeMemoryBank.Storage.PreUnlock;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.TestSupport;
 using BeeMemoryBank.Vault.Sealed;
@@ -411,7 +413,70 @@ public class UnlockMaterialMirrorTests
         (await f.WrapperFingerprintsAsync()).Should().BeEmpty();
     }
 
-    private sealed class ClosedFactory : IDbConnectionFactory
+    [Fact]
+public async Task ARewriteWritesTheHintMirror_FromTheActiveUsersWithAHint()
+{
+    await using var f = await SealedMirrorFixture.CreateAsync();
+    await f.AddUserAsync("alice-unique-name", hint: "the blue folder by the window");
+    await f.AddUserAsync("bob-unique-name");
+    await f.AddUserAsync("carol-deleted-name", hint: "the old door");
+    using (var c = f.Vault.CreateConnection())
+        await c.ExecuteAsync("UPDATE tbl_user SET is_active = 0 WHERE username = 'carol-deleted-name'");
+
+    await f.Mirror.RewriteAsync();
+
+    var mirror = new PasswordHintFile(Path.Combine(f.Dir, PasswordHintFile.FileName));
+    (await mirror.FindAsync("alice-unique-name")).Should().Be("the blue folder by the window");
+    (await mirror.FindAsync("bob-unique-name")).Should().BeNull("a user without a hint is absent, not present with an empty one");
+    (await mirror.FindAsync("carol-deleted-name")).Should().BeNull("a deactivated account is not mirrored");
+    Encoding.UTF8.GetString(await File.ReadAllBytesAsync(mirror.FilePath))
+        .Should().NotContain("alice-unique-name", "the file keys each entry by an HMAC, not by the name");
+}
+
+[Fact]
+public async Task ARewriteReplacesTheWholeHintMirror_SoAnOlderStateCannotSurvive()
+{
+    await using var f = await SealedMirrorFixture.CreateAsync();
+    await f.AddUserAsync("alice", hint: "the first hint");
+    await f.AddUserAsync("bob", hint: "the red door");
+    await f.Mirror.RewriteAsync();
+
+    using (var c = f.Vault.CreateConnection())
+    {
+        await c.ExecuteAsync("UPDATE tbl_user SET password_hint = 'the second hint' WHERE username = 'alice'");
+        await c.ExecuteAsync("UPDATE tbl_user SET is_active = 0 WHERE username = 'bob'");
+    }
+    await f.Mirror.RewriteAsync();
+
+    var mirror = new PasswordHintFile(Path.Combine(f.Dir, PasswordHintFile.FileName));
+    (await mirror.FindAsync("alice")).Should().Be("the second hint");
+    (await mirror.FindAsync("bob")).Should().BeNull("the derived file is replaced, not merged");
+}
+
+[Fact]
+public async Task ANewBootStoreForAnotherDatabase_WritesItsHintMirrorBesideIt()
+{
+    await using var f = await SealedMirrorFixture.CreateAsync();
+    await f.AddUserAsync("alice", hint: "the blue folder by the window");
+    var targetDir = Path.Combine(f.Dir, "target");
+    Directory.CreateDirectory(targetDir);
+    var targetBoot = Path.Combine(targetDir, "beememorybank.boot.db");
+    var dbk = RandomNumberGenerator.GetBytes(32);
+    try
+    {
+        await f.Mirror.WriteNewBootStoreAsync(targetBoot, f.Vault, dbk, 1, [f.NewDek()]);
+    }
+    finally
+    {
+        Array.Clear(dbk);
+    }
+
+    var mirror = new PasswordHintFile(Path.Combine(targetDir, PasswordHintFile.FileName));
+    (await mirror.FindAsync("alice")).Should().Be("the blue folder by the window",
+        "a node sealed at setup must answer its hint before its first unlock");
+}
+
+private sealed class ClosedFactory : IDbConnectionFactory
     {
         public System.Data.IDbConnection CreateConnection() => throw new VaultSealedException();
         public string DatabaseId => "closed";

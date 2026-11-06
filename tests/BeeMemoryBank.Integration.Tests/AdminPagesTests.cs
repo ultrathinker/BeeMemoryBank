@@ -316,7 +316,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
         using var api = _api.CreateClient();
         await _api.InitializeNodeAsync(displayName: "WebNode", password: AdminPassword);
         (await api.PostAsJsonAsync("/api/session/unlock", new { password = AdminPassword })).EnsureSuccessStatusCode();
-        (await api.PostAsJsonAsync("/api/users", new { username = "bob", password = BobPassword, displayName = "Bob", role = "user" })).EnsureSuccessStatusCode();
+        (await api.PostAsJsonAsync("/api/users", new { username = "bob", password = BobPassword, displayName = "Bob", role = "user", passwordHint = "A test hint" })).EnsureSuccessStatusCode();
         _web.RouteOutboundHttpThrough(_scripted = new Scripted(_api.Server.CreateHandler()));
         _admin = await WebLogin.LoginAsync(_web, "admin", AdminPassword);
         _bob = await WebLogin.LoginAsync(_web, "bob", BobPassword);
@@ -383,6 +383,8 @@ public sealed class AdminPagesTests : IAsyncLifetime
     public async Task TheIndex_ListsEveryPageOnceUnderItsHeading_WithItsIconTitleAndShortDescription()
     {
         var html = await GetAsync("/Admin");
+        // The recovery-key notice is an alert with a link to Admin -> Recovery key, not a second catalog entry.
+        html = Regex.Replace(html, "<sl-alert id=\"recovery-key-notice\".*?</sl-alert>", "", RegexOptions.Singleline);
 
         foreach (var page in AdminPageCatalog.All)
         {
@@ -568,6 +570,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
     private static readonly Case[] Cases =
     [
         new("/Admin", "DismissPasswordNotice", Expect.Message),
+        new("/Admin", "DismissRecoveryKeyNotice", Expect.Message),
         new("/Admin", "PeerAcceptDekRotation", Expect.Message, F(("eventId", Nobody))),
         new("/Admin", "PeerRejectDekRotation", Expect.Message, F(("eventId", Nobody))),
 
@@ -609,7 +612,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
 
         new("/Admin/Compaction", "Compact", Expect.Message),
 
-        new("/Admin/MasterPassword", "ChangeMasterPassword", Expect.Message, F(("oldPassword", "not the password"), ("newPassword", "Another-Pass-9"))),
+        new("/Admin/MasterPassword", "ChangeMasterPassword", Expect.Message, F(("oldPassword", "not the password"), ("newPassword", "Another-Pass-9"), ("passwordHint", "the sign-in note"))),
         new("/Admin/MasterPassword", "DismissPasswordNotice", Expect.Message),
 
         new("/Admin/ConnectDevice", "Enable", Expect.Page, Shown: "id=\"connect-device\""),

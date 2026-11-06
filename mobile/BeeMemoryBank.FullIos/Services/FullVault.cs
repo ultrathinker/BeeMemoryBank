@@ -78,13 +78,14 @@ public sealed class FullVault(IServiceProvider services)
     /// Makes a new memory bank on this phone and opens it: the node's identity, the master key wrapped under the password, the
     /// administrator account (named like the node, as on Android); then a recovery key, returned to be shown once and never kept by the app.
     /// </summary>
-    public async Task<string> CreateAsync(string nodeName, string password)
+    public async Task<string> CreateAsync(string nodeName, string password, string passwordHint)
     {
         if (CheckNewPassword(password, password) is { } problem) throw new ArgumentException(problem);
+        if (PasswordHintPolicy.Validate(passwordHint, password, nodeName) is { } hintProblem) throw new ArgumentException(hintProblem);
         if (await GetStateAsync() != VaultState.NoVault) throw new InvalidOperationException("This phone already holds a memory bank.");
 
         using (var scope = services.CreateScope())
-            await scope.ServiceProvider.GetRequiredService<NodeSetupService>().InitAsync(nodeName, password);
+            await scope.ServiceProvider.GetRequiredService<NodeSetupService>().InitAsync(nodeName, password, passwordHint);
 
         if (!await Session.UnlockAsync(password))
             throw new InvalidOperationException("The new memory bank did not open with its own password.");
@@ -98,8 +99,9 @@ public sealed class FullVault(IServiceProvider services)
     /// (the password then goes only to the computer whose key the code pins) or the https address of a server. A damaged code is refused
     /// here, never read as an address: that would drop the pin.
     /// </summary>
-    public async Task JoinAsync(string nodeName, string codeOrAddress, string password)
+    public async Task JoinAsync(string nodeName, string codeOrAddress, string password, string passwordHint)
     {
+        if (PasswordHintPolicy.Validate(passwordHint, password, nodeName) is { } hintProblem) throw new ArgumentException(hintProblem);
         var text = (codeOrAddress ?? "").Trim();
         if (text.Length == 0) throw new ArgumentException("Paste the join code from Connect a device on your computer, or a server's address.");
         if (string.IsNullOrEmpty(password)) throw new ArgumentException("Enter the master password of your memory bank.");
@@ -123,7 +125,7 @@ public sealed class FullVault(IServiceProvider services)
         await LocalNetwork.WaitUntilReachableAsync(new Uri(address), TimeSpan.FromSeconds(45));
 
         using (var scope = services.CreateScope())
-            await scope.ServiceProvider.GetRequiredService<NodeSetupService>().JoinAsync(nodeName, address, password, code);
+            await scope.ServiceProvider.GetRequiredService<NodeSetupService>().JoinAsync(nodeName, address, password, code, passwordHint);
 
         if (!await Session.UnlockAsync(password))
             throw new InvalidOperationException("The joined copy did not open with the password the network accepted.");

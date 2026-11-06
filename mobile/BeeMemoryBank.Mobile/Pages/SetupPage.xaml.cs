@@ -49,12 +49,18 @@ public partial class SetupPage : ContentPage
         var name = NameEntry.Text?.Trim() ?? "";
         var serverUrl = ServerUrlEntry.Text?.Trim() ?? "";
         var password = PasswordEntry.Text ?? "";
+        var passwordHint = PasswordHintEntry.Text?.Trim() ?? "";
 
         ErrorLabel.IsVisible = false;
         ResetButton.IsVisible = false;
 
         if (string.IsNullOrWhiteSpace(name)) { ShowError("Enter node name"); return; }
         if (password.Length < 6) { ShowError("Password must be at least 6 characters"); return; }
+        if (BeeMemoryBank.Core.Services.PasswordHintPolicy.Validate(passwordHint, password, name) is { } hintProblem)
+        {
+            ShowError(hintProblem);
+            return;
+        }
 
         // A join code from a computer's Connect page: the join goes only to the computer whose key
         // it pins. A damaged code is refused, never read as a plain address — that would drop the pin.
@@ -99,9 +105,9 @@ public partial class SetupPage : ContentPage
                     await Task.Run(async () =>
                     {
                         if (isJoin)
-                            await _setupSvc.JoinAsync(name, serverUrl, password, code);
+                            await _setupSvc.JoinAsync(name, serverUrl, password, code, passwordHint);
                         else
-                            await _setupSvc.InitAsync(name, password);
+                            await _setupSvc.InitAsync(name, password, passwordHint);
 
                         await _session.UnlockAsync(password);
                     });

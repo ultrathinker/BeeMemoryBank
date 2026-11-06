@@ -46,6 +46,13 @@ public partial class JoinPage : ContentPage
         var code = CodeEditor.Text ?? "";
         var password = PasswordEntry.Text ?? "";
         var name = FullVault.NodeName(NameEntry.Text, DeviceInfo.Current.Name);
+        var passwordHint = (HintEntry.Text ?? "").Trim();
+        if (BeeMemoryBank.Core.Services.PasswordHintPolicy.Validate(passwordHint, password, name) is { } hintProblem)
+        {
+            ErrorLabel.Text = hintProblem;
+            ErrorLabel.IsVisible = true;
+            return;
+        }
 
         // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up with the steps of the join, so Join cannot be tapped
         // twice; the whole error is written under the button when it fails.
@@ -56,7 +63,7 @@ public partial class JoinPage : ContentPage
             try
             {
                 // The field is emptied whatever the join ends in (SecretFields), not just when it works.
-                await SecretFields.RunAsync(() => Task.Run(() => _vault.JoinAsync(name, code, password)), () => PasswordEntry.Text = "");
+                await SecretFields.RunAsync(() => Task.Run(() => _vault.JoinAsync(name, code, password, passwordHint)), () => PasswordEntry.Text = "");
             }
             finally
             {

@@ -99,6 +99,23 @@ public record ErrorResponse(string Error, string? Code = null);
 /// <summary>The password was replaced. Says nothing else: the caller signs in normally afterwards.</summary>
 public record RecoverAccessResponse(bool PasswordChanged);
 
+/// <summary>
+/// The answer of the anonymous password-hint lookup. The SAME shape for a user with a hint, a user without one and
+/// a username nobody holds: <c>Hint</c> is the text only when there is one, and <c>Message</c> is the one sentence
+/// every empty answer carries.
+/// </summary>
+public record PasswordHintResponse(string? Hint, string? Message);
+
+/// <summary>The hint of the signed-in caller, or null when they have not written one yet.</summary>
+public record CurrentPasswordHintResponse(string? PasswordHint);
+
+/// <summary>
+/// The recovery-key state of this node (release 2.7.5). <c>Required</c> and <c>Acknowledged</c> drive the blocking
+/// step a new node shows; <c>HasRecoveryKey</c> and <c>NoticeDismissed</c> drive the dismissible notice an upgraded
+/// node shows while it holds no recovery slot. Nothing here is key material.
+/// </summary>
+public record RecoveryKeyStatusResponse(bool Required, bool Acknowledged, bool HasRecoveryKey, bool NoticeDismissed);
+
 /// <summary>The <see cref="ErrorResponse.Code"/> values callers are allowed to branch on.</summary>
 public static class ErrorCodes
 {

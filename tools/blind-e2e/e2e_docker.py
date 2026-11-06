@@ -130,7 +130,8 @@ def main():
         if not check('full node starts', bool(up)):
             return 1
         s, b = http('POST', full_url + '/api/init/standalone', fh,
-                    {'adminUsername': 'admin', 'displayName': 'E2E full', 'password': 'E2e-test-password-1'})
+                    {'adminUsername': 'admin', 'displayName': 'E2E full', 'password': 'E2e-test-password-1',
+                     'passwordHint': 'the blue folder by the window'})
         check('full node initialized', s in (200, 201), '%s %s' % (s, b[:120]))
         s, b = http('POST', full_url + '/api/session/unlock', fh, {'password': 'E2e-test-password-1'})
         check('full node unlocked', s == 200, '%s %s' % (s, b[:120]))

@@ -156,7 +156,10 @@ public sealed class AdminCardsTests : IAsyncLifetime
         field.Should().Contain("type=\"password\"").And.Contain("autocomplete=\"off\"").And.NotContain("bmb-secret");
         foreach (var neighbour in new[] { "/Admin/MasterPassword", "/Admin/DekRotation", "/Admin/ResetNode" })
             Regex.Matches(Body(await GetAsync(neighbour)), "<sl-input[^>]*>", RegexOptions.Singleline).Select(m => m.Value).Should().OnlyContain(
-                tag => !tag.Contains("password", StringComparison.OrdinalIgnoreCase) || (tag.Contains("type=\"password\"") && tag.Contains("autocomplete=\"off\"")),
+                // The password hint is deliberately a plain text field (it is shown on the sign-in page); every
+                // field that carries a secret is a password field with autocomplete off.
+                tag => tag.Contains("name=\"passwordHint\"") || !tag.Contains("password", StringComparison.OrdinalIgnoreCase)
+                       || (tag.Contains("type=\"password\"") && tag.Contains("autocomplete=\"off\"")),
                 $"the password fields of {neighbour} are password fields with autocomplete off");
     }
 

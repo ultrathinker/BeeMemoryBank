@@ -82,7 +82,7 @@ public class SessionUnlockAuthorizationTests : IAsyncLifetime
         using (var scope = _factory.Services.CreateScope())
             scope.ServiceProvider.GetRequiredService<SessionService>().Lock();
 
-        var unlockResp = await _client.PostAsJsonAsync("/api/session/unlock", new { password = recoveryKey });
+        var unlockResp = await _client.PostAsJsonAsync("/api/session/unlock", new { password = recoveryKey, passwordHint = "A test hint" });
         unlockResp.StatusCode.Should().Be(HttpStatusCode.OK,
             "the recovery key is not tied to any user account and must always be able to unlock the vault");
     }

@@ -25,6 +25,7 @@ public static class UserCommand
         string dataPath,
         string userName,
         bool recoveryKeyStdin,
+        string? passwordHint = null,
         TextReader? input = null,
         TextWriter? output = null)
     {
@@ -41,6 +42,14 @@ public static class UserCommand
             {
                 await output.WriteLineAsync(
                     "Error: with --recovery-key-stdin, line 1 of stdin is the recovery key and line 2 is the new password.");
+                return 1;
+            }
+            // A redirected stdin is never read for the hint (its lines are the key and the password), so a script
+            // must pass --hint. A hint is not a secret and may sit on the command line.
+            if (string.IsNullOrWhiteSpace(passwordHint))
+            {
+                await output.WriteLineAsync(
+                    "Error: --hint is required with --recovery-key-stdin: the hint is shown on the sign-in page if the password is forgotten.");
                 return 1;
             }
         }
@@ -65,6 +74,11 @@ public static class UserCommand
                 await output.WriteLineAsync("Error: the two passwords do not match.");
                 return 1;
             }
+            if (string.IsNullOrWhiteSpace(passwordHint))
+            {
+                Console.Error.Write("Password hint: ");
+                passwordHint = (input ?? Console.In).ReadLine()?.Trim();
+            }
         }
 
         // The password rules say nothing about the key or the account, so this message is safe to be specific.
@@ -72,6 +86,12 @@ public static class UserCommand
         catch (ArgumentException ex)
         {
             await output.WriteLineAsync($"Error: {ex.Message}");
+            return 1;
+        }
+
+        if (PasswordHintPolicy.Validate(passwordHint, newPassword, userName) is { } hintProblem)
+        {
+            await output.WriteLineAsync($"Error: {hintProblem}");
             return 1;
         }
 
@@ -92,7 +112,7 @@ public static class UserCommand
         RecoveryResetResult result;
         try
         {
-            result = await users.ResetPasswordWithRecoveryKeyAsync(userName, recoveryKey, newPassword);
+            result = await users.ResetPasswordWithRecoveryKeyAsync(userName, recoveryKey, newPassword, passwordHint);
         }
         catch (System.Security.SecurityException)
         {
@@ -117,7 +137,9 @@ public static class UserCommand
         await nodeRepo.ClearMasterPasswordNoticeAsync();
         await nodeRepo.SetMasterPasswordChangedLocallyAtAsync(DateTime.UtcNow);
 
-        await output.WriteLineAsync("Password changed. Sign in with the new password; the vault stays as it was until then.");
+        await output.WriteLineAsync(
+            "Password changed. Sign in with the new password; the vault stays as it was until then. " +
+            "The recovery key still works; issue a new recovery key from Admin if this one may have been seen.");
         var peers = await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetAllActiveAsync();
         if (peers.Count > 0)
             await output.WriteLineAsync(

@@ -11,6 +11,8 @@
                 <Label Text="Master password" Style="{StaticResource Section}" />
                 <Entry x:Name="PasswordEntry" IsPassword="True" Placeholder="Master password" ReturnType="Next" AutomationId="PasswordEntry" />
                 <Entry x:Name="RepeatEntry" IsPassword="True" Placeholder="The same again" ReturnType="Done" Completed="OnCreate" AutomationId="RepeatEntry" />
+                <Label Text="Password hint (required). If you forget your password, we will show this hint on the sign-in page, because there is no e-mail recovery. Write it so that other people cannot work out your password from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it." Style="{StaticResource Muted}" />
+                <Entry x:Name="HintEntry" Placeholder="Password hint" ReturnType="Next" AutomationId="PasswordHintEntry" />
                 <Label Style="{StaticResource Muted}" Text="At least 8 characters, with an upper-case letter, a lower-case letter and a digit. It opens your memory bank on every device and is never stored: nobody can reset it for you. You will get a recovery key next, for the day you forget it." />
                 <Label x:Name="ErrorLabel" Style="{StaticResource Error}" IsVisible="False" />
             </VerticalStackLayout>

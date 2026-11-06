@@ -29,7 +29,7 @@ public sealed class FreshNodeSealedSetupTests
         return dir;
     }
 
-    private static object Body(string password = Password) => new { adminUsername = "admin", displayName = "Fresh node", password };
+    private static object Body(string password = Password) => new { adminUsername = "admin", displayName = "Fresh node", password, passwordHint = "A test hint" };
 
     private static byte[] Head(string path, int count = 16)
     {

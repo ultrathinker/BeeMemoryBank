@@ -115,10 +115,24 @@ public class PasswordInputTests : IDisposable
         return (process.ExitCode, output.Result, error.Result);
     }
 
+    [Theory]
+    [InlineData("init")]
+    [InlineData("join")]
+    public void TheHelp_ExplainsWhatAnUnattendedRunWithoutTheSavedKeyFlag_LeavesBehind(string verb)
+    {
+        var help = RunBmb("", verb, "--help");
+
+        help.Exit.Should().Be(0, help.Error + help.Output);
+        var text = string.Join(" ", (help.Output + " " + help.Error).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        text.Should().Contain("--i-saved-the-key");
+        text.Should().Contain("web sign-in", "an operator must know where the unfinished step appears");
+        text.Should().Contain("second recovery slot", "and that the web app issues another key");
+    }
+
     [Fact]
     public void BmbInit_TakesThePasswordFromStdin_AndTheNodeOpensWithIt()
     {
-        var init = RunBmb("Stdin-Password-1\n", "init", "--data", _tempDir, "--name", "stdinnode", "--password-stdin");
+        var init = RunBmb("Stdin-Password-1\n", "init", "--data", _tempDir, "--name", "stdinnode", "--password-stdin", "--hint", "the sign-in note");
 
         init.Exit.Should().Be(0, init.Error + init.Output);
         init.Output.Should().Contain("successfully initialized");
@@ -133,7 +147,7 @@ public class PasswordInputTests : IDisposable
     {
         var dir = _tempDir + "_argv";
 
-        var init = RunBmb("", "init", "--data", dir, "--name", "argvnode", "--password", "Argv-Password-1");
+        var init = RunBmb("", "init", "--data", dir, "--name", "argvnode", "--password", "Argv-Password-1", "--hint", "the sign-in note");
 
         init.Exit.Should().Be(0, init.Error + init.Output);
         init.Error.Should().Contain("--password-stdin").And.NotContain("Argv-Password-1");

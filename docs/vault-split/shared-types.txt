@@ -396,6 +396,7 @@ BeeMemoryBank.Core BeeMemoryBank.Core.Services.NodeSentinel
 BeeMemoryBank.Core BeeMemoryBank.Core.Services.NullActorProvider
 BeeMemoryBank.Core BeeMemoryBank.Core.Services.NullAuthoringScope
 BeeMemoryBank.Core BeeMemoryBank.Core.Services.NullEventLogger
+BeeMemoryBank.Core BeeMemoryBank.Core.Services.PasswordHintPolicy
 BeeMemoryBank.Core BeeMemoryBank.Core.Services.ReadOnlyAccessException
 BeeMemoryBank.Core BeeMemoryBank.Core.Services.ResultBucket
 BeeMemoryBank.Core BeeMemoryBank.Core.Services.ResultBuckets
@@ -483,6 +484,10 @@ BeeMemoryBank.Storage BeeMemoryBank.Storage.Boot.RelayInbox
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Boot.RelayInbox+EventRecord
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Boot.RelayInboxSummary
 BeeMemoryBank.Storage BeeMemoryBank.Storage.NodeDependencyInjection
+BeeMemoryBank.Storage BeeMemoryBank.Storage.PreUnlock.PasswordHintEntry
+BeeMemoryBank.Storage BeeMemoryBank.Storage.PreUnlock.PasswordHintFile
+BeeMemoryBank.Storage BeeMemoryBank.Storage.PreUnlock.PasswordHintFile+EntryModel
+BeeMemoryBank.Storage BeeMemoryBank.Storage.PreUnlock.PasswordHintFile+FileModel
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.Bmbdb2Container
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.CompanionState
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sealed.DbPurposes

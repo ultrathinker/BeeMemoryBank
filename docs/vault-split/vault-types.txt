@@ -280,6 +280,7 @@ BeeMemoryBank.Vault.Sealed.SealedUnlockMaterialServiceCollectionExtensions
 BeeMemoryBank.Vault.Sealed.SlotDoors
 BeeMemoryBank.Vault.Sealed.UnlockMaterialMirror
 BeeMemoryBank.Vault.Sealed.UnlockMaterialMirror+AgentRecord
+BeeMemoryBank.Vault.Sealed.UnlockMaterialMirror+HintRecord
 BeeMemoryBank.Vault.Sealed.UnlockMaterialMirror+IdentityRecord
 BeeMemoryBank.Vault.Sealed.UnlockMaterialMirror+SealedState
 BeeMemoryBank.Vault.Sealed.UnlockMaterialMirror+SlotRecord

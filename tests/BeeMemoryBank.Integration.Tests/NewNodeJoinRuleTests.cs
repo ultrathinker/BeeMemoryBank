@@ -37,7 +37,7 @@ public sealed class NewNodeJoinRuleTests
     }
 
     private static Task<HttpResponseMessage> JoinAsync(HttpClient client, string displayName) =>
-        client.PostAsJsonAsync("/api/init/join", new { adminUsername = "admin", displayName, remoteUrl = "http://host", password = Password }, JsonOpts);
+        client.PostAsJsonAsync("/api/init/join", new { adminUsername = "admin", displayName, remoteUrl = "http://host", password = Password, passwordHint = "A test hint" }, JsonOpts);
 
     [Fact]
     public async Task A_new_node_does_not_join_a_node_that_does_not_encrypt_its_metadata_and_nothing_is_written_or_kept()

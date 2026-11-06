@@ -1,0 +1,66 @@
+@page
+@model BeeMemoryBank.Web.Pages.RecoveryKeyGateModel
+@{
+    ViewData["Title"] = "Save your recovery key";
+    Layout = "_Layout";
+}
+
+<style>
+    /* The step cannot be walked away from: no close button, and the overlay does not close it. */
+    #recovery-key-gate-dialog::part(close-button) { display: none; }
+</style>
+
+<div style="max-width:560px;margin:40px auto;">
+    <sl-dialog id="recovery-key-gate-dialog" label="Save your recovery key" open>
+        <sl-alert variant="warning" open style="margin-bottom:14px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>There is no e-mail recovery.</strong>
+            If you forget your password, this key is the only way back into your memory bank. It is shown now,
+            it is not stored anywhere in a form we can show you again, and nobody at this company can reset it for you.
+        </sl-alert>
+
+        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+        {
+            <sl-alert variant="danger" open style="margin-bottom:14px;">
+                <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
+                @Model.ErrorMessage
+            </sl-alert>
+        }
+
+        @if (!string.IsNullOrEmpty(Model.RecoveryKey))
+        {
+            <p class="text-sm" style="margin:0 0 8px 0;">
+                Write it down on paper, or keep it in a password manager away from this computer.
+            </p>
+            <sl-input id="recovery-key-value" readonly filled value="@Model.RecoveryKey"
+                      style="font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:1.05rem;"
+                      help-text="The Copy button puts it in the clipboard; clear the clipboard after pasting it somewhere safe."></sl-input>
+            <sl-button id="recovery-key-copy" variant="default" size="small" style="margin-top:6px;">
+                <sl-icon slot="prefix" name="clipboard"></sl-icon>
+                Copy
+            </sl-button>
+
+            <form method="post" asp-page-handler="Acknowledge" data-busy="short" style="margin-top:18px;">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                <sl-checkbox id="saved-recovery-key" name="savedRecoveryKey" required>
+                    I saved my recovery key
+                </sl-checkbox>
+                <div style="margin-top:14px;">
+                    <sl-button id="recovery-key-continue" type="submit" variant="primary" disabled>
+                        Continue
+                    </sl-button>
+                </div>
+            </form>
+        }
+        else
+        {
+            <form method="get">
+                <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                <sl-button type="submit" variant="primary">Try again</sl-button>
+            </form>
+        }
+    </sl-dialog>
+</div>
+
+<script src="~/js/pages/recovery-gate.js" asp-append-version="true"></script>

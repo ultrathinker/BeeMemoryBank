@@ -22,6 +22,8 @@
 
         <partial name="_MasterPasswordNotice" model="Model" />
 
+        <partial name="_RecoveryKeyNotice" model="Model.RecoveryKeyStatus" />
+
         @await Component.InvokeAsync("RecoveryWarnings")
 
         <partial name="_PendingDekRotations" model="Model.PeerPendingRotations" />

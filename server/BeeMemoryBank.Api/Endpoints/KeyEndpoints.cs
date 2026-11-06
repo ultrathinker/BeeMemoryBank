@@ -29,6 +29,7 @@ public static class KeyEndpoints
             ChangePasswordRequest req,
             KeyManagementService svc,
             UserService userService,
+            IUserRepository userRepo,
             SessionService session,
             IEventLogger eventLogger,
             INodeIdentityRepository nodeRepo,
@@ -46,15 +47,20 @@ public static class KeyEndpoints
             // longer unlock the vault, so after the next lock or restart the web could not open the
             // node at all (BMB-31, scenario 18). Callers with no user (older mobile builds) keep it.
             var callerId = CallerIdentity.Extract(ctx).UserId;
+            var caller = callerId is { } id ? await userRepo.GetByIdAsync(id) : null;
+            if (PasswordHintPolicy.Validate(req.PasswordHint, req.NewPassword, caller?.Username) is { } hintProblem)
+                return Results.BadRequest(new ErrorResponse(hintProblem));
             // A client that goes away (or a node that is stopping) stops the change while it is still only computation; once the key slot is being written it runs to its end.
             using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
             if (callerId is { } userId)
             {
-                try { await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword, stop.Token); }
+                try { await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword, stop.Token, req.PasswordHint); }
                 catch (UnauthorizedAccessException) { throw new InvalidOperationException("Incorrect old password."); }
             }
             else
             {
+                // No user row (older clients on the slot-only rotation): nothing to attach a hint to, but the
+                // mandatory-hint rule still applies at the door.
                 await svc.ChangePasswordAsync(req.OldPassword, req.NewPassword, stop.Token);
             }
 
@@ -135,6 +141,39 @@ public static class KeyEndpoints
 
             var key = await svc.AddRecoveryKeyAsync();
             return Results.Ok(new RecoveryKeyResponse(key));
+        });
+
+        // GET /api/keys/recovery-status — what the Web layer needs for the recovery-key step and for the notice on
+        // an upgraded node: does this node owe the step, has its administrator confirmed the key, does it already
+        // hold a recovery slot, and was the "no recovery key" notice dismissed. Superadmin only (the group), and it
+        // reads no key material.
+        group.MapGet("/recovery-status", async (INodeIdentityRepository nodeRepo, IKeySlotRepository keySlotRepo) =>
+        {
+            var hasRecoveryKey = (await keySlotRepo.GetAllAsync()).Any(slot => slot.SlotType == "recovery");
+            var value = new RecoveryKeyStatusResponse(
+                Required: await nodeRepo.GetRecoveryKeyRequiredAsync(),
+                Acknowledged: await nodeRepo.GetRecoveryKeyAcknowledgedAtAsync() != null,
+                HasRecoveryKey: hasRecoveryKey,
+                NoticeDismissed: await nodeRepo.GetRecoveryKeyNoticeDismissedAtAsync() != null);
+            return Results.Ok(value);
+        });
+
+        // POST /api/keys/recovery-acknowledge — the person ticked "I saved my recovery key" in the blocking step.
+        // Idempotent, and it says nothing about the key itself (a node without a recovery slot can acknowledge too:
+        // that is the CLI's "I wrote the key down" path, and the notice still points at the missing slot).
+        group.MapPost("/recovery-acknowledge", async (INodeIdentityRepository nodeRepo) =>
+        {
+            await nodeRepo.SetRecoveryKeyAcknowledgedAtAsync(DateTime.UtcNow);
+            return Results.Ok(new { acknowledged = true });
+        });
+
+        // POST /api/keys/recovery-notice/dismiss — the operator has seen the "no recovery key has been issued" notice
+        // on an upgraded node and is handling it (the same pattern as the master-password notice). It is a note that
+        // the notice was read, not a claim that a key exists, which the status above reports separately.
+        group.MapPost("/recovery-notice/dismiss", async (INodeIdentityRepository nodeRepo) =>
+        {
+            await nodeRepo.SetRecoveryKeyNoticeDismissedAtAsync(DateTime.UtcNow);
+            return Results.Ok(new { dismissed = true });
         });
     }
 }

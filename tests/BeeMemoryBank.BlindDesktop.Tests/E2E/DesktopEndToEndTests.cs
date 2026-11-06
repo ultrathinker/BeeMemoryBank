@@ -385,7 +385,7 @@ public sealed class DesktopEndToEndTests
 
         public async Task InitializeAsync()
         {
-            (await Send(HttpMethod.Post, "/api/init/standalone", new { adminUsername = "admin", displayName = "E2E PC", password = Password })).Status
+            (await Send(HttpMethod.Post, "/api/init/standalone", new { adminUsername = "admin", displayName = "E2E PC", password = Password, passwordHint = "A test hint" })).Status
                 .Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.Created);
             await UnlockAsync();
         }
@@ -421,7 +421,7 @@ public sealed class DesktopEndToEndTests
         public async Task RestoreFromBackupAsync(string path, string password)
         {
             var start = await Send(HttpMethod.Post, "/api/restore/backup",
-                new { path, password, adminUsername = "admin", displayName = "E2E restored" });
+                new { path, password, adminUsername = "admin", displayName = "E2E restored", passwordHint = "A test hint" });
             start.Status.Should().Be(HttpStatusCode.Accepted, start.Body);
             var end = DateTime.UtcNow.AddMinutes(6);
             while (DateTime.UtcNow < end)

@@ -45,6 +45,9 @@ public static class VaultFiles
         "node.status.json",
         NetworkSettingsFileName,
         NetworkListenerStateFileName,
+        // Derived from tbl_user and rewritten at the first unlock of the database it belongs to: a copied vault must not
+        // carry a hint mirror of an older state (the name matches Storage's PasswordHintFile.FileName; a test pins that).
+        PasswordHintMirrorFileName,
     };
 
     /// <summary>
@@ -55,6 +58,12 @@ public static class VaultFiles
 
     /// <summary>Whether the node's network listener is really up (runtime state the node writes and the Api's announcer reads); see <c>LanListenerState</c>.</summary>
     public const string NetworkListenerStateFileName = "network.listening.json";
+
+    /// <summary>
+    /// The derived pre-unlock copy of the password hints (Storage's <c>PasswordHintFile</c>): beside the boot store, rebuilt
+    /// from the database at every unlock, never carried by a vault copy or a backup.
+    /// </summary>
+    public const string PasswordHintMirrorFileName = "beememorybank.hints.json";
 
     /// <summary>True for files that are never carried with a vault (lock, status, runtime descriptor, *.ready, the network setting).</summary>
     public static bool IsTransient(string fileName)

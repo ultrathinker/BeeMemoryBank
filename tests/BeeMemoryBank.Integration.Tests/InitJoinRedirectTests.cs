@@ -27,6 +27,7 @@ public class InitJoinRedirectTests
         var resp = await client.PostAsJsonAsync("/api/init/join", new
         {
             adminUsername = "admin",
+            passwordHint = "A test hint",
             displayName = "NodeB",
             remoteUrl = $"http://127.0.0.1:{redirector.Port}",
             password = Password

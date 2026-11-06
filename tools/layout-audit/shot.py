@@ -103,6 +103,18 @@ with sync_playwright() as p:
     page.fill("sl-input[name=username] input", args.user)
     page.fill("sl-input[name=password] input", args.password)
     page.keyboard.press("Enter")
+    page.wait_for_load_state("networkidle")
+    for _ in range(40):
+        if page.url.endswith("/Tree") or "/RecoveryKeyGate" in page.url:
+            break
+        time.sleep(0.5)
+    if "/RecoveryKeyGate" in page.url:
+        # A new node blocks its superadmin until the recovery key is confirmed (BMB-335). The audit must not confirm it:
+        # that is the owner's one chance to save the key.
+        print("This node has not confirmed its recovery key yet: sign in once in a browser, save the key and tick "
+              "'I saved my recovery key', then run the audit again.", file=sys.stderr)
+        browser.close()
+        sys.exit(2)
     page.wait_for_url("**/Tree**", timeout=20000)
     art, folder, root = discover(page)
     json.dump(root, open(os.path.join(args.out, "_tree-root.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)

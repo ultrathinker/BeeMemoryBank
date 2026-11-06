@@ -1,0 +1,205 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        The shell is a dark application by design: every window sets its own dark colours
+        (#111119 window, #1E1E2A fields, #2D2D3D neutral buttons, #F59E0B accent). App.axaml
+        requests the Dark theme variant, but these styles do not rely on it: they name every
+        colour a control uses in every state it can be in, so a Light system theme (or a future
+        theme change) can never repaint a control with a light Fluent brush on top of the dark
+        window. The bug this fixes: Fluent's Light TextBox turns white on focus while the
+        window's white text stays white, placeholder brushes were light-theme greys, and a
+        Button's hover state replaced its background with a theme brush.
+
+        Order matters: these styles are included after <FluentTheme />, so their setters win
+        over the Fluent control themes. A value set directly on a control in a window still
+        wins over a style setter, which is why the accent buttons carry the "accent" class
+        instead of relying on the default button colours.
+    -->
+
+    <!-- Base text: any TextBlock that does not set its own colour is white on the dark windows. -->
+    <Style Selector="TextBlock">
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+
+    <!-- TextBox: idle, pointer-over, focused and disabled backgrounds are all explicit. -->
+    <Style Selector="TextBox">
+        <Setter Property="Background" Value="#1E1E2A" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+        <Setter Property="BorderBrush" Value="#3A3A4D" />
+        <Setter Property="PlaceholderForeground" Value="#A0A0B0" />
+        <Setter Property="CaretBrush" Value="#F59E0B" />
+        <Setter Property="SelectionBrush" Value="#F59E0B" />
+        <Setter Property="SelectionForegroundBrush" Value="#111119" />
+    </Style>
+    <Style Selector="TextBox /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="#1E1E2A" />
+        <Setter Property="BorderBrush" Value="#3A3A4D" />
+    </Style>
+    <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="#232330" />
+        <Setter Property="BorderBrush" Value="#5A5A70" />
+    </Style>
+    <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="#1E1E2A" />
+        <Setter Property="BorderBrush" Value="#F59E0B" />
+    </Style>
+    <Style Selector="TextBox:disabled /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="#191924" />
+        <Setter Property="BorderBrush" Value="#2D2D3D" />
+    </Style>
+    <Style Selector="TextBox:disabled">
+        <Setter Property="Foreground" Value="#6B6B7B" />
+        <Setter Property="PlaceholderForeground" Value="#6B6B7B" />
+    </Style>
+
+    <!-- Buttons: neutral by default; the destructive amber ("accent") ones keep their own colour on hover. -->
+    <Style Selector="Button">
+        <Setter Property="Background" Value="#2D2D3D" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+        <Setter Property="BorderBrush" Value="#3A3A4D" />
+    </Style>
+    <Style Selector="Button /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#2D2D3D" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+        <Setter Property="BorderBrush" Value="#3A3A4D" />
+    </Style>
+    <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#3D3D52" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+        <Setter Property="BorderBrush" Value="#5A5A70" />
+    </Style>
+    <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#242432" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#232330" />
+        <Setter Property="Foreground" Value="#6B6B7B" />
+    </Style>
+
+    <Style Selector="Button.accent">
+        <Setter Property="Background" Value="#F59E0B" />
+        <Setter Property="Foreground" Value="#111119" />
+    </Style>
+    <!-- The TextBlock a ContentPresenter generates for a string Content inherits the button's colour,
+         but the base TextBlock style above would paint it white; the accent button keeps dark text. -->
+    <Style Selector="Button.accent TextBlock">
+        <Setter Property="Foreground" Value="#111119" />
+    </Style>
+    <Style Selector="Button.accent /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#F59E0B" />
+        <Setter Property="Foreground" Value="#111119" />
+    </Style>
+    <Style Selector="Button.accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#FBBF24" />
+        <Setter Property="Foreground" Value="#111119" />
+    </Style>
+    <Style Selector="Button.accent:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#D97706" />
+        <Setter Property="Foreground" Value="#111119" />
+    </Style>
+    <Style Selector="Button.accent:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#6B5A2A" />
+        <Setter Property="Foreground" Value="#C9C9D4" />
+    </Style>
+
+    <!-- Expander: the header and the content live on the window colour, never on the theme's light grey. -->
+    <Style Selector="Expander">
+        <Setter Property="Foreground" Value="#A0A0B0" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton">
+        <Setter Property="Foreground" Value="#A0A0B0" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton:pointerover">
+        <Setter Property="Foreground" Value="#FFFFFF" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Expander /template/ ToggleButton:pressed">
+        <Setter Property="Foreground" Value="#FFFFFF" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Expander /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+
+    <!-- ComboBox: the Settings window's profile picker. -->
+    <Style Selector="ComboBox">
+        <Setter Property="Background" Value="#1E1E2A" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+        <Setter Property="BorderBrush" Value="#3A3A4D" />
+        <Setter Property="PlaceholderForeground" Value="#A0A0B0" />
+    </Style>
+    <Style Selector="ComboBox:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="#232330" />
+        <Setter Property="BorderBrush" Value="#5A5A70" />
+    </Style>
+    <Style Selector="ComboBox:focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="#1E1E2A" />
+        <Setter Property="BorderBrush" Value="#F59E0B" />
+    </Style>
+    <Style Selector="ComboBoxItem">
+        <Setter Property="Background" Value="#1E1E2A" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="ComboBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#3D3D52" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="ComboBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#2D2D3D" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+
+    <!-- Check boxes and radio buttons. -->
+    <Style Selector="CheckBox">
+        <Setter Property="Foreground" Value="#D1D5DB" />
+    </Style>
+    <Style Selector="CheckBox:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="RadioButton">
+        <Setter Property="Foreground" Value="#D1D5DB" />
+    </Style>
+    <Style Selector="RadioButton:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+
+    <!-- The one list the shell uses (Settings > profiles) and its rows. -->
+    <Style Selector="ListBox">
+        <Setter Property="Background" Value="#1E1E2A" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+        <Setter Property="BorderBrush" Value="#3A3A4D" />
+    </Style>
+    <Style Selector="ListBoxItem">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#2D2D3D" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#3D3D52" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="#45455C" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+
+    <!-- Progress bars and tooltips. -->
+    <Style Selector="ProgressBar">
+        <Setter Property="Background" Value="#2D2D3D" />
+        <Setter Property="Foreground" Value="#F59E0B" />
+    </Style>
+    <Style Selector="ToolTip">
+        <Setter Property="Background" Value="#1E1E2A" />
+        <Setter Property="Foreground" Value="#FFFFFF" />
+        <Setter Property="BorderBrush" Value="#3A3A4D" />
+    </Style>
+
+</Styles>

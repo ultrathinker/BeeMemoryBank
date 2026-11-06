@@ -131,7 +131,7 @@ public class RecoveryBoxLifecycleTests : IAsyncLifetime
         await AddPeerAsync(BlindNodeId.NewId(), "Blind");
         const string newPassword = "ChangedPass2";
 
-        (await _client.PostAsJsonAsync("/api/keys/change-password", new { oldPassword = Password, newPassword }))
+        (await _client.PostAsJsonAsync("/api/keys/change-password", new { oldPassword = Password, newPassword, passwordHint = "A test hint" }))
             .EnsureSuccessStatusCode();
 
         (await WaitUntilAsync(async () => (await OwnStrongBoxesAsync()).Count == 1)).Should().BeTrue();
@@ -253,7 +253,7 @@ public class RecoveryBoxLifecycleTests : IAsyncLifetime
         var oldBox = (await OwnStrongBoxesAsync()).Should().ContainSingle().Subject;
 
         const string newPassword = "ChangedPass2";
-        (await _client.PostAsJsonAsync("/api/keys/change-password", new { oldPassword = Password, newPassword }))
+        (await _client.PostAsJsonAsync("/api/keys/change-password", new { oldPassword = Password, newPassword, passwordHint = "A test hint" }))
             .EnsureSuccessStatusCode();
         (await WaitUntilAsync(async () => (await OwnStrongBoxesAsync()).Any(b => b.BoxId != oldBox.BoxId)))
             .Should().BeTrue("the change builds a strong box under the new password");

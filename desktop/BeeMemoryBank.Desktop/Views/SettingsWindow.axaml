@@ -125,6 +125,7 @@
                                     Click="OnRestartClick"
                                     IsVisible="False"
                                     Padding="14,7"
+                                    Classes="accent"
                                     Background="#F59E0B"
                                     Foreground="#111119"
                                     FontWeight="SemiBold"

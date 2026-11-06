@@ -264,7 +264,8 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
         using var client = b.CreateClient();
         var response = await client.PostAsJsonAsync("/api/init/join", new
         {
-            adminUsername = "admin", displayName = "NodeB", remoteUrl = $"https://127.0.0.1:{_doorPort}", password = Password
+            adminUsername = "admin", displayName = "NodeB", remoteUrl = $"https://127.0.0.1:{_doorPort}", password = Password,
+            passwordHint = "A test hint",
         }, JsonOpts);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
@@ -292,7 +293,8 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
         using var client = joiner.CreateClient();
         var response = await client.PostAsJsonAsync("/api/init/join", new
         {
-            adminUsername = "admin", displayName = "NodeB", remoteUrl = "", password, joinCode = code
+            adminUsername = "admin", displayName = "NodeB", remoteUrl = "", password, joinCode = code,
+            passwordHint = "A test hint",
         }, JsonOpts);
         return (response.StatusCode, await response.Content.ReadAsStringAsync());
     }
