@@ -7,8 +7,9 @@ shopt -s inherit_errexit 2>/dev/null || true
 # pieces.  Slow classes are placed from the 2026-10-12 CI timings; the remaining
 # classes use a small stable name hash so a newly added class is assigned automatically.
 
-# Every test host would otherwise watch its appsettings files through inotify, and a Linux runner allows 128 instances per user.
+# Every test host would otherwise watch its appsettings and wwwroot files through inotify, and a Linux runner allows 128 instances per user.
 export DOTNET_hostBuilder__reloadConfigOnChange=false
+export DOTNET_USE_POLLING_FILE_WATCHER=1
 
 readonly integration_project='tests/BeeMemoryBank.Integration.Tests/BeeMemoryBank.Integration.Tests.csproj'
 
