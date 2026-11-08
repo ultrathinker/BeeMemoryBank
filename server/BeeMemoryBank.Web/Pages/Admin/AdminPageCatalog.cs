@@ -4,7 +4,9 @@ namespace BeeMemoryBank.Web.Pages.Admin;
 /// One page of the Admin area: where it lives, which section of the index lists it, and the icon, title and short description the index shows. The page
 /// itself shows the same icon and title through its template (<c>_AdminPage</c>) and adds its own, longer description.
 /// </summary>
-public sealed record AdminPageInfo(string Route, string Section, string Icon, string Title, string Summary)
+/// <param name="Listed">False for a page that is reached from another page of the area and has no row on the index: the details of one device (it needs a device)
+/// and the page that adds a blind node (a button of the Devices page).</param>
+public sealed record AdminPageInfo(string Route, string Section, string Icon, string Title, string Summary, bool Listed = true)
 {
     /// <summary>The name of the page: its file name without the extension (<c>Snapshots</c> for <c>/Admin/Snapshots</c>).</summary>
     public string Name => Route[(Route.LastIndexOf('/') + 1)..];
@@ -15,13 +17,23 @@ public static class AdminRoutes
 {
     public const string Index = "/Admin";
 
+    public const string Devices = "/Admin/Devices";
+    /// <summary>The details of one device: <c>/Admin/Device/{nodeId}</c>.</summary>
+    public const string Device = "/Admin/Device";
+    public const string NetworkSettings = "/Admin/NetworkSettings";
+    /// <summary>"Add a blind node": the pair code, the invitations and the Android blind copies. The blind nodes themselves are devices of the Devices list.</summary>
+    public const string BlindNodes = "/Admin/BlindNodes";
+
+    /// <summary>The address of the details of one device.</summary>
+    public static string DeviceOf(Guid nodeId) => Device + "/" + nodeId;
+
+    // Pages of 2.7.5 and earlier that the Devices section replaced. Their routes answer a redirect (a LegacyPageRedirectModel in the file of the old page); nothing links to them any more.
     public const string RestoredDevices = "/Admin/RestoredDevices";
     public const string NodeIdentity = "/Admin/NodeIdentity";
     public const string TrustedNodes = "/Admin/TrustedNodes";
     public const string ConnectDevice = "/Admin/ConnectDevice";
     public const string DevicesOnMyNetwork = "/Admin/DevicesOnMyNetwork";
     public const string InvisibleMode = "/Admin/InvisibleMode";
-    public const string BlindNodes = "/Admin/BlindNodes";
 
     public const string Snapshots = "/Admin/Snapshots";
     public const string Compaction = "/Admin/Compaction";
@@ -53,7 +65,7 @@ public static class AdminRoutes
 /// </summary>
 public static class AdminPageCatalog
 {
-    public const string NodesAndNetwork = "Nodes and network";
+    public const string DevicesSection = "Devices";
     public const string BackupsAndHistory = "Backups and history";
     public const string Security = "Security";
     public const string SearchAndAi = "Search and AI";
@@ -63,7 +75,7 @@ public static class AdminPageCatalog
     /// <summary>The sections of the index, in the order it shows them, each with a line on what its pages have in common.</summary>
     public static readonly IReadOnlyList<(string Title, string Hint)> Sections =
     [
-        (NodesAndNetwork, "Who is in this network, how the devices reach each other, and how to add one."),
+        (DevicesSection, "Who is in this network, how the devices reach each other, and how to add one."),
         (BackupsAndHistory, "Copies of this node, and the log of changes the nodes sync with."),
         (Security, "Passwords, keys and encryption."),
         (SearchAndAi, "What AI agents and the chat may use, and how search is doing."),
@@ -73,20 +85,14 @@ public static class AdminPageCatalog
 
     public static readonly IReadOnlyList<AdminPageInfo> All =
     [
-        new(AdminRoutes.RestoredDevices, NodesAndNetwork, "shield-exclamation", "Restored devices awaiting confirmation",
-            "Devices this node trusted before a restore. They stay switched off until you confirm that you recognise them."),
-        new(AdminRoutes.NodeIdentity, NodesAndNetwork, "fingerprint", "Node Identity",
-            "The ID, name and public key that identify this node to the rest of the network."),
-        new(AdminRoutes.TrustedNodes, NodesAndNetwork, "people", "Trusted Nodes",
-            "The devices that belong to this network: who may sync with this node, who is a superadmin and what each may apply on its own."),
-        new(AdminRoutes.ConnectDevice, NodesAndNetwork, "phone", "Connect a device",
-            "Let a phone or another computer join this one for 15 minutes with a join code. Nothing stays open afterwards."),
-        new(AdminRoutes.DevicesOnMyNetwork, NodesAndNetwork, "wifi", "Devices on my network",
-            "Open this node to the other devices on your local network, or keep it answering this computer only."),
-        new(AdminRoutes.InvisibleMode, NodesAndNetwork, "eye-slash", "Invisible Mode",
-            "Make this node call nobody and answer nobody, without losing anything: your work is delivered when you turn it off."),
-        new(AdminRoutes.BlindNodes, NodesAndNetwork, "shield-lock", "Blind nodes",
-            "Keep an encrypted copy of this network and its backups on another machine that cannot read it."),
+        new(AdminRoutes.Devices, DevicesSection, "people", "Devices",
+            "Every device of this network and how this node reaches it: connect a new one, add a blind node, open a device for its details."),
+        new(AdminRoutes.NetworkSettings, DevicesSection, "wifi", "Network settings",
+            "Which networks this node syncs with your devices on, whether the web page is shown on your network, VPN sync and Invisible Mode."),
+        new(AdminRoutes.Device, DevicesSection, "laptop", "Device",
+            "One device: its status, the ways to reach it, what it may do on its own and how its certificate is trusted.", Listed: false),
+        new(AdminRoutes.BlindNodes, DevicesSection, "shield-lock", "Add a blind node",
+            "Keep an encrypted copy of this network and its backups on another machine that cannot read it.", Listed: false),
 
         new(AdminRoutes.Snapshots, BackupsAndHistory, "archive", "Snapshots",
             "Backups of this node: create one, download or upload a file, restore this node or the whole network from it."),
@@ -134,21 +140,33 @@ public static class AdminPageCatalog
     public static AdminPageInfo? Find(string? route) =>
         string.IsNullOrEmpty(route) ? null : All.FirstOrDefault(p => string.Equals(p.Route, route, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>The pages of one section, in the order of the list.</summary>
-    public static IEnumerable<AdminPageInfo> In(string section) => All.Where(p => p.Section == section);
+    /// <summary>The pages of one section the index lists, in the order of the list.</summary>
+    public static IEnumerable<AdminPageInfo> In(string section) => All.Where(p => p.Section == section && p.Listed);
+
+    /// <summary>
+    /// The routes of the pages the Devices section replaced. A route here answers a redirect to the new place (a <c>LegacyPageRedirectModel</c> in the
+    /// page's own file), so a bookmark, a link in an older app or a message of an older node still lead somewhere. They are not in <see cref="All"/>: they are
+    /// no pages of the area. Never remove a row.
+    /// </summary>
+    public static readonly IReadOnlyList<string> LegacyRoutes =
+    [
+        AdminRoutes.RestoredDevices, AdminRoutes.NodeIdentity, AdminRoutes.TrustedNodes, AdminRoutes.ConnectDevice,
+        AdminRoutes.DevicesOnMyNetwork, AdminRoutes.InvisibleMode,
+    ];
 
     /// <summary>
     /// Where each card of the old, single Admin page went. A bookmark <c>/Admin#card-snapshots</c> still reaches the index (a fragment never reaches the
-    /// server); the script of the index reads this table and moves the browser to the page of the block. Never remove a row: the ids are in bookmarks.
+    /// server); the script of the index reads this table and moves the browser to the page of the block (and, after a <c>#</c>, to the block on that page).
+    /// Never remove a row: the ids are in bookmarks.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> LegacyAnchors = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["card-updates"] = AdminRoutes.SoftwareUpdates,
         ["card-master-password"] = AdminRoutes.MasterPassword,
-        ["devices-on-my-network"] = AdminRoutes.DevicesOnMyNetwork,
-        ["card-invisible-mode"] = AdminRoutes.InvisibleMode,
-        ["card-trusted-nodes"] = AdminRoutes.TrustedNodes,
-        ["restored-peers"] = AdminRoutes.RestoredDevices,
+        ["devices-on-my-network"] = AdminRoutes.NetworkSettings + "#devices-on-my-network",
+        ["card-invisible-mode"] = AdminRoutes.NetworkSettings + "#invisible-mode",
+        ["card-trusted-nodes"] = AdminRoutes.Devices,
+        ["restored-peers"] = AdminRoutes.Devices + "#restored-peers",
         ["card-snapshots"] = AdminRoutes.Snapshots,
         ["card-compaction"] = AdminRoutes.Compaction,
         ["card-agents"] = AdminRoutes.Agents,

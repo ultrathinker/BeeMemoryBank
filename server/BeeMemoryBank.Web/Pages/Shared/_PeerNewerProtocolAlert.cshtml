@@ -1,7 +1,10 @@
 @inject BeeMemoryBank.Web.Services.ApiClient ApiClient
 
 @* The layout's sync warnings, from one /api/sync/status call: a peer on a newer protocol, a node that cannot catch up,
-   and changes received but not applied yet. *@
+   and changes received but not applied yet. They are rendered in the layout's .app-alerts strip above the page (never inside
+   .app-body, which is the row of the tree and the page): each is one compact line that can be closed. A closed one asks the node
+   again after data-reshow-after seconds and comes back while its state (data-reshow-state, a member of /api/sync/status) is still
+   there (layout.js); a page loaded again shows it at once. The long "cannot catch up" sentence is cut to one line; Details shows it whole. *@
 @{
     var hasNewer = false;
     string? snapshotRequired = null;
@@ -11,26 +14,39 @@
         (hasNewer, snapshotRequired, held) = await ApiClient.GetSyncAlertsAsync();
     }
     catch {}
+    const int reshowSeconds = 600;
 }
 
 @if (hasNewer)
 {
-    <sl-alert variant="warning" open style="margin:12px 16px 0;">
+    <sl-alert variant="warning" open closable class="layout-alert" data-reshow-after="@reshowSeconds" data-reshow-state="peerNewerProtocol">
         <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-        <strong>A peer node has a newer protocol version — update this node.</strong>
+        <div class="layout-alert-row">
+            <strong class="layout-alert-text">A peer node has a newer protocol version — update this node.</strong>
+        </div>
     </sl-alert>
 }
 @if (snapshotRequired != null)
 {
-    <sl-alert variant="danger" open style="margin:12px 16px 0;" data-testid="snapshot-required-alert">
+    <sl-alert variant="danger" open closable class="layout-alert" data-testid="snapshot-required-alert"
+              data-reshow-after="@reshowSeconds" data-reshow-state="snapshotRequired">
         <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
-        <strong>@snapshotRequired</strong>
+        <div class="layout-alert-row">
+            <strong class="layout-alert-text" title="@snapshotRequired">@snapshotRequired</strong>
+            <span class="layout-alert-actions">
+                <button type="button" class="layout-alert-link" data-alert-details aria-expanded="false">Details</button>
+                <a href="/Admin/Devices" class="layout-alert-link">Devices</a>
+            </span>
+        </div>
     </sl-alert>
 }
 @if (held is { } waiting)
 {
-    <sl-alert variant="@(waiting.Warning ? "warning" : "primary")" open style="margin:12px 16px 0;" data-testid="held-events-alert">
+    <sl-alert variant="@(waiting.Warning ? "warning" : "primary")" open closable class="layout-alert" data-testid="held-events-alert"
+              data-reshow-after="@reshowSeconds" data-reshow-state="held">
         <sl-icon slot="icon" name="hourglass-split"></sl-icon>
-        @waiting.Message
+        <div class="layout-alert-row">
+            <span class="layout-alert-text">@waiting.Message</span>
+        </div>
     </sl-alert>
 }

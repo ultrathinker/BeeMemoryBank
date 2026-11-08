@@ -36,6 +36,9 @@ public partial class MainWindow : Window
     private readonly Services.NodeAlarmsRequest _alarmsRequest;
     private Services.BlindAlarmWatcher? _blindAlarms;
     private Services.IUserNotifier? _notifier;
+    // The question "Sync with your paired devices on this network?" and the one-time LAN notice: it polls the node's GET /node/lan.
+    private readonly Services.NodeLanRequest _lanRequest;
+    private Services.LanNetworkPrompt? _lanPrompt;
 
     /// <summary>
     /// "Lock the vault when this computer sleeps" (off by default, per app like the other flags in desktop-settings.json). The sleep
@@ -75,8 +78,21 @@ public partial class MainWindow : Window
     /// <summary>How many blind nodes need attention now (the tray tooltip says so); 0 before the first node started.</summary>
     public int BlindAlarmCount => _blindAlarms?.AttentionCount ?? 0;
 
+    /// <summary>How many of <see cref="BlindAlarmCount"/> are full peers (computers, servers, phones) that have been silent for days.</summary>
+    public int PeerAlarmCount => _blindAlarms?.AttentionPeerCount ?? 0;
+
     /// <summary>Raised, on a background thread, when <see cref="BlindAlarmCount"/> changes.</summary>
     public event EventHandler? BlindAlarmsChanged;
+
+    /// <summary>What the tray menu shows of LAN sync: the status of this network and the questions still open.</summary>
+    public Services.LanTrayState LanTrayState => _lanPrompt?.TrayState ?? Services.LanTrayState.Empty;
+
+    /// <summary>The tray's answer to the question about a network ("Yes" is true); false when the node did not take it.</summary>
+    public Task<bool> AnswerLanNetworkAsync(string fingerprint, bool trusted) =>
+        _lanPrompt?.AnswerAsync(fingerprint, trusted) ?? Task.FromResult(false);
+
+    /// <summary>Raised, on a background thread, when <see cref="LanTrayState"/> changes.</summary>
+    public event EventHandler? LanTrayChanged;
 
     public MainWindow()
     {
@@ -93,6 +109,9 @@ public partial class MainWindow : Window
             () => _nodeLifecycle.IsAttachedToExternalNode ? null : Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"));
         // The same address and the same key rule as the lock request: a node this app merely attached to is not asked.
         _alarmsRequest = new Services.NodeAlarmsRequest(
+            () => _frontUrl,
+            () => _nodeLifecycle.IsAttachedToExternalNode ? null : Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"));
+        _lanRequest = new Services.NodeLanRequest(
             () => _frontUrl,
             () => _nodeLifecycle.IsAttachedToExternalNode ? null : Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY"));
         InitializeComponent();
@@ -211,6 +230,7 @@ public partial class MainWindow : Window
         BmbWebView.Source = new Uri(frontUrl);
         StartPowerEventsMonitoring();
         StartBlindAlarmWatcher();
+        StartLanPrompt();
 
         SplashPanel.IsVisible = false;
         ErrorPanel.IsVisible = false;
@@ -617,6 +637,17 @@ public partial class MainWindow : Window
         {
             Debug.WriteLine($"Error stopping the blind-node alarm watcher: {ex.Message}");
         }
+
+        try
+        {
+            _lanPrompt?.Dispose();
+            _lanPrompt = null;
+            _lanRequest.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error stopping the LAN network prompt: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -640,6 +671,37 @@ public partial class MainWindow : Window
         {
             Debug.WriteLine($"Failed to start the blind-node alarm watcher: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Starts the LAN network prompt once (it follows profile switches by itself: it reads the open profile at each poll). Its questions go
+    /// through the system's notice with buttons where there is one (macOS), else through the plain notice of the blind-node alarms and the
+    /// tray menu.
+    /// </summary>
+    private void StartLanPrompt()
+    {
+        if (_lanPrompt != null) return;
+        try
+        {
+            _lanPrompt = new Services.LanNetworkPrompt(
+                _lanRequest, _alarmsRequest.PollAsync, Services.ShellPlatforms.Current.CreateActionNotifier(), _notifier,
+                () => Dispatcher.UIThread.Post(() => ShowAdminPage(Services.LanNetworkPrompt.SettingsPath)),
+                () => _activeProfileId);
+            _lanPrompt.Changed += (_, _) => LanTrayChanged?.Invoke(this, EventArgs.Empty);
+            _lanPrompt.Start();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to start the LAN network prompt: {ex.Message}");
+        }
+    }
+
+    /// <summary>Brings the window to the front on a page of the node's own web UI (for example the card of the networks). UI thread.</summary>
+    public void ShowAdminPage(string path)
+    {
+        if (_frontUrl == null || !Uri.TryCreate(new Uri(_frontUrl), path, out var target)) return;
+        ShowAndFocusWindow();
+        BmbWebView.Source = target;
     }
 
     private void StartPowerEventsMonitoring()

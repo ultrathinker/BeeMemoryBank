@@ -1,3 +1,4 @@
+using System;
 using BeeMemoryBank.Desktop.Services;
 
 namespace BeeMemoryBank.Desktop.MacOS;
@@ -11,6 +12,9 @@ internal sealed class MacOsShellPlatform : IShellPlatform
 {
     private readonly MacOsNotifier _notifier = new();
 
+    // One for the shell: the notification centre has one delegate, and it routes a button to the notice that made it.
+    private readonly Lazy<MacOsActionNotifier> _actionNotifier = new(() => new MacOsActionNotifier());
+
     public ShellOs Os => ShellOs.MacOs;
 
     public IAutostartService CreateAutostart() => new MacOsAutostart();
@@ -21,6 +25,12 @@ internal sealed class MacOsShellPlatform : IShellPlatform
 
     /// <summary>The same osascript banner the sleep monitor uses.</summary>
     public IUserNotifier? CreateNotifier() => _notifier;
+
+    /// <summary>
+    /// A notice with buttons through <c>UNUserNotificationCenter</c>. It works in the signed .app only; from anything else it says it could not
+    /// show the notice, and the shell uses the banner above and the tray menu.
+    /// </summary>
+    public IActionNotifier? CreateActionNotifier() => _actionNotifier.Value;
 
     public IFileManagerReveal FileManager { get; } = new MacOsFileManager();
 

@@ -1,7 +1,9 @@
 using Android.Content;
 using AndroidX.Work;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Channels;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile.Platforms.Android;
@@ -82,11 +84,21 @@ public class SyncWorker : Worker
         }
 
         var whitelist = sp.GetRequiredService<IWhitelistRepository>();
-        var syncClient = sp.GetRequiredService<SyncClient>();
         var httpFactory = services.GetRequiredService<IHttpClientFactory>();
 
-        var nodes = (await whitelist.GetAllActiveAsync())
-            .Where(n => !string.IsNullOrEmpty(n.ApiAddress)).ToList();
+        var peers = await whitelist.GetAllActiveAsync();
+        if (peers.Count == 0)
+        {
+            Services.SyncHeartbeat.RecordCycle(true, 0, null, "wm");
+            return false;
+        }
+
+        // A look around the Wi-Fi first (a few seconds at most, none when no peer is paired): a desktop that only announced itself, or one whose
+        // DHCP address changed, is callable through what NSD sees. It starts and ends here, so nothing keeps listening between cycles.
+        if (services.GetService<ILanPeerScanner>() is { } scanner) await scanner.ScanAsync(PhonePeers.LookFor, CancellationToken.None);
+
+        // Every peer that has a way to be reached now, not only those with an address of their own.
+        var nodes = await PhonePeers.CallableAsync(sp, peers);
         if (nodes.Count == 0)
         {
             Services.SyncHeartbeat.RecordCycle(true, 0, null, "wm");
@@ -99,7 +111,7 @@ public class SyncWorker : Worker
         http.Timeout = TimeSpan.FromSeconds(30);
         foreach (var node in nodes)
         {
-            try { applied += await syncClient.SyncWithAsync(http, node.ApiAddress!, node.NodeId, CancellationToken.None); }
+            try { applied += await PeerSessions.SyncWithPeerAsync(sp, http, node, CancellationToken.None); }
             // Every peer that failed is named with its reason (a wrong address says "no sync server at this address"), not only the last one.
             catch (Exception ex) { failures.Add(PeerSyncFailure.From(node, ex)); }
         }

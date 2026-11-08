@@ -70,6 +70,21 @@ public class SyncForegroundService : Service
                 await scheduler.StartAsync(token);
             });
 
+            // The look for the paired desktops on the Wi-Fi lives and dies with the sync loop above (docs/design/lan-peer-sync.md 16): a short look every
+            // minute, at once when a peer's LAN addresses failed (a DHCP change). The scheduler's cycle plans each peer's channels from what it saw.
+            Task.Run(async () =>
+            {
+                try
+                {
+                    if (IPlatformApplication.Current!.Services.GetService<NsdPeerDiscovery>() is { } discovery)
+                        await discovery.RunAsync(token);
+                }
+                catch (Exception ex)
+                {
+                    global::Android.Util.Log.Error("BeeSync", $"Peer discovery stopped: {ex.GetType().Name}");
+                }
+            });
+
             Task.Run(async () =>
             {
                 var services = IPlatformApplication.Current!.Services;

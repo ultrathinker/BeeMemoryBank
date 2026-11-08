@@ -30,6 +30,15 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
     /// </summary>
     public static readonly HttpRequestOptionsKey<string> ExplicitPin = new("bmb.tls-spki");
 
+    /// <summary>
+    /// The TLS anchor of the PEER a request is for (docs/design/lan-peer-sync.md sections 7 and 9): its pinned leaf keys, its local CA's key, and whether
+    /// an ordinary CA-valid certificate is also acceptable. Set by the sync loop on every request of a session (<see cref="PeerAnchorStamp"/>), so an
+    /// address learned from an announcement, an mDNS record or a person is held to the anchor of the peer it is dialled FOR - never to whatever row
+    /// happens to have that host:port - and peer A's address is never accepted with peer B's key. It wins over <see cref="ExplicitPin"/> and the
+    /// host:port lookup, which stays for the callers that dial a row's primary address without a peer context.
+    /// </summary>
+    public static readonly HttpRequestOptionsKey<PeerTlsAnchor> ExplicitAnchor = new("bmb.tls-anchor");
+
     private readonly object _gate = new();
     private Dictionary<string, string> _pins = new(StringComparer.OrdinalIgnoreCase);
     private DateTime _loadedAt = DateTime.MinValue;
@@ -57,17 +66,25 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
     /// other host gets the ordinary validation.
     /// </summary>
     public bool Validate(HttpRequestMessage request, X509Certificate2? certificate, SslPolicyErrors errors, X509Chain? chain = null) =>
-        Check(PinOf(request), certificate, errors, chain);
+        Check(AnchorOf(request), certificate, errors, chain);
 
     /// <summary>The pin a request must meet: the one it carries itself, else its host:port's row; null = the ordinary check.</summary>
     internal string? PinOf(HttpRequestMessage request) =>
         request.Options.TryGetValue(ExplicitPin, out var explicitPin) ? explicitPin
             : request.RequestUri is { } uri ? PinFor(uri) : null;
 
-    private bool Check(string? pin, X509Certificate2? certificate, SslPolicyErrors errors, X509Chain? chain)
+    /// <summary>
+    /// The anchor a request must meet: the peer's own (<see cref="ExplicitAnchor"/>, with the public CAs only at the row's own host:
+    /// <see cref="PeerTlsAnchor.AtHost"/>), else a pin as before; null = the ordinary check.
+    /// </summary>
+    internal PeerTlsAnchor? AnchorOf(HttpRequestMessage request) =>
+        request.Options.TryGetValue(ExplicitAnchor, out var anchor) && anchor is not null ? anchor.AtHost(request.RequestUri)
+            : PinOf(request) is { } pin ? PeerTlsAnchor.PinOnly(pin) : null;
+
+    private bool Check(PeerTlsAnchor? anchor, X509Certificate2? certificate, SslPolicyErrors errors, X509Chain? chain)
     {
-        if (pin is null) return PublicCaTls.IsValid(certificate, chain, errors, anchors);
-        return certificate is not null && Spki.Equal(Spki.Of(certificate), pin);
+        if (anchor is null) return PublicCaTls.IsValid(certificate, chain, errors, anchors);
+        return anchor.Accepts(certificate, DateTime.UtcNow) || (anchor.AllowPublicCa && PublicCaTls.IsValid(certificate, chain, errors, anchors));
     }
 
     /// <summary>
@@ -83,7 +100,10 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
     /// gets the <see cref="System.Net.Security.SslStream"/> as its sender, NOT the request (only HttpClientHandler's own callback is
     /// given the request), so a handler cannot learn the pin from the request: each handler is made for one pin instead.
     /// </summary>
-    internal SocketsHttpHandler NewSocketsHandler(PeerNetwork net, string? pin) => new()
+    internal SocketsHttpHandler NewSocketsHandler(PeerNetwork net, string? pin) => NewSocketsHandlerFor(net, pin is null ? null : PeerTlsAnchor.PinOnly(pin));
+
+    /// <summary>A sockets handler for one anchor (null = the ordinary check); see <see cref="NewSocketsHandler"/>.</summary>
+    internal SocketsHttpHandler NewSocketsHandlerFor(PeerNetwork net, PeerTlsAnchor? anchor) => new()
     {
         // A redirect would take the request to a host the pin never covered — an unpinned host
         // with any CA-valid certificate passes the ordinary check (review L-stage1 #5).
@@ -94,7 +114,7 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
         SslOptions = new SslClientAuthenticationOptions
         {
             RemoteCertificateValidationCallback = (_, certificate, chain, errors) =>
-                Check(pin, certificate as X509Certificate2 ?? (certificate is null ? null : new X509Certificate2(certificate)), errors, chain)
+                Check(anchor, certificate as X509Certificate2 ?? (certificate is null ? null : new X509Certificate2(certificate)), errors, chain)
         }
     };
 
@@ -111,10 +131,10 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             var uri = request.RequestUri ?? throw new InvalidOperationException("The request has no address.");
-            var pin = owner.PinOf(request);
+            var anchor = owner.AnchorOf(request);
             // Lazy: two requests racing for one new lane build ONE handler (a second one would never be disposed).
-            var lane = _lanes.GetOrAdd(LaneKey(uri, pin),
-                _ => new Lazy<HttpMessageInvoker>(() => new HttpMessageInvoker(owner.NewSocketsHandler(net, pin), disposeHandler: true)));
+            var lane = _lanes.GetOrAdd(LaneKeyFor(uri, anchor),
+                _ => new Lazy<HttpMessageInvoker>(() => new HttpMessageInvoker(owner.NewSocketsHandlerFor(net, anchor), disposeHandler: true)));
             return lane.Value.SendAsync(request, ct);
         }
 
@@ -127,11 +147,15 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
     }
 
     /// <summary>One lane per host:port (host in lower case, as <see cref="Uri.Host"/> gives it) and EXACT pin: a pin that differs in letter case is another key; no pin is not an empty pin.</summary>
-    internal static string LaneKey(Uri uri, string? pin) => $"{uri.Host.ToLowerInvariant()}:{uri.Port}|{(pin is null ? "-" : "pin:" + pin)}";
+    internal static string LaneKey(Uri uri, string? pin) => LaneKeyFor(uri, pin is null ? null : PeerTlsAnchor.PinOnly(pin));
 
-    /// <summary>True if this request goes to a pinned peer (by the request's own pin or the whitelist).</summary>
+    /// <summary>One lane per host:port and EXACT anchor (<see cref="PeerTlsAnchor.LaneKey"/>).</summary>
+    internal static string LaneKeyFor(Uri uri, PeerTlsAnchor? anchor) => $"{uri.Host.ToLowerInvariant()}:{uri.Port}|{(anchor is null ? "-" : anchor.LaneKey)}";
+
+    /// <summary>True if this request goes to a pinned peer (by the request's own pin or anchor, or the whitelist): it must be HTTPS. An anchor that also
+    /// accepts an ordinary certificate (a peer on a public CA) is not "pinned": its plain-HTTP address of a test setup keeps working as before.</summary>
     public bool IsPinned(HttpRequestMessage request) =>
-        request.Options.TryGetValue(ExplicitPin, out _) || (request.RequestUri is { } uri && PinFor(uri) is not null);
+        AnchorOf(request) is { AllowPublicCa: false };
 
     private void Reload()
     {

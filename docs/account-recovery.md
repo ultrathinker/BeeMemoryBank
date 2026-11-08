@@ -5,7 +5,7 @@ they wrote themselves, and a **recovery key** kept offline.
 
 ## The password hint
 
-Every place that creates or replaces a password asks for a hint (3 to 120 characters; it may not contain the
+Every place that creates or replaces a password asks for a hint (1 to 120 characters; it may not contain the
 password, the username, or a line break). It is stored in the node's local user table in the clear, because the
 Sign In page has to show it **before the vault is unlocked**; it is never synchronized, never written to an audit
 line or a log, and the policy is the same in the web forms, the HTTP endpoints, the CLI and the phone apps.

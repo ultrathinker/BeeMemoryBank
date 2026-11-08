@@ -33,7 +33,9 @@
     <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" asp-append-version="true" />
     <link href="/css/site.css" rel="stylesheet" asp-append-version="true" />
     @await RenderSectionAsync("HeadStyles", required: false)
-    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="/images/favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="apple-touch-icon" href="/images/apple-touch-icon.png" />
     <script src="/lib/marked/marked.umd.js" asp-append-version="true"></script>
     <script src="/lib/dompurify/purify.min.js" asp-append-version="true"></script>
     <script src="/js/theme-init.js" asp-append-version="true"></script>
@@ -62,7 +64,7 @@
                 <sl-icon-button id="btn-header-tree" name="layout-sidebar" label="Folders" title="Folders" class="header-tree-button"></sl-icon-button>
             }
             <a href="/Tree" class="app-logo" title="@brandName">
-                <img src="/images/web-app-manifest-192x192.png" alt="Bee" class="app-logo-img" />
+                <img src="/images/favicon.svg" alt="" class="app-logo-img" />
                 <span class="app-logo-name">@brandName</span>
             </a>
         </div>
@@ -108,7 +110,7 @@
             <div class="sync-status-wrapper" id="syncStatusWidget" style="position: relative;">
                 <sl-icon-button name="arrow-repeat" label="Sync status" id="syncStatusBtn" style="font-size: 1.2rem;"></sl-icon-button>
                 <span class="sync-badge" id="syncBadge" style="display:none;"></span>
-                @* BMB-313: shown while Invisible Mode is on (switched in Admin > Invisible Mode). *@
+                @* BMB-313: shown while Invisible Mode is on (switched in Admin > Network settings). *@
                 <span class="sync-invisible-badge" id="syncInvisibleBadge" style="display:none;" title="Invisible Mode is on: this node calls nobody and answers nobody">
                     <sl-icon name="eye-slash"></sl-icon>
                 </span>
@@ -168,22 +170,30 @@
         </sl-dialog>
     </header>
 
-    <div class="app-body">
+    @* The node's notices sit in their own strip ABOVE the page. Not inside .app-body: that is a row (the tree, the splitter, the
+       page), and an alert placed in it became a column of its own that pushed the tree to the right and squeezed the page. *@
+    <div class="app-alerts" id="app-alerts">
         <partial name="_PeerNewerProtocolAlert" />
         @if (TempData["MigrationBanner"] is string migrationBanner)
         {
-            <sl-alert variant="primary" open closable style="margin:12px 16px 0;">
+            <sl-alert variant="primary" open closable class="layout-alert">
                 <sl-icon slot="icon" name="info-circle"></sl-icon>
-                @migrationBanner
+                <div class="layout-alert-row"><span class="layout-alert-text">@migrationBanner</span></div>
             </sl-alert>
         }
         @if (TempData["RecoveryKeyReminder"] is string recoveryKeyReminder)
         {
-            <sl-alert variant="warning" open closable style="margin:12px 16px 0;">
+            <sl-alert variant="warning" open closable class="layout-alert">
                 <sl-icon slot="icon" name="key"></sl-icon>
-                @recoveryKeyReminder <a href="/Admin/RecoveryKey">Issue a recovery key</a>
+                <div class="layout-alert-row">
+                    <span class="layout-alert-text">@recoveryKeyReminder</span>
+                    <span class="layout-alert-actions"><a href="/Admin/RecoveryKey" class="layout-alert-link">Issue a recovery key</a></span>
+                </div>
             </sl-alert>
         }
+    </div>
+
+    <div class="app-body">
         @RenderBody()
     </div>
 

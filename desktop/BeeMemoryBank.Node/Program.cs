@@ -280,8 +280,9 @@ public static class Program
 
         WebApplication? app = null;
         LanJoinListener? lanListener = null;
-        LanFrontListener? lanFront = null;
+        LanListener? lan = null;
         LanNetworkSwitch? lanNetwork = null;
+        ITrustedNetworks? trustedNetworks = null;
         LanListenerState? listenerState = null;
         NodeFront.CachedLeafCert? lanLeaf = null;
         var tcs = new TaskCompletionSource<int>();
@@ -400,16 +401,18 @@ public static class Program
             const int preferredFrontPort = 5310;
 
             // Opening the node to the network is the profile's setting "Devices on my network" (Admin > Devices on my network), off by
-            // default; it is served by a second listener that can be opened and closed while the node runs (LanFrontListener).
+            // default; it is the web surface of the node's one LAN listener, opened and closed while the node runs (LanListener).
             // BMB_HTTPS_ENABLED=1 is the older way, kept as an override: it makes the front itself add the HTTPS listener on
             // :5311 for this run, and the setting then has nothing to change. With neither, the front is byte-for-byte what it
             // was: only the plain-HTTP listener runs.
             var networkStore = new NodeNetworkSettingsStore(resolvedDataDirectory);
             var startupExposure = networkStore.Current();
             var httpsEnabled = startupExposure.Source == NetworkExposureSource.Environment;
+            // The one LAN port every surface shares (the setting, or BMB_LAN_PORT for this run; 5311 by default).
+            var lanPort = networkStore.CurrentPort();
             if (httpsEnabled)
             {
-                Console.WriteLine("[Node] BMB_HTTPS_ENABLED=1: additive HTTPS listener will be started on :5311.");
+                Console.WriteLine($"[Node] BMB_HTTPS_ENABLED=1: additive HTTPS listener will be started on :{lanPort}.");
             }
             if (frontGate.StopRequested)
             {
@@ -449,7 +452,7 @@ public static class Program
             }
 
             // Windows and macOS: the two systems with a place to keep the local CA's key (DPAPI, the Keychain), which the HTTPS
-            // listeners need. The listeners themselves are plain Kestrel; only the firewall differs (see ILanFirewall).
+            // listeners need. The listener itself is plain Kestrel; the firewall and the idea of a trusted network differ (ILanFirewall, ITrustedNetworks).
             LanControl? BuildLan(bool permanent)
             {
                 var internalKey = ResolveInternalKey();
@@ -462,25 +465,33 @@ public static class Program
                 ILanFirewall firewall = OperatingSystem.IsWindows() && !WindowsServiceHelpers.IsWindowsService()
                     ? new NetshLanFirewall()
                     : new NoLanFirewall();
+                trustedNetworks ??= TrustedNetworks.ForThisComputer(resolvedDataDirectory);
 
-                // The door forwards joins to the Api child, so without one there is no door; a node that is permanently open
-                // by BMB_HTTPS_ENABLED=1 never needed it.
+                // The listener forwards to the Api child, so without one there is no listener; a node that is permanently open
+                // by BMB_HTTPS_ENABLED=1 serves everything from the front itself and has none.
                 var apiUrl = orchestrator.ReadyChildren.TryGetValue("BeeMemoryBank.Api", out var api) ? api.Urls.FirstOrDefault() : null;
                 if (apiUrl == null && !permanent) return null;
-                if (apiUrl != null)
-                    lanListener ??= new LanJoinListener(apiUrl, leaf.Get,
-                        new System.Net.IPEndPoint(System.Net.IPAddress.Any, NodeFront.HttpsPort), TimeProvider.System);
-                lanFront ??= new LanFrontListener(
-                    () => NodeFrontBuilder.BuildNetworkFront(orchestrator.ReadyChildren,
-                        new System.Net.IPEndPoint(System.Net.IPAddress.Any, NodeFront.HttpsPort), leaf.Get),
-                    leaf.Get,
-                    listening => listenerState?.Set(listening));
+                if (!permanent && apiUrl != null)
+                {
+                    string? WebUrl() => orchestrator.ReadyChildren.TryGetValue("BeeMemoryBank.Web", out var web) ? web.Urls.FirstOrDefault() : null;
+                    var trusted = trustedNetworks;
+                    lan ??= new LanListener(apiUrl, WebUrl, leaf.Get, new TrustedNetworkBindPlanner(trusted), lanPort,
+                        snapshot => listenerState?.Set(snapshot), Console.WriteLine);
+                    var listener = lan;
+                    // A join that succeeded through the door makes the network it came in on trusted (decision D1): the two devices sync there from now on.
+                    lanListener ??= new LanJoinListener(listener, leaf.Get, TimeProvider.System, joined: local =>
+                    {
+                        if (local is null) return;
+                        trusted.TrustNetworkOf(local.IsIPv4MappedToIPv6 ? local.MapToIPv4() : local, "paired");
+                        _ = listener.RefreshAsync();
+                    });
+                }
                 // Rebuilt for every front (it holds references, no state of its own): a front that had to give up the
                 // BMB_HTTPS_ENABLED listener is no longer "permanent by environment" and the setting takes over again.
-                lanNetwork = new LanNetworkSwitch(networkStore, lanFront, lanListener,
+                lanNetwork = new LanNetworkSwitch(networkStore, permanent ? null : lan, permanent ? null : lanListener,
                     permanent ? startupExposure : NetworkExposure.Resolve(networkStore.Load(), null));
 
-                return new LanControl(permanent ? null : lanListener, leaf.Get, firewall, internalKey, lanNetwork, platform);
+                return new LanControl(permanent ? null : lanListener, leaf.Get, firewall, internalKey, lanNetwork, platform, trustedNetworks);
             }
 
             // Every start goes through the gate: it builds the front and starts it only if no stop has been
@@ -495,7 +506,8 @@ public static class Program
                     resolvedDataDirectory,
                     BuildLan(https),
                     BuildLock(),
-                    BuildAlarms()),
+                    BuildAlarms(),
+                    lanPort),
                 front => front.StartAsync());
 
             try
@@ -529,7 +541,7 @@ public static class Program
                     // must never be able to prevent the plain-HTTP path from starting — degrade it off
                     // and retry once more with HTTPS disabled for this session.
                     Console.WriteLine(
-                        $"[Node] WARNING: could not bind the opt-in HTTPS listener on :{NodeFront.HttpsPort} " +
+                        $"[Node] WARNING: could not bind the opt-in HTTPS listener on :{lanPort} " +
                         "(port unavailable) — starting with HTTPS disabled for this session.");
                     httpsEnabled = false;
                     app = await StartFrontAsync("http://127.0.0.1:0", httpsEnabled);
@@ -546,10 +558,10 @@ public static class Program
                 try
                 {
                     var firewall = new FirewallService();
-                    var ok = firewall.EnsureInboundTcpRule(NodeFront.HttpsPort, "BeeMemoryBank Node");
+                    var ok = firewall.EnsureInboundTcpRule(lanPort, "BeeMemoryBank Node");
                     Console.WriteLine(ok
-                        ? $"[Node] Inbound firewall rule ensured for TCP {NodeFront.HttpsPort}."
-                        : $"[Node] WARNING: could not add inbound firewall rule for TCP {NodeFront.HttpsPort} " +
+                        ? $"[Node] Inbound firewall rule ensured for TCP {lanPort}."
+                        : $"[Node] WARNING: could not add inbound firewall rule for TCP {lanPort} " +
                           "(administrator elevation is required for inbound firewall rules). The HTTPS listener " +
                           "is running, but may be unreachable from other devices until the rule is added manually.");
                 }
@@ -565,16 +577,17 @@ public static class Program
                 Console.WriteLine($"[Node] Front is listening at: {frontUrl}");
                 if (httpsEnabled)
                 {
-                    Console.WriteLine($"[Node] Front HTTPS listener on: https://<this-host>:{NodeFront.HttpsPort}");
+                    Console.WriteLine($"[Node] Front HTTPS listener on: https://<this-host>:{lanPort}");
                 }
                 orchestrator.UpdateFrontUrl(frontUrl);
             }
 
-            // BMB_HTTPS_ENABLED=1: the front itself holds :5311, and it is bound only if httpsEnabled survived the fallback above.
-            if (httpsEnabled) listenerState?.Set(true);
+            // BMB_HTTPS_ENABLED=1: the front itself holds the LAN port with everything, and it is bound only if httpsEnabled survived the fallback above.
+            // It is announced as the web surface; it names no sync addresses (it answers every network, trusted or not).
+            if (httpsEnabled) listenerState?.Set(new LanListenerSnapshot(true, lanPort, Sync: false, Web: true, Join: false, SyncAddresses: []));
 
-            // The profile's "Devices on my network" setting: if it is on, the second listener opens now, with the loopback front
-            // already serving (a failure only leaves the node answering this computer, and says so in the log).
+            // The LAN listener: the sync surface on the trusted networks (on unless the profile switched it off), and "Devices on my network" if that
+            // is on, with the loopback front already serving (a failure only leaves the node answering this computer, and says so in the log).
             if (lanNetwork != null) await lanNetwork.ApplyAtStartAsync(Console.WriteLine);
 
             Console.WriteLine("[Node] Node is running. Press Ctrl+C to shut down.");
@@ -609,9 +622,9 @@ public static class Program
             {
                 try { await lanListener.DisposeAsync(); } catch { }
             }
-            if (lanFront != null)
+            if (lan != null)
             {
-                try { await lanFront.DisposeAsync(); } catch { }
+                try { await lan.DisposeAsync(); } catch { }
             }
             listenerState?.Set(false); // the BMB_HTTPS_ENABLED front goes down with the node too
 
@@ -627,10 +640,11 @@ public static class Program
         string? dataPath = null,
         LanControl? lan = null,
         NodeLockControl? lockControl = null,
-        NodeAlarmsControl? alarmsControl = null)
+        NodeAlarmsControl? alarmsControl = null,
+        int httpsPort = NodeFront.HttpsPort)
     {
         var builder = WebApplication.CreateBuilder(webArgs);
-        var front = NodeFrontBuilder.Build(builder, readyChildren, enableHttps, dataPath, lan, lockControl, alarmsControl);
+        var front = NodeFrontBuilder.Build(builder, readyChildren, enableHttps, dataPath, lan, lockControl, alarmsControl, httpsPort);
         var app = builder.Build();
         front.MapEndpoints(app);
         return app;
@@ -752,11 +766,10 @@ public static class AutoDiscovery
         var webInfo = ResolveApplicationStartInfo(absBaseDir, "web", "BeeMemoryBank.Web");
 
         // Base environment variables
-        // The Node front's HTTPS port — mDNS should advertise the port peers can ACTUALLY reach (the
-        // front's :5311), not Api's own random ASPNETCORE_URLS=:0 port or Api's unrelated
-        // standalone/Docker port. It is a fixed port (NodeFront.HttpsPort), unlike the loopback front's
-        // OS-assigned fallback, so what is announced is what is served.
-        const int frontHttpsPort = NodeFront.HttpsPort;
+        // The LAN port — mDNS should advertise the port peers can ACTUALLY reach (the LAN listener's), not Api's own random
+        // ASPNETCORE_URLS=:0 port or Api's unrelated standalone/Docker port. The announcer reads the port the listener really
+        // serves from network.listening.json; this is only its fallback for a state file of an older build.
+        var frontHttpsPort = new NodeNetworkSettingsStore(absDataDir).CurrentPort();
         var httpsEnabled = Environment.GetEnvironmentVariable("BMB_HTTPS_ENABLED") == "1";
 
         // Api's Program.cs fail-fasts in Production if BMB_INTERNAL_KEY is absent (it otherwise

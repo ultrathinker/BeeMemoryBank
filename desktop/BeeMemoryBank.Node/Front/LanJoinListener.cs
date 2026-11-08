@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Buffers.Text;
 using System.Net;
 using System.Security.Cryptography;
@@ -22,11 +23,11 @@ namespace BeeMemoryBank.Node;
 public sealed record LanJoinSession(string Token, DateTimeOffset ExpiresAt, string SpkiPin, int Port);
 
 /// <summary>
-/// The LAN HTTPS listener a phone joins through when there is no hub (plan section 10), switched on
-/// from the Connect page while the node runs. It is a second Kestrel server inside the Node process,
-/// next to the loopback front; the Api and Web children are not touched, so the vault stays unlocked
-/// — the old way, <c>BMB_HTTPS_ENABLED=1</c>, needed a restart and a restarted node is locked, so
-/// <c>/api/join</c> answered 409.
+/// The door a phone or another computer joins through when there is no hub (plan section 10), opened from the Connect page while the node
+/// runs: the JOIN surface of the node's one LAN listener (<see cref="LanListener"/>, on the LAN port beside the sync and web surfaces). The Api
+/// and Web children are not touched, so the vault stays unlocked - the old way, <c>BMB_HTTPS_ENABLED=1</c>, needed a restart and a restarted
+/// node is locked, so <c>/api/join</c> answered 409. The door opens on every usable network, a trusted one or not (decision D2: it is an explicit
+/// action, guarded by the token); a join that succeeds makes the network it came in on a trusted one (decision D1).
 ///
 /// <para>What it exposes is deliberately narrow: the four calls a join makes (<c>/api/join</c>, the
 /// challenge, authenticate, and the for-join snapshot) and the joiner's abort of a failed join
@@ -67,13 +68,14 @@ public sealed class LanJoinListener : IAsyncDisposable
 
     private enum TokenState { Free, InUse, Spent }
 
-    private readonly string _apiUrl;
+    private readonly LanListener _host;
+    private readonly bool _ownsHost;
     private readonly Func<X509Certificate2?> _certificate;
-    private readonly IPEndPoint _endpoint;
     private readonly TimeProvider _time;
+    private readonly Action<IPAddress?>? _joined;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    private WebApplication? _app;
+    private bool _open;       // the join surface is up on the host (guarded by _gate)
     private ITimer? _expiry;
     private LanJoinSession? _session;
     private byte[] _tokenBytes = [];
@@ -81,15 +83,35 @@ public sealed class LanJoinListener : IAsyncDisposable
     private int _finishing;   // 1 from the joined device's snapshot until the grace ends: only the abort is served
     private bool _disposed;   // guarded by _gate
 
+    /// <summary>
+    /// A door with a listener of its own on one fixed address (the tests; the node itself uses the other constructor and its one LAN listener).
+    /// </summary>
     /// <param name="apiUrl">The Api child's loopback URL the joins are forwarded to.</param>
     /// <param name="certificate">The node's TLS leaf (the one the Connect page pins).</param>
-    /// <param name="endpoint">Where to listen: <c>0.0.0.0:5311</c> on a real node.</param>
+    /// <param name="endpoint">Where to listen.</param>
     public LanJoinListener(string apiUrl, Func<X509Certificate2?> certificate, IPEndPoint endpoint, TimeProvider time)
+        : this(new LanListener(apiUrl ?? throw new ArgumentNullException(nameof(apiUrl)), () => null,
+                certificate ?? throw new ArgumentNullException(nameof(certificate)),
+                new FixedBindPlanner((endpoint ?? throw new ArgumentNullException(nameof(endpoint))).Address), endpoint.Port),
+            certificate, time, joined: null, ownsHost: true)
     {
-        _apiUrl = apiUrl ?? throw new ArgumentNullException(nameof(apiUrl));
+    }
+
+    /// <param name="host">The node's LAN listener: the door is its join surface.</param>
+    /// <param name="certificate">The node's TLS leaf (the one the Connect page pins).</param>
+    /// <param name="joined">Told the local address a join came in on, once it succeeded: the network a device was paired on is trusted (decision D1).</param>
+    public LanJoinListener(LanListener host, Func<X509Certificate2?> certificate, TimeProvider time, Action<IPAddress?>? joined = null)
+        : this(host, certificate, time, joined, ownsHost: false)
+    {
+    }
+
+    private LanJoinListener(LanListener host, Func<X509Certificate2?> certificate, TimeProvider time, Action<IPAddress?>? joined, bool ownsHost)
+    {
+        _host = host ?? throw new ArgumentNullException(nameof(host));
         _certificate = certificate ?? throw new ArgumentNullException(nameof(certificate));
-        _endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         _time = time ?? throw new ArgumentNullException(nameof(time));
+        _joined = joined;
+        _ownsHost = ownsHost;
     }
 
     /// <summary>The open session, or null when the listener is off.</summary>
@@ -116,18 +138,13 @@ public sealed class LanJoinListener : IAsyncDisposable
                 ?? throw new InvalidOperationException("This node has no TLS certificate to serve the LAN listener with.");
             var pin = SpkiPin.Of(probe);
 
-            var app = Build();
-            try { await app.StartAsync(); }
-            catch
-            {
-                await app.DisposeAsync();
-                throw;
-            }
+            // The join surface of the one LAN listener: on every usable network, trusted or not (decision D2), until the session ends.
+            await _host.SetJoinAsync(this);
+            _open = true;
 
             _tokenBytes = RandomNumberGenerator.GetBytes(BeeMemoryBank.Core.Models.JoinCode.TokenSize);
             Volatile.Write(ref _tokenState, (int)TokenState.Free);
-            _app = app;
-            var session = new LanJoinSession(Base64Url.EncodeToString(_tokenBytes), _time.GetUtcNow() + Lifetime, pin, _endpoint.Port);
+            var session = new LanJoinSession(Base64Url.EncodeToString(_tokenBytes), _time.GetUtcNow() + Lifetime, pin, _host.Port);
             _session = session;
             _expiry = _time.CreateTimer(_ => _ = CloseAsync(session), null, Lifetime, Timeout.InfiniteTimeSpan);
             return session;
@@ -160,13 +177,11 @@ public sealed class LanJoinListener : IAsyncDisposable
         _expiry = null;
         _session = null;
         Volatile.Write(ref _finishing, 0);
-        if (_app is { } app)
+        if (_open)
         {
-            _app = null;
-            // Graceful: a snapshot still streaming to a device is let finish (bounded).
-            using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            try { await app.StopAsync(stopCts.Token); } catch (OperationCanceledException) { }
-            await app.DisposeAsync();
+            _open = false;
+            // Graceful: a snapshot still streaming to a device is let finish (bounded by the listener).
+            await _host.SetJoinAsync(null);
         }
     }
 
@@ -182,24 +197,27 @@ public sealed class LanJoinListener : IAsyncDisposable
             if (!ReferenceEquals(session, _session)) return;
             _expiry?.Dispose();
             _session = null;
+            _lastFinished = session;
             Volatile.Write(ref _finishing, 1);
-            var app = _app;
-            _expiry = _time.CreateTimer(_ => _ = CloseFinishedAsync(app), null, AbortGrace, Timeout.InfiniteTimeSpan);
+            var finished = session;
+            _expiry = _time.CreateTimer(_ => _ = CloseFinishedAsync(finished), null, AbortGrace, Timeout.InfiniteTimeSpan);
         }
         finally { _gate.Release(); }
     }
 
-    private async Task CloseFinishedAsync(WebApplication? app)
+    private async Task CloseFinishedAsync(LanJoinSession finished)
     {
         await _gate.WaitAsync();
         try
         {
             // A late timer of a grace that a new session has replaced must not close that session.
-            if (app != null && ReferenceEquals(app, _app) && Volatile.Read(ref _finishing) == 1)
+            if (_session is null && _open && Volatile.Read(ref _finishing) == 1 && ReferenceEquals(finished, _lastFinished))
                 await CloseCoreAsync();
         }
         finally { _gate.Release(); }
     }
+
+    private LanJoinSession? _lastFinished;
 
     public async ValueTask DisposeAsync()
     {
@@ -210,44 +228,16 @@ public sealed class LanJoinListener : IAsyncDisposable
         finally { _gate.Release(); }
 
         await DisableAsync();
+        if (_ownsHost) await _host.DisposeAsync();
     }
 
-    private WebApplication Build()
-    {
-        var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [] });
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
-        builder.WebHost.ConfigureKestrel(options =>
-        {
-            options.Limits.MaxRequestBodySize = 1024 * 1024;
-            options.Listen(_endpoint, listen => listen.UseHttps(https =>
-            {
-                https.SslProtocols = System.Security.Authentication.SslProtocols.Tls12
-                    | System.Security.Authentication.SslProtocols.Tls13;
-                https.ServerCertificateSelector = (_, _) => _certificate();
-            }));
-        });
-        builder.Services.AddHttpForwarder();
+    /// <summary>True for a route of the door (the join calls, and nothing more).</summary>
+    internal bool Serves(string method, PathString path) =>
+        path.HasValue && ExposedRoutes.Any(r => string.Equals(r.Method, method, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(r.Path, path.Value, StringComparison.OrdinalIgnoreCase));
 
-        var app = builder.Build();
-        app.Use(GateAsync);
-
-        var requestConfig = new ForwarderRequestConfig { ActivityTimeout = TimeSpan.FromMinutes(35) };
-        foreach (var (method, path) in ExposedRoutes)
-        {
-            app.MapForwarder(path, _apiUrl, requestConfig, transforms =>
-            {
-                // Same rule as the loopback front: nothing from outside may claim to be the node.
-                foreach (var header in NodeFront.StrippedInboundIdentityHeaders)
-                    transforms.AddRequestHeaderRemove(header);
-                transforms.AddRequestHeaderRemove(TokenHeader);
-            }).WithMetadata(new HttpMethodMetadata([method]));
-        }
-        // Anything else is not here — the same 404 an unpublished path gets from the Api.
-        app.MapFallback(() => Results.NotFound());
-        return app;
-    }
-
-    private async Task GateAsync(HttpContext ctx, Func<Task> next)
+    /// <summary>The door's rules for one request of its routes; <paramref name="next"/> forwards it to the Api.</summary>
+    internal async Task GateAsync(HttpContext ctx, Func<Task> next)
     {
         var path = ctx.Request.Path;
         if (path.Equals(JoinPath, StringComparison.OrdinalIgnoreCase))
@@ -309,6 +299,11 @@ public sealed class LanJoinListener : IAsyncDisposable
         finally
         {
             Volatile.Write(ref _tokenState, (int)(joined ? TokenState.Spent : TokenState.Free));
+        }
+        if (joined)
+        {
+            try { _joined?.Invoke(ctx.Connection.LocalIpAddress); }
+            catch { /* remembering the network is a convenience; the join itself succeeded */ }
         }
     }
 

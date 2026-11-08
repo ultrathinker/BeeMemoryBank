@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The product's mDNS scan (MdnsBrowser: one short browse of _beememorybank._tcp and its parser), the service's identifiers (MdnsConstants)
+    and the record a scan returns (MdnsNodeRecord). Used by the full app (Infrastructure: the announcer, the desktop node's peer browse, the
+    join wizard) and by the blind desktop apps, which look for their hub after its address changed (docs/design/lan-peer-sync.md, section 19).
+
+    It references NOTHING of the product: no Vault, no Infrastructure, no Core, no blind project. The blind apps may carry it because of that;
+    Infrastructure, which holds the full app's secret stores and the local CA, must never reach a blind app (InfrastructureBoundaryTests).
+  -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Makaretu.Dns.Multicast" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+</Project>

@@ -20,6 +20,7 @@ public sealed record BlindAlarmEntry(string Kind, Guid NodeId, string? Name, Dat
 public sealed record BlindAlarmsAnswer(string State, bool Locked, IReadOnlyList<BlindAlarmEntry> Alarms)
 {
     public const string Judged = "ok";
+    public const string Invisible = "invisible";
 }
 
 /// <summary>What one poll of <c>GET /node/alarms</c> brought.</summary>

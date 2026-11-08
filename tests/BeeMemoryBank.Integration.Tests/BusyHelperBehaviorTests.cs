@@ -83,6 +83,7 @@ public class BusyHelperBehaviorTests
     // BMB-317: two lines a node, the rest under a chevron
     [InlineData("the_sync_dropdown_is_two_lines_with_the_rest_under_a_chevron")]
     [InlineData("the_chevron_opens_the_details_and_a_check_opens_a_closed_row")]
+    [InlineData("a_checked_node_says_it_is_being_checked_once")]
     // BMB-316: the password dialog of the save of a protected article
     [InlineData("the_save_of_a_protected_article_tells_a_missing_password_from_other_failures")]
     [InlineData("the_password_dialog_saves_with_what_is_typed_and_stays_open_when_it_fails")]

@@ -34,7 +34,7 @@
                 <sl-icon slot="icon" name="shield-exclamation"></sl-icon>
                 <strong>@Model.RestoredPeers.Count restored @(Model.RestoredPeers.Count == 1 ? "device waits" : "devices wait") for your confirmation.</strong>
                 A restore kept @(Model.RestoredPeers.Count == 1 ? "it" : "them") switched off, because nothing vouched for @(Model.RestoredPeers.Count == 1 ? "it" : "them").
-                <a href="@AdminRoutes.RestoredDevices">Review @(Model.RestoredPeers.Count == 1 ? "it" : "them")</a>.
+                <a href="@(AdminRoutes.Devices)#restored-peers">Review @(Model.RestoredPeers.Count == 1 ? "it" : "them")</a>.
             </sl-alert>
         }
 

@@ -14,7 +14,7 @@ desktop/BeeMemoryBank.Desktop/MacOS/MacOsAutostart.cs 1
 desktop/BeeMemoryBank.Desktop/MacOS/MacOsFileManager.cs 2
 desktop/BeeMemoryBank.Desktop/MacOS/MacOsPreventSleep.cs 5
 desktop/BeeMemoryBank.Desktop/MacOS/MacOsSleepMonitor.cs 10
-desktop/BeeMemoryBank.Desktop/MainWindow.axaml.cs 15
+desktop/BeeMemoryBank.Desktop/MainWindow.axaml.cs 17
 desktop/BeeMemoryBank.Desktop/Program.cs 2
 desktop/BeeMemoryBank.Desktop/Services/BlindAlarmWatcher.cs 1
 desktop/BeeMemoryBank.Desktop/Services/DesktopRekeyService.cs 3
@@ -35,8 +35,9 @@ desktop/BeeMemoryBank.Desktop/Views/CreateStorageDialog.axaml.cs 1
 desktop/BeeMemoryBank.Desktop/Views/ManageStoragesWindow.axaml.cs 5
 desktop/BeeMemoryBank.Desktop/Views/ProfileCommands.cs 1
 desktop/BeeMemoryBank.Desktop/Views/SettingsWindow.axaml.cs 3
-desktop/BeeMemoryBank.Node/Front/LanControl.cs 3
-desktop/BeeMemoryBank.Node/Front/LanFrontListener.cs 3
+desktop/BeeMemoryBank.Node/Front/LanControl.cs 5
+desktop/BeeMemoryBank.Node/Front/LanListener.cs 2
+desktop/BeeMemoryBank.Node/Front/LanNetworkSwitch.cs 4
 desktop/BeeMemoryBank.Node/NodeOrchestrator.cs 3
 desktop/BeeMemoryBank.Node/NodeStatusManager.cs 4
 desktop/BeeMemoryBank.Node/Program.cs 12
@@ -58,7 +59,7 @@ libs/BeeMemoryBank.Core/IO/OwnerOnlyFile.cs 1
 libs/BeeMemoryBank.Embeddings/OnnxEmbeddingGenerator.cs 1
 libs/BeeMemoryBank.Embeddings/PendingEmbeddingProcessor.cs 1
 libs/BeeMemoryBank.Hosting/ReadyFileManager.cs 6
-libs/BeeMemoryBank.Infrastructure/Mdns/MdnsBrowser.cs 1
+libs/BeeMemoryBank.Mdns/MdnsBrowser.cs 1
 libs/BeeMemoryBank.Rekey/RekeyRunner.cs 2
 libs/BeeMemoryBank.Storage/Sqlite/MigrationRunner.cs 3
 libs/BeeMemoryBank.Sync/Blind/BaselineStore.cs 1
@@ -95,7 +96,7 @@ mobile/BeeMemoryBank.Mobile/Pages/ArticleEditPage.xaml.cs 4
 mobile/BeeMemoryBank.Mobile/Pages/ArticlesPage.xaml.cs 1
 mobile/BeeMemoryBank.Mobile/Pages/FolderPickerPage.xaml.cs 1
 mobile/BeeMemoryBank.Mobile/Pages/SecurityPage.xaml.cs 5
-mobile/BeeMemoryBank.Mobile/Pages/StatusPage.xaml.cs 5
+mobile/BeeMemoryBank.Mobile/Pages/StatusPage.xaml.cs 8
 mobile/BeeMemoryBank.Mobile/Pages/TagArticlesPage.xaml.cs 1
 mobile/BeeMemoryBank.Mobile/Pages/TagsPage.xaml.cs 1
 mobile/BeeMemoryBank.Mobile/Pages/TreeFolderPage.xaml.cs 1
@@ -179,7 +180,7 @@ server/BeeMemoryBank.Cli/Commands/SyncActivationCommand.cs 2
 server/BeeMemoryBank.Cli/Commands/UserCommand.cs 1
 server/BeeMemoryBank.Cli/Commands/VaultCommand.cs 7
 server/BeeMemoryBank.Cli/Program.cs 1
-server/BeeMemoryBank.Web/Pages/Admin/BlindNodes.cshtml.cs 2
+server/BeeMemoryBank.Web/Pages/Admin/Device.cshtml.cs 1
 server/BeeMemoryBank.Web/Pages/Login.cshtml.cs 2
 server/BeeMemoryBank.Web/Pages/RecoverAccess.cshtml.cs 2
 server/BeeMemoryBank.Web/Services/ApiClient.BlindNodes.cs 1

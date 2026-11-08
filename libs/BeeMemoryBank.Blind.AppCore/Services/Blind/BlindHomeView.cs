@@ -15,7 +15,7 @@ public sealed record BlindHomeView(
     string? PairingCode, bool ShowPairingCode, string PairingMessage, bool CanConnect, bool CanRePair,
     bool CanSyncNow, bool CanBackupNow, string BackupNowText, bool CanSaveTo,
     string? KeyLostText, string? KeyStoreText, string? StartErrorText,
-    int ScheduleIndex, string Backups, string Log, string Store = "", string? Problem = null)
+    int ScheduleIndex, string Backups, string Log, string Store = "", string? Problem = null, string? Hub = null)
 {
     public static readonly BlindBackupSchedule[] Schedules = [BlindBackupSchedule.Off, BlindBackupSchedule.Daily, BlindBackupSchedule.Weekly];
 
@@ -72,7 +72,8 @@ public sealed record BlindHomeView(
                 : string.Join("\n", status.Backups.Select(b => $"{b.Name}  ({b.Size / 1024} KiB)")),
             Log: string.Join("\n", status.RecentLog.Select(e => $"{e.At.ToLocalTime():dd.MM HH:mm}  {Stored(e)}")),
             Store: StoreText(store, status, now ?? DateTimeOffset.UtcNow),
-            Problem: ProblemText(status));
+            Problem: ProblemText(status),
+            Hub: status.Hub);
     }
 
     /// <summary>The log kinds of a failed contact with the node: a sync round, a refused pin, a refused certificate.</summary>

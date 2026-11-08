@@ -9,6 +9,16 @@
     //   "done"      → step 3: completion screen
     var step = Model.Step;
     var mode = Model.Mode; // "standalone" or "join"
+    // The view the card opens in (the page script switches it afterwards): the start cards, the create form, or the two join pages
+    // (first how to connect, then the details). A join form shown again with an error keeps the way the person chose (joinWay).
+    var joinWay = Model.Request.HasFormContentType ? Model.Request.Form["joinWay"].ToString() : "";
+    var view = step == "form"
+        ? (mode == "join" ? (joinWay == "code" ? "join-code" : joinWay == "url" ? "join-url" : "join-choose") : "standalone")
+        : "start";
+    // The hint rule of PasswordHintPolicy, for the page script's check before sending (the node checks it again).
+    var hintMin = BeeMemoryBank.Core.Services.PasswordHintPolicy.MinimumLength;
+    var hintMax = BeeMemoryBank.Core.Services.PasswordHintPolicy.MaximumLength;
+    var hintHelp = $"{hintMin} to {hintMax} characters.";
 }
 
 <!DOCTYPE html>
@@ -20,18 +30,20 @@
     <script type="module" src="/js/shoelace-init.js" asp-append-version="true"></script>
     <link rel="stylesheet" href="/lib/shoelace/themes/dark.css" asp-append-version="true" />
     <link href="/css/site.css" rel="stylesheet" asp-append-version="true" />
-    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="/images/favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="apple-touch-icon" href="/images/apple-touch-icon.png" />
     <style>
-        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px 0; }
-        .setup-card { width: 460px; max-width: calc(100vw - 32px); background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; }
+        body { display: flex; align-items: center; justify-content: flex-start; height: auto; min-height: 100vh; overflow-y: auto; padding: 24px 0; }
+        .setup-card { margin: auto; width: 460px; max-width: calc(100vw - 32px); background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; }
         .setup-card h2 { margin-bottom: 8px; font-size: 1.3rem; text-align: center; }
         .setup-card .logo-icon { width: 1.6rem; height: 1.6rem; vertical-align: middle; margin-right: 6px; }
         .setup-subtitle { text-align: center; color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 24px; }
 
         /* Mode selection cards */
         .mode-cards { display: flex; flex-direction: column; gap: 12px; }
-        .mode-card { display: flex; align-items: center; gap: 16px; padding: 18px; border: 2px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--bg-app); transition: border-color 0.15s, background 0.15s; text-align: left; width: 100%; }
-        .mode-card:hover { border-color: var(--sl-color-primary-500); background: var(--sl-color-primary-950); }
+        .mode-card { display: flex; align-items: center; gap: 16px; padding: 18px; border: 2px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--bg-app); color: var(--text-primary); transition: border-color 0.15s, background 0.15s; text-align: left; width: 100%; }
+        .mode-card:hover, .mode-card:focus-visible { border-color: var(--sl-color-primary-500); background: var(--tree-hover); color: var(--text-primary); }
         .mode-card sl-icon { font-size: 1.8rem; flex-shrink: 0; color: var(--sl-color-primary-400); }
         .mode-card-text strong { display: block; margin-bottom: 2px; }
         .mode-card-text small { color: var(--text-secondary); font-size: 0.83rem; }
@@ -49,13 +61,29 @@
         .done-icon sl-icon { font-size: 3rem; color: var(--sl-color-success-400); }
         .done-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
 
+        /* Create / join form: two columns on a wide window (everything on one screen), one column on a narrow one */
+        .form-two-col { display: grid; grid-template-columns: 1fr; gap: 16px 32px; }
+        .form-two-col .form-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+        .form-two-col .form-actions { grid-column: 1 / -1; }
+        @@media (min-width: 940px) {
+            .setup-card:has(#panel-form.active) { width: 900px; }
+            .form-two-col { grid-template-columns: 1fr 1fr; }
+        }
+
+        /* Join: first choose how to connect, then fill in the details */
+        #setup-card[data-view="join-choose"] #join-details { display: none; }
+        #setup-card:not([data-view="join-choose"]) #join-choose { display: none; }
+        #setup-card[data-view="join-code"] [data-join-way="url"], #setup-card[data-view="join-url"] [data-join-way="code"] { display: none !important; }
+        #setup-card[data-view="join-choose"].setup-card { width: 560px; }
+        .join-way-title { margin: 0 0 14px; font-size: 0.95rem; color: var(--text-secondary); }
+
         /* Hide/show panels */
         .wizard-panel { display: none; }
         .wizard-panel.active { display: block; }
     </style>
 </head>
 <body class="sl-theme-dark">
-    <div class="setup-card">
+    <div class="setup-card" id="setup-card" data-view="@view">
         <h2>
             <img src="/images/favicon.svg" alt="" class="logo-icon" />
             Welcome to Bee Memory Bank
@@ -146,30 +174,36 @@
         <!-- ═══ STEP 2: Forms ═══ -->
         <div class="wizard-panel @(currentStepNum == 2 ? "active" : "")" id="panel-form">
             <!-- Back button -->
-            <a href="/Setup" class="back-link">
+            <a href="/Setup" class="back-link" id="link-form-back">
                 <sl-icon name="arrow-left"></sl-icon> Back
             </a>
 
             <!-- Standalone form — visible when mode=standalone -->
             <div id="form-standalone" style="display:@(mode == "standalone" || currentStepNum == 2 && mode != "join" ? "block" : "none");">
-                <form data-busy="long" data-busy-title="Creating your memory bank" data-busy-text="Please wait. This takes a few seconds." method="post" asp-page-handler="Standalone" class="tab-panel-form" data-setup-form="standalone">
+                <form data-busy="long" data-busy-title="Creating your memory bank" data-busy-text="Please wait. This takes a few seconds." method="post" asp-page-handler="Standalone" class="tab-panel-form form-two-col" data-setup-form="standalone">
                     @Html.AntiForgeryToken()
-                    <sl-input name="adminUsername" label="Username" required
-                              value="@SetupModel.SuggestedUsername" autocomplete="username"></sl-input>
-                    <sl-input name="password" label="Password" type="password" required autofocus
+                    <div class="form-col">
+                    <sl-input name="adminUsername" label="Username" required data-setup-username
+                              value="@Model.FieldValue("standalone", Model.PostedUsername, SetupModel.SuggestedUsername)" autocomplete="username"></sl-input>
+                    <sl-input name="password" label="Password" type="password" required autofocus data-setup-password
                               password-toggle minlength="6" autocomplete="new-password"></sl-input>
-                    <sl-input name="confirmPassword" label="Repeat password" type="password" required
+                    <sl-input name="confirmPassword" label="Repeat password" type="password" required data-setup-confirm
                               password-toggle minlength="6" autocomplete="new-password"></sl-input>
+                    </div>
+                    <div class="form-col">
                     <p class="text-sm text-muted" style="margin:10px 0 6px 0;" id="password-hint-intro">
                         Password hint (required). If you forget your password, we will show this hint on the sign-in page,
                         because there is no e-mail recovery. Write it so that other people cannot work out your password
                         from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it.
                     </p>
-                    <sl-input name="passwordHint" label="Password hint" required maxlength="120"
-                              autocomplete="off" help-text="3 to 120 characters."></sl-input>
+                    <sl-input name="passwordHint" label="Password hint" required maxlength="@hintMax"
+                              data-setup-hint data-hint-min="@hintMin" data-hint-max="@hintMax"
+                              value="@Model.FieldValue("standalone", Model.PostedPasswordHint)"
+                              autocomplete="off" help-text="@hintHelp"></sl-input>
                     <sl-input name="displayName" label="Name of this computer" required
-                              value="@SetupModel.SuggestedNodeName" placeholder="e.g. My Laptop"
+                              value="@Model.FieldValue("standalone", Model.PostedDisplayName, SetupModel.SuggestedNodeName)" placeholder="e.g. My Laptop"
                               help-text="How this computer appears on your other devices."></sl-input>
+                    </div>
                     <div class="form-actions">
                         <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
                             <sl-icon slot="prefix" name="plus-circle"></sl-icon> Create
@@ -178,59 +212,95 @@
                 </form>
             </div>
 
-            <!-- Join form — visible when mode=join -->
+            <!-- Join: first how to connect (a code that another computer shows, or the address of a node), then the details. -->
             <div id="form-join" style="display:@(mode == "join" ? "block" : "none");">
-                <form data-busy="long" data-busy-title="Joining the network" data-busy-text="Please wait. Your notes are being copied from the other device; this may take up to a minute." method="post" asp-page-handler="Join" class="tab-panel-form" data-setup-form="join">
-                    @Html.AntiForgeryToken()
-                    <!-- The code another computer shows under Admin > Connect a device: its address, a one-time token and
-                         the pin of its certificate. Pasted, it fills the address below and the join goes only to the computer
-                         the code belongs to; no certificate has to be trusted first. -->
-                    <sl-input name="joinCode" id="join-code" label="Join code from the other computer" autofocus
-                              placeholder="bmb-join:?a=https%3A%2F%2F192.168.1.20%3A5311&amp;t=&hellip;" autocomplete="off"
-                              help-text="On that computer open Admin, then Connect a device, and copy the code it shows. It is the easiest way to join a computer on your own network."></sl-input>
-                    <small id="join-code-status" class="text-muted" style="display:none;margin:-4px 0 4px;"></small>
-
-                    <sl-input name="remoteUrl" id="join-remote-url" label="Address of the other device"
-                              placeholder="https://bee.example.com" type="url"
-                              help-text="Only if you have no join code: the web address of a node that has a normal HTTPS certificate."></sl-input>
-
-                    <!-- Optional, on request only: an mDNS scan (OnGetDiscoveredNodes) whose results
-                         pre-fill the address field above. Never runs by itself. It finds the computers that have
-                         "Devices on my network" switched on (Admin > Devices on my network); a computer that only opens Connect a device
-                         is not announced, and is joined by its code. -->
-                    <div id="join-discovered" style="margin-bottom:4px;">
-                        <sl-button variant="default" size="small" id="btn-scan-network" type="button" outline
-                                   style="width:100%;">
-                            <sl-icon slot="prefix" name="broadcast-pin"></sl-icon>
-                            Find devices on my network
-                        </sl-button>
-                        <small class="text-muted" style="display:block;margin-top:4px;">
-                            Finds computers that have &ldquo;Devices on my network&rdquo; switched on (Admin &rarr; Devices on my network). A computer you have
-                            not switched that on for is not found: use the join code from its Connect a device card.
-                        </small>
-                        <div id="discovered-nodes" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"></div>
+                <div id="join-choose">
+                    <p class="join-way-title">How do you want to connect to your other node?</p>
+                    <div class="mode-cards">
+                        <button class="mode-card" id="btn-join-way-code" type="button">
+                            <sl-icon name="key"></sl-icon>
+                            <div class="mode-card-text">
+                                <strong>Connect with a code</strong>
+                                <small>Get the code on your other node: in the Windows or Mac app open Admin, then Devices, then Connect a device,
+                                    and copy the code it shows. The code works on the same network and for 15 minutes.</small>
+                            </div>
+                        </button>
+                        <button class="mode-card" id="btn-join-way-url" type="button">
+                            <sl-icon name="globe2"></sl-icon>
+                            <div class="mode-card-text">
+                                <strong>Connect with the address of your node</strong>
+                                <small>Use the web address of your node on the internet or on your local network, for example
+                                    https://notes.example.com. Nothing has to be generated on that node. This works with nodes that have a
+                                    normal HTTPS certificate, such as a server (Docker) node behind a web server. The Windows and Mac apps use
+                                    their own certificate: connect to them with a code.</small>
+                            </div>
+                        </button>
                     </div>
+                </div>
 
-                    <sl-input name="joinAdminUsername" label="Username" required
-                              value="@SetupModel.SuggestedUsername" autocomplete="username"></sl-input>
-                    <sl-input name="joinPassword" label="Password" type="password" required
-                              password-toggle minlength="6" autocomplete="current-password"></sl-input>
-                    <p class="text-sm text-muted" style="margin:10px 0 6px 0;" id="join-password-hint-intro">
-                        Password hint (required). If you forget your password, we will show this hint on the sign-in page,
-                        because there is no e-mail recovery. Write it so that other people cannot work out your password
-                        from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it.
-                    </p>
-                    <sl-input name="passwordHint" label="Password hint" required maxlength="120"
-                              autocomplete="off" help-text="3 to 120 characters."></sl-input>
-                    <sl-input name="joinDisplayName" label="Name of this computer" required
-                              value="@SetupModel.SuggestedNodeName" placeholder="e.g. My Laptop"
-                              help-text="How this computer appears on your other devices."></sl-input>
-                    <div class="form-actions">
-                        <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
-                            <sl-icon slot="prefix" name="link"></sl-icon> Connect
-                        </sl-button>
-                    </div>
-                </form>
+                <div id="join-details">
+                    <form data-busy="long" data-busy-title="Joining the network" data-busy-text="Please wait. Your notes are being copied from the other device; this may take up to a minute." method="post" asp-page-handler="Join" class="tab-panel-form form-two-col" data-setup-form="join">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="joinWay" id="join-way" value="@joinWay" />
+                        <div class="form-col">
+                            <!-- The code another computer shows under Admin > Devices > Connect a device: its address, a one-time token and
+                                 the pin of its certificate. Pasted, it fills the address and the join goes only to the computer
+                                 the code belongs to; no certificate has to be trusted first. -->
+                            <sl-input name="joinCode" id="join-code" data-join-way="code" label="Join code from the other computer"
+                                      value="@Model.FieldValue("join", Model.PostedJoinCode)"
+                                      placeholder="bmb-join:?a=https%3A%2F%2F192.168.1.20%3A5311&amp;t=&hellip;" autocomplete="off"
+                                      help-text="On that computer open Admin, then Devices, then Connect a device, and copy the code it shows."></sl-input>
+                            <small id="join-code-status" data-join-way="code" class="text-muted" style="display:none;margin:-4px 0 4px;"></small>
+
+                            <!-- Optional, on request only: an mDNS scan (OnGetDiscoveredNodes) that shows the computers on this network which announce themselves
+                                 for sync (the announcement of "Sync with your devices on this network"; one whose web page is shown is found as well). It never runs by itself.
+                                 A computer found here still needs its code: finding it only tells which one to ask. -->
+                            <div id="join-discovered" data-join-way="code" style="margin-bottom:4px;">
+                                <sl-button variant="default" size="small" id="btn-scan-network" type="button" outline
+                                           style="width:100%;">
+                                    <sl-icon slot="prefix" name="broadcast-pin"></sl-icon>
+                                    Find devices on my network
+                                </sl-button>
+                                <small class="text-muted" style="display:block;margin-top:4px;">
+                                    Finds computers on this network by their sync announcement. A computer found here still needs its join code: on that computer open
+                                    Admin, then Devices, then Connect a device, and copy the code it shows.
+                                </small>
+                                <div id="discovered-nodes" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"></div>
+                            </div>
+
+                            <sl-input name="remoteUrl" id="join-remote-url" data-join-way="url" label="Address of your node"
+                                      value="@Model.FieldValue("join", Model.PostedRemoteUrl)"
+                                      placeholder="https://bee.example.com" type="url"
+                                      help-text="The web address of a node that has a normal HTTPS certificate."></sl-input>
+
+                            <sl-input name="joinAdminUsername" label="Username" required data-setup-username
+                                      value="@Model.FieldValue("join", Model.PostedUsername, SetupModel.SuggestedUsername)" autocomplete="username"></sl-input>
+                            <sl-input name="joinPassword" label="Password" type="password" required data-setup-password
+                                      password-toggle minlength="6" autocomplete="current-password"></sl-input>
+                            <sl-input name="joinConfirmPassword" label="Repeat password" type="password" required data-setup-confirm
+                                      password-toggle minlength="6" autocomplete="off"></sl-input>
+                        </div>
+                        <div class="form-col">
+                            <p class="text-sm text-muted" style="margin:10px 0 6px 0;" id="join-password-hint-intro">
+                                Password hint (required). If you forget your password, we will show this hint on the sign-in page,
+                                because there is no e-mail recovery. Write it so that other people cannot work out your password
+                                from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it.
+                            </p>
+                            <sl-input name="passwordHint" label="Password hint" required maxlength="@hintMax"
+                                      data-setup-hint data-hint-min="@hintMin" data-hint-max="@hintMax"
+                                      value="@Model.FieldValue("join", Model.PostedPasswordHint)"
+                                      autocomplete="off" help-text="@hintHelp"></sl-input>
+                            <sl-input name="joinDisplayName" label="Name of this computer" required
+                                      value="@Model.FieldValue("join", Model.PostedDisplayName, SetupModel.SuggestedNodeName)" placeholder="e.g. My Laptop"
+                                      help-text="How this computer appears on your other devices."></sl-input>
+                        </div>
+                        <div class="form-actions">
+                            <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>
+                                <sl-icon slot="prefix" name="link"></sl-icon> Connect
+                            </sl-button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
 
@@ -243,7 +313,7 @@
             <p class="text-muted" style="text-align:center;font-size:0.9rem;margin-bottom:20px;">
                 @if (mode == "join")
                 {
-                    <text>This computer is connected. Sign in to open your notes.</text>
+                    <text>This computer is connected. Sign in to open your notes. It keeps in step with your other devices by itself: directly whenever they are on a trusted network together, and through your server or blind node when they are apart.</text>
                 }
                 else
                 {

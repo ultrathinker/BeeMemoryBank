@@ -1,6 +1,8 @@
+using System.Security.Authentication;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Sync.Blind;
 
 namespace BeeMemoryBank.BlindMobile.Services.Blind;
 
@@ -23,6 +25,7 @@ public sealed class BlindHttpClientProvider : IHttpClientFactory, IDisposable
     private readonly Func<HttpMessageHandler>? _primaryOverride;
     private string? _currentKey;
     private HttpMessageHandler? _currentHandler;
+    private HttpMessageHandler? _anchoredHandler;
 
     private readonly Action<string>? _onPinRefused;
     private readonly Action<string>? _onCertificateRefused;
@@ -47,6 +50,59 @@ public sealed class BlindHttpClientProvider : IHttpClientFactory, IDisposable
     /// call this constructor, tests do, and a new parameter type would show in a signature).
     /// </summary>
     public BlindMeteringTap? Metering { get; init; }
+
+    /// <summary>
+    /// How this copy reaches its hub over the hub's channels (<see cref="BlindHubChannels"/>): the pairing address, what the hub announced, what mDNS saw. Null (a composition that
+    /// has none) is the pairing address through <see cref="GetClient(BlindCallCode, bool)"/> alone. An init property, like <see cref="Metering"/>.
+    /// </summary>
+    public BlindHubChannels? Hub { get; init; }
+
+    /// <summary>
+    /// The checks of a TLS key against a peer's anchor (<see cref="SpkiPinRegistry"/>), for the clients of a session over the hub's channels: whichever address is dialled, the request
+    /// carries the hub's anchor, and the certificate must be one of its pinned keys or a leaf of its local CA. Without it (a composition with no hub channels) there is no such client.
+    /// </summary>
+    public SpkiPinRegistry? Pins { get; init; }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> with the client and the call code of one call to the hub. With <see cref="Hub"/> they are the hub's first channel that answers (the call code then
+    /// holds that address for this call only; the pairing's own is never changed); without it, the client <see cref="GetClient(BlindCallCode, bool)"/> gives and the call code as it is.
+    /// </summary>
+    /// <param name="kind">What the call is for (the order of the hub's addresses depends on it).</param>
+    /// <param name="exempt">The call counts and is never blocked (see <see cref="GetClient(BlindCallCode, bool)"/>).</param>
+    public async Task<T> WithClientAsync<T>(BlindCallCode target, BlindHubCall kind, bool exempt, Func<HttpClient, BlindCallCode, Task<T>> work, CancellationToken ct)
+    {
+        if (Hub is { } hub) return await hub.RunAsync(this, target, kind, exempt, work, ct).ConfigureAwait(false);
+        using var client = GetClient(target, exempt);
+        return await work(client, target).ConfigureAwait(false);
+    }
+
+    /// <summary>The same for a call that returns nothing.</summary>
+    public Task WithClientAsync(BlindCallCode target, BlindHubCall kind, bool exempt, Func<HttpClient, BlindCallCode, Task> work, CancellationToken ct) =>
+        WithClientAsync<int>(target, kind, exempt, async (client, call) =>
+        {
+            await work(client, call).ConfigureAwait(false);
+            return 0;
+        }, ct);
+
+    /// <summary>
+    /// The pipeline of a client that is stamped with a peer's anchor on every request (<see cref="PeerAnchorStamp"/>): the maintenance and https checks, no redirect, and the same counting
+    /// and limits as <see cref="GetClient(BlindCallCode, bool)"/>; at the bottom the handler of <see cref="Pins"/>, which accepts only what the request's anchor accepts. The handler at the bottom
+    /// is shared (its connections are kept per address and anchor) and is not disposed with the client.
+    /// </summary>
+    internal HttpMessageHandler CreateAnchoredHandler(bool exempt)
+    {
+        HttpMessageHandler primary;
+        lock (_gate)
+        {
+            _anchoredHandler ??= _primaryOverride?.Invoke()
+                ?? (Pins ?? throw new InvalidOperationException("This composition has no checks for a peer's anchor.")).CreateHandler();
+            primary = _anchoredHandler;
+        }
+
+        HttpMessageHandler inner = new PinRefusalReporter(_onPinRefused) { InnerHandler = new NonDisposingDelegatingHandler(primary) };
+        if (Metering is { } tap) inner = new BlindMeteringHandler(tap, exempt) { InnerHandler = inner };
+        return new MaintenanceDetectingHandler { InnerHandler = new BlindHttpHandler(inner, onlyAuthority: null) };
+    }
 
     /// <summary>
     /// Gets or creates a fresh disposable HttpClient bound to the specified or active CallCode SPKI pin.
@@ -127,6 +183,8 @@ public sealed class BlindHttpClientProvider : IHttpClientFactory, IDisposable
         {
             DisposeCurrent();
             _currentKey = null;
+            _anchoredHandler?.Dispose();
+            _anchoredHandler = null;
         }
     }
 
@@ -140,6 +198,23 @@ public sealed class BlindHttpClientProvider : IHttpClientFactory, IDisposable
     }
 
     public void Dispose() => Invalidate();
+
+    /// <summary>Tells when a peer answered with another key than its anchor accepts, as the pinned handler does for the pairing address: the stack alone says "connection failure", as for a node that is off.</summary>
+    private sealed class PinRefusalReporter(Action<string>? onRefused) : DelegatingHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            try
+            {
+                return await base.SendAsync(request, ct).ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex) when (ex.InnerException is AuthenticationException && request.RequestUri is { } uri)
+            {
+                onRefused?.Invoke(uri.Authority);
+                throw;
+            }
+        }
+    }
 
     private sealed class NonDisposingDelegatingHandler(HttpMessageHandler innerHandler) : DelegatingHandler(innerHandler)
     {

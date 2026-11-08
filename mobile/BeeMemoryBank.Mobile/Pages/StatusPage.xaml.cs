@@ -99,9 +99,22 @@ public partial class StatusPage : ContentPage
                 // Defense-in-depth fail-closed filter: if identity read fails, show nothing
                 // rather than risk leaking the self-row. The real invariant is that self
                 // never lives in tbl_whitelist (enforced in InitializationService / NodeSetupService).
-                return local == null
-                    ? new List<WhitelistEntry>()
-                    : all.Where(n => n.NodeId != local.NodeId).ToList();
+                if (local == null) return new List<PeerCard>();
+
+                // How often this phone syncs now: the foreground service every 5 minutes, else the worker every 15. A direct contact counts for 2.5 of them.
+#if ANDROID
+                var interval = TimeSpan.FromMinutes(SyncForegroundService.IsRunning ? 5 : 15);
+#else
+                var interval = TimeSpan.FromMinutes(15);
+#endif
+                var (lastCycleUtc, _, _, _) = Services.SyncHeartbeat.Read();
+                var ownCycleRecent = lastCycleUtc is { } at && DateTime.UtcNow - at < TimeSpan.FromMinutes(20);
+
+                var channels = scope.ServiceProvider.GetRequiredService<PeerChannelService>();
+                var cards = new List<PeerCard>();
+                foreach (var peer in all.Where(n => n.NodeId != local.NodeId))
+                    cards.Add(await channels.CardAsync(peer, interval, ownCycleRecent));
+                return cards;
             });
             PeersList.ItemsSource = peers;
         }
@@ -143,7 +156,7 @@ public partial class StatusPage : ContentPage
         if (sender is not Button btn || btn.CommandParameter is not WhitelistEntry entry) return;
 
         var newUrl = await this.ShowInputPopupAsync(
-            "Change URL",
+            "Change address",
             $"Enter new API address for {entry.DisplayName}:",
             initialValue: entry.ApiAddress ?? "",
             placeholder: "https://example.com");
@@ -177,6 +190,69 @@ public partial class StatusPage : ContentPage
                 result.Outcome == PeerAddressOutcome.Unchanged ? result.Message : $"The address of {entry.DisplayName} is updated.", "OK");
             await LoadPeersAsync();
         }, new BusyOptions { FailureTitle = "Failed to update" });
+    }
+
+    private async void OnAddPeerAddressClicked(object? sender, EventArgs e)
+    {
+        if (sender is not Button btn || btn.CommandParameter is not WhitelistEntry entry) return;
+
+        var typed = await this.ShowInputPopupAsync(
+            "Add an address",
+            $"Enter an IP address, a name or a URL where {entry.DisplayName} can be reached. It is kept on this phone only.",
+            accept: "Add",
+            placeholder: "192.168.1.20");
+
+        if (string.IsNullOrWhiteSpace(typed)) return;
+
+        // The one busy helper (BMB-311): the button is off and spins through the check of the address and the save; a failure is said in full in a
+        // dialog (a list row has no room for a line).
+        var text = typed;
+        await BusyAction.RunAsync(btn, async () =>
+        {
+            // The address is made canonical, then asked who it is with THIS peer's TLS anchor: the node id, the key on record and the certificate must be
+            // the peer's. Its sentences never quote the address, so none is put in a dialog here.
+            var result = await AddChannelAsync(entry.NodeId, text, saveWithoutAnswer: false);
+            if (result.CanSaveAnyway)
+            {
+                // Nothing answers there as a sync server - warn but allow saving (the device may be off, or on another network now). The first session
+                // that reaches it will check who answers.
+                bool proceed = await DisplayAlert("Warning", result.Message, "Save anyway", "Cancel");
+                if (!proceed) return;
+                result = await AddChannelAsync(entry.NodeId, text, saveWithoutAnswer: true);
+            }
+            if (!result.Succeeded)
+            {
+                await DisplayAlert("Not saved", result.Message, "OK");
+                return;
+            }
+
+            await DisplayAlert("Address added", result.Message, "OK");
+            await LoadPeersAsync();
+        }, new BusyOptions { FailureTitle = "Failed to add the address" });
+    }
+
+    private async void OnRemovePeerChannelClicked(object? sender, EventArgs e)
+    {
+        if (sender is not Button btn || btn.CommandParameter is not PeerChannelLine line) return;
+
+        bool confirmed = await DisplayAlert(
+            "Remove address",
+            "Remove this address? Only this phone forgets it; the device and its other addresses stay.",
+            "Remove", "Cancel");
+        if (!confirmed) return;
+
+        await BusyAction.RunAsync(btn, async () =>
+        {
+            using (var scope = _services.CreateScope())
+                await scope.ServiceProvider.GetRequiredService<PeerChannelService>().RemoveAsync(line.PeerNodeId, line.Address);
+            await LoadPeersAsync();
+        }, new BusyOptions { FailureTitle = "Failed to remove the address" });
+    }
+
+    private async Task<PeerChannelResult> AddChannelAsync(Guid nodeId, string typed, bool saveWithoutAnswer)
+    {
+        using var scope = _services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<PeerChannelService>().AddAsync(nodeId, typed, saveWithoutAnswer);
     }
 
     private async Task<PeerAddressResult> ChangeAddressAsync(Guid nodeId, string typed, bool saveWhenUnanswered)

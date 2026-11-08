@@ -272,8 +272,16 @@ public static class SyncEndpoints
             // last row it was given would ask for the same page forever. The next baseline carries what the left-out rows
             // changed.
             long? endOfLog = null;
-            if (policy.SealsMetadata && BlindNodeId.IsBlind(nodeId))
-                (events, endOfLog) = await FillBlindPageAsync(eventLogRepo, events, limit);
+            // The same filling for a requester that does not advertise peer-endpoints-v1 (a 2.7.5 node): it is never served a node_endpoints event,
+            // which a locked, encrypted 2.7.5 node would refuse and so stall on (docs/design/lan-peer-sync.md 8, 12).
+            var bearer = ctx.Request.Headers.Authorization.ToString();
+            var capabilities = store.CapabilitiesOf(bearer.StartsWith("Bearer ", StringComparison.Ordinal) ? bearer["Bearer ".Length..] : "");
+            var withholdClearContent = policy.SealsMetadata && BlindNodeId.IsBlind(nodeId);
+            var withholdEndpoints = !MetadataCapabilities.HasPeerEndpointsV1(capabilities);
+            if (withholdClearContent || withholdEndpoints)
+                (events, endOfLog) = await FillPageAsync(eventLogRepo, events, limit, e =>
+                    !(withholdClearContent && EventClasses.IsClearContent(e.ProtocolVersion, e.EventType))
+                    && !MetadataCapabilities.IsWithheldFrom(e.EventType, capabilities));
             var offeredAll = events.Count;
 
             // Even at the count-based `limit` (1000 by default), events aren't uniformly
@@ -908,6 +916,7 @@ public static class SyncEndpoints
             INodeIdentityRepository nodeRepo,
             SyncScheduler? scheduler) =>
         {
+            var services = ctx.RequestServices;
             var identity = await nodeRepo.GetAsync();
             // Use the head sequence number (MAX), NOT COUNT(*): after compaction trims early
             // events, COUNT is lower than the head seq, so comparing a node's last_pushed_seq
@@ -932,8 +941,11 @@ public static class SyncEndpoints
                 // (BMB-315): the count is of what a push to it would carry.
                 var unsyncedCount = await eventLogRepo.CountEventsToRelayAfterAsync(node.NodeId, lastPushed);
                 // LastContactAt is the last successful contact, either way (BMB-313); the last push of events is LastPushAt.
-                statuses.Add(PeerContactView.Build(node, contacts.Get(node.NodeId, node.ApiAddress), pullPositions.GetValueOrDefault(node.NodeId), push, headSeq, unsyncedCount, DateTime.UtcNow,
-                    scheduler?.Interval));
+                var contact = contacts.Get(node.NodeId, node.ApiAddress);
+                var pulled = pullPositions.GetValueOrDefault(node.NodeId);
+                var now = DateTime.UtcNow;
+                statuses.Add(PeerContactView.Build(node, contact, pulled, push, headSeq, unsyncedCount, now,
+                    scheduler?.Interval, await PeerContactView.LanFactsAsync(services, node, contact, pulled, scheduler?.Interval, now)));
             }
 
             return Results.Ok(new DeliveryStatusResponse(identity?.NodeId, invisibleMode.IsInvisible, statuses));
@@ -955,7 +967,8 @@ public static class SyncEndpoints
             INodeIdentityRepository nodeRepo,
             INodeRole role,
             ISyncProtocolPolicy policy,
-            SyncScheduler? scheduler) =>
+            SyncScheduler? scheduler,
+            HttpContext ctx) =>
         {
             var identity = await nodeRepo.GetAsync();
             if (identity is null) return Results.Problem("Node is not initialized.", statusCode: 503);
@@ -971,7 +984,9 @@ public static class SyncEndpoints
                 var push = pushPositions.FirstOrDefault(p => p.RemoteNodeId == node.NodeId);
                 var unsynced = await eventLogRepo.CountEventsToRelayAfterAsync(node.NodeId, push?.LastPushedSeq ?? 0);
                 var contact = contacts.Get(node.NodeId, node.ApiAddress);
-                var status = PeerContactView.Build(node, contact, pullPositions.GetValueOrDefault(node.NodeId), push, headSeq, unsynced, now, scheduler?.Interval);
+                var pulledAt = pullPositions.GetValueOrDefault(node.NodeId);
+                var status = PeerContactView.Build(node, contact, pulledAt, push, headSeq, unsynced, now, scheduler?.Interval,
+                    await PeerContactView.LanFactsAsync(ctx.RequestServices, node, contact, pulledAt, scheduler?.Interval, now));
                 peers.Add(new NetworkMapBuilder.Peer(node, status, contact));
             }
 
@@ -1000,6 +1015,7 @@ public static class SyncEndpoints
             PeerContactLog contacts,
             BeeMemoryBank.Core.Services.InvisibleModeService invisibleMode,
             INodeIdentityRepository nodeRepo,
+            HttpContext ctx,
             CancellationToken ct) =>
         {
             var identity = await nodeRepo.GetAsync();
@@ -1010,16 +1026,25 @@ public static class SyncEndpoints
             {
                 var push = (await pushPositionRepo.GetAllAsync()).FirstOrDefault(p => p.RemoteNodeId == nodeId);
                 var pulled = (await pullPositionRepo.GetAllAsync()).FirstOrDefault(p => p.RemoteNodeId == nodeId)?.UpdatedAt;
-                return PeerContactView.Build(node, contacts.Get(nodeId, node.ApiAddress), pulled, push, await eventLogRepo.GetMaxSequenceAsync(),
-                    await eventLogRepo.CountEventsToRelayAfterAsync(nodeId, push?.LastPushedSeq ?? 0), DateTime.UtcNow, scheduler.Interval);
+                var contact = contacts.Get(nodeId, node.ApiAddress);
+                var now = DateTime.UtcNow;
+                return PeerContactView.Build(node, contact, pulled, push, await eventLogRepo.GetMaxSequenceAsync(),
+                    await eventLogRepo.CountEventsToRelayAfterAsync(nodeId, push?.LastPushedSeq ?? 0), now, scheduler.Interval,
+                    await PeerContactView.LanFactsAsync(ctx.RequestServices, node, contact, pulled, scheduler.Interval, now));
             }
 
             if (invisibleMode.IsInvisible)
                 return Results.Json(new NodeCheckResponse("invisible", "Invisible Mode is on: this node calls nobody and answers nobody.", 0, await StatusAsync()), statusCode: 409);
-            if (string.IsNullOrEmpty(node.ApiAddress))
-                return Results.Ok(new NodeCheckResponse("calls_us", null, 0, await StatusAsync()));
-
+            // A node with no way to be called (no address of its own, none announced, seen or typed) calls this node: nothing is asked.
             var check = await scheduler.CheckPeerNowAsync(nodeId, ct);
+            if (!check.Called && !check.Busy)
+            {
+                // Its addresses are all on a network this computer is not on now (a laptop on a trip): not one that calls this node.
+                var status = await StatusAsync();
+                return status.Reachability is BeeMemoryBank.Sync.Channels.ReachabilityStates.Away or BeeMemoryBank.Sync.Channels.ReachabilityStates.ViaRelay
+                    ? Results.Ok(new NodeCheckResponse("away", "It is not on this network now; it is called again when this computer is on its network.", 0, status))
+                    : Results.Ok(new NodeCheckResponse("calls_us", null, 0, status));
+            }
             if (check.Busy)
                 return Results.Json(new NodeCheckResponse("busy", "A sync is running or this node is busy; try again in a moment.", 0, await StatusAsync()), statusCode: 409);
             return Results.Ok(new NodeCheckResponse(check.Answered ? "answered" : "not_answering", check.Reason, check.Applied, await StatusAsync()));
@@ -1281,14 +1306,15 @@ public static class SyncEndpoints
     /// lowercase-hex SHA-256 strings — so the repository only ever sees values that can be keys.
     /// </summary>
     /// <summary>
-    /// The page a blind requester gets after the metadata activation (docs/design/step-a-spec.md 5.7): the rows of the
-    /// log after its cursor that it may have (everything except protocol-1..3 content), at most <paramref name="limit"/>,
+    /// The page a requester gets when some rows are not for it: a blind requester after the metadata activation (docs/design/step-a-spec.md 5.7)
+    /// has no protocol-1..3 content, a requester without peer-endpoints-v1 has no node_endpoints. The rows of the
+    /// log after its cursor that it may have (<paramref name="mayHave"/>), at most <paramref name="limit"/>,
     /// in order. <paramref name="first"/> is the first <paramref name="limit"/> rows after the cursor; the log is read on
     /// until enough rows are found or it ends. <c>EndOfLog</c> is the last sequence read when the log ended inside the
     /// scan and the page holds every row the requester may have (so it is up to date over the rows left out), else null.
     /// </summary>
-    private static async Task<(List<SyncEvent> Page, long? EndOfLog)> FillBlindPageAsync(
-        IEventLogRepository eventLogRepo, List<SyncEvent> first, int limit)
+    private static async Task<(List<SyncEvent> Page, long? EndOfLog)> FillPageAsync(
+        IEventLogRepository eventLogRepo, List<SyncEvent> first, int limit, Func<SyncEvent, bool> mayHave)
     {
         var page = new List<SyncEvent>();
         var batch = first;
@@ -1296,7 +1322,7 @@ public static class SyncEndpoints
         while (true)
         {
             if (batch.Count > 0) lastRead = batch[^1].SequenceNum;
-            page.AddRange(batch.Where(e => !EventClasses.IsClearContent(e.ProtocolVersion, e.EventType)));
+            page.AddRange(batch.Where(mayHave));
             if (page.Count > limit) return (page.GetRange(0, limit), null);
             if (batch.Count < limit) return (page, lastRead); // the log ended inside this batch
             if (page.Count == limit) return (page, null);

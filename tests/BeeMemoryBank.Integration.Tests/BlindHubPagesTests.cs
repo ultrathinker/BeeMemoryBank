@@ -13,8 +13,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The screens of "Let blind copies call this node" (ADR 0007), through the real Web host in front of a real Api: Admin &gt; Trusted
-/// Nodes (the button, the badge, the dialog and what its form does), the Blind nodes page (the hubs, with their certificate mode)
+/// The screens of "Let blind copies call this node" (ADR 0007), through the real Web host in front of a real Api: Admin &gt; Devices, the page
+/// of a device (the button, the badge, the dialog and what its form does), the page that adds a blind node (the hubs, with their certificate mode)
 /// and the page that pairs a blind copy (the nodes it can be told to call, with their mode).
 /// </summary>
 public sealed class BlindHubPagesTests : IAsyncLifetime
@@ -64,27 +64,30 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
 
     private async Task<string> PageAsync(string path) => WebUtility.HtmlDecode(await (await _admin.GetAsync(path)).Content.ReadAsStringAsync());
 
-    // ── Admin > Trusted Nodes ─────────────────────────────────────────────────
+    // ── Admin > Devices > the page of a device ────────────────────────────────
 
     [Fact]
-    public async Task TrustedNodes_ShowTheModeOfACallableNode_AndOfferTheButtonToFullNodesOnly()
+    public async Task TheDevicePage_ShowsTheModeOfACallableNode_AndOffersTheButtonToFullNodesOnly()
     {
-        var html = await PageAsync("/Admin/TrustedNodes");
+        var normal = await PageAsync($"/Admin/Device/{_normal}");
+        var pinned = await PageAsync($"/Admin/Device/{_pinned}");
+        var plain = await PageAsync($"/Admin/Device/{_plain}");
+        var blind = await PageAsync($"/Admin/Device/{_blind}");
 
-        Row(html, "Server Normal").Should().Contain("blind copies: normal certificate");
-        Row(html, "Server Pinned").Should().Contain("blind copies: pinned certificate").And.Contain(Pin);
-        Row(html, "Plain Node").Should().NotContain("blind copies:");
+        normal.Should().Contain("blind copies: normal certificate");
+        pinned.Should().Contain("blind copies: pinned certificate").And.Contain(Pin);
+        plain.Should().NotContain("blind copies:");
 
-        Row(html, "Server Normal").Should().Contain("btn-open-hub").And.Contain($"data-node-id=\"{_normal}\"").And.Contain("data-trust=\"public-ca\"");
-        Row(html, "Server Pinned").Should().Contain("btn-open-hub").And.Contain("data-trust=\"pin\"");
-        Row(html, "Plain Node").Should().Contain("btn-open-hub");
-        Row(html, "Docker Blind").Should().NotContain("btn-open-hub", "a blind node is called by the pin in its pair code, set when it was added");
+        normal.Should().Contain("btn-open-hub").And.Contain($"data-node-id=\"{_normal}\"").And.Contain("data-trust=\"public-ca\"");
+        pinned.Should().Contain("btn-open-hub").And.Contain("data-trust=\"pin\"");
+        plain.Should().Contain("btn-open-hub");
+        blind.Should().NotContain("btn-open-hub", "a blind node is called by the pin in its pair code, set when it was added");
     }
 
     [Fact]
     public async Task TheDialog_OffersTheThreeChoices_AndSaysWhatEachCostsInPlainWords()
     {
-        var html = await PageAsync("/Admin/TrustedNodes");
+        var html = await PageAsync($"/Admin/Device/{_normal}");
 
         html.Should().Contain("id=\"dlg-hub\"").And.Contain("Let blind copies call this node");
         html.Should().Contain("Normal certificate").And.Contain("Pinned certificate").And.Contain("Do not let blind copies call this node");
@@ -97,23 +100,23 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
     [Fact]
     public async Task TurningItOff_FromTheDialog_ClearsTheRow_AndSaysSo()
     {
-        var (_, html) = await SubmitAdminAsync(new Dictionary<string, string>
+        var (_, html) = await SubmitAdminAsync(_normal, new Dictionary<string, string>
         {
-            ["nodeId"] = _normal.ToString(), ["trust"] = "off", ["password"] = AdminPassword,
+            ["trust"] = "off", ["password"] = AdminPassword,
         });
 
         html.Should().Contain("Blind copies can no longer be paired to call this node");
         var row = (await _api.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(_normal))!;
         (row.TlsTrust, row.TlsSpki).Should().Be((null, null));
-        (await PageAsync("/Admin/TrustedNodes")).Should().NotContain("blind copies: normal certificate");
+        (await PageAsync($"/Admin/Device/{_normal}")).Should().NotContain("blind copies: normal certificate");
     }
 
     [Fact]
     public async Task AnAddressThatCanNeverBeAHub_ComesBackAsTheNodesOwnSentence()
     {
-        var (_, html) = await SubmitAdminAsync(new Dictionary<string, string>
+        var (_, html) = await SubmitAdminAsync(_plain, new Dictionary<string, string>
         {
-            ["nodeId"] = _plain.ToString(), ["trust"] = "public-ca", ["address"] = "https://localhost:1", ["password"] = AdminPassword,
+            ["trust"] = "public-ca", ["address"] = "https://localhost:1", ["password"] = AdminPassword,
         });
 
         html.Should().Contain("can never be a hub");
@@ -123,9 +126,9 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
     [Fact]
     public async Task AWrongMasterPassword_IsTold()
     {
-        var (_, html) = await SubmitAdminAsync(new Dictionary<string, string>
+        var (_, html) = await SubmitAdminAsync(_normal, new Dictionary<string, string>
         {
-            ["nodeId"] = _normal.ToString(), ["trust"] = "off", ["password"] = "not the password",
+            ["trust"] = "off", ["password"] = "not the password",
         });
 
         html.Should().Contain("Invalid master password");
@@ -140,7 +143,7 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
         var html = await PageAsync("/Admin/BlindNodes");
 
         html.Should().Contain("Hubs for blind copies");
-        var hubs = html[html.IndexOf("id=\"hubs\"", StringComparison.Ordinal)..html.IndexOf("Connected blind nodes", StringComparison.Ordinal)];
+        var hubs = html[html.IndexOf("id=\"hubs\"", StringComparison.Ordinal)..html.IndexOf("Your blind nodes", StringComparison.Ordinal)];
         hubs.Should().Contain("Server Normal").And.Contain("https://hub-a.example.org").And.Contain("normal certificate");
         hubs.Should().Contain("Server Pinned").And.Contain("https://hub-b.example.org:8443").And.Contain("pinned certificate");
         hubs.Should().NotContain("Plain Node", "it was never set up for blind copies").And.NotContain("Docker Blind", "a blind node is not a hub");
@@ -159,27 +162,18 @@ public sealed class BlindHubPagesTests : IAsyncLifetime
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    /// <summary>The cells and buttons of one row of the Trusted Nodes table (the card above it that offers superadmin to old peers names them too: look from the table on).</summary>
-    private static string Row(string html, string name)
-    {
-        var at = html.IndexOf($">{name}</strong>", html.IndexOf("<table", StringComparison.Ordinal), StringComparison.Ordinal);   // the name carries a title (the node id and the date), so the tag has an attribute
-        at.Should().BeGreaterThan(0, $"the row of {name} is on the page");
-        var end = html.IndexOf("</tr>", at, StringComparison.Ordinal);
-        return html[at..end];
-    }
-
     private static readonly Regex Token = new("__RequestVerificationToken[^>]*value=\"([^\"]+)\"", RegexOptions.Compiled);
 
     /// <summary>Posts the dialog's form the way the browser does (antiforgery), follows the redirect, returns the page shown.</summary>
-    private async Task<(HttpStatusCode Status, string Html)> SubmitAdminAsync(Dictionary<string, string> fields)
+    private async Task<(HttpStatusCode Status, string Html)> SubmitAdminAsync(Guid node, Dictionary<string, string> fields)
     {
-        var form = await _admin.GetAsync("/Admin/TrustedNodes");
+        var form = await _admin.GetAsync($"/Admin/Device/{node}");
         var html = await form.Content.ReadAsStringAsync();
         var session = string.Join("; ", _admin.DefaultRequestHeaders.GetValues("Cookie"));
         var antiforgery = form.Headers.TryGetValues("Set-Cookie", out var set)
             ? string.Join("; ", set.Select(c => c.Split(';')[0])) : "";
         var body = new Dictionary<string, string>(fields) { ["__RequestVerificationToken"] = Token.Match(html).Groups[1].Value };
-        using var post = new HttpRequestMessage(HttpMethod.Post, "/Admin/TrustedNodes?handler=SetBlindCallable") { Content = new FormUrlEncodedContent(body) };
+        using var post = new HttpRequestMessage(HttpMethod.Post, $"/Admin/Device/{node}?handler=SetBlindCallable") { Content = new FormUrlEncodedContent(body) };
         post.Headers.TryAddWithoutValidation("Cookie", session + "; " + antiforgery);
         var resp = await _admin.SendAsync(post);
         if (resp.StatusCode is HttpStatusCode.Redirect or HttpStatusCode.Found)

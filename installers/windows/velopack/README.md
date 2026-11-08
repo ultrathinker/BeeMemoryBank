@@ -10,9 +10,9 @@ This directory holds the configuration/assets for the Velopack Windows installer
 
 ### Icon
 
-The app icon (`icon.ico`) used by `vpk pack --icon` is **generated at build time** by
-`scripts/pack-windows.ps1` — it converts `desktop/BeeMemoryBank.Desktop/Assets/icon.png`
-to a multi-size `.ico` using `System.Drawing`.  The generated file is placed in
+The app icon (`icon.ico`) used by `vpk pack --icon` is **copied at build time** by
+`scripts/pack-windows.ps1` from `desktop/BeeMemoryBank.Desktop/Assets/icon.ico` (the app's own
+multi-size icon, whose 16 to 48 px entries are drawn for those sizes).  The copy is placed in
 `installers/windows/velopack/icon.ico` and is **excluded from source control**
 (see `.gitignore`).
 

@@ -45,6 +45,9 @@ public static class VaultFiles
         "node.status.json",
         NetworkSettingsFileName,
         NetworkListenerStateFileName,
+        // The person's answers about networks (LAN sync, docs/design/lan-peer-sync.md 6): about this computer's networks only.
+        TrustedNetworksFileName,
+        TrustedNetworksFileName + ".lock",
         // Derived from tbl_user and rewritten at the first unlock of the database it belongs to: a copied vault must not
         // carry a hint mirror of an older state (the name matches Storage's PasswordHintFile.FileName; a test pins that).
         PasswordHintMirrorFileName,
@@ -58,6 +61,9 @@ public static class VaultFiles
 
     /// <summary>Whether the node's network listener is really up (runtime state the node writes and the Api's announcer reads); see <c>LanListenerState</c>.</summary>
     public const string NetworkListenerStateFileName = "network.listening.json";
+
+    /// <summary>Which networks the person trusts for LAN sync on this computer; see <c>TrustedNetworkStore</c> (Infrastructure; a test keeps the spellings equal).</summary>
+    public const string TrustedNetworksFileName = "network.trusted.json";
 
     /// <summary>
     /// The derived pre-unlock copy of the password hints (Storage's <c>PasswordHintFile</c>): beside the boot store, rebuilt

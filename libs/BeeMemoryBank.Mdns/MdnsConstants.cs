@@ -1,4 +1,4 @@
-namespace BeeMemoryBank.Infrastructure.Mdns;
+namespace BeeMemoryBank.Mdns;
 
 /// <summary>
 /// mDNS / DNS-SD identifiers shared by <see cref="MdnsAnnouncer"/> and <see cref="MdnsBrowser"/>.
@@ -41,4 +41,7 @@ public static class MdnsConstants
         catch (UriFormatException) { return value; }
     }
     public const string TxtHttps = "https";
+
+    /// <summary>Which surfaces of the LAN listener answer: "sync", "web" or "sync,web" (absent in a record of a build before LAN sync: the web one).</summary>
+    public const string TxtSurface = "surface";
 }

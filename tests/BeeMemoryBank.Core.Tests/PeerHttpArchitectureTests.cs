@@ -30,6 +30,8 @@ public class PeerHttpArchitectureTests
             "the blind console talks to its own node, on loopback; the address is the node's own front"),
         new("server/BeeMemoryBank.Cli/Commands/BlindApi.cs",
             "the command line talks to a blind node's own console API that the person named; it is no peer of the mesh and carries no join"),
+        new("desktop/BeeMemoryBank.Node/Front/LanListener.cs",
+            "the LAN listener forwards what it accepted to this node's own Api child on loopback (the address the node itself started it at); it dials no peer"),
         new("desktop/BeeMemoryBank.Node/Front/NodeAlarmsControl.cs",
             "the node's own front, on loopback (the alarms the tray shows)"),
         new("desktop/BeeMemoryBank.Node/Front/NodeLockControl.cs",

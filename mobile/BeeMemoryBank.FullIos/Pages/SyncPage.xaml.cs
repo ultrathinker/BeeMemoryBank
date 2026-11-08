@@ -4,7 +4,7 @@ using BeeMemoryBank.FullIos.Services;
 
 namespace BeeMemoryBank.FullIos.Pages;
 
-/// <summary>This node, the peers it syncs with and how the last contact with each went, and Sync now.</summary>
+/// <summary>This node, the peers it syncs with and how the last contact with each went (a tap opens the peer's page), the note when iOS refused the local network, and Sync now.</summary>
 public partial class SyncPage : ContentPage
 {
     private readonly IServiceProvider _services;
@@ -33,6 +33,13 @@ public partial class SyncPage : ContentPage
     }
 
     private void OnChanged() => MainThread.BeginInvokeOnMainThread(() => _ = RefreshAsync());
+
+    // busy-exempt: opens the page of the peer tapped, nothing is sent and nothing waits
+    private async void OnPeerTapped(object? sender, TappedEventArgs e)
+    {
+        if ((sender as BindableObject)?.BindingContext is not PeerStatus peer) return;
+        await Navigation.PushAsync(_services.GetRequiredService<PeerPage>().For(peer.NodeId, peer.Name));
+    }
 
     private async void OnSyncNow(object? sender, EventArgs e)
     {
@@ -64,6 +71,8 @@ public partial class SyncPage : ContentPage
             : $"{round.At.ToLocalTime():HH:mm:ss}: {round.Reached} reached, {round.Failed} failed, {round.Applied} changes received";
         ProblemLabel.Text = round?.Problem;
         ProblemLabel.IsVisible = round?.Problem is not null;
+        LocalNetworkLabel.Text = _sync.LocalNetworkNotice;
+        LocalNetworkLabel.IsVisible = _sync.LocalNetworkNotice is not null;
 
         var peers = await _sync.PeersAsync();
         BindableLayout.SetItemsSource(PeersList, peers);

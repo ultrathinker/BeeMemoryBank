@@ -19,7 +19,7 @@ namespace BeeMemoryBank.Api.Endpoints;
 /// </summary>
 file record SyncStatusEntry(
     Guid NodeId, DateTime UpdatedAt, DateTime? LastContactAt = null, string? Direction = null, DateTime? PushedAt = null, string State = "unknown",
-    DateTime? NotAnsweringSince = null, string? NotAnsweringReason = null);
+    DateTime? NotAnsweringSince = null, string? NotAnsweringReason = null, string? Reachability = null, string? ReachabilityText = null);
 
 public static class WhitelistEndpoints
 {
@@ -62,12 +62,15 @@ public static class WhitelistEndpoints
             {
                 pushes.TryGetValue(node.NodeId, out var push);
                 var pulled = pulls.GetValueOrDefault(node.NodeId);
-                var view = PeerContactView.Build(node, contacts.Get(node.NodeId, node.ApiAddress), pulled, push, headSeq, 0, DateTime.UtcNow, scheduler?.Interval);
-                if (view.LastContactAt is null && view.LastPushAt is null && view.NotAnsweringSince is null) continue;
+                var contact = contacts.Get(node.NodeId, node.ApiAddress);
+                var now = DateTime.UtcNow;
+                var lan = await Services.Lan.LanStatusFacts.ForAsync(ctx.RequestServices, node, contact, pulled, scheduler?.Interval, now);
+                var view = PeerContactView.Build(node, contact, pulled, push, headSeq, 0, now, scheduler?.Interval, lan);
+                if (view.LastContactAt is null && view.LastPushAt is null && view.NotAnsweringSince is null && view.Reachability is null) continue;
                 // UpdatedAt: the delivery time of before (the later of the pull position and the push position); the contact is the new LastContactAt.
                 var delivered = new[] { pulled ?? default, push?.PushedAt ?? default }.Max();
                 entries.Add(new SyncStatusEntry(node.NodeId, delivered, view.LastContactAt, view.LastContactDirection, view.LastPushAt,
-                    view.State, view.NotAnsweringSince, view.NotAnsweringReason));
+                    view.State, view.NotAnsweringSince, view.NotAnsweringReason, view.Reachability, view.ReachabilityText));
             }
             return Results.Ok(entries);
         });
@@ -146,8 +149,8 @@ public static class WhitelistEndpoints
             var version = await eventLogger.LogWhitelistUpdateAsync(nodeId, apiAddress: null, entry.DisplayName);
 
             entry.UpdatedAt = DateTime.UtcNow;
-            entry.LamportTs = version.LamportTs;
-            entry.SourceNodeId = version.SourceNodeId;
+            // The concern the event writes (the name) takes its version, nothing else: a demotion that crossed this rename still applies here.
+            entry.StampLocal(version, BeeMemoryBank.Sync.WhitelistEventConcerns.ForLocalUpdate(nodeId, version.SourceNodeId, null, entry.DisplayName));
             await repo.UpdateAsync(entry);
             eventLogger.SignalSync();
             return Results.Ok(WhitelistEntryResponse.From(entry));
@@ -195,8 +198,8 @@ public static class WhitelistEndpoints
 
             entry.IsSuperadmin = req.IsSuperadmin;
             entry.UpdatedAt = DateTime.UtcNow;
-            entry.LamportTs = version.LamportTs;
-            entry.SourceNodeId = version.SourceNodeId;
+            // Only the flag takes the event's version: a rename or an address change that crossed it is judged on its own field.
+            entry.StampLocal(version, BeeMemoryBank.Sync.WhitelistEventConcerns.ForLocalUpdate(nodeId, version.SourceNodeId, null, null, req.IsSuperadmin));
             await repo.UpdateAsync(entry);
             eventLogger.SignalSync();
 

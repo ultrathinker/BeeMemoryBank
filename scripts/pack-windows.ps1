@@ -48,7 +48,7 @@ $PublishBase   = Join-Path $RepoRoot "publish\win-x64"
 $DesktopOut    = Join-Path $PublishBase "desktop"
 $PayloadDir    = Join-Path $PublishBase "payload"
 $DesktopProj   = Join-Path $RepoRoot "desktop\BeeMemoryBank.Desktop\BeeMemoryBank.Desktop.csproj"
-$SourceIconPng = Join-Path $RepoRoot "desktop\BeeMemoryBank.Desktop\Assets\icon.png"
+$SourceIconIco = Join-Path $RepoRoot "desktop\BeeMemoryBank.Desktop\Assets\icon.ico"
 $VelopackDir   = Join-Path $RepoRoot "installers\windows\velopack"
 $ReleasesDir   = if ($OutputDir) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir) } else { Join-Path $VelopackDir "releases" }
 $IconIco       = Join-Path $VelopackDir "icon.ico"
@@ -153,88 +153,19 @@ foreach ($c in $ServerComponents) {
 
 Write-Host "  Payload assembled at: $PayloadDir"
 
-# ---- Step 4: Convert PNG icon to ICO -----------------------------------------
+# ---- Step 4: The installer icon ------------------------------------------------
+# The app's own .ico, copied as it is: its 16 to 48 px entries are drawn for those sizes, so they are never made by shrinking the
+# big picture (which is what the old PNG -> ICO conversion here did).
 Write-Host ""
-Write-Host "-- Step 4: Converting icon.png -> icon.ico ---------------------------"
+Write-Host "-- Step 4: Copying Assets\icon.ico -> icon.ico ----------------------"
 
-if (-not (Test-Path $SourceIconPng)) {
-    Write-Error "Source icon not found: $SourceIconPng"
+if (-not (Test-Path $SourceIconIco)) {
+    Write-Error "Source icon not found: $SourceIconIco"
     exit 1
 }
 
 New-Item -ItemType Directory -Path $VelopackDir -Force | Out-Null
-
-Add-Type -AssemblyName System.Drawing
-
-function ConvertTo-Ico {
-    param (
-        [string]$PngPath,
-        [string]$IcoPath,
-        [int[]]$Sizes = @(256, 64, 48, 32, 16)
-    )
-
-    $srcBmp = [System.Drawing.Image]::FromFile($PngPath)
-    $images = @()
-
-    foreach ($sz in $Sizes) {
-        $bmp = New-Object System.Drawing.Bitmap($sz, $sz, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-        $g   = [System.Drawing.Graphics]::FromImage($bmp)
-        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-        $g.DrawImage($srcBmp, 0, 0, $sz, $sz)
-        $g.Dispose()
-
-        $imgStream = New-Object System.IO.MemoryStream
-        $bmp.Save($imgStream, [System.Drawing.Imaging.ImageFormat]::Png)
-        $images += ,$imgStream.ToArray()
-        $imgStream.Dispose()
-        $bmp.Dispose()
-    }
-    $srcBmp.Dispose()
-
-    # Build ICO binary manually (ICO = ICONDIR header + N ICONDIRENTRY + image data)
-    $count    = $images.Count
-    $headerSz = 6 + $count * 16   # ICONDIR (6 bytes) + ICONDIRENTRY * count (16 each)
-
-    $ms     = New-Object System.IO.MemoryStream
-    $writer = New-Object System.IO.BinaryWriter($ms)
-
-    # ICONDIR
-    $writer.Write([uint16]0)      # reserved
-    $writer.Write([uint16]1)      # type = 1 (ICO)
-    $writer.Write([uint16]$count)
-
-    # ICONDIRENTRY array
-    $offset = $headerSz
-    for ($i = 0; $i -lt $count; $i++) {
-        $sz  = $Sizes[$i]
-        $bsz = $images[$i].Length
-        $w   = if ($sz -ge 256) { 0 } else { [byte]$sz }
-        $h   = if ($sz -ge 256) { 0 } else { [byte]$sz }
-        $writer.Write([byte]$w)
-        $writer.Write([byte]$h)
-        $writer.Write([byte]0)      # color count (0 = 256+)
-        $writer.Write([byte]0)      # reserved
-        $writer.Write([uint16]1)    # planes
-        $writer.Write([uint16]32)   # bit count
-        $writer.Write([uint32]$bsz)
-        $writer.Write([uint32]$offset)
-        $offset += $bsz
-    }
-
-    # image data blobs
-    foreach ($imgBytes in $images) {
-        $writer.Write($imgBytes)
-    }
-    $writer.Flush()
-
-    [System.IO.File]::WriteAllBytes($IcoPath, $ms.ToArray())
-    $writer.Dispose()
-    $ms.Dispose()
-
-    Write-Host "  ICO written: $IcoPath  (sizes: $($Sizes -join ', '))"
-}
-
-ConvertTo-Ico -PngPath $SourceIconPng -IcoPath $IconIco
+Copy-Item -LiteralPath $SourceIconIco -Destination $IconIco -Force
 
 # ---- Step 5: Read version ----------------------------------------------------
 $VersionFile = Join-Path $RepoRoot "VERSION"

@@ -29,15 +29,18 @@ public sealed class BlindSourceLeaveHook : IBlindAccountLeaveHook
         var identity = await services.GetRequiredService<INodeIdentityRepository>().GetAsync().ConfigureAwait(false);
         if (identity is null) return;
 
-        using var client = services.GetRequiredService<BlindHttpClientProvider>().GetClient(target, exempt: true);
         var declared = services.GetService<ISyncProtocolPolicy>()?.Declared;
-        var token = await PeerAuthenticator.AuthenticateAsync(
-            services.GetRequiredService<INodeAuthSigner>(), client, target.Address, identity, target.NodeId, ct, declared).ConfigureAwait(false);
+        var signer = services.GetRequiredService<INodeAuthSigner>();
+        // At the hub's first channel that answers (its pairing address, what it announced, where mDNS saw it): a copy whose hub changed address still says goodbye.
+        await services.GetRequiredService<BlindHttpClientProvider>().WithClientAsync(target, BlindHubCall.Sync, exempt: true, async (client, hub) =>
+        {
+            var token = await PeerAuthenticator.AuthenticateAsync(signer, client, hub.Address, identity, hub.NodeId, ct, declared).ConfigureAwait(false);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{target.Address.TrimEnd('/')}/api/sync/leave");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        using var response = await client.SendAsync(request, ct).ConfigureAwait(false);
-        // 204 is the answer; anything else (404 from an older hub, 401 from a hub that already revoked this device) changes nothing for the removal.
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{hub.Address.TrimEnd('/')}/api/sync/leave");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var response = await client.SendAsync(request, ct).ConfigureAwait(false);
+            // 204 is the answer; anything else (404 from an older hub, 401 from a hub that already revoked this device) changes nothing for the removal.
+        }, ct).ConfigureAwait(false);
     }
 }
 

@@ -75,6 +75,8 @@
     <!-- The receive-only guard of the Android tests: the repositories EventApplier needs are named by the composition class and by nobody else. -->
     <Compile Include="..\BeeMemoryBank.BlindMobile.Tests\BoundaryScanner.cs" Link="Shared\BoundaryScanner.cs" />
     <Compile Include="..\BeeMemoryBank.BlindMobile.Tests\ReceiveOnlyTypes.cs" Link="Shared\ReceiveOnlyTypes.cs" />
+    <!-- A hub that moves between addresses, a host's mDNS browse and a TLS server with a key of the test's choosing: the support of the hub-channel tests of AppCore, run here through the desktop runtime. -->
+    <Compile Include="..\BeeMemoryBank.Blind.AppCore.Tests\HubNetworkSupport.cs" Link="Shared\HubNetworkSupport.cs" />
   </ItemGroup>
 
 </Project>

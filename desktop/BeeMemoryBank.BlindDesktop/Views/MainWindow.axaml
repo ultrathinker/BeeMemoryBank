@@ -152,6 +152,7 @@
                           <TextBlock Text="{Binding IdentityText}" FontSize="16" />
                           <TextBlock Text="{Binding NodeText}" Opacity="0.7" TextWrapping="Wrap" />
                           <TextBlock Text="{Binding PairText}" TextWrapping="Wrap" />
+                          <TextBlock Text="{Binding HubText}" IsVisible="{Binding HasHubText}" TextWrapping="Wrap" Opacity="0.8" />
 
                           <Border IsVisible="{Binding HasStartError}" Background="#33CC4444" Padding="10" CornerRadius="4">
                             <TextBlock Text="{Binding StartErrorText}" TextWrapping="Wrap" />

@@ -41,6 +41,20 @@ golden list keeps the blind libraries out of this one.
   Clipboard) for two minutes. Computers can join the phone's vault only through a node that listens - in practice the phone joins a
   computer, not the other way round.
 
+## Reaching your computers: every address, and Bonjour
+
+A peer has several ways to be reached (docs/design/lan-peer-sync.md, "channels"), and every sync round of the phone goes through
+`PeerSessions`, as the computers do: the address that worked last, then the peer's addresses on this Wi-Fi all at once (two seconds
+each), then its internet address. The addresses come from the peer's row, from what the peer announced about itself (a signed
+`node_endpoints` event), from **Bonjour**, and from what was typed on this iPhone. While the app is open and the vault unlocked, the phone
+browses `_beememorybank._tcp` (Network.framework, `NwBonjourBrowser`; the logic is `Services/BonjourPeerDiscovery.cs`) and notes the
+IPv4 address of every paired computer it sees, so a computer whose address changed (DHCP) is found again; a record of a node that is not
+a peer, or one that names a host instead of an address, is ignored. Every address is held to the peer's own TLS keys and its node key,
+so a forged record costs one failed attempt. The first browse makes iOS ask for **Local Network** access (`NSLocalNetworkUsageDescription`,
+`NSBonjourServices` in `Info.plist`); without it the Sync page says so, and the phone syncs through the internet and the relays only. A
+peer's page lists its addresses and offers **Add an address** (an IP, a name or a URL, checked to be that peer before it is saved, kept on
+this iPhone only). The phone is still never called: it announces nothing and has no LAN listener.
+
 ## Keys, data and locking
 
 | What | Where | Protected by |

@@ -131,7 +131,8 @@ public class SnapshotRoundTripTests : IAsyncLifetime
             (await conn.QueryAsync<(int, string)>("SELECT version, filename FROM tbl_migration")).Should().Equal(
                 [(MigrationRunner.BaselineVersion, MigrationRunner.BaselineResourceName), (41, "BeeMemoryBank.Storage.Migrations.041_blind_invite.sql"),
                     (42, "BeeMemoryBank.Storage.Migrations.042_blind_invite_server.sql"),
-                    (43, "BeeMemoryBank.Storage.Migrations.043_password_hint.sql")],
+                    (43, "BeeMemoryBank.Storage.Migrations.043_password_hint.sql"), (44, "BeeMemoryBank.Storage.Migrations.044_peer_channels.sql"),
+                (45, "BeeMemoryBank.Storage.Migrations.045_whitelist_concern_versions.sql")],
                 "the restored 2.6.1 ledger became the baseline's, and the migrations after it ran");
         var titles = await ListArticleTitlesAsync();
         titles.Should().Contain("in-the-261-backup").And.NotContain("written-after-the-backup");

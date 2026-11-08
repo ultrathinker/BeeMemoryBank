@@ -514,6 +514,53 @@ const scenarios = {
         assert(/class="sync-node-item is-open"/.test(html), 'the row drawn again after the check is closed: ' + html.slice(0, 120));
         assert(/class="sync-node-details">/.test(html) && !/class="sync-node-details" hidden/.test(html), 'the details drawn again are closed');
     },
+    // A node being checked says "Checking this node now..." ONCE: in its details when they are open (a check opens them), under its name when they are
+    // closed. The second line used to say it too, so an open row showed it twice, one under the other.
+    async a_checked_node_says_it_is_being_checked_once() {
+        const button = fresh('button'); button.id = 'syncStatusBtn';
+        const dropdown = fresh('div'); dropdown.id = 'syncDropdown';
+        const badge = fresh('span'); badge.id = 'syncBadge';
+        const list = fresh('div'); list.id = 'syncNodeList';
+        let html = '';
+        Object.defineProperty(list, 'innerHTML', { configurable: true, get: () => html, set: (v) => { html = v; } });
+        const since = new Date(Date.now() - 600000).toISOString();
+        const nodes = [{ nodeId: 'a', displayName: 'Windows PC', state: 'not_answering', notAnsweringSince: since, notAnsweringReason: 'no answer',
+            canBeCalled: true, isSynced: true, lastContactAt: since }];
+        const answer = deferred();
+        sandbox.fetch = (url, init) => {
+            if (init && init.method === 'POST') return answer.promise;
+            return Promise.resolve(jsonResponse({ nodes, isInvisible: false }));
+        };
+        loadSyncStatus();
+        await flush();
+        button.listeners.click[0]({ stopPropagation() { } });
+        await flush();
+
+        const row = new El('div'); row.setAttribute('data-node-id', 'a'); row.className = 'sync-node-item'; list.appendChild(row);
+        const summary = new El('div'); summary.className = 'sync-node-summary'; row.appendChild(summary);
+        const details = new El('div'); details.className = 'sync-node-details'; details.hidden = true; row.appendChild(details);
+        const meta = new El('div'); meta.className = 'sync-node-meta'; details.appendChild(meta);
+        const chevron = new El('button'); chevron.setAttribute('data-toggle-node', 'a'); chevron.setAttribute('aria-expanded', 'false');
+        chevron.setAttribute('aria-label', 'Show the details of Windows PC'); row.appendChild(chevron);
+        // The page's own elements keep what is written into them (the fake page parses nothing).
+        for (const el of [summary, meta]) { let v = ''; Object.defineProperty(el, 'innerHTML', { configurable: true, get: () => v, set: (x) => { v = x; } }); }
+        const times = (s) => (String(s).match(/Checking this node now/g) || []).length;
+
+        list.listeners.dblclick[0]({ target: row });   // the check opens the row and is not answered yet
+        assert(times(meta.innerHTML) === 1 && times(summary.innerHTML) === 0,
+            'the row in place says it twice or not at all: details "' + meta.innerHTML + '", second line "' + summary.innerHTML + '"');
+        assert(/Last contact/.test(summary.innerHTML), 'the second line lost when the node was last heard from: "' + summary.innerHTML + '"');
+        await flush();
+        const drawn = html.split('class="sync-node-item').slice(1).find((r) => /data-node-id="a"/.test(r)) || '';
+        assert(times(drawn) === 1, 'the row drawn again says it ' + times(drawn) + ' times: ' + drawn);
+
+        list.listeners.click[0]({ target: chevron, stopPropagation() { } });   // the details are closed while the check runs
+        assert(details.hidden === true && times(summary.innerHTML) === 1, 'with the details closed the line is not under the name: "' + summary.innerHTML + '"');
+
+        answer.resolve(fakeResponse(200, JSON.stringify({ outcome: 'not_answering', reason: 'no answer' })));
+        await flush();
+        assert(times(html) === 0, 'the line stays after the check ended: ' + html.slice(0, 200));
+    },
 
     // BMB-316: which failures of the save of a protected article are "the password is needed", and which are not
     async the_save_of_a_protected_article_tells_a_missing_password_from_other_failures() {

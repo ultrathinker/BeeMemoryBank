@@ -64,6 +64,7 @@ public class AdminPagesScriptTests
     [BusyHelperBehaviorTests.NodeTheory]
     [InlineData("the_index_moves_a_known_fragment_to_its_page")]
     [InlineData("the_index_ignores_what_it_does_not_know")]
+    [InlineData("the_index_follows_a_block_of_a_page_of_the_area_and_nothing_longer")]
     [InlineData("the_index_follows_nothing_but_a_page_of_the_area")]
     [InlineData("the_index_without_its_table_or_with_a_damaged_one_does_nothing")]
     public void TheScriptOfTheIndexMovesOldBookmarksAndNothingElse(string scenario)

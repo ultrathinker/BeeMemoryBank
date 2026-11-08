@@ -32,7 +32,51 @@ Only a node whose `is_superadmin` bit is set on the *receiving* node's own white
 
 - **Revoke another peer** — `ApplyWhitelistRevokeAsync` flips the target's row to `Status = "R"` on
   every node that receives and accepts the event. A node ignores a revoke aimed at itself, so the
-  revoked peer keeps its own data; it just stops being accepted anywhere else.
+  revoked peer keeps its own data; it just stops being accepted anywhere else. Who is a peer, and what
+  each node holds about it, no longer depends on the order the whitelist events arrive in. Each row
+  has five concerns, each with the version of the newest event that wrote it (migration 045):
+  membership (a `whitelist_add` makes it active, a `whitelist_revoke` revoked), `is_superadmin`,
+  `display_name`, `api_address` and the TLS trust (`tls_spki` with `tls_trust`). Each concern is
+  last-writer-wins by (Lamport time, node) on its own. An add writes all five, a revoke membership only,
+  an update the fields it names (`WhitelistEventConcerns`). So a revoke is never undone by an update,
+  whatever the update's version: an update made by a node that had not seen the revoke yet cannot write
+  membership. A re-add newer than the revoke still wins. Two updates of different fields that crossed
+  (a demotion and a rename) both stand on every node; before, a node that got the newer one first
+  dropped the older, and kept a demoted peer as a superadmin. A revoke that finds no row (it came before
+  the add, as when a new node pulls the history from several peers) leaves a revoked row at its version,
+  a tombstone; its fields have no version until an event names them. An update applies to a revoked row
+  as to an active one: its fields wait there, judged field by field, for a re-add. An update that finds
+  no row is applied after the event that writes the row. A tombstone is a revoked row like any other: nothing
+  that lists, dials or counts peers reads revoked rows, and a revoked row has no authority whatever its
+  `is_superadmin` says. Events signed by a node known only from such a revoke (no add has named its key)
+  wait, as from a node never heard of. A local write stamps the concerns its own event carries, so a
+  rename made here does not hide a demotion that crossed it.
+  Two exceptions, both decided by the events alone, never by the order they arrive in. A row revoked
+  before versioning refuses every remote add. And a field whose writer this node cannot name is
+  *undated* (`undated_fields`, a bit per field; its version stays the real one, so an update is compared
+  with it exactly as before, ties included). That covers a value a join from a 2.7.5 host, the host's own
+  row on a joiner, a restore (an unconfirmed row too), a blind package, a backup or an older build wrote,
+  and every field of a row from before migration 045 until the repair dates it. An update newer than its
+  version changes it and dates it. A re-add changes it too: an add newer than a revoke of the peer that
+  is itself newer than the value (newer than its version; for a value at version 0, newer than this
+  node's last join or restore), whether that revoke is in the log or is the one the row stands revoked
+  at. Any other add does not: what the source said cannot be dated against an add delivered late from an
+  old log, as an older build never let an add change an active row, and a revoke and re-add long before
+  the value was written are history it already reflects. The adds of the log are run again when a revoke
+  or a dating update arrives (also when it arrives again after a crash), so the result does not depend on
+  which came first. An add still dates membership. A node raising its own `is_superadmin` is refused
+  whatever its row says.
+  At its first start a node of this version runs its log through these rules once (`WhitelistOrderRepair`)
+  and logs every row it changes. Before that, a concern of an active row written by an older build (all
+  five at the row's one version, the fields undated) is dated where the log shows which event wrote its
+  value: a field the event that gave the row its version wrote takes that version, and otherwise the
+  concern takes the version of the event that wrote it. A revoke or a demotion that a crossing update made an older build drop then
+  applies. This needs four things: the event that gave the row its version is in the log and did not
+  write that concern; the row is younger than the last compaction, join and restore of this node (so
+  the log holds its whole history); the dropped event arrived after a newer event the log holds; and
+  the value is one that raises trust (active, superadmin) or a plain field. The repair never adds or
+  promotes. A row whose history the log does not hold keeps its version, and a revoke or demotion held
+  back that way is logged as a warning, for an admin to decide.
 - **Hard-delete an article or folder everywhere** — `hard_delete` routes to
   `HardDeleteService.ApplyRemoteAsync`, which physically purges the rows and deletes the `.enc`
   media files. It is not a tombstone and there is nothing to restore from afterwards.
@@ -151,6 +195,29 @@ NodeB → NodeA: POST /api/sync/events
 **Push position tracking:** After a successful push, `tbl_sync_push_position` is updated with the last pushed sequence number. This enables the delivery status UI to show per-node sync progress.
 
 **What is owed to a peer (2.6.4).** A push carries everything but the events the peer wrote itself, so the delivery status counts the same rows (`unsyncedCount`, `IEventLogRepository.CountEventsToRelayAfterAsync`), not every event after the peer's position. When the push finds nothing left to send, the log after the peer's position can only be its own events; the position then moves to the head of the log that was read before the push (`ISyncPushPositionRepository.AdvanceCursorAsync`, only for a peer that already has a row, never after a stalled send) and `pushed_at`, which is "last delivery", is left as it was. Before this, such a peer showed "N changes not delivered" for ever and the stuck position looked like a gap to the compaction of the log.
+
+## Direct Sync on the LAN (channels)
+
+Since 2.8.0 (ADR 0011, [design/lan-peer-sync.md](design/lan-peer-sync.md)) a desktop node answers its paired
+devices directly on its LAN port (5311 by default, a setting; `BMB_LAN_PORT` overrides it), on trusted networks only (Windows:
+Private and domain networks; a Mac: the networks the person trusted, the one a device was paired on included), and only the
+peer sync routes: never the web UI. "Devices on my network" stays a separate switch for the web page.
+
+A peer is reached over a list of **channels**, tried in order: the one that worked last, then its LAN addresses of a network this
+computer is on (all at once, 2 s each), then its internet addresses, then an explicit LAN address of another network. The
+sources: the replicated `api_address`, what the peer announces about itself in a signed `node_endpoints` event, what mDNS
+shows on this network, and addresses typed for it on this node (Admin > Devices, the device page, "Ways to reach it"). Every request of
+a session carries the TLS anchor of the peer it is for (its pinned leaf key, its local CA's key), so an address is accepted only
+as that peer.
+
+`node_endpoints` is a clear control event a node publishes about itself: at most eight https endpoints of trusted networks and its
+TLS anchors. It reaches only nodes that advertise the capability `peer-endpoints-v1`: a 2.7.5 node is never served one on a pull
+and never sent one on a push (the cursor moves over it), so a locked, encrypted 2.7.5 node cannot stall on a type it does not
+know. Announcements therefore spread only through updated nodes; mDNS and typed addresses cover the LAN meanwhile.
+
+The status of a peer says how it is reached: directly on this network, over the internet, it calls this node, reachable through
+another device (another peer saw it recently), not on this network, needs an update (a desktop of an older version on this
+network), not answering, or silent for days (an alarm).
 
 ## Push-on-Save (SyncTrigger)
 
@@ -524,7 +591,23 @@ to 30 seconds each.
    CAs, which a self-signed peer never passes. Both fields are optional: a producer of 2.5.0 or
    older sends neither (the peer is then recorded without a mode, as before), and a joiner of 2.5.0
    or older ignores them. A pin that is not a well-formed pin leaves that peer out of the join (the
-   peer is learned later from the whitelist events) rather than unpinned (`JoinTls`).
+   peer is learned later from the whitelist events) rather than unpinned (`JoinTls`). The producer's
+   revoked peers travel apart, in `revokedPeers` (node id, the `lamportTs` and `sourceNodeId` of the
+   revoke, which is the row's membership version, and the key when it has one). The joiner keeps each as
+   a revoked row at that version (`JoinRevocations`), so an older `whitelist_add` for it that another
+   node's log delivers later is refused. They are not in `whitelist` because a joiner of any version
+   makes an active row of every entry there; a joiner of 2.7.5 or older ignores `revokedPeers`, and a
+   producer of 2.7.5 or older sends none. Each `whitelist` entry also carries `versions`: the producer's
+   version of each concern of that row (`membership`, `superadmin`, `name`, `address`, `tls`, each a
+   `lamportTs` and a `sourceNodeId`; migration 045). The joiner's row takes them
+   (`JoinRevocations.Inherit`), so it judges every later event about that peer field by field as the
+   producer does. With one version for the whole row the joiner inherited the producer's state as it
+   was, a demotion dropped for a crossing rename included. Each entry also carries `lamportTs` and
+   `sourceNodeId`, the row's own version (the newest of `versions`), which a joiner of this version does
+   not need. A field the producer holds undated stays undated on the joiner (`undated` in its version). Without
+   `versions` (a 2.7.5 producer) every concern is at version 0, as before, and the fields are undated:
+   an add that is not a re-add changes none of them (see above). A version outside what a join accepts is
+   read as 0.
 2. Challenge+sig authenticate with the remote (standard `/api/sync/authenticate`).
 3. `GET /api/sync/snapshot/for-join` (Bearer auth) → signed `.tar.gz`. Headers:
    - `X-BMB-Snapshot-CP-Seq`: sequence number the snapshot represents
@@ -1117,6 +1200,22 @@ add with one sentence, a 404 says the node is older than 2.7 and never falls bac
 "removed by the owner" and not retried (the copy and its keys stay until the person removes the account; Reconnect, in the apps worded "Try again", puts a healthy copy back, for example after a proxy or firewall in front of the source refused twice). A contact that goes through (a finished sync round, a finished first load, a baseline check the node answered with 304 or a newer baseline) forgets the first refusal, a refusal that reaches an account already removed is not remembered, and one older than 24 hours is a first one again; removing the account sends `POST /api/sync/leave` first.
 
 ### Older nodes, and the schema number
+
+**The whitelist and 2.7.5 nodes (migration 045).** The whitelist events did not change: same members, same
+signature, so 2.7.5 and this version sync in both directions as before. A 2.7.5 node keeps its own rule, one
+version per row. It still keeps a peer that a newer crossing update outranked the revoke of, and it still
+drops a demotion for a crossing rename that arrived first. While such a node holds a peer as a superadmin
+that the others demoted, it applies that peer's cluster-state events alone. Nodes of this version agree
+among themselves whatever an older node sends them, in any order. A node of this version joins a 2.7.5 host:
+it writes the host's peers with their fields undated, and if that host's row had diverged, the update the
+joiner pulls afterwards puts it right. A 2.7.5 node cannot join a node of this version (it refuses the
+snapshot of schema 44 or 45, as it already did with 44); its join answer type ignores `versions` and
+`revokedPeers` all the same. Rows built from a source with one version per row (a blind package, a phone's
+replica, a recovery restore) keep membership at that version: on such a node a revoke that a newer
+update crossed before the package was built is still refused, as in 2.7.5, until a newer event. Update
+every node to end the divergence for good; an admin can revoke or demote again on a node that kept the
+older answer. Migration 045 ships in the same release as 044 (2.8.0), so it adds no upgrade step: a 2.7.5
+node cannot take a snapshot, a join archive or a blind package of schema 44 or 45 anyway.
 
 No sync protocol changes. Migration 041 (the invitations) and migration 042 (the kind of an invitation and a server node's encrypted pair code, both additive) follow the 2.6.2 baseline, so a 2.7 node's snapshots, join archives and blind packages carry schema version **42**:
 a 2.6.x node asked to join from one, or a 2.6.x server blind node asked to take a seed from a 2.7 hub, answers "upgrade this node first" (`SchemaMismatch`). Update

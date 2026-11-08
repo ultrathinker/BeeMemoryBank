@@ -73,14 +73,14 @@ public class LanControlNetworkTests : IAsyncLifetime
         status.Active.Should().BeTrue();
         status.Token.Should().BeNull("a permanently open node has no one-time token in its join code");
         status.SpkiPin.Should().Be(SpkiPin.Of(_cert));
-        node.Listener.IsOn.Should().BeTrue();
+        node.Listener.WebOn.Should().BeTrue();
         new NodeNetworkSettingsStore(_dir).Load().DevicesOnMyNetwork.Should().BeTrue();
 
         var off = (await (await node.PostAsync("/node/lan/network", new { enabled = false })).Content.ReadFromJsonAsync<LanControl.LanStatus>(Json))!;
 
         off.Mode.Should().Be("on-demand");
         off.Setting.Should().Be("off");
-        node.Listener.IsOn.Should().BeFalse();
+        node.Listener.WebOn.Should().BeFalse();
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public class LanControlNetworkTests : IAsyncLifetime
         using var req = new HttpRequestMessage(HttpMethod.Post, "/node/lan/network") { Content = JsonContent.Create(new { enabled = true }) };
         (await node.Client.SendAsync(req)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
 
-        node.Listener.IsOn.Should().BeFalse();
+        node.Listener.WebOn.Should().BeFalse();
         new NodeNetworkSettingsStore(_dir).Load().DevicesOnMyNetwork.Should().BeFalse();
     }
 
@@ -132,7 +132,7 @@ public class LanControlNetworkTests : IAsyncLifetime
         status.Setting.Should().Be("on");
         status.Mode.Should().Be("on-demand", "\"permanent\" means the listener is really up");
         status.Active.Should().BeFalse();
-        node.Listener.IsOn.Should().BeFalse();
+        node.Listener.WebOn.Should().BeFalse();
     }
 
     [Fact]
@@ -237,10 +237,9 @@ public class LanControlNetworkTests : IAsyncLifetime
         certificate ??= () => _cert;
         var exposure = startup ?? new NetworkExposure(false, NetworkExposureSource.Off);
         // The control routes are driven, the door and the listener are never connected to: both bind a port the system picks.
-        var door = new LanJoinListener("http://127.0.0.1:1", certificate, new IPEndPoint(IPAddress.Loopback, 0), TimeProvider.System);
-        var listener = new LanFrontListener(
-            () => NodeFrontBuilder.BuildNetworkFront(_children, new IPEndPoint(IPAddress.Loopback, 0), certificate),
-            certificate);
+        var listener = new LanListener(_children["BeeMemoryBank.Api"].Urls[0], () => _children["BeeMemoryBank.Web"].Urls[0], certificate,
+            new FixedBindPlanner(IPAddress.Loopback), 0);
+        var door = new LanJoinListener(listener, certificate, TimeProvider.System);
         var network = new LanNetworkSwitch(new NodeNetworkSettingsStore(_dir), listener, door, exposure);
         var lan = new LanControl(permanentByEnvironment ? null : door, certificate, firewall ?? new Firewall(true), InternalKey, network, platform);
 
@@ -254,9 +253,9 @@ public class LanControlNetworkTests : IAsyncLifetime
         return new Node(app, listener, door);
     }
 
-    private sealed class Node(WebApplication app, LanFrontListener listener, LanJoinListener door) : IAsyncDisposable
+    private sealed class Node(WebApplication app, LanListener listener, LanJoinListener door) : IAsyncDisposable
     {
-        public LanFrontListener Listener => listener;
+        public LanListener Listener => listener;
         public HttpClient Client { get; } = new() { BaseAddress = new Uri(app.Urls.First()) };
 
         public Task<HttpResponseMessage> PostAsync(string path, object? body)
@@ -277,8 +276,8 @@ public class LanControlNetworkTests : IAsyncLifetime
         public async ValueTask DisposeAsync()
         {
             Client.Dispose();
-            await listener.DisposeAsync();
             await door.DisposeAsync();
+            await listener.DisposeAsync();
             await app.StopAsync();
             await app.DisposeAsync();
         }

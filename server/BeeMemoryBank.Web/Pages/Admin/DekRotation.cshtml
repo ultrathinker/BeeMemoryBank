@@ -5,7 +5,7 @@
     <p>
         Every article, version and file is encrypted under its own key, and those keys are wrapped by one <strong>master data key</strong> (the DEK). <strong>Rotating</strong> it makes a new
         master key and re-encrypts everything under it; the old key is retired. Reasons: you suspect the key leaked, or a device that held it should be locked out for good (revoke it
-        first on <a href="/Admin/TrustedNodes">Trusted Nodes</a>: a revoked device gets no copy of the new key), or you want periodic key hygiene.
+        first on <a href="/Admin/Devices">Devices</a>: a revoked device gets no copy of the new key), or you want periodic key hygiene.
     </p>
     <p class="admin-warning">
         <strong>This is a heavy operation for the whole network.</strong> It is started on one node and the others apply it as they sync: each one must accept it (here, or automatically for

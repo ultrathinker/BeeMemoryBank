@@ -38,6 +38,8 @@ public class ClearFieldGoldenTests
         [EventTypes.SealedSecretSet] = typeof(SealedSecretSetPayload),
         [EventTypes.MetadataKeySet] = typeof(MetadataKeySetPayload),
         [EventTypes.MetadataActivation] = typeof(MetadataActivationPayload),
+        // LAN sync (docs/design/lan-peer-sync.md 8, decision D3): private and VPN addresses and public keys, in clear on purpose.
+        [EventTypes.NodeEndpoints] = typeof(NodeEndpointsPayload),
     };
 
     [Fact]

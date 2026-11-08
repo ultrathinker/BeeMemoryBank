@@ -58,7 +58,7 @@ public sealed class BlindPhonePairingService(
         if (listener == null || !CanBeCalled(listener))
             throw new BlindPhonePairingException(
                 "The phone can only call a node that listens on https with a pinned or a publicly valid certificate — a blind node or a hub. " +
-                "Add one first (Admin, Trusted Nodes: \"Let blind copies call this node\"); this PC alone cannot serve a phone.");
+                "Add one first (Admin > Devices, the page of that node: \"Let blind copies call this node\"); this PC alone cannot serve a phone.");
 
         var enrollment = BlindPhoneEnrollment.Prepare(phoneCode, listener.ApiAddress!, listener.NodeId,
             listener.TlsSpki ?? "", listener.Ed25519PublicKey, time.GetUtcNow().UtcDateTime, out var error,
@@ -79,8 +79,8 @@ public sealed class BlindPhonePairingService(
             {
                 // Log first, like every whitelist write: the row carries the version the mesh is told.
                 var version = await sp.GetRequiredService<IEventLogger>().LogWhitelistAddAsync(phone);
-                phone.LamportTs = version.LamportTs;
-                phone.SourceNodeId = version.SourceNodeId;
+                // An add writes every field of the row, and its membership.
+                phone.StampLocal(version, BeeMemoryBank.Sync.WhitelistEventConcerns.OfAdd);
                 if (existing is null) await whitelist.CreateAsync(phone);
                 else await whitelist.UpdateAsync(phone);
             }

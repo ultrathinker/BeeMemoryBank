@@ -18,10 +18,10 @@ public sealed class BlindPackageFetcher(
     {
         var target = state.CallCode
             ?? throw new InvalidDataException("This phone is not paired with a node to fetch a package from.");
-        return client.FetchVerifiedPackageAsync(http.GetClient(target), target, workDirectory, progress, ct, length =>
+        return http.WithClientAsync(target, BlindHubCall.Package, exempt: false, (web, hub) => client.FetchVerifiedPackageAsync(web, hub, workDirectory, progress, ct, length =>
         {
             BeforeArchive?.Invoke(length);
             beforeDownload(length);
-        });
+        }), ct);
     }
 }

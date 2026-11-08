@@ -1,34 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <defs>
-    <g id="bee-body"><g>
-      <clipPath id="abdclip"><path d="M 430,430 C 427.9,437 426.7,451 417.5,472 C 408.3,493 385.3,526 375,556 C 364.7,586 359.3,628 355.5,652 C 351.7,676 350.8,682 352,700 C 353.2,718 354.6,734 362.5,760 C 370.4,786 387.6,832 399.5,856 C 411.4,880 423.2,891.7 434,904 C 444.8,916.3 451.5,920.3 464.5,930 C 477.5,939.7 496.2,962 512,962 C 527.8,962 546.5,939.7 559.5,930 C 572.5,920.3 579.2,916.3 590,904 C 600.8,891.7 612.6,880 624.5,856 C 636.4,832 653.6,786 661.5,760 C 669.4,734 670.8,718 672,700 C 673.2,682 672.3,676 668.5,652 C 664.7,628 659.3,586 649,556 C 638.7,526 615.7,493 606.5,472 C 597.3,451 596.1,437 594,430 Z"/></clipPath>
-      <path d="M 430,430 C 427.9,437 426.7,451 417.5,472 C 408.3,493 385.3,526 375,556 C 364.7,586 359.3,628 355.5,652 C 351.7,676 350.8,682 352,700 C 353.2,718 354.6,734 362.5,760 C 370.4,786 387.6,832 399.5,856 C 411.4,880 423.2,891.7 434,904 C 444.8,916.3 451.5,920.3 464.5,930 C 477.5,939.7 496.2,962 512,962 C 527.8,962 546.5,939.7 559.5,930 C 572.5,920.3 579.2,916.3 590,904 C 600.8,891.7 612.6,880 624.5,856 C 636.4,832 653.6,786 661.5,760 C 669.4,734 670.8,718 672,700 C 673.2,682 672.3,676 668.5,652 C 664.7,628 659.3,586 649,556 C 638.7,526 615.7,493 606.5,472 C 597.3,451 596.1,437 594,430 Z" fill="#FBCC0D"/>
-      <g clip-path="url(#abdclip)">
-        <path d="M 120.5,419.8 A 391.5 102 0 0 0 903.5,419.8" fill="none" stroke="#FFFFFF" stroke-width="41"/>
-        <path d="M 120.5,614.2 A 391.5 102 0 0 0 903.5,614.2" fill="none" stroke="#FFFFFF" stroke-width="40"/>
-        <path d="M 120.5,400 A 391.5 102 0 0 0 903.5,400" fill="none" stroke="#0B0B0B" stroke-width="22"/><path d="M 120.5,439.5 A 391.5 102 0 0 0 903.5,439.5" fill="none" stroke="#0B0B0B" stroke-width="22"/><path d="M 120.5,595 A 391.5 102 0 0 0 903.5,595" fill="none" stroke="#0B0B0B" stroke-width="22"/><path d="M 120.5,633.5 A 391.5 102 0 0 0 903.5,633.5" fill="none" stroke="#0B0B0B" stroke-width="22"/><path d="M 120.5,791 A 391.5 102 0 0 0 903.5,791" fill="none" stroke="#0B0B0B" stroke-width="22"/>
-      </g>
-      <path d="M 430,430 C 427.9,437 426.7,451 417.5,472 C 408.3,493 385.3,526 375,556 C 364.7,586 359.3,628 355.5,652 C 351.7,676 350.8,682 352,700 C 353.2,718 354.6,734 362.5,760 C 370.4,786 387.6,832 399.5,856 C 411.4,880 423.2,891.7 434,904 C 444.8,916.3 451.5,920.3 464.5,930 C 477.5,939.7 496.2,962 512,962 C 527.8,962 546.5,939.7 559.5,930 C 572.5,920.3 579.2,916.3 590,904 C 600.8,891.7 612.6,880 624.5,856 C 636.4,832 653.6,786 661.5,760 C 669.4,734 670.8,718 672,700 C 673.2,682 672.3,676 668.5,652 C 664.7,628 659.3,586 649,556 C 638.7,526 615.7,493 606.5,472 C 597.3,451 596.1,437 594,430 Z" fill="none" stroke="#0B0B0B" stroke-width="22" stroke-linejoin="round"/>
-      <path d="M 512,966 V 992" stroke="#0B0B0B" stroke-width="24" fill="none"/>
-    </g></g>
-    <clipPath id="body0"><path d="M 180.5,739 A 331.5 102 0 0 0 843.5,739 L 843.5,886 A 331.5 102 0 0 1 180.5,886 Z"/></clipPath><clipPath id="body1"><path d="M 180.5,544 A 331.5 102 0 0 0 843.5,544 L 843.5,684.5 A 331.5 102 0 0 1 180.5,684.5 Z"/></clipPath><clipPath id="body2"><path d="M 180.5,348.5 A 331.5 102 0 0 0 843.5,348.5 L 843.5,489 A 331.5 102 0 0 1 180.5,489 Z"/></clipPath>
-  </defs>
-  <g id="database">
-    <path d="M 180.5,739 L 180.5,886 A 331.5 102 0 0 0 843.5,886 L 843.5,739 A 331.5 102 0 0 0 180.5,739 Z" fill="#FFFFFF"/>
-    <g clip-path="url(#body0)"><use href="#bee-body"/></g>
-    <path d="M 180.5,739 L 180.5,886 A 331.5 102 0 0 0 843.5,886 L 843.5,739 A 331.5 102 0 0 0 180.5,739 Z" fill="none" stroke="#0B0B0B" stroke-width="22" stroke-linejoin="round"/>
-    <path d="M 180.5,739 A 331.5 102 0 0 0 843.5,739" fill="none" stroke="#0B0B0B" stroke-width="22"/>
-<path d="M 180.5,544 L 180.5,684.5 A 331.5 102 0 0 0 843.5,684.5 L 843.5,544 A 331.5 102 0 0 0 180.5,544 Z" fill="#FFFFFF"/>
-    <g clip-path="url(#body1)"><use href="#bee-body"/></g>
-    <path d="M 180.5,544 L 180.5,684.5 A 331.5 102 0 0 0 843.5,684.5 L 843.5,544 A 331.5 102 0 0 0 180.5,544 Z" fill="none" stroke="#0B0B0B" stroke-width="22" stroke-linejoin="round"/>
-    <path d="M 180.5,544 A 331.5 102 0 0 0 843.5,544" fill="none" stroke="#0B0B0B" stroke-width="22"/>
-<path d="M 180.5,348.5 L 180.5,489 A 331.5 102 0 0 0 843.5,489 L 843.5,348.5 A 331.5 102 0 0 0 180.5,348.5 Z" fill="#FFFFFF"/>
-    <g clip-path="url(#body2)"><use href="#bee-body"/></g>
-    <path d="M 180.5,348.5 L 180.5,489 A 331.5 102 0 0 0 843.5,489 L 843.5,348.5 A 331.5 102 0 0 0 180.5,348.5 Z" fill="none" stroke="#0B0B0B" stroke-width="22" stroke-linejoin="round"/>
-    <path d="M 180.5,348.5 A 331.5 102 0 0 0 843.5,348.5" fill="none" stroke="#0B0B0B" stroke-width="22"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <g stroke="#2B2B2B" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="3.5" y="21" width="25" height="5" fill="#FFC800" stroke="none"/>
+    <ellipse cx="16" cy="26" rx="12.5" ry="4" fill="#FFC800" stroke="none"/>
+    <ellipse cx="16" cy="21" rx="12.5" ry="4" fill="#FFFFFF"/>
+    <path d="M3.5 21V26A12.5 4 0 0 0 28.5 26V21" fill="none"/>
+    <rect x="3.5" y="16" width="25" height="5" fill="#FFFFFF" stroke="none"/>
+    <ellipse cx="16" cy="21" rx="12.5" ry="4" fill="#FFFFFF" stroke="none"/>
+    <ellipse cx="16" cy="16" rx="12.5" ry="4" fill="#FFFFFF"/>
+    <path d="M3.5 16V21A12.5 4 0 0 0 28.5 21V16" fill="none"/>
+    <rect x="3.5" y="11" width="25" height="5" fill="#FFC800" stroke="none"/>
+    <ellipse cx="16" cy="16" rx="12.5" ry="4" fill="#FFC800" stroke="none"/>
+    <ellipse cx="16" cy="11" rx="12.5" ry="4" fill="#FFFFFF"/>
+    <path d="M3.5 11V16A12.5 4 0 0 0 28.5 16V11" fill="none"/>
+    <rect x="3.5" y="6" width="25" height="5" fill="#FFFFFF" stroke="none"/>
+    <ellipse cx="16" cy="11" rx="12.5" ry="4" fill="#FFFFFF" stroke="none"/>
+    <ellipse cx="16" cy="6" rx="12.5" ry="4" fill="#FFFFFF"/>
+    <path d="M3.5 6V11A12.5 4 0 0 0 28.5 11V6" fill="none"/>
   </g>
-  <ellipse cx="512" cy="243" rx="172" ry="146" fill="#FFFFFF" stroke="#0B0B0B" stroke-width="22"/>
-  <circle cx="405" cy="232" r="62.5" fill="#EAEAF6" stroke="#0B0B0B" stroke-width="22"/><circle cx="416" cy="232" r="28.5" fill="#0B0B0B"/><circle cx="428" cy="219" r="8.5" fill="#FFFFFF"/><circle cx="619" cy="232" r="62.5" fill="#EAEAF6" stroke="#0B0B0B" stroke-width="22"/><circle cx="608" cy="232" r="28.5" fill="#0B0B0B"/><circle cx="620" cy="219" r="8.5" fill="#FFFFFF"/>
-  <path d="M 342,52 C 395,38 446,72 466,142" fill="none" stroke="#0B0B0B" stroke-width="22" stroke-linecap="round"/><circle cx="313" cy="68.5" r="34" fill="#FFFFFF" stroke="#0B0B0B" stroke-width="22"/>
-  <path d="M 682,52 C 629,38 578,72 558,142" fill="none" stroke="#0B0B0B" stroke-width="22" stroke-linecap="round"/><circle cx="711" cy="68.5" r="34" fill="#FFFFFF" stroke="#0B0B0B" stroke-width="22"/>
 </svg>

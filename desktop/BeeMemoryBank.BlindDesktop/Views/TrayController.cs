@@ -11,7 +11,7 @@ public sealed class TrayController : IDisposable
 
     /// <param name="iconAsset">The <c>avares://</c> resource of the icon; the platform chooses it (a monochrome template image in the macOS menu bar).</param>
     /// <param name="isTemplate">The icon is a monochrome template image: macOS then tints it for the light and dark menu bar (without the flag it draws the black pixels as they are).</param>
-    public TrayController(Application application, ITrayActions actions, string iconAsset = "avares://BeeMemoryBank.BlindDesktop/Assets/icon.png", bool isTemplate = false)
+    public TrayController(Application application, ITrayActions actions, string iconAsset = "avares://BeeMemoryBank.BlindDesktop/Assets/icon.ico", bool isTemplate = false)
     {
         using var stream = AssetLoader.Open(new Uri(iconAsset));
         _icon = new TrayIcon

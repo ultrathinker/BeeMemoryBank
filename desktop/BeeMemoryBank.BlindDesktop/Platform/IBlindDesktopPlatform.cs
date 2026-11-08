@@ -48,7 +48,8 @@ public interface IBlindDesktopPlatform
     string StatusAreaName => "tray";
 
     /// <summary>The Avalonia resource (<c>avares://...</c>) of the icon the tray / menu bar shows. A template-style monochrome one on macOS.</summary>
-    string TrayIconAsset => "avares://BeeMemoryBank.BlindDesktop/Assets/icon.png";
+    /// <remarks>The multi-size .ico by default, so Windows takes its hand-drawn small entries for the tray; macOS has its template image.</remarks>
+    string TrayIconAsset => "avares://BeeMemoryBank.BlindDesktop/Assets/icon.ico";
 
     /// <summary>True when <see cref="TrayIconAsset"/> is a monochrome template image (black with alpha) that the system must tint for the light and dark menu bar. macOS only; the shell has to say so, or the system draws the black pixels as they are.</summary>
     bool TrayIconIsTemplate => false;

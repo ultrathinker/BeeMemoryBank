@@ -90,9 +90,10 @@ public sealed class BlindPackageBuilder(
     /// in order (review L-merge round 3 #2: without the revokes, a revoked producer's old promotion
     /// would be replayed alone). The receiver runs them through its ordinary applier before it has any
     /// row for this node, so what the stream cannot prove it does not grant: compaction removes a prefix
-    /// of the log, so where the admission is gone the updates and revokes after it apply to nothing. A
-    /// revoke this node never received (it is cut off once revoked) is not here either; the receiver
-    /// learns it from any other peer, as every node does.
+    /// of the log, so where the admission is gone the updates after it apply to nothing, and a revoke
+    /// leaves a revoked row at its version (2.8.0), which only a newer add or the seed's own grant
+    /// outranks. A revoke this node never received (it is cut off once revoked) is not here either; the
+    /// receiver learns it from any other peer, as every node does.
     /// </summary>
     private async Task<IReadOnlyList<SyncEvent>> StandingEventsAsync(Guid self)
     {

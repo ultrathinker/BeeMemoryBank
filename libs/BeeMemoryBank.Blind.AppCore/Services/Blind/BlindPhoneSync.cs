@@ -45,7 +45,7 @@ public sealed class BlindPhoneSync(
 
         try
         {
-            await client.SyncOnceAsync(http.GetClient(target), target, ct);
+            await http.WithClientAsync(target, BlindHubCall.Sync, exempt: false, (web, hub) => client.SyncOnceAsync(web, hub, ct), ct);
             // A round ran to its end: a pause that was told is over, the next one is told at once.
             Reporter?.Clear();
         }

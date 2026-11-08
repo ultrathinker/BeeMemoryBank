@@ -40,10 +40,15 @@ public sealed class AdminPagesSourceTests
         return dir?.FullName ?? throw new InvalidOperationException("Could not locate repo root from " + AppContext.BaseDirectory);
     }
 
+    /// <summary>The pages of the area. A file that only redirects (the route of a page the Devices section replaced) is no page: it is in <c>AdminPageCatalog.LegacyRoutes</c>.</summary>
     private static IEnumerable<string> PageFiles() =>
         Directory.EnumerateFiles(AdminDir, "*.cshtml")
             .Where(f => !Path.GetFileName(f).StartsWith('_') && !string.Equals(Path.GetFileName(f), "Index.cshtml", StringComparison.Ordinal))
+            .Where(f => !IsRedirectOnly(f))
             .OrderBy(f => f, StringComparer.Ordinal);
+
+    private static bool IsRedirectOnly(string cshtmlFile) =>
+        File.ReadAllText(cshtmlFile + ".cs").Contains(" : LegacyPageRedirectModel(", StringComparison.Ordinal);
 
     // ---------------------------------------------------------------- the catalog
 
@@ -51,7 +56,7 @@ public sealed class AdminPagesSourceTests
     public void TheCatalog_GivesEveryPageARouteATitleAnIconAndAShortDescription_OnceEach()
     {
         var all = AdminPageCatalog.All;
-        all.Count.Should().BeGreaterThanOrEqualTo(25, "one block, one page");
+        all.Count.Should().BeGreaterThanOrEqualTo(20, "one block, one page");
 
         all.Select(p => p.Route).Should().OnlyHaveUniqueItems();
         all.Select(p => p.Title).Should().OnlyHaveUniqueItems("two items with one title cannot be told apart on the list");
@@ -87,7 +92,8 @@ public sealed class AdminPagesSourceTests
     /// <summary>What is wrong with the source of one page of the Admin area (the guard, apart from the files, so that it can be tested).</summary>
     internal static IEnumerable<string> TemplateProblems(string name, string text)
     {
-        if (!Regex.IsMatch(text, @"\A\s*@page\s*\r?\n")) yield return $"{name}: not a Razor page (the first line is @page)";
+        // @page, or @page "{nodeId:guid}" for the page of one device
+        if (!Regex.IsMatch(text, @"\A\s*@page(\s+""[^""\r\n]*"")?\s*\r?\n")) yield return $"{name}: not a Razor page (the first line is @page)";
         if (!text.Contains($"@model BeeMemoryBank.Web.Pages.Admin.{name}Model", StringComparison.Ordinal)) yield return $"{name}: the model is not {name}Model";
         // A layout is chosen by Pages/Admin/_ViewStart.cshtml, for the whole folder: a page that sets its own has left the template.
         if (Regex.IsMatch(text, @"\bLayout\s*=")) yield return $"{name}: sets its own Layout";
@@ -123,7 +129,7 @@ public sealed class AdminPagesSourceTests
             seen++;
             problems.AddRange(TemplateProblems(Path.GetFileNameWithoutExtension(file), File.ReadAllText(file)));
         }
-        seen.Should().BeGreaterThanOrEqualTo(25);
+        seen.Should().BeGreaterThanOrEqualTo(20);
         problems.Should().BeEmpty();
     }
 
@@ -182,7 +188,7 @@ public sealed class AdminPagesSourceTests
     {
         AdminPageCatalog.LegacyAnchors.Keys.Should().BeEquivalentTo(OldCardIds, "a bookmark of any card of the old page must still lead somewhere");
         foreach (var (id, route) in AdminPageCatalog.LegacyAnchors)
-            AdminPageCatalog.Find(route).Should().NotBeNull($"{id} -> {route} is a page of the area");
+            AdminPageCatalog.Find(route.Split('#')[0]).Should().NotBeNull($"{id} -> {route} is a page of the area (and a block of it, after the #)");
     }
 
     [Fact]
@@ -192,7 +198,7 @@ public sealed class AdminPagesSourceTests
 
         js.Should().Contain("admin-legacy-anchors").And.Contain("location.hash").And.Contain("location.replace");
         js.Should().Contain("hasOwnProperty", "only a key of the table, not something inherited from Object.prototype (#constructor)");
-        js.Should().Contain("/^\\/Admin\\/[A-Za-z]+$/", "and nothing but a page of the Admin area is followed");
+        js.Should().Contain("/^\\/Admin\\/[A-Za-z]+(#[A-Za-z0-9_-]+)?$/", "and nothing but a page of the Admin area (and a block of it) is followed");
         js.Should().NotMatchRegex(@"<script|eval\(|innerHTML", "the table is data, never markup");
         // The index loads it, with the version; and renders the table of the server.
         var index = File.ReadAllText(Path.Combine(AdminDir, "Index.cshtml"));
@@ -240,7 +246,8 @@ public sealed class AdminPagesSourceTests
     [Fact]
     public void EveryAdminAddressNamedInTheWebSources_IsAPageOfTheArea()
     {
-        var known = AdminPageCatalog.All.Select(p => p.Name).Append("Index").ToHashSet(StringComparer.Ordinal);
+        // the pages of the area, and the routes of the pages the Devices section replaced (they answer a redirect)
+        var known = AdminPageCatalog.All.Select(p => p.Name).Append("Index").Concat(AdminPageCatalog.LegacyRoutes.Select(r => r[(r.LastIndexOf('/') + 1)..])).ToHashSet(StringComparer.Ordinal);
         var problems = new List<string>();
         var found = 0;
         foreach (var file in WebSources())
@@ -377,6 +384,9 @@ public sealed class AdminPagesTests : IAsyncLifetime
         return area.Groups[1].Value;
     }
 
+    /// <summary>Where a page is opened: the page of one device needs a device in the address (it says so when the device is not there).</summary>
+    private static string AddressOf(AdminPageInfo page) => page.Route == "/Admin/Device" ? $"/Admin/Device/{Guid.NewGuid()}" : page.Route;
+
     // ---------------------------------------------------------------- the index
 
     [Fact]
@@ -386,7 +396,10 @@ public sealed class AdminPagesTests : IAsyncLifetime
         // The recovery-key notice is an alert with a link to Admin -> Recovery key, not a second catalog entry.
         html = Regex.Replace(html, "<sl-alert id=\"recovery-key-notice\".*?</sl-alert>", "", RegexOptions.Singleline);
 
-        foreach (var page in AdminPageCatalog.All)
+        // A page that is reached from another page (the page of one device, "Add a blind node") has no row on the index.
+        foreach (var unlisted in AdminPageCatalog.All.Where(p => !p.Listed))
+            html.Should().NotContain($"href=\"{unlisted.Route}\"", $"{unlisted.Route} is reached from the Devices page, not from the list");
+        foreach (var page in AdminPageCatalog.All.Where(p => p.Listed))
         {
             Regex.Matches(html, $"href=\"{Regex.Escape(page.Route)}\"").Should().HaveCount(1, $"{page.Route} is on the index exactly once");
             Regex.Matches(html, $"data-admin-item=\"{page.Name}\"").Should().HaveCount(1);
@@ -417,11 +430,11 @@ public sealed class AdminPagesTests : IAsyncLifetime
     {
         var index = await GetAsync("/Admin");
         var links = Regex.Matches(index, "<a class=\"admin-item\" href=\"([^\"]+)\"").Select(m => m.Groups[1].Value).ToList();
-        links.Should().BeEquivalentTo(AdminPageCatalog.All.Select(p => p.Route));
+        links.Should().BeEquivalentTo(AdminPageCatalog.All.Where(p => p.Listed).Select(p => p.Route));
 
         foreach (var page in AdminPageCatalog.All)
         {
-            var html = await GetAsync(page.Route);
+            var html = await GetAsync(AddressOf(page));
 
             html.Should().Contain($"data-admin-page=\"{page.Route}\"", page.Route);
             html.Should().Contain($"<h1 class=\"admin-title\">{page.Title}</h1>", page.Route);
@@ -442,7 +455,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
     public async Task EveryPage_IsRefusedForARegularUser_AndForAVisitorWhoIsNotSignedIn()
     {
         using var visitor = _web.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
-        foreach (var route in AdminPageCatalog.All.Select(p => p.Route).Prepend("/Admin"))
+        foreach (var route in AdminPageCatalog.All.Select(AddressOf).Prepend("/Admin"))
         {
             using var asBob = await _bob.GetAsync(route);
             asBob.StatusCode.Should().NotBe(HttpStatusCode.OK, $"{route} is the superadmin's");
@@ -458,7 +471,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
     public async Task APostToAPage_IsRefusedForARegularUser_AndChangesNothing()
     {
         // Bob has no business with the wipe, the lock, the rotation or the revocation: the area's gate is the base class, for the handlers too.
-        foreach (var (route, handler) in new[] { ("/Admin/ResetNode", "ResetNode"), ("/Admin/DekRotation", "ProposeDekRotation"), ("/Admin/TrustedNodes", "RevokeNode"), ("/Admin/Snapshots", "CreateSnapshot") })
+        foreach (var (route, handler) in new[] { ("/Admin/ResetNode", "ResetNode"), ("/Admin/DekRotation", "ProposeDekRotation"), ($"/Admin/Device/{Guid.NewGuid()}", "RevokeNode"), ("/Admin/Snapshots", "CreateSnapshot") })
         {
             using var post = new HttpRequestMessage(HttpMethod.Post, $"{route}?handler={handler}") { Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["masterPassword"] = AdminPassword }) };
             using var response = await _bob.SendAsync(post);
@@ -516,9 +529,9 @@ public sealed class AdminPagesTests : IAsyncLifetime
         _scripted.Restored = $$"""[{"nodeId":"{{phone}}","displayName":"Kitchen tablet","apiAddress":"https://tablet.lan"}]""";
 
         var index = await GetAsync("/Admin");
-        var page = await GetAsync("/Admin/RestoredDevices");
+        var page = await GetAsync("/Admin/Devices");
 
-        index.Should().Contain("id=\"restored-devices-notice\"").And.Contain("1 restored device waits for your confirmation.").And.Contain("href=\"/Admin/RestoredDevices\"");
+        index.Should().Contain("id=\"restored-devices-notice\"").And.Contain("1 restored device waits for your confirmation.").And.Contain("href=\"/Admin/Devices#restored-peers\"");
         Body(page).Should().Contain("Kitchen tablet").And.Contain("https://tablet.lan").And.Contain($"value=\"{phone}\"").And.Contain("handler=ConfirmRestoredPeer");
         _scripted.Restored = "[]";
         (await GetAsync("/Admin")).Should().NotContain("restored-devices-notice");
@@ -535,15 +548,15 @@ public sealed class AdminPagesTests : IAsyncLifetime
         index.Should().Contain("GET /api/keys/password-notice").And.Contain("GET /api/dek-rotation/peer-pending").And.Contain("GET /api/recovery/restored-peers");
 
         _scripted.Calls.Clear();
-        await GetAsync("/Admin/NodeIdentity");
-        var identity = Calls();
-        identity.Should().Contain(c => c.Contains("identity", StringComparison.OrdinalIgnoreCase));
-        identity.Should().NotContain(c => c.Contains("/api/snapshots") || c.Contains("/api/agents") || c.Contains("/api/whitelist") || c.Contains("/api/vault/status")
-            || c.Contains("/api/keys/password-notice") || c.Contains("/api/dek-rotation") || c.Contains("/api/recovery/restored-peers"));
+        await GetAsync("/Admin/Devices");
+        var devices = Calls();
+        devices.Should().Contain(c => c.Contains("/api/sync/network")).And.Contain(c => c.Contains("identity", StringComparison.OrdinalIgnoreCase)).And.Contain(c => c.Contains("/api/whitelist"));
+        devices.Should().NotContain(c => c.Contains("/api/snapshots") || c.Contains("/api/agents") || c.Contains("/api/vault/status")
+            || c.Contains("/api/keys/password-notice") || c.Contains("/api/dek-rotation"));
 
         // A page whose data is read by its own script asks the server for nothing: it makes the calls of the layout (the header), and no more.
         _scripted.Calls.Clear();
-        await GetAsync("/Admin/ConnectDevice");
+        await GetAsync("/Admin/HardDelete");
         var layoutOnly = Calls();
         _scripted.Calls.Clear();
         await GetAsync("/Admin/Branding");
@@ -574,12 +587,30 @@ public sealed class AdminPagesTests : IAsyncLifetime
         new("/Admin", "PeerAcceptDekRotation", Expect.Message, F(("eventId", Nobody))),
         new("/Admin", "PeerRejectDekRotation", Expect.Message, F(("eventId", Nobody))),
 
-        new("/Admin/RestoredDevices", "ConfirmRestoredPeer", Expect.Message, F(("nodeId", Nobody))),
+        new("/Admin/Devices", "ConfirmRestoredPeer", Expect.Message, F(("nodeId", Nobody))),
+        new("/Admin/Devices", "DismissLanNotice", Expect.NoMessage),
+        new("/Admin/Devices", "PromotePasswordPeers", Expect.Message, F(("nodeIds", Nobody))),
+        new("/Admin/Devices", "Enable", Expect.Page, Shown: "id=\"connect-device-body\""),
+        new("/Admin/Devices", "Disable", Expect.Page, Shown: "id=\"connect-device-body\""),
+        new("/Admin/Devices", "Firewall", Expect.Page, Shown: "id=\"connect-device-body\""),
 
-        new("/Admin/DevicesOnMyNetwork", "SetDevicesOnMyNetwork", Expect.Message, F(("enabled", "true"))),
-        new("/Admin/DevicesOnMyNetwork", "DevicesFirewall", Expect.Message, F(("action", "add"))),
+        new("/Admin/NetworkSettings", "SetDevicesOnMyNetwork", Expect.Message, F(("enabled", "true"))),
+        new("/Admin/NetworkSettings", "DevicesFirewall", Expect.Message, F(("action", "add"))),
+        new("/Admin/NetworkSettings", "SetLanSync", Expect.Message, F(("enabled", "true"))),
+        new("/Admin/NetworkSettings", "SetLanPort", Expect.Message, F(("port", "5312"))),
+        new("/Admin/NetworkSettings", "AnswerNetwork", Expect.Message, F(("fingerprint", "v1:192.168.1.0/24|192.168.1.1|00:11:22:33:44:55"), ("answer", "yes"))),
+        new("/Admin/NetworkSettings", "SetInvisibleMode", Expect.Message, F(("enabled", "false"))),
 
-        new("/Admin/InvisibleMode", "SetInvisibleMode", Expect.Message, F(("enabled", "false"))),
+        // the page of one device is /Admin/Device/{nodeId}: the test puts a device that is not there in the address
+        new("/Admin/Device", "SetPeerSuperadmin", Expect.Message, F(("isSuperadmin", "true"))),
+        new("/Admin/Device", "RevokeNode", Expect.Message),
+        new("/Admin/Device", "ChangeNodeAddress", Expect.Message, F(("newApiAddress", "http://127.0.0.1:1"), ("password", "not the password"))),
+        new("/Admin/Device", "SetBlindCallable", Expect.Message, F(("trust", "off"), ("password", "not the password"))),
+        new("/Admin/Device", "SetAutoAcceptRestore", Expect.Message, F(("autoAccept", "true"))),
+        new("/Admin/Device", "SetAutoAcceptDekRotation", Expect.Message, F(("autoAccept", "true"))),
+        new("/Admin/Device", "AddPeerChannel", Expect.Message, F(("address", "192.168.1.20"), ("saveWithoutAnswer", "false"))),
+        new("/Admin/Device", "RemovePeerChannel", Expect.Message, F(("address", "https://192.168.1.20:5311"))),
+        new("/Admin/Device", "Reseed", Expect.Message),
 
         new("/Admin/SoftwareUpdates", "CheckUpdate", Expect.NoMessage, F(("manifestJson", ""), ("manifestSignatureBase64", ""))),
         new("/Admin/SoftwareUpdates", "DownloadUpdate", Expect.NoMessage, F(("manifestJson", ""))),
@@ -591,17 +622,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
         new("/Admin/BlindNodes", "ConfirmInvite", Expect.Message, F(("inviteId", Nobody), ("password", "not the password"))),
         new("/Admin/BlindNodes", "RefuseInvite", Expect.Message, F(("inviteId", Nobody))),
         new("/Admin/BlindNodes", "WithdrawInvite", Expect.Message, F(("inviteId", Nobody))),
-        new("/Admin/BlindNodes", "Reseed", Expect.Message, F(("nodeId", Nobody))),
-        new("/Admin/BlindNodes", "Disconnect", Expect.Message, F(("nodeId", Nobody))),
         new("/Admin/BlindNodes", "PairPhone", Expect.Page, F(("code", "not a phone code"), ("listenerId", Nobody)), Shown: "id=\"phone-error\""),
-
-        new("/Admin/TrustedNodes", "SetPeerSuperadmin", Expect.Message, F(("nodeId", Nobody), ("isSuperadmin", "true"))),
-        new("/Admin/TrustedNodes", "RevokeNode", Expect.Message, F(("nodeId", Nobody))),
-        new("/Admin/TrustedNodes", "ChangeNodeAddress", Expect.Message, F(("nodeId", Nobody), ("newApiAddress", "http://127.0.0.1:1"), ("password", "not the password"))),
-        new("/Admin/TrustedNodes", "PromotePasswordPeers", Expect.Message, F(("nodeIds", Nobody))),
-        new("/Admin/TrustedNodes", "SetBlindCallable", Expect.Message, F(("nodeId", Nobody), ("trust", "off"), ("password", "not the password"))),
-        new("/Admin/TrustedNodes", "SetAutoAcceptRestore", Expect.Message, F(("nodeId", Nobody), ("autoAccept", "true"))),
-        new("/Admin/TrustedNodes", "SetAutoAcceptDekRotation", Expect.Message, F(("nodeId", Nobody), ("autoAccept", "true"))),
 
         new("/Admin/Snapshots", "CreateSnapshot", Expect.Message),
         new("/Admin/Snapshots", "DeleteSnapshot", Expect.Message, F(("fileName", "no-such-snapshot.tar.gz"))),
@@ -614,10 +635,6 @@ public sealed class AdminPagesTests : IAsyncLifetime
 
         new("/Admin/MasterPassword", "ChangeMasterPassword", Expect.Message, F(("oldPassword", "not the password"), ("newPassword", "Another-Pass-9"), ("passwordHint", "the sign-in note"))),
         new("/Admin/MasterPassword", "DismissPasswordNotice", Expect.Message),
-
-        new("/Admin/ConnectDevice", "Enable", Expect.Page, Shown: "id=\"connect-device\""),
-        new("/Admin/ConnectDevice", "Disable", Expect.Page, Shown: "id=\"connect-device\""),
-        new("/Admin/ConnectDevice", "Firewall", Expect.Page, Shown: "id=\"connect-device\""),
 
         new("/Admin/StorageProtection", "Seal", Expect.Message, F(("password", "not the password"))),
         new("/Admin/StorageProtection", "Erase", Expect.Message, F(("password", "not the password"), ("paths", "no-such-copy.db"))),
@@ -681,6 +698,8 @@ public sealed class AdminPagesTests : IAsyncLifetime
     public async Task EveryHandler_WorksFromItsNewPage_AndSaysWhereItEndsAndWhatCameOfIt(string page, string handler)
     {
         var c = Cases.Single(x => x.Page == page && x.Handler == handler);
+        var route = page;
+        page = page == "/Admin/Device" ? $"/Admin/Device/{Nobody}" : page;   // where the browser is
         var html = await GetAsync(page);
         var token = Token.Match(html).Groups[1].Value;
         token.Should().NotBeNullOrEmpty($"{page} carries the antiforgery token its posts need, whether or not it has a form on it");
@@ -720,12 +739,12 @@ public sealed class AdminPagesTests : IAsyncLifetime
             case Expect.Page:
                 response.StatusCode.Should().Be(HttpStatusCode.OK, handler);
                 var shown = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
-                shown.Should().Contain($"data-admin-page=\"{page}\"", "the answer is the page itself").And.Contain(c.Shown!, $"{handler} says what came of it, on the page");
+                shown.Should().Contain($"data-admin-page=\"{route}\"", "the answer is the page itself").And.Contain(c.Shown!, $"{handler} says what came of it, on the page");
                 break;
             case Expect.NoMessage:
                 response.StatusCode.Should().Be(HttpStatusCode.Redirect, handler);
                 WebUtility.UrlDecode(response.Headers.Location!.OriginalString).Should().Be(page, $"{handler} comes back to its own page");
-                (await GetAsync(response.Headers.Location.OriginalString)).Should().Contain($"data-admin-page=\"{page}\"");
+                (await GetAsync(response.Headers.Location.OriginalString)).Should().Contain($"data-admin-page=\"{route}\"");
                 break;
             default:
                 response.StatusCode.Should().Be(HttpStatusCode.Redirect, $"{handler}: {await response.Content.ReadAsStringAsync()}");

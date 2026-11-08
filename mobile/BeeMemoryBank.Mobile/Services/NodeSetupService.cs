@@ -283,7 +283,7 @@ public class NodeSetupService
                         continue;
                     }
 
-                    await _whitelistRepo.CreateAsync(new WhitelistEntry
+                    var inherited = new WhitelistEntry
                     {
                         NodeId = entry.NodeId,
                         DisplayName = entry.DisplayName,
@@ -300,7 +300,10 @@ public class NodeSetupService
                         IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin),
                         TlsTrust = tlsTrust,
                         TlsSpki = tlsSpki
-                    });
+                    };
+                    // The host's version of each field (none from a 2.7.5 host): later events are judged here as they are there.
+                    JoinRevocations.Inherit(inherited, entry.Versions);
+                    await _whitelistRepo.CreateAsync(inherited);
                 }
                 catch (Exception ex)
                 {
@@ -326,6 +329,10 @@ public class NodeSetupService
                 // ordinary check on the phone trusts, so without the pin every sync after the join would fail.
                 TlsSpki = code?.SpkiPin
             });
+
+            // The peers the host has revoked (a host of 2.7.5 or older sends none): kept as revoked rows, so an old add for one of them that another
+            // node's log delivers later is refused here as it is on the host.
+            await JoinRevocations.ImportAsync(_whitelistRepo, joinResponse.RevokedPeers, nodeId, remote.NodeId, _logger);
         }
         catch (Exception ex) when (!hostTold)
         {
@@ -403,11 +410,12 @@ public class NodeSetupService
         cmd.ExecuteNonQuery();
     }
 
-    private sealed record JoinResponseDto(JoinRemoteNodeDto RemoteNode, JoinKeySlotDto KeySlot, List<JoinWhitelistEntryDto>? Whitelist);
+    private sealed record JoinResponseDto(JoinRemoteNodeDto RemoteNode, JoinKeySlotDto KeySlot, List<JoinWhitelistEntryDto>? Whitelist,
+        List<JoinRevokedPeer>? RevokedPeers = null);
     private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);
     private sealed record JoinWhitelistEntryDto(
         Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false,
-        string? TlsTrust = null, string? TlsSpki = null);
+        string? TlsTrust = null, string? TlsSpki = null, JoinPeerVersions? Versions = null);
     private sealed record JoinKeySlotDto(
         string EncryptedMasterDekB64,
         string IvB64,

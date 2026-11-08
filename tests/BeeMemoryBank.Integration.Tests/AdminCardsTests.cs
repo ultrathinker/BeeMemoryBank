@@ -172,8 +172,8 @@ public sealed class AdminCardsTests : IAsyncLifetime
     [InlineData("DekRotation", "CancelDekRotation")]
     [InlineData("MetadataEncryption", "ActivateMetadata")]
     [InlineData("Agents", "DeleteAgent")]
-    [InlineData("TrustedNodes", "RevokeNode")]
-    [InlineData("TrustedNodes", "ChangeNodeAddress")]
+    [InlineData("Device", "RevokeNode")]
+    [InlineData("Device", "ChangeNodeAddress")]
     [InlineData("Snapshots", "DeleteSnapshot")]
     public async Task An_action_ends_at_the_page_of_its_button_and_says_what_came_of_it_there(string page, string handler)
     {
@@ -183,11 +183,13 @@ public sealed class AdminCardsTests : IAsyncLifetime
             ["agentId"] = "999999", ["nodeId"] = Guid.NewGuid().ToString(), ["newApiAddress"] = "http://127.0.0.1:1", ["password"] = "x", ["fileName"] = "no-such-snapshot.tar.gz",
         };
 
-        var response = await PostAdminAsync("/Admin/" + page, handler, fields);
+        // the page of one device is /Admin/Device/{nodeId}: the device is in the address
+        var url = page == "Device" ? $"/Admin/Device/{fields["nodeId"]}" : "/Admin/" + page;
+        var response = await PostAdminAsync(url, handler, fields);
 
         response.StatusCode.Should().Be(HttpStatusCode.Redirect);
         var location = WebUtility.UrlDecode(response.Headers.Location!.OriginalString);
-        location.Should().StartWith($"/Admin/{page}?");
+        location.Should().StartWith($"{url}?");
         var message = Regex.Match(location, "[?&](?:err|msg)=([^&#]*)").Groups[1].Value;
         message.Should().NotBeNullOrWhiteSpace($"{handler} says what came of it: {location}");
         var admin = await FollowAsync(response);
@@ -196,14 +198,14 @@ public sealed class AdminCardsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_device_that_cannot_be_confirmed_is_said_on_the_page_of_the_restored_devices()
+    public async Task A_device_that_cannot_be_confirmed_is_said_on_the_devices_page()
     {
-        // No device is waiting: the page says so, and the refusal is told in its message area.
-        var response = await PostAdminAsync("/Admin/RestoredDevices", "ConfirmRestoredPeer", new() { ["nodeId"] = Guid.NewGuid().ToString() });
+        // No device is waiting: there is no block of restored devices, and the refusal is told in the message area of the Devices page.
+        var response = await PostAdminAsync("/Admin/Devices", "ConfirmRestoredPeer", new() { ["nodeId"] = Guid.NewGuid().ToString() });
 
         var admin = await FollowAsync(response);
 
-        Body(admin).Should().NotContain("id=\"restored-peers\"").And.Contain("No device is waiting for your confirmation.");
+        Body(admin).Should().NotContain("id=\"restored-peers\"");
         Message(admin).Should().Contain("Could not confirm the device.");
     }
 
@@ -241,15 +243,15 @@ public sealed class AdminCardsTests : IAsyncLifetime
     [Fact]
     public async Task Invisible_Mode_is_switched_in_Admin_and_the_header_only_shows_a_badge_while_it_is_on()
     {
-        var admin = await GetAsync("/Admin/InvisibleMode");
+        var admin = await GetAsync("/Admin/NetworkSettings");
         var body = Body(admin);
         body.Should().Contain("Turn Invisible Mode on").And.Contain("data-busy").And.Contain(">off<");
         admin.Should().Contain("id=\"syncInvisibleBadge\"", "the sync icon carries the badge");
 
-        var on = await PostAdminAsync("/Admin/InvisibleMode", "SetInvisibleMode", new() { ["enabled"] = "true" });
+        var on = await PostAdminAsync("/Admin/NetworkSettings", "SetInvisibleMode", new() { ["enabled"] = "true" });
         try
         {
-            WebUtility.UrlDecode(on.Headers.Location!.OriginalString).Should().StartWith("/Admin/InvisibleMode?msg=Invisible Mode is on");
+            WebUtility.UrlDecode(on.Headers.Location!.OriginalString).Should().StartWith("/Admin/NetworkSettings?msg=Invisible Mode is on");
             var after = await FollowAsync(on);
             Message(after).Should().Contain("Invisible Mode is on");
             Body(after).Should().Contain("Turn Invisible Mode off").And.Contain(">on<");
@@ -259,7 +261,7 @@ public sealed class AdminCardsTests : IAsyncLifetime
         }
         finally
         {
-            var off = await PostAdminAsync("/Admin/InvisibleMode", "SetInvisibleMode", new() { ["enabled"] = "false" });
+            var off = await PostAdminAsync("/Admin/NetworkSettings", "SetInvisibleMode", new() { ["enabled"] = "false" });
             var after = await FollowAsync(off);
             Message(after).Should().Contain("Invisible Mode is off");
             Body(after).Should().Contain("Turn Invisible Mode on");
@@ -272,7 +274,7 @@ public sealed class AdminCardsTests : IAsyncLifetime
         var script = await GetAsync("/js/site-sync-status.js");
 
         script.Should().NotContain("InvisibleModeSwitch").And.NotContain("sl-switch", "the switch left the dropdown and the dialog");
-        script.Should().Contain("syncInvisibleBadge").And.Contain("Change it in Admin").And.Contain("/Admin/InvisibleMode");
+        script.Should().Contain("syncInvisibleBadge").And.Contain("Change it in Admin").And.Contain("/Admin/NetworkSettings#invisible-mode");
         script.Should().NotContain("/Admin#", "the page of the Invisible Mode is a page of its own, not a card of the Admin page");
         script.Should().Contain("dblclick").And.Contain("/api-proxy/sync/nodes/").And.Contain("/check");
         script.Should().Contain("lastContactDirection").And.Contain("notAnsweringSince").And.Contain("lastPushAt");
@@ -282,7 +284,7 @@ public sealed class AdminCardsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Trusted_nodes_shows_the_last_contact_with_its_direction_and_for_a_node_that_calls_in_when_it_last_did()
+    public async Task The_devices_list_shows_the_last_contact_with_its_direction_and_for_a_node_that_calls_in_when_it_last_did()
     {
         var phone = Guid.NewGuid();
         using (var scope = _api.Services.CreateScope())
@@ -293,13 +295,11 @@ public sealed class AdminCardsTests : IAsyncLifetime
             });
         _api.Services.GetRequiredService<PeerContactLog>().NoteInbound(phone, DateTime.UtcNow.AddMinutes(-3));
 
-        var admin = await GetAsync("/Admin/TrustedNodes");
+        var admin = await GetAsync("/Admin/Devices");
 
-        var row = System.Text.RegularExpressions.Regex.Match(admin, "<tr>(?:(?!</tr>).)*Kitchen phone.*?</tr>", System.Text.RegularExpressions.RegexOptions.Singleline).Value;
+        var row = System.Text.RegularExpressions.Regex.Match(admin, $"<li[^>]*data-node-id=\"{phone}\".*?</li>", System.Text.RegularExpressions.RegexOptions.Singleline).Value;
         row.Should().NotBeEmpty();
-        var cell = System.Text.RegularExpressions.Regex.Match(row, "<td[^>]*data-contact-state=.*?</td>", System.Text.RegularExpressions.RegexOptions.Singleline).Value;
-        cell.Should().Contain("3 min ago").And.Contain("it → us").And.NotContain("Never");
-        admin.Should().Contain("Last contact", "the column that used to be \"Last Sync\"");
+        row.Should().Contain("Kitchen phone").And.Contain("Last contact 3 min ago").And.Contain("it → us").And.NotContain("Never");
     }
 
     // ------------------------------------------------------------------ the browser

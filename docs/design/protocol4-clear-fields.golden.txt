@@ -55,6 +55,14 @@ control metadata_key_set generation
 control metadata_key_set iv
 control metadata_key_set key_id
 control metadata_key_set wrapped
+control node_endpoints endpoints
+control node_endpoints endpoints[].scope
+control node_endpoints endpoints[].url
+control node_endpoints node_id
+control node_endpoints port
+control node_endpoints seq
+control node_endpoints tls_ca_key
+control node_endpoints tls_leaf_spki
 control recovery_box_retire box_ids
 control recovery_box_retire covering_box_id
 control recovery_box_set author_node_id

@@ -60,11 +60,11 @@ public class NodeFront
     }
 
     /// <summary>
-    /// The fixed port for the opt-in HTTPS listener (the plain-HTTP listener stays on its own
-    /// port, configured via the front's <c>--urls</c> argument). Chosen distinct from the
-    /// standalone/Docker ports (5300/5301) and the front's HTTP port (5310).
+    /// The default LAN port (the plain-HTTP listener stays on its own port, configured via the front's <c>--urls</c> argument). Chosen distinct
+    /// from the standalone/Docker ports (5300/5301) and the front's HTTP port (5310). The port a node really uses is its setting (or
+    /// <c>BMB_LAN_PORT</c>), <see cref="BeeMemoryBank.Infrastructure.Network.LanPorts"/>.
     /// </summary>
-    public const int HttpsPort = 5311;
+    public const int HttpsPort = BeeMemoryBank.Infrastructure.Network.LanPorts.Default;
 
     /// <summary>The <c>/node/lan</c> endpoints behind the Connect page; null when not wired.</summary>
     public LanControl? Lan { get; init; }
@@ -98,7 +98,8 @@ public class NodeFront
     /// <param name="dataPath">
     /// Data directory passed to <see cref="LocalCaService"/> for cert generation/reload. Only
     /// used when <paramref name="enableHttps"/> is true.</param>
-    public void RegisterServices(IServiceCollection services, bool enableHttps = false, string? dataPath = null)
+    /// <param name="httpsPort">The LAN port of this node (the setting, or <c>BMB_LAN_PORT</c>); <see cref="HttpsPort"/> by default.</param>
+    public void RegisterServices(IServiceCollection services, bool enableHttps = false, string? dataPath = null, int httpsPort = HttpsPort)
     {
         // The cert selector resolves the leaf FRESH on every TLS handshake (rather than capturing a
         // cert once at startup) so the 90-day leaf rotation "just works" without a process restart:
@@ -119,7 +120,7 @@ public class NodeFront
 
             if (leafProvider != null)
             {
-                options.Listen(IPAddress.Any, HttpsPort, listenOptions =>
+                options.Listen(IPAddress.Any, httpsPort, listenOptions =>
                 {
                     listenOptions.UseHttps(httpsOptions =>
                     {
@@ -470,45 +471,16 @@ public static class NodeFrontBuilder
         string? dataPath = null,
         LanControl? lan = null,
         NodeLockControl? lockControl = null,
-        NodeAlarmsControl? alarmsControl = null)
+        NodeAlarmsControl? alarmsControl = null,
+        int httpsPort = NodeFront.HttpsPort)
     {
         if (builder == null) throw new ArgumentNullException(nameof(builder));
         if (children == null) throw new ArgumentNullException(nameof(children));
 
         var front = new NodeFront(children) { Lan = lan, Lock = lockControl, Alarms = alarmsControl };
-        front.RegisterServices(builder.Services, enableHttps, dataPath);
+        front.RegisterServices(builder.Services, enableHttps, dataPath, httpsPort);
         builder.Services.AddSingleton(front);
 
         return front;
-    }
-
-    /// <summary>
-    /// The second front behind "Devices on my network" (<see cref="LanFrontListener"/>): the same routes as the loopback
-    /// front, served over HTTPS at <paramref name="endpoint"/> only, with the certificate <paramref name="certificate"/> returns
-    /// (resolved on every handshake, so the leaf's rotation needs no restart). It has no <c>/node/lan</c>, <c>/node/lock</c> or
-    /// <c>/node/alarms</c> control: those are for the page and the shell on this computer, and the <c>/node</c> group refuses everything that is not
-    /// loopback anyway. Not started.
-    /// </summary>
-    public static WebApplication BuildNetworkFront(
-        IReadOnlyDictionary<string, ReadyFileInfo> children,
-        IPEndPoint endpoint,
-        Func<X509Certificate2?> certificate)
-    {
-        if (children == null) throw new ArgumentNullException(nameof(children));
-        if (endpoint == null) throw new ArgumentNullException(nameof(endpoint));
-        if (certificate == null) throw new ArgumentNullException(nameof(certificate));
-
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
-        // Only this listener: no --urls, so Kestrel has no plain-HTTP address to fall back to.
-        builder.WebHost.ConfigureKestrel(options => options.Listen(endpoint, listen => listen.UseHttps(https =>
-        {
-            https.SslProtocols = System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13;
-            https.ServerCertificateSelector = (_, _) => certificate();
-        })));
-        var front = Build(builder, children);
-        var app = builder.Build();
-        front.MapEndpoints(app);
-        return app;
     }
 }

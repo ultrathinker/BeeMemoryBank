@@ -8,13 +8,14 @@ using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Sync;
 using Microsoft.Extensions.DependencyInjection;
 using ApiClient = WebApp::BeeMemoryBank.Web.Services.ApiClient;
-using TrustedNodesModel = WebApp::BeeMemoryBank.Web.Pages.Admin.TrustedNodesModel;
+using DevicesModel = WebApp::BeeMemoryBank.Web.Pages.Admin.DevicesModel;
+using NodeLanClient = WebApp::BeeMemoryBank.Web.Services.NodeLanClient;
 
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// BMB-42 for rows recorded before "whoever knows the master password is a superadmin": the card of the
-/// Trusted Nodes page lists them and promotes the confirmed ones, one <c>whitelist_update</c> each — never a blind
+/// Devices page lists them and promotes the confirmed ones, one <c>whitelist_update</c> each — never a blind
 /// node, never a revoked one, never a row that is already a superadmin. And a re-join with the same key
 /// raises the row by itself.
 /// </summary>
@@ -40,6 +41,12 @@ public class PasswordPeerPromotionTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
+    /// <summary>The Devices page without a desktop node behind it: the node's own endpoints answer "unavailable".</summary>
+    private sealed class DevicesPage(ApiClient api) : DevicesModel(api, null!, null!)
+    {
+        protected override NodeLanClient Client => new(new HttpClient(), dataPath: Path.Combine(Path.GetTempPath(), "bmb_no_such_front_" + Guid.NewGuid().ToString("N")), internalKey: "k");
+    }
+
     [Fact]
     public async Task ConfirmedDevices_ArePromoted_OneEventEach_BlindRevokedAndSuperadminsLeftAlone()
     {
@@ -48,8 +55,8 @@ public class PasswordPeerPromotionTests : IAsyncLifetime
         var blind = await AddRowAsync(BlindNodeId.NewId(), isSuperadmin: false);
         var revoked = await AddRowAsync(Guid.NewGuid(), isSuperadmin: false, status: "R");
 
-        var page = new TrustedNodesModel(new ApiClient(_client));
-        await page.OnGetAsync();
+        var page = new DevicesPage(new ApiClient(_client));
+        await page.OnGetAsync(CancellationToken.None);
         page.PasswordPeersToPromote.Select(c => c.NodeId).Should().Equal([oldPhone],
             "only an active, non-blind device that is not a superadmin yet is offered");
 

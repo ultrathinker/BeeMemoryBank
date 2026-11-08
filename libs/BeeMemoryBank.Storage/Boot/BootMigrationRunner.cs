@@ -10,7 +10,8 @@ namespace BeeMemoryBank.Storage.Boot;
 /// <c>tbl_boot_migration (version, filename, applied_at)</c>. The vault's <see cref="MigrationRunner"/> never sees this ledger or these
 /// files (their resource names start with a letter, not a version number) and this runner never sees the vault's.
 /// A ledger row whose resource name no longer matches the assembly's is dropped and the current file is applied again, as the vault
-/// runner does; every statement of a boot migration is idempotent (<c>IF NOT EXISTS</c>).
+/// runner does; every statement of a boot migration is idempotent (<c>IF NOT EXISTS</c>), and an <c>ALTER TABLE ... ADD COLUMN</c> of a
+/// column that is there already is skipped as applied, as the vault runner skips it.
 /// </summary>
 public sealed class BootMigrationRunner(BootStoreConnectionFactory factory)
 {
@@ -79,7 +80,20 @@ public sealed class BootMigrationRunner(BootStoreConnectionFactory factory)
             try
             {
                 foreach (var statement in statements)
-                    await connection.ExecuteAsync(statement, transaction: transaction);
+                {
+                    // A savepoint per statement, so that a column added before (the file applied again) is skipped without losing the rest.
+                    await connection.ExecuteAsync("SAVEPOINT bmb_boot_stmt", transaction: transaction);
+                    try
+                    {
+                        await connection.ExecuteAsync(statement, transaction: transaction);
+                        await connection.ExecuteAsync("RELEASE SAVEPOINT bmb_boot_stmt", transaction: transaction);
+                    }
+                    catch (SqliteException ex) when (MigrationRunner.IsColumnAlreadyThere(statement, ex))
+                    {
+                        await connection.ExecuteAsync("ROLLBACK TO SAVEPOINT bmb_boot_stmt", transaction: transaction);
+                        await connection.ExecuteAsync("RELEASE SAVEPOINT bmb_boot_stmt", transaction: transaction);
+                    }
+                }
                 await connection.ExecuteAsync(
                     "INSERT INTO tbl_boot_migration (version, filename, applied_at) VALUES (@version, @name, @now)",
                     new { version, name, now = DateTime.UtcNow.ToString("o") }, transaction);

@@ -231,6 +231,12 @@ public class RepositoryWriteGuardrailTests
             "Records how far a peer SAYS it has applied our log (POST /api/sync/report-position) — the same protocol bookkeeping the entry above covers, in the column the blind node's log trimmer cuts at rather than the delivery watermark."),
         new("server/BeeMemoryBank.Api/Endpoints/SyncEndpoints.cs", "IBlobRepository", "StoreAsync",
             "Stores content-addressed blob bytes pushed by a peer during sync — this endpoint is the receiving side of the sync protocol itself."),
+        new("server/BeeMemoryBank.Api/Services/Lan/NodeEndpointsAnnouncer.cs", "IEventLogRepository", "AppendAsync",
+            "Publishes this node's own node_endpoints event (LAN sync): it ticks the clock, signs, writes the row through the applier and appends the event, the sequence RecoveryEventPublisher uses for the recovery events. This IS the event-logging path for this event type, not a bypass of one."),
+        new("server/BeeMemoryBank.Api/Endpoints/PeerChannelEndpoints.cs", "IAuditLogRepository", "LogAsync",
+            "Audits an address a person typed for a peer on THIS node only (tbl_peer_channel, LAN sync): local, never replicated, so there is no sync event to log; the line names the address by its fingerprint."),
+        new("mobile/BeeMemoryBank.Mobile/Services/PeerChannelService.cs", "IAuditLogRepository", "LogAsync",
+            "The Android app's \"Add an address\" and its removal: the same local, never replicated row of tbl_peer_channel as the Api's PeerChannelEndpoints, audited the same way."),
         new("server/BeeMemoryBank.Api/Endpoints/SnapshotEndpoints.cs", "IEventLogRepository", "AppendAsync",
             "Publishes a restore_network broadcast event: there is no LogRestoreNetworkAsync wrapper on IEventLogger for this rare event type, so the endpoint ticks the Lamport clock, signs and appends the SyncEvent itself — the same sequence IEventLogger's other Log*Async methods perform internally. This IS the event-logging path for this event type, not a bypass of one."),
 

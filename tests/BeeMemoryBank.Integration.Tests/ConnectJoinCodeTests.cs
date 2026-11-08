@@ -2,13 +2,13 @@ extern alias WebApp;
 
 using System.Net;
 using BeeMemoryBank.Core.Models;
-using ConnectDeviceModel = WebApp::BeeMemoryBank.Web.Pages.Admin.ConnectDeviceModel;
+using JoinCodes = WebApp::BeeMemoryBank.Web.Services.JoinCodes;
 using LanStatus = WebApp::BeeMemoryBank.Web.Services.NodeLanClient.LanStatus;
 
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// What the Connect page puts on screen for the node's LAN listener (plan section 10): one join code
+/// What the Connect a device dialog of Admin > Devices puts on screen for the node's LAN listener (plan section 10): one join code
 /// per LAN address carrying the address, the session token and the key pin — and nothing while the
 /// listener is off, so a stale code is never shown.
 /// </summary>
@@ -22,7 +22,7 @@ public class ConnectJoinCodeTests
     {
         var status = new LanStatus("on-demand", true, Token, DateTimeOffset.UtcNow.AddMinutes(15), Pin, 5311, true);
 
-        var endpoints = ConnectDeviceModel.BuildEndpoints(status, [IPAddress.Parse("192.0.2.20"), IPAddress.Parse("192.0.2.5")]);
+        var endpoints = JoinCodes.BuildEndpoints(status, [IPAddress.Parse("192.0.2.20"), IPAddress.Parse("192.0.2.5")]);
 
         endpoints.Select(e => e.Url).Should().Equal("https://192.0.2.20:5311", "https://192.0.2.5:5311");
         JoinCode.TryParse(endpoints[0].Code, out var code).Should().BeTrue();
@@ -35,7 +35,7 @@ public class ConnectJoinCodeTests
     {
         var status = new LanStatus("permanent", true, null, null, Pin, 5311, true);
 
-        var endpoint = ConnectDeviceModel.BuildEndpoints(status, [IPAddress.Parse("192.0.2.20")]).Single();
+        var endpoint = JoinCodes.BuildEndpoints(status, [IPAddress.Parse("192.0.2.20")]).Single();
 
         JoinCode.TryParse(endpoint.Code, out var code).Should().BeTrue();
         code!.Token.Should().BeNull();
@@ -47,10 +47,10 @@ public class ConnectJoinCodeTests
         var addresses = new[] { IPAddress.Parse("192.0.2.20") };
 
         // A closed session with its old token and pin still in hand must not show them.
-        ConnectDeviceModel.BuildEndpoints(new LanStatus("on-demand", false, Token, null, Pin, 5311, true), addresses)
+        JoinCodes.BuildEndpoints(new LanStatus("on-demand", false, Token, null, Pin, 5311, true), addresses)
             .Should().BeEmpty("a code for a closed listener would send the phone nowhere");
-        ConnectDeviceModel.BuildEndpoints(new LanStatus("on-demand", true, Token, null, null, 5311, true), addresses)
+        JoinCodes.BuildEndpoints(new LanStatus("on-demand", true, Token, null, null, 5311, true), addresses)
             .Should().BeEmpty("without a pin the phone could not check whom it sends the password to");
-        ConnectDeviceModel.BuildEndpoints(LanStatus.Unavailable, addresses).Should().BeEmpty();
+        JoinCodes.BuildEndpoints(LanStatus.Unavailable, addresses).Should().BeEmpty();
     }
 }

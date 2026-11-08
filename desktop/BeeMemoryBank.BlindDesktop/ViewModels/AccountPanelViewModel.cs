@@ -41,6 +41,7 @@ public sealed class AccountPanelViewModel : ObservableObject, IDisposable
     private string _identityText = "";
     private string _nodeText = "";
     private string _pairText = "";
+    private string _hubText = "";
     private string _loadText = "";
     private string _storeText = "";
     private static readonly TimeSpan StoreEvery = TimeSpan.FromSeconds(15);
@@ -124,6 +125,11 @@ public sealed class AccountPanelViewModel : ObservableObject, IDisposable
     public string IdentityText { get => _identityText; private set => Set(ref _identityText, value); }
     public string NodeText { get => _nodeText; private set => Set(ref _nodeText, value); }
     public string PairText { get => _pairText; private set => Set(ref _pairText, value); }
+
+    /// <summary>Where the hub is, in the app's own words ("Hub reached on this network at 192.168.1.231."), or empty when there is nothing to say.</summary>
+    public string HubText { get => _hubText; private set { if (Set(ref _hubText, value)) Raise(nameof(HasHubText)); } }
+
+    public bool HasHubText => !string.IsNullOrEmpty(_hubText);
     public string LoadText { get => _loadText; private set => Set(ref _loadText, value); }
 
     /// <summary>The restore point's age, the changes since it and the bytes stored; never a note count (docs/design/step-a-spec.md 10.2).</summary>
@@ -315,6 +321,7 @@ public sealed class AccountPanelViewModel : ObservableObject, IDisposable
             PairText = status.IsPaired
                 ? $"Calls {status.Endpoint}"
                 : "Not paired yet: do steps 1 and 2 below.";
+            HubText = status.IsPaired ? status.Hub ?? "" : "";
             LoadText = LoadTextFor(status);
             StoreText = BlindHomeView.StoreText(_storeSummary, status, DateTimeOffset.UtcNow);
             ReadStoreSoon(status);

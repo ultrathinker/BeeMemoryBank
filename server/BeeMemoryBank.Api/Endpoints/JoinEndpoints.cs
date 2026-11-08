@@ -28,7 +28,9 @@ public static class JoinEndpoints
             IEventLogger eventLogger,
             SessionService session,
             ISyncProtocolPolicy protocolPolicy,
-            BeeMemoryBank.Sync.PeerAddressService addresses) =>
+            BeeMemoryBank.Sync.PeerAddressService addresses,
+            HttpContext httpCtx,
+            ILoggerFactory loggerFactory) =>
         {
             // 1. Verify that this node is initialized
             var identity = await nodeRepo.GetAsync();
@@ -190,6 +192,13 @@ public static class JoinEndpoints
                 JoinAttemptGate.Gate.Release();
             }
 
+            // 4b. What the joiner said about its LAN endpoints and TLS anchors (optional members, absent from older joiners): the row that only "calls us"
+            // can be called from the first minute (docs/design/lan-peer-sync.md 8).
+            var lanLogger = loggerFactory.CreateLogger("BeeMemoryBank.Api.JoinEndpoints");
+            await Services.Lan.LanJoinExchange.NoteOtherSideAsync(httpCtx.RequestServices, req.NodeId, req.Endpoints, req.TlsLeafSpki, req.TlsCaKey, req.LanPort, lanLogger);
+            var dataPath = Services.Lan.LanJoinExchange.DataPath(httpCtx.RequestServices);
+            var offer = string.IsNullOrEmpty(dataPath) ? null : Services.Lan.LanJoinExchange.OwnOffer(dataPath, httpCtx.Connection.RemoteIpAddress);
+
             // 5. Return this node's identity + key slot + the full whitelist (for bootstrap of the new node)
             var allEntries = await whitelistRepo.GetAllActiveAsync();
             var whitelistDto = allEntries
@@ -209,9 +218,19 @@ public static class JoinEndpoints
                         e.ApiAddress,
                         e.IsSuperadmin,
                         tlsTrust,
-                        tlsSpki);
+                        tlsSpki,
+                        e.LamportTs,
+                        e.SourceNodeId,
+                        BeeMemoryBank.Sync.JoinPeerVersions.From(e));
                 })
                 .OfType<JoinWhitelistEntry>()
+                .ToList();
+
+            // The revoked rows, tombstones included, with the version of each revoke: without them the joiner knows nothing of the revocations, and
+            // the first old whitelist_add for one of those peers that reaches it from another node's log makes it an active peer there.
+            var revokedPeers = (await whitelistRepo.GetAllRevokedAsync())
+                .Where(e => e.NodeId != identity.NodeId && e.NodeId != req.NodeId)
+                .Select(BeeMemoryBank.Sync.JoinRevokedPeer.From)
                 .ToList();
 
             return Results.Ok(new JoinResponse(
@@ -227,7 +246,12 @@ public static class JoinEndpoints
                     passwordSlot.ArgonMemory ?? CryptoConstants.DefaultArgonMemory,
                     passwordSlot.ArgonIterations ?? CryptoConstants.DefaultArgonIterations,
                     passwordSlot.ArgonParallelism ?? CryptoConstants.DefaultArgonParallelism),
-                Whitelist: whitelistDto));
+                Whitelist: whitelistDto,
+                Endpoints: offer?.Endpoints,
+                TlsLeafSpki: offer?.TlsLeafSpki,
+                TlsCaKey: offer?.TlsCaKey,
+                LanPort: offer?.LanPort,
+                RevokedPeers: revokedPeers));
         }).WithTags("Join");
 
         // POST /api/join/abort - a joiner whose join failed AFTER this node answered it (a timeout, a bad step on its own side, a snapshot
@@ -291,12 +315,12 @@ public static class JoinEndpoints
                         statusCode: 409);
                 if (DateTime.UtcNow - existing.CreatedAt > JoinAttemptGate.AbortWindow)
                     return Results.Json(
-                        new ErrorResponse("This node was recorded too long ago to be the join being aborted; revoke it under Admin -> Trusted Nodes if it is not wanted"),
+                        new ErrorResponse("This node was recorded too long ago to be the join being aborted; revoke it on its page under Admin > Devices if it is not wanted"),
                         statusCode: 409);
                 // Never synced in either direction: nothing was served to it (the push position compaction reads) and nothing was pulled from it.
                 if (await pushPositionRepo.GetAsync(req.NodeId) != null || await syncPositionRepo.GetAsync(req.NodeId) != null)
                     return Results.Json(
-                        new ErrorResponse("This node has already synced and is a member; revoke it under Admin -> Trusted Nodes if it is not wanted"),
+                        new ErrorResponse("This node has already synced and is a member; revoke it on its page under Admin > Devices if it is not wanted"),
                         statusCode: 409);
 
                 // Signing the revoke needs the master DEK, which is only in memory while the vault is unlocked (as for the join).

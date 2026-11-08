@@ -35,13 +35,18 @@ Mac app, the Windows service) answers this computer only by default: its front d
   first-run page under **Connect to another device**, or runs `bmb join --code <code>` (it asks for the master password and
   the mandatory password hint; `--hint` supplies the latter without the prompt). The joiner sends
   the master password only to a server holding the pinned key, so no certificate has to be trusted first.
-  The door is not announced by mDNS: a node is found on the network only while Devices on my network is
-  on, and a node that only opens this door is joined by its code. To keep two computers in step after
-  such a join, the one that was joined has to stay reachable: switch Devices on my network on there (or
-  use a reverse proxy, below).
+  The door is not announced by mDNS on its own: a node is found on the network while it serves the sync
+  connection (below) or Devices on my network is on, and a node that only opens this door is joined by its code.
+- **Sync with your devices on this network** is a third setting, **on by default** since
+  2.8.0: devices that are already paired sync with this node directly on the same port, but only the sync
+  connection (node-key-authenticated peer routes, never the web page or MCP), and only on a network the
+  system or you trust (Windows: Private and domain networks; a Mac: the network a device was paired on, and
+  any other one you said yes for). After a join through a code the two computers keep in step by themselves
+  on that network, with no reverse proxy and without Devices on my network. The port is a setting
+  (5311 by default; `BMB_LAN_PORT` overrides it); see docs/design/lan-peer-sync.md.
 
 The firewall: the Windows app asks once, with the usual Windows permission prompt, to add one inbound
-rule for port 5311 limited to the local network (and can remove it again from the same card); it never
+rule for port 5311 limited to the local network and to private and domain networks (and can remove it again from the same card); it never
 changes the firewall without asking. The Windows service has no desktop to ask on: its installer's
 "Configure Windows Firewall Exception" option opens the ports. On a Mac the app changes nothing:
 macOS asks whether "Bee Memory Bank" may accept incoming connections when the first device connects;
@@ -57,7 +62,7 @@ nobody can attack.
 | **5301** | Web UI (Docker, systemd/launchd/NSSM installs) | Only to your reverse proxy, on the host's loopback. Never directly. |
 | **5300** | Raw API (same installs) | Never to the internet. Your reverse proxy may forward a few paths to it (below), over loopback. |
 | **5310** | Desktop app / Windows service front door, `127.0.0.1` only: serves the UI and the API paths together | Only to a proxy on the same machine, and block `/node` in the proxy (see the section below). |
-| **5311** | The node's own HTTPS listener (certificate from the node's local CA), meant for the LAN: opened by the "Devices on my network" setting (off by default) or, for 15 minutes, by Connect a device; see above | Never to the internet. Browsers on the internet cannot trust a local CA, and it is not a public-facing listener. |
+| **5311** | The node's own HTTPS listener (certificate from the node's local CA), meant for the LAN: the sync connection for paired devices on trusted networks (on by default), the web page by the "Devices on my network" setting (off by default), and for 15 minutes the door of Connect a device; see above. The port is a setting. | Never to the internet. Browsers on the internet cannot trust a local CA, and it is not a public-facing listener. |
 | **443** (and **80** if your proxy needs it for certificates) | Your reverse proxy | Yes: this is the only thing the router should forward. |
 
 Published Docker ports skip `ufw` (Docker writes its own firewall rules), so a `0.0.0.0` mapping is

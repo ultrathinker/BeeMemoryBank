@@ -32,6 +32,9 @@ public static class MauiProgram
         builder.Services.AddSingleton<QuickUnlock>();
         builder.Services.AddSingleton<NotesService>();
         builder.Services.AddSingleton<FullSync>();
+        // The phone's discovery of its computers on the Wi-Fi: Network.framework's browse under the platform-free logic (Services/BonjourPeerDiscovery).
+        builder.Services.AddSingleton<IBonjourBrowser, NwBonjourBrowser>();
+        builder.Services.AddSingleton<BonjourPeerDiscovery>();
         builder.Services.AddSingleton<AutoLockPolicy>();
         builder.Services.AddSingleton<AppFlow>();
 
@@ -46,6 +49,7 @@ public static class MauiProgram
         builder.Services.AddTransient<SearchPage>();
         builder.Services.AddTransient<TrashPage>();
         builder.Services.AddTransient<SyncPage>();
+        builder.Services.AddTransient<PeerPage>();
         builder.Services.AddTransient<SettingsPage>();
         builder.Services.AddTransient<EncryptDatabasePage>();
         return builder.Build();

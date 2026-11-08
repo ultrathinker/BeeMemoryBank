@@ -72,6 +72,9 @@ public class SnapshotTablesCoverageTests
         // in format-2 packages as encrypted files, never as rows of a snapshot.
         "tbl_baseline", "tbl_baseline_blob",
 
+        // This node's own ways to reach each peer and how each went (migration 044, LAN sync): another node's view of the network is its own.
+        "tbl_peer_channel",
+
         // The invitations this full node made to blind copies (migration 041): bearer-secret hashes, the redeeming device's keys and, until the owner
         // decides, its backup key under this node's DEK. About this one node; a join snapshot or a package empties it (FilterSecretsFrom).
         "tbl_blind_invite"

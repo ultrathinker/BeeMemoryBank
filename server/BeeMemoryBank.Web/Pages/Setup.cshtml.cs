@@ -4,6 +4,7 @@ using BeeMemoryBank.Infrastructure.Mdns;
 using BeeMemoryBank.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using BeeMemoryBank.Mdns;
 
 namespace BeeMemoryBank.Web.Pages;
 
@@ -30,6 +31,29 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
         string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)
             ? ""
             : Environment.MachineName;
+
+    // What the person typed into the form that was sent, so that a form shown again with an error keeps it. Null on a first
+    // visit (the suggestions are shown then). The passwords are never kept: they are not written back into the page. The
+    // page script checks the two of them, and the hint, before the form is sent, so those mistakes never come back here.
+    public string? PostedUsername { get; private set; }
+    public string? PostedDisplayName { get; private set; }
+    public string? PostedPasswordHint { get; private set; }
+    public string? PostedJoinCode { get; private set; }
+    public string? PostedRemoteUrl { get; private set; }
+
+    /// <summary>The value a field of the <paramref name="form"/> form ("standalone" or "join") opens with: what was sent with it, else <paramref name="suggested"/>.</summary>
+    public string FieldValue(string form, string? posted, string suggested = "") =>
+        Mode == form && posted != null ? posted : suggested;
+
+    private void KeepPosted(string? username, string? displayName, string? passwordHint, string? joinCode = null, string? remoteUrl = null)
+    {
+        PostedUsername = username ?? "";
+        PostedDisplayName = displayName ?? "";
+        PostedPasswordHint = passwordHint ?? "";
+        PostedJoinCode = joinCode ?? "";
+        // With a code the join goes to the code's address (the page shows it from the code), never to what was typed.
+        PostedRemoteUrl = string.IsNullOrWhiteSpace(joinCode) ? remoteUrl ?? "" : "";
+    }
 
     public void OnGet(string? step, string? mode)
     {
@@ -66,6 +90,7 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
     {
         adminUsername = adminUsername?.Trim() ?? "";
         displayName = displayName?.Trim() ?? "";
+        KeepPosted(adminUsername, displayName, passwordHint);
 
         if (string.IsNullOrWhiteSpace(adminUsername) ||
             string.IsNullOrWhiteSpace(displayName) ||
@@ -114,12 +139,14 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
     /// for a node at a real name (a reverse proxy with a public certificate).
     /// </summary>
     public async Task<IActionResult> OnPostJoinAsync(
-        string joinAdminUsername, string joinDisplayName, string remoteUrl, string joinPassword, string passwordHint, string? joinCode = null)
+        string joinAdminUsername, string joinDisplayName, string remoteUrl, string joinPassword, string passwordHint, string? joinCode = null,
+        string? joinConfirmPassword = null)
     {
         joinAdminUsername = joinAdminUsername?.Trim() ?? "";
         joinDisplayName = joinDisplayName?.Trim() ?? "";
         remoteUrl = remoteUrl?.Trim() ?? "";
         joinCode = joinCode?.Trim() ?? "";
+        KeepPosted(joinAdminUsername, joinDisplayName, passwordHint, joinCode, remoteUrl);
 
         if (joinCode.Length > 0)
         {
@@ -153,6 +180,14 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
         }
 
         // A join creates this node's first administrator too, so it owes a hint (the node checks it again).
+        if (joinPassword != joinConfirmPassword)
+        {
+            ErrorMessage = "Passwords do not match.";
+            Step = "form";
+            Mode = "join";
+            return Page();
+        }
+
         if (PasswordHintPolicy.Validate(passwordHint, joinPassword, joinAdminUsername) is { } hintProblem)
         {
             ErrorMessage = hintProblem;

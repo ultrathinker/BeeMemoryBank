@@ -17,7 +17,7 @@
         <li><strong>This node only</strong> replaces everything on this node with the snapshot. The node becomes a <em>new</em> node: new identity, and it forgets the nodes it
             trusted, its blind copies and its sync history, so the other devices have to be joined to it again. The server is unavailable while it restores, and you sign in afterwards.</li>
         <li><strong>The whole network</strong> asks every trusted node to restore the same snapshot. This node keeps its identity; each other node applies it when it next
-            syncs, and only if it trusts this node as a superadmin and has Auto-restore switched on for it (<a href="/Admin/TrustedNodes">Trusted Nodes</a>).</li>
+            syncs, and only if it trusts this node as a superadmin and has Auto-restore switched on for it (on the page of that device in <a href="/Admin/Devices">Devices</a>).</li>
     </ul>
     <p>
         Both ask for the master password. A restore of the whole network always takes a safety backup of this node first; for this node only, the box
@@ -139,7 +139,7 @@ else
             <strong>Every node of the network is asked to restore this snapshot.</strong>
             <ul style="margin:8px 0 0 20px;">
                 <li>This node keeps its identity, its users and the nodes it trusts; its articles, folders, tags and media are replaced with the snapshot's.</li>
-                <li>Each other node applies it when it next syncs, and <strong>only if</strong> it trusts this node as a superadmin and has <em>Auto-restore</em> switched on for this node (Admin &rarr; Trusted Nodes). Today @autoRestorePeers of @activePeers trusted node(s) have it on. A node without it does not apply the restore.</li>
+                <li>Each other node applies it when it next syncs, and <strong>only if</strong> it trusts this node as a superadmin and has <em>Auto-restore</em> switched on for this node (Admin &rarr; Devices, on the page of that device). Today @autoRestorePeers of @activePeers trusted node(s) have it on. A node without it does not apply the restore.</li>
                 <li>Keep this node running and reachable: the others download the snapshot from it (the offer is open for 30 days).</li>
                 <li>Blind copies are reseeded.</li>
                 <li>A safety backup of this node is always taken first.</li>

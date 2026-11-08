@@ -5,13 +5,13 @@ namespace BeeMemoryBank.Core.Services;
 /// endpoints, the command line and the phone apps. A hint is not a second password: it is shown to anyone who types the
 /// username on the sign-in page (there is no e-mail recovery), so it must help the person and nobody else.
 ///
-/// <para>The rules: trimmed; 3 to 120 characters; no control characters or line breaks; it must not contain the
+/// <para>The rules: trimmed; 1 to 120 characters (so: not empty); no control characters or line breaks; it must not contain the
 /// password or the username (case-insensitive, both sides trimmed) and it must never equal the password. The messages
 /// are English sentences safe to show to the person who typed the hint - they say nothing about any other account.</para>
 /// </summary>
 public static class PasswordHintPolicy
 {
-    public const int MinimumLength = 3;
+    public const int MinimumLength = 1;
     public const int MaximumLength = 120;
 
     public const string RequiredMessage =

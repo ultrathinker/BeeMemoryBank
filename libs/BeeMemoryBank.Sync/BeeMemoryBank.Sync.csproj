@@ -9,6 +9,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="BeeMemoryBank.Sync.Tests" />
+    <!-- NodeEndpointsRules.AllowLoopbackForTests: two nodes on one machine announce their loopback endpoints to each other. -->
+    <InternalsVisibleTo Include="BeeMemoryBank.Integration.Tests" />
     <!-- BlobTransport: the phone client downloads blobs the way the sync client does. -->
     <InternalsVisibleTo Include="BeeMemoryBank.Blind.PhoneClient" />
   </ItemGroup>

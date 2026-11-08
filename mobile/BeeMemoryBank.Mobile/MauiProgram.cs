@@ -8,6 +8,7 @@ using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Channels;
 using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Extensions.Logging;
 #if ANDROID
@@ -72,6 +73,7 @@ public static class MauiProgram
             .AddSingleton<SyncNotificationService>()
             .AddSingleton<SyncStatusService>()
             .AddScoped<NodeSetupService>()
+            .AddScoped<PeerChannelService>()
             .AddSingleton<IngestKeyEnroller>()
             .AddSingleton<PostUnlockRouter>()
             .AddSingleton<MobileUnlockHolder>()
@@ -95,6 +97,10 @@ public static class MauiProgram
         // carries the pinned handler — blind peers on their key only, HTTPS only, no redirects.
         builder.Services.AddHttpClient(string.Empty)
             .UsePinnedSyncHandler()
+            .AddHttpMessageHandler<Services.MaintenanceDetectingHandler>();
+        // A session over a peer's channels (PeerSessions.SyncWithPeerAsync) takes its client from the named sync client, not from the default one: it
+        // carries the same friendly 503 text, so the Status page, the worker and the first download say the same as before.
+        builder.Services.AddHttpClient(SyncScheduler.HttpClientName)
             .AddHttpMessageHandler<Services.MaintenanceDetectingHandler>();
 
         builder.Services.AddTransient<SnapshotJoinClient>(sp =>
@@ -120,6 +126,12 @@ public static class MauiProgram
         // SessionNodeAuthSigner registered in AddSync().
         builder.Services.AddSingleton<IIngestKeyStore, IngestKeyStore>();
         builder.Services.AddScoped<INodeAuthSigner, KeystoreNodeAuthSigner>();
+        // Direct sync on the LAN (docs/design/lan-peer-sync.md 16): what NSD sees of the paired desktops lands in the cache the channel planner reads
+        // (replacing the empty default AddSync leaves), and the discovery is started and stopped by the sync paths, never left running.
+        builder.Services.AddSingleton<PeerDiscoveryCache>();
+        builder.Services.AddSingleton<IPeerDiscovery>(sp => sp.GetRequiredService<PeerDiscoveryCache>());
+        builder.Services.AddSingleton<NsdPeerDiscovery>();
+        builder.Services.AddSingleton<ILanPeerScanner>(sp => sp.GetRequiredService<NsdPeerDiscovery>());
 #endif
 
         builder.Services.AddTransient<Pages.UnlockPage>();

@@ -8,7 +8,7 @@ public record BlindNodeDto(
     long? AdoptedCheckpoint = null, BlindContactDto? Contact = null);
 
 /// <summary>
-/// The contact with a blind node, as the Api tells it for every node (the same fields as the Trusted Nodes and the header): the last contact with its
+/// The contact with a blind node, as the Api tells it for every node (the same fields as the Devices list and the header): the last contact with its
 /// direction, the last time events went out, and since when this PC's calls fail and why (BMB-313).
 /// </summary>
 /// <param name="LastContactDirection"><c>outbound</c> (this PC called), <c>inbound</c> (it called this PC), or null.</param>

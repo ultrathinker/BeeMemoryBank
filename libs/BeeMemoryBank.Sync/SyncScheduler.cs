@@ -241,13 +241,32 @@ public class SyncScheduler(
         // Who is on the whitelist now, at which address: what was learned about a peer that is gone or moved is forgotten (BMB-313).
         ReconcilePeers(nodes, scope.ServiceProvider.GetService<PeerContactLog>());
 
-        // Only sync with nodes that have an API address configured
-        var remoteNodes = nodes.Where(n => !string.IsNullOrEmpty(n.ApiAddress)).ToList();
-        snapshotRequiredState?.RetainOnly(remoteNodes.Select(n => n.NodeId).ToHashSet());
-        var current = remoteNodes.Select(n => n.NodeId).ToHashSet();
-        foreach (var gone in _lastFailure.Keys.Where(id => !current.Contains(id)).ToList()) _lastFailure.TryRemove(gone, out _);
+        // Every way to reach each peer (docs/design/lan-peer-sync.md section 7): its primary address, what it announced, what mDNS showed, what a person
+        // typed here. A peer with none is one that only calls this node. A peer whose addresses are all on networks this computer is not on is "away":
+        // nothing is dialled for it, and it is not a failure.
+        var reachability = scope.ServiceProvider.GetService<Channels.PeerReachability>();
+        reachability?.Retain(nodes.Select(n => n.NodeId).ToHashSet());
+        var planned = new List<(WhitelistEntry Node, Channels.ChannelPlan Plan, Blind.PeerTlsAnchor? Anchor)>();
+        var withChannels = new HashSet<Guid>();
+        foreach (var n in nodes)
+        {
+            var (plan, anchor) = await PlanAsync(scope.ServiceProvider, n);
+            reachability?.NotePlan(n.NodeId, plan, DateTime.UtcNow);
+            if (plan.All.Count > 0) withChannels.Add(n.NodeId);
+            NoteNewChannels(n.NodeId, plan);
+            if (plan.HasDialable) planned.Add((n, plan, anchor));
+        }
+        // LAN peers first: a home network is served before a slow internet hop.
+        planned = planned.OrderBy(p => p.Plan.Parallel.Count + p.Plan.First.Count(c => c.IsLanLike) > 0 ? 0 : 1).ToList();
+        await PruneChannelsAsync(scope.ServiceProvider, nodes);
+
+        var remoteNodes = planned.Select(p => p.Node).ToList();
+        snapshotRequiredState?.RetainOnly(withChannels);
+        foreach (var gone in _lastFailure.Keys.Where(id => !withChannels.Contains(id)).ToList()) _lastFailure.TryRemove(gone, out _);
         if (remoteNodes.Count == 0) return new SyncCycleResult(0);
         var failures = new List<PeerSyncFailure>();
+        var discovery = scope.ServiceProvider.GetService<Channels.IPeerDiscovery>();
+        var dialer = scope.ServiceProvider.GetService<Channels.PeerDialer>();
 
         using var http = httpClientFactory.CreateClient(HttpClientName);
         var reseeder = scope.ServiceProvider.GetService<IBlindPeerReseeder>();
@@ -259,7 +278,7 @@ public class SyncScheduler(
         // A full node's cycle is what it always was.
         var blind = scope.ServiceProvider.GetService<INodeRole>() is { IsBlind: true };
 
-        foreach (var node in remoteNodes)
+        foreach (var (node, plan, anchor) in planned)
         {
             if (ct.IsCancellationRequested) break;
             if (_unreachable.ShouldSkip(node.NodeId, DateTime.UtcNow))
@@ -277,9 +296,14 @@ public class SyncScheduler(
                 continue;
 
             Exception? failure = null;
+            Channels.ChannelCandidate? chosen = null;
+            using var peerHttp = PeerClient(scope.ServiceProvider, http, anchor);
             try
             {
-                totalApplied += await syncClient.SyncWithPeerAsync(http, node.ApiAddress!, node.NodeId, ct);
+                chosen = await ChooseAsync(dialer, peerHttp.Client, node, Channels.PeerSessions.Usable(plan, peerHttp), ct);
+                totalApplied += await syncClient.SyncWithPeerAsync(peerHttp.Client, chosen.Url, node.NodeId, ct);
+                if (dialer is not null) await dialer.NoteSessionOkAsync(node.NodeId, chosen);
+                reachability?.NoteDirect(node.NodeId, chosen.Scope, DateTime.UtcNow);
                 snapshotRequiredState?.Clear(node.NodeId);
                 contacts?.NoteOutboundOk(node.NodeId, DateTime.UtcNow, node.ApiAddress);
                 _lastFailure.TryRemove(node.NodeId, out _);
@@ -358,6 +382,9 @@ public class SyncScheduler(
             catch (Exception ex) when (IsUnreachable(ex, ct))
             {
                 failure = ex;
+                if (chosen is not null && dialer is not null) await dialer.NoteSessionFailedAsync(node.NodeId, chosen, ex);
+                // A LAN address that stopped answering may have moved (a DHCP change): the discovery looks again now.
+                if (plan.Dialable.Any(c => c.IsLanLike)) discovery?.Prompt();
                 NoteFailed(failures, node, ex);
                 contacts?.NoteOutboundFailure(node.NodeId, DateTime.UtcNow, PeerContactLog.Describe(ex), node.ApiAddress);
                 // A 404 or a page that is not an identity IS an answer, and not a refusal: the door of a peer that had closed it is open (what stands behind it is not a sync
@@ -397,6 +424,44 @@ public class SyncScheduler(
         }
 
         return new SyncCycleResult(totalApplied, null, failures);
+    }
+
+    // The dialled addresses of each peer at the last look: a new one (an announcement, an mDNS record of a peer back home) ends a pause at once.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, HashSet<string>> _channelSets = new();
+    private DateTime _prunedAt = DateTime.MinValue;
+
+    /// <summary>The plan of a peer's channels and its TLS anchor (<see cref="Channels.PeerSessions.PlanAsync"/>).</summary>
+    internal Task<(Channels.ChannelPlan Plan, Blind.PeerTlsAnchor? Anchor)> PlanAsync(IServiceProvider sp, WhitelistEntry node) =>
+        Channels.PeerSessions.PlanAsync(sp, node, logger);
+
+    private static Task<Channels.ChannelCandidate> ChooseAsync(
+        Channels.PeerDialer? dialer, HttpClient http, WhitelistEntry node, Channels.ChannelPlan plan, CancellationToken ct) =>
+        Channels.PeerSessions.ChooseAsync(dialer, http, node, plan, ct);
+
+    /// <summary>The client of one session with one peer (<see cref="Channels.PeerSessions.ClientFor"/>): the factory of this loop, not a test's own.</summary>
+    private Channels.PeerSessions.Session PeerClient(IServiceProvider sp, HttpClient fallback, Blind.PeerTlsAnchor? anchor) =>
+        Channels.PeerSessions.ClientFor(httpClientFactory, fallback, anchor);
+
+    /// <summary>A peer that has a dialled address it did not have at the last look is asked at once: its pause was learned at the old ones.</summary>
+    private void NoteNewChannels(Guid nodeId, Channels.ChannelPlan plan)
+    {
+        var now = plan.Dialable.Select(c => c.Url).ToHashSet(StringComparer.Ordinal);
+        if (_channelSets.TryGetValue(nodeId, out var before) && now.Any(u => !before.Contains(u)) && _unreachable.ShouldSkip(nodeId, DateTime.UtcNow))
+        {
+            logger.LogInformation("{NodeId} has a new address to try; its pause ends", nodeId);
+            _unreachable.Forget(nodeId);
+        }
+        _channelSets[nodeId] = now;
+    }
+
+    /// <summary>Once an hour: the channel rows of peers that are gone, and automatic rows nothing has produced for a month, are deleted.</summary>
+    private async Task PruneChannelsAsync(IServiceProvider sp, IReadOnlyList<WhitelistEntry> nodes)
+    {
+        if (DateTime.UtcNow - _prunedAt < TimeSpan.FromHours(1) || sp.GetService<Channels.PeerChannelStore>() is not { } channels) return;
+        _prunedAt = DateTime.UtcNow;
+        foreach (var gone in _channelSets.Keys.Where(id => nodes.All(n => n.NodeId != id)).ToList()) _channelSets.TryRemove(gone, out _);
+        try { await channels.PruneAsync(nodes.Select(n => n.NodeId).ToHashSet(), TimeSpan.FromDays(30), DateTime.UtcNow); }
+        catch (Exception ex) when (ex is not VaultSealedException) { logger.LogDebug(ex, "Pruning the channel rows failed"); }
     }
 
     /// <summary>Remembers why this peer was not served, for this cycle's result and for the cycles in which it is left alone.</summary>
@@ -443,14 +508,22 @@ public class SyncScheduler(
                 var active = await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetAllActiveAsync();
                 ReconcilePeers(active, contacts);   // an address that changed since the last cycle is noticed now, before it is called
                 var node = active.FirstOrDefault(n => n.NodeId == nodeId);
-                if (node is null || string.IsNullOrEmpty(node.ApiAddress))
-                    return new PeerCheck(false, false, false, 0, null);
+                if (node is null) return new PeerCheck(false, false, false, 0, null);
+                // A person asked: an address paused after a wrong answer is asked too (it may have been a passing failure).
+                var (plan, anchor) = await Channels.PeerSessions.PlanAsync(scope.ServiceProvider, node, logger, ignorePause: true);
+                scope.ServiceProvider.GetService<Channels.PeerReachability>()?.NotePlan(node.NodeId, plan, DateTime.UtcNow);
+                if (!plan.HasDialable) return new PeerCheck(false, false, false, 0, null);
 
                 var syncClient = scope.ServiceProvider.GetRequiredService<SyncClient>();
+                var dialer = scope.ServiceProvider.GetService<Channels.PeerDialer>();
                 using var http = httpClientFactory.CreateClient(HttpClientName);
+                using var peerHttp = PeerClient(scope.ServiceProvider, http, anchor);
                 try
                 {
-                    var applied = await syncClient.SyncWithPeerAsync(http, node.ApiAddress!, node.NodeId, ct);
+                    var chosen = await ChooseAsync(dialer, peerHttp.Client, node, Channels.PeerSessions.Usable(plan, peerHttp), ct);
+                    var applied = await syncClient.SyncWithPeerAsync(peerHttp.Client, chosen.Url, node.NodeId, ct);
+                    if (dialer is not null) await dialer.NoteSessionOkAsync(node.NodeId, chosen);
+                    scope.ServiceProvider.GetService<Channels.PeerReachability>()?.NoteDirect(node.NodeId, chosen.Scope, DateTime.UtcNow);
                     snapshotRequiredState?.Clear(node.NodeId);
                     contacts?.NoteOutboundOk(node.NodeId, DateTime.UtcNow, node.ApiAddress);
                     _unreachable.NoteSuccess(node.NodeId);

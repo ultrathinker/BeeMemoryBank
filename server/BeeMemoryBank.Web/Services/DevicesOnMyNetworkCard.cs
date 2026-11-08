@@ -1,6 +1,6 @@
 namespace BeeMemoryBank.Web.Services;
 
-/// <summary>Which card the Admin &gt; Devices on my network page shows.</summary>
+/// <summary>Which card "Show this node's web page to devices on my network" (Admin &gt; Network settings) shows.</summary>
 public enum DevicesCardKind
 {
     /// <summary>Not a desktop node (Docker, a standalone Api+Web): there is nothing to switch, the card says what decides instead.</summary>
@@ -36,7 +36,7 @@ public enum DevicesFirewallStep
 }
 
 /// <summary>
-/// Everything the "Devices on my network" card decides from the node's answer, in one place so the page only renders it and the
+/// Everything the "Show this node's web page to devices on my network" card decides from the node's answer, in one place so the page only renders it and the
 /// rules (what to offer where) are testable without a page.
 /// </summary>
 public sealed record DevicesOnMyNetworkCard(
@@ -71,7 +71,9 @@ public sealed record DevicesOnMyNetworkCard(
 
     private static DevicesFirewallStep FirewallStepFor(NodeLanClient.LanStatus status, bool on, bool failed)
     {
-        var wantsOpen = on || failed;
+        // The port is wanted open when the web surface is on (or should be), and when LAN sync is on: the paired devices of a private network
+        // reach the sync connection on the same port (docs/design/lan-peer-sync.md 6.2). Only with both off is removing the rule offered.
+        var wantsOpen = on || failed || status.LanSync?.Setting == "on";
         if (status.FirewallManaged)
         {
             if (wantsOpen) return status.FirewallRule ? DevicesFirewallStep.RuleInPlace : DevicesFirewallStep.AddRule;

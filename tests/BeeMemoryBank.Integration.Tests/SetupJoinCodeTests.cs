@@ -50,8 +50,10 @@ public sealed class SetupJoinCodeTests : IAsyncLifetime
         html.Should().MatchRegex("<sl-input name=\"joinCode\" id=\"join-code\"[^>]*label=\"Join code from the other computer\"");
         html.Should().MatchRegex("<sl-input name=\"remoteUrl\" id=\"join-remote-url\"(?![^>]*\\brequired\\b)",
             "with a code the address is not typed, so the browser must not insist on one");
-        html.Should().Contain("Connect a device").And.Contain("Devices on my network",
-            "the scan button says which computers it can find, and where the code comes from");
+        html.Should().Contain("Connect a device").And.Contain("Find devices on my network").And.Contain("by their sync announcement",
+            "the scan button sits under the code, says how it finds computers, and where the code comes from");
+        html.Should().NotContain("Devices on my network switched on", "the hint that only nodes with that setting are found is gone");
+        html.Should().MatchRegex("<div id=\"join-discovered\" data-join-way=\"code\"");
     }
 
     [Fact]
@@ -98,8 +100,9 @@ public sealed class SetupJoinCodeTests : IAsyncLifetime
     public void TheScript_ReadsTheCodesAddressForDisplay_AndExplainsAnEmptyScan()
     {
         SetupScript.Should().Contain("bmb-join:?").And.Contain("join-code").And.Contain("join-remote-url");
-        SetupScript.Should().Contain("Devices on my network", "an empty scan says which computers can be found");
+        SetupScript.Should().Contain("direct sync is on for it", "an empty scan says which computers can be found");
         SetupScript.Should().Contain("Connect a device", "and where the code to use instead comes from");
+        SetupScript.Should().Contain("still needs its join code", "a computer that was found still needs its code");
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
@@ -119,6 +122,7 @@ public sealed class SetupJoinCodeTests : IAsyncLifetime
                 ["joinAdminUsername"] = "admin",
                 ["joinDisplayName"] = "NodeB",
                 ["joinPassword"] = "doorJoinPassword123",
+                ["joinConfirmPassword"] = "doorJoinPassword123",
                 ["passwordHint"] = "the join hint",
                 ["__RequestVerificationToken"] = token,
             }),

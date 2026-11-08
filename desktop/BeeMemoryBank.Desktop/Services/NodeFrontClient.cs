@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -44,7 +45,7 @@ public sealed record NodeFrontReply(
 
 /// <summary>
 /// The one way the shell calls an endpoint of its own node's front (<c>/node/...</c>) with the node's internal key: the update-unlock
-/// handoff, the vault lock on sleep, and the update guard of a profile switch.
+/// handoff, the vault lock on sleep, the update guard of a profile switch, the alarms poll and the LAN network question.
 ///
 /// <para><b>What it guarantees</b> (they used to be re-implemented by each caller, and only the lock request did all of them): the
 /// address must be an http(s) address on this computer, or nothing is sent and the key never leaves it; the request goes over a
@@ -122,9 +123,10 @@ public sealed class NodeFrontClient : IDisposable
     /// </summary>
     /// <param name="asSuperadmin">Also send <c>X-User-Role: superadmin</c> (the update routes want it; the lock route does not).</param>
     /// <param name="readBody">Read the response text into <see cref="NodeFrontReply.Body"/>.</param>
+    /// <param name="jsonBody">The request body (sent as <c>application/json</c>); null sends none.</param>
     public async Task<NodeFrontReply> SendAsync(
         HttpMethod method, string frontUrl, string path, string? internalKey,
-        bool asSuperadmin = false, bool readBody = false, CancellationToken cancellationToken = default)
+        bool asSuperadmin = false, bool readBody = false, CancellationToken cancellationToken = default, string? jsonBody = null)
     {
         try
         {
@@ -136,6 +138,7 @@ public sealed class NodeFrontClient : IDisposable
             using var request = new HttpRequestMessage(method, target);
             if (!string.IsNullOrEmpty(internalKey)) request.Headers.TryAddWithoutValidation(InternalKeyHeader, internalKey);
             if (asSuperadmin) request.Headers.TryAddWithoutValidation(UserRoleHeader, "superadmin");
+            if (jsonBody is not null) request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
             using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             var body = readBody ? await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false) : null;

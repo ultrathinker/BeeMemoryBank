@@ -29,9 +29,18 @@ internal sealed class WindowsShellPlatform : IShellPlatform
     /// <summary>A balloon on a hidden window of the notifier's own (the power-events service keeps its own one for the sleep notice).</summary>
     public IUserNotifier? CreateNotifier() => OperatingSystem.IsWindows() ? new WindowsBalloonNotifier() : null;
 
+    /// <summary>
+    /// None: a balloon has no buttons, and a toast with buttons needs a registered app id and a COM activator (the shell has neither). The
+    /// network question is not asked on Windows anyway (its network category decides), so the only notice that would use buttons is the
+    /// one-time LAN notice, which is then shown as a balloon and dismissed at once.
+    /// </summary>
+    public IActionNotifier? CreateActionNotifier() => null;
+
     public IFileManagerReveal FileManager { get; } = new WindowsFileManager();
 
-    public string TrayIconAsset => "avares://BeeMemoryBank.Desktop/Assets/icon.png";
+    /// <summary>The app's multi-size .ico, not the 512 px PNG: Windows takes its hand-drawn 16, 24 and 32 px entries for the notification area
+    /// (Avalonia's Win32 icon reads every entry of an .ico), where a big picture made small loses its lines.</summary>
+    public string TrayIconAsset => "avares://BeeMemoryBank.Desktop/Assets/icon.ico";
 
     public bool TrayIconIsTemplate => false;
 

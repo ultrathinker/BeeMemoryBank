@@ -36,8 +36,7 @@ public sealed class BlindPauseReporter(
 
         try
         {
-            using var exempt = http.GetClient(target, exempt: true);
-            await client.ReportPausedAsync(exempt, target, pause, ct).ConfigureAwait(false);
+            await http.WithClientAsync(target, BlindHubCall.Sync, exempt: true, (web, hub) => client.ReportPausedAsync(web, hub, pause, ct), ct).ConfigureAwait(false);
             lock (_gate)
             {
                 state.PauseReportedAt = now;

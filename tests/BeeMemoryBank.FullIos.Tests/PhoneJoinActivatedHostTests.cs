@@ -31,10 +31,10 @@ public class PhoneJoinActivatedHostTests
         using (var join = JsonDocument.Parse(server.Requests.Single(r => r.Path == "/api/join").Body))
         {
             join.RootElement.GetProperty("protocolVersion").GetInt32().Should().Be(3);
-            join.RootElement.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()).Should().Equal([MetadataCapabilities.EnvelopeV1]);
+            join.RootElement.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()).Should().Equal(MetadataCapabilities.Advertised, "what this build advertises: the envelope, and since LAN sync peer-endpoints-v1");
         }
         using (var auth = JsonDocument.Parse(server.Requests.Single(r => r.Path == "/api/sync/authenticate").Body))
-            auth.RootElement.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()).Should().Equal([MetadataCapabilities.EnvelopeV1]);
+            auth.RootElement.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()).Should().Equal(MetadataCapabilities.Advertised, "what this build advertises: the envelope, and since LAN sync peer-endpoints-v1");
         using var check = test.Services.CreateScope();
         (await check.ServiceProvider.GetRequiredService<ISyncPositionRepository>().GetAsync(host.HostId))!.LastSequenceNum.Should().Be(42);
         (await check.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!.InitialSyncCompleted.Should().BeTrue();

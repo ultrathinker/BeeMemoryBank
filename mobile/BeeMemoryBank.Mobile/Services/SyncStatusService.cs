@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Channels;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile.Services;
@@ -88,7 +89,8 @@ public class SyncStatusService : INotifyPropertyChanged
 
             var whitelistRepo = sp.GetRequiredService<IWhitelistRepository>();
             var peers = await whitelistRepo.GetAllActiveAsync();
-            isRegistered = peers.Any(p => p.NodeId != identity?.NodeId && !string.IsNullOrEmpty(p.ApiAddress));
+            // "Registered" is: the phone knows some way to reach a peer - its address, what it announced, what NSD saw, an address typed here.
+            isRegistered = await PhonePeers.AnyChannelAsync(sp, peers.Where(p => p.NodeId != identity?.NodeId));
 
             MainThread.BeginInvokeOnMainThread(() =>
             {
@@ -105,7 +107,7 @@ public class SyncStatusService : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// One sync with every peer that has an address, now. Returns what each peer that could not be served said (empty when all were): a wrong
+    /// One sync with every peer that has a way to be reached, now. Returns what each peer that could not be served said (empty when all were): a wrong
     /// address answers "no sync server at this address", never a clean pass (BMB-307). Callers that have a place to say it (the Status page) show it.
     /// </summary>
     public async Task<IReadOnlyList<PeerSyncFailure>> SyncNowAsync()
@@ -131,10 +133,13 @@ public class SyncStatusService : INotifyPropertyChanged
             using var scope = _serviceProvider.CreateScope();
             var sp = scope.ServiceProvider;
             var whitelist = sp.GetRequiredService<IWhitelistRepository>();
-            var syncClient = sp.GetRequiredService<SyncClient>();
 
             var nodes = await whitelist.GetAllActiveAsync();
-            var remoteNodes = nodes.Where(n => !string.IsNullOrEmpty(n.ApiAddress)).ToList();
+            // A look around the Wi-Fi first (a few seconds at most; it starts and ends here): a desktop that moved to another address is found by NSD.
+            if (nodes.Count > 0 && _serviceProvider.GetService<ILanPeerScanner>() is { } scanner)
+                await scanner.ScanAsync(PhonePeers.LookFor, token);
+            // Every peer that has a way to be reached now, not only those whose row has an address.
+            var remoteNodes = await PhonePeers.CallableAsync(sp, nodes);
 
             var http = _httpClientFactory.CreateClient();
             http.Timeout = TimeSpan.FromSeconds(30);
@@ -143,7 +148,7 @@ public class SyncStatusService : INotifyPropertyChanged
                 if (token.IsCancellationRequested) break;
                 try
                 {
-                    await syncClient.SyncWithAsync(http, node.ApiAddress!, node.NodeId, token);
+                    await PeerSessions.SyncWithPeerAsync(sp, http, node, token);
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)

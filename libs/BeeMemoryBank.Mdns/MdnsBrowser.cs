@@ -1,7 +1,7 @@
 using Makaretu.Dns;
 using Microsoft.Extensions.Logging;
 
-namespace BeeMemoryBank.Infrastructure.Mdns;
+namespace BeeMemoryBank.Mdns;
 
 /// <summary>
 /// Browses the local network for other BeeMemoryBank nodes advertising
@@ -100,19 +100,23 @@ public sealed class MdnsBrowser
         var name = rawName is null ? instanceStr : MdnsConstants.DecodeTxtName(rawName);
         var version = props.GetValueOrDefault(MdnsConstants.TxtVersion) ?? "";
         bool.TryParse(props.GetValueOrDefault(MdnsConstants.TxtHttps), out var https);
+        var surface = props.GetValueOrDefault(MdnsConstants.TxtSurface);
 
         // Resolve the host: prefer an A/AAAA keyed by the SRV target hostname, then by the instance
         // name, then fall back to the target hostname itself (a .local name) as a last resort.
+        // An IPv4 address before an IPv6 one: a link-local IPv6 address is no address a node may call (PeerAddressPolicy), and the LAN listener is IPv4.
         string? host = null;
         var targetStr = srv?.Target?.ToString();
+        var addresses = records.OfType<AddressRecord>()
+            .OrderBy(r => r.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 0 : 1).ToList();
         if (targetStr is not null)
         {
-            var byTarget = records.OfType<AddressRecord>().FirstOrDefault(r => NameEquals(r.Name, targetStr));
+            var byTarget = addresses.FirstOrDefault(r => NameEquals(r.Name, targetStr));
             host = byTarget?.Address.ToString();
         }
         if (host is null)
         {
-            var byInstance = records.OfType<AddressRecord>().FirstOrDefault(r => NameEquals(r.Name, instanceStr));
+            var byInstance = addresses.FirstOrDefault(r => NameEquals(r.Name, instanceStr));
             host = byInstance?.Address.ToString();
         }
         host ??= targetStr;
@@ -123,7 +127,7 @@ public sealed class MdnsBrowser
         if (host is null || port == 0)
             return false;
 
-        record = new MdnsNodeRecord(nodeId, name, version, https, host, port);
+        record = new MdnsNodeRecord(nodeId, name, version, https, host, port, surface);
         return true;
     }
 

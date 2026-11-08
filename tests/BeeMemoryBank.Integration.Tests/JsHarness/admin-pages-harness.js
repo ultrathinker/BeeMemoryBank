@@ -163,6 +163,19 @@ const scenarios = {
         }
         return ok('an empty, unknown, inherited or damaged fragment stays where it is');
     },
+    async the_index_follows_a_block_of_a_page_of_the_area_and_nothing_longer() {
+        const follow = (target) => {
+            const p = page({ 'admin-legacy-anchors': element({ attrs: { 'data-map': JSON.stringify({ 'card-x': target }) } }) }, { hash: '#card-x' });
+            run(p);
+            return p.log.replaced;
+        };
+        const followed = follow('/Admin/NetworkSettings#invisible-mode');
+        if (followed.length !== 1 || followed[0] !== '/Admin/NetworkSettings#invisible-mode') return fail('a block of a page of the area was not followed: ' + JSON.stringify(followed));
+        for (const target of ['/Admin/Devices#a b', '/Admin/Devices#<script>', '/Admin/Devices#', '/Admin/Devices#x#y', 'https://evil.example/Admin/Devices#x', '/Admin/Devices/x#y']) {
+            if (follow(target).length) return fail('it followed ' + target);
+        }
+        return ok('/Admin/<Name>#<block> is followed, nothing else after the page');
+    },
     async the_index_follows_nothing_but_a_page_of_the_area() {
         for (const target of ['https://evil.example/x', '//evil.example/Admin/X', '/Admin/../Login', '/Login', 'javascript:alert(1)', '/Admin/', '/Admin/X/Y', '/admin/Snapshots/']) {
             const p = page({ 'admin-legacy-anchors': element({ attrs: { 'data-map': JSON.stringify({ 'card-x': target }) } }) }, { hash: '#card-x' });

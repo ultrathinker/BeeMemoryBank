@@ -98,3 +98,44 @@ window.bmbDownloadChoice = function (withImages, btn) {
         initLayout();
     }
 })();
+
+// ===== Node notices above the page (_Layout .app-alerts, _PeerNewerProtocolAlert) =====
+// "Details" shows the whole sentence of a notice cut to one line. A notice that is closed and carries data-reshow-after="<seconds>" asks the
+// node again after that time (/api-proxy/sync/status) and comes back while its state (data-reshow-state, a member of that answer) is still
+// there; a page that is loaded again shows it at once, from the server. Closing is never "for ever" for a problem that lasts.
+(function () {
+    document.addEventListener('click', function (e) {
+        var btn = e.target && e.target.closest ? e.target.closest('[data-alert-details]') : null;
+        if (!btn) return;
+        var alert = btn.closest('sl-alert');
+        if (!alert) return;
+        var expanded = alert.classList.toggle('expanded');
+        btn.textContent = expanded ? 'Less' : 'Details';
+        btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    });
+
+    function stillThere(state) {
+        if (!state) return Promise.resolve(true);
+        return fetch('/api-proxy/sync/status', { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
+            .then(function (s) {
+                var value = s ? s[state] : null;
+                return value === true || (value !== null && value !== undefined && value !== false);
+            })
+            .catch(function () { return true; });   // the node could not be asked: the notice the page was given stands
+    }
+
+    document.addEventListener('sl-after-hide', function (e) {
+        var alert = e.target;
+        if (!alert || alert.tagName !== 'SL-ALERT' || !alert.hasAttribute('data-reshow-after')) return;
+        var seconds = parseInt(alert.getAttribute('data-reshow-after'), 10);
+        if (!(seconds > 0)) return;
+        clearTimeout(alert._bmbReshow);
+        alert._bmbReshow = setTimeout(function () {
+            if (!document.contains(alert)) return;
+            stillThere(alert.getAttribute('data-reshow-state')).then(function (yes) {
+                if (yes && document.contains(alert)) alert.show();
+            });
+        }, seconds * 1000);
+    });
+})();

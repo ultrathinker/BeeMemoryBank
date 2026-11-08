@@ -60,13 +60,14 @@ public static class SnapshotJoin
     public const long MaxAcceptedLamport = 1L << 53;
 
     // Every Lamport column of the replicated state a join imports (a snapshot of an older schema may lack some). The same set the recovery restore reads
-    // (RecoveryRestoreService.LamportColumns), without the whitelist: a join writes its own whitelist rows here.
+    // (RecoveryRestoreService.LamportColumns). The whitelist rows are the ones the join wrote from the host's answer: the active ones at version 0, the
+    // revoked ones at the version of their revoke (JoinRevocations), which a re-add made here later has to outrank.
     private static readonly (string Table, string Column)[] LamportColumns =
     [
         ("tbl_article", "lamport_ts"), ("tbl_folder", "lamport_ts"), ("tbl_media", "lamport_ts"),
         ("tbl_comment", "lamport_ts"), ("tbl_comment", "delete_lamport_ts"), ("tbl_tombstone", "lamport_ts"),
         ("tbl_conflict_version", "lamport_ts"), ("tbl_recovery_box", "lamport_ts"),
-        ("tbl_state_anchor", "lamport_ts"), ("tbl_sealed_secret", "lamport_ts"),
+        ("tbl_state_anchor", "lamport_ts"), ("tbl_sealed_secret", "lamport_ts"), ("tbl_whitelist", "lamport_ts"),
     ];
 
     /// <summary>The highest Lamport time of the rows now in the replicated tables; 0 for none.</summary>

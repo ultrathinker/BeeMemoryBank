@@ -36,7 +36,10 @@ public static class SnapshotTables
         "tbl_recovery_box", "tbl_dek_retired_link", "tbl_state_anchor", "tbl_sealed_secret",
         // The metadata keys, wrapped under the master DEK, and the activation record (migration 037, step-a-spec 4.1):
         // a joiner starts activated with the keys it opens after its first unlock.
-        "tbl_metadata_key", "tbl_metadata_activation"
+        "tbl_metadata_key", "tbl_metadata_activation",
+        // What each node announced about itself (node_endpoints, migration 044): a joiner can reach the host's other peers directly from the start,
+        // even when their last announcement was compacted away. Older joiners never get here (schema 44), and ignore a table they do not list.
+        "tbl_peer_endpoint"
     ];
 
     /// <summary>

@@ -4,11 +4,29 @@ public static class MetadataCapabilities
 {
     public const string EnvelopeV1 = "metadata-envelope-v1";
 
+    /// <summary>
+    /// The node takes <c>node_endpoints</c> events (docs/design/lan-peer-sync.md section 8). A 2.7.5 node does not advertise it, and a LOCKED, encrypted
+    /// 2.7.5 full node refuses an event type it does not know in its relay inbox - which would stall every push to it behind one announcement. So the
+    /// event is never served (pull) or sent (push) to a peer without this capability; the cursor moves over it.
+    /// </summary>
+    public const string PeerEndpointsV1 = "peer-endpoints-v1";
+
     /// <summary>What this build advertises in identity, authenticate, report-position, my-standing and join.</summary>
-    public static readonly IReadOnlyList<string> Advertised = [EnvelopeV1];
+    public static readonly IReadOnlyList<string> Advertised = [EnvelopeV1, PeerEndpointsV1];
 
     public static bool HasEnvelopeV1(IReadOnlyCollection<string>? capabilities) =>
         capabilities is not null && capabilities.Contains(EnvelopeV1);
+
+    /// <summary>True when a peer that advertised <paramref name="capabilities"/> may be given a <c>node_endpoints</c> event.</summary>
+    public static bool HasPeerEndpointsV1(IReadOnlyCollection<string>? capabilities) =>
+        capabilities is not null && capabilities.Contains(PeerEndpointsV1);
+
+    /// <summary>
+    /// An event that a peer with <paramref name="capabilities"/> must not be given: today only <c>node_endpoints</c> to a peer without
+    /// <see cref="PeerEndpointsV1"/>. One rule for the pull (the server) and the push (the client).
+    /// </summary>
+    public static bool IsWithheldFrom(string eventType, IReadOnlyCollection<string>? capabilities) =>
+        eventType == EventTypes.NodeEndpoints && !HasPeerEndpointsV1(capabilities);
 
     /// <summary>Parses the comma-separated form used in query strings and tbl_whitelist.last_capabilities.</summary>
     public static IReadOnlyList<string> Parse(string? commaSeparated) =>

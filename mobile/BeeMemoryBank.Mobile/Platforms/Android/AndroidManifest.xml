@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Finding the paired desktops on the Wi-Fi by NSD (docs/design/lan-peer-sync.md 16). Both are normal, install-time permissions: no prompt, and
+         neither is location or nearby-devices access. The multicast lock is held for the few seconds of a look so the Wi-Fi chip does not drop the answers
+         while the screen is off. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

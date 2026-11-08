@@ -18,17 +18,23 @@ internal static class SchemaDump
     // What the migrations AFTER the baseline add (041 and up). The squash tests compare a database with the schema the 39-file chain built, which is the
     // baseline's, so these objects and ledger rows stay out of every dump (PostBaselineTests checks them on their own).
     private const int FirstPostBaselineVersion = MigrationRunner.BaselineVersion + 1;
-    private static readonly HashSet<string> PostBaselineTables = new(StringComparer.Ordinal) { "tbl_blind_invite" };
+    private static readonly HashSet<string> PostBaselineTables = new(StringComparer.Ordinal) { "tbl_blind_invite", "tbl_peer_endpoint", "tbl_peer_channel" };
 
     // Columns that migrations after the baseline ADD to tables the baseline already had (043, release 2.7.5: the password
-    // hint and the node-level recovery-key flags). They stay out of the dump for the same reason the whole table of 041
-    // does: the oracle is the schema the 39-file chain built, and PostBaselineTests checks these columns on their own.
+    // hint and the node-level recovery-key flags; 045: the version of each concern of a whitelist row). They stay out of the
+    // dump for the same reason the whole table of 041 does: the oracle is the schema the 39-file chain built, and
+    // PostBaselineTests checks these columns on their own.
     private static readonly Dictionary<string, HashSet<string>> PostBaselineColumns = new(StringComparer.Ordinal)
     {
         ["tbl_user"] = new(StringComparer.Ordinal) { "password_hint" },
         ["tbl_node_identity"] = new(StringComparer.Ordinal)
         {
             "recovery_key_required", "recovery_key_acknowledged_at", "recovery_key_notice_dismissed_at"
+        },
+        ["tbl_whitelist"] = new(StringComparer.Ordinal)
+        {
+            "member_lamport_ts", "member_source_node_id", "superadmin_lamport_ts", "superadmin_source_node_id", "name_lamport_ts",
+            "name_source_node_id", "address_lamport_ts", "address_source_node_id", "tls_lamport_ts", "tls_source_node_id", "undated_fields"
         },
     };
 
@@ -87,7 +93,8 @@ internal static class SchemaDump
     public static List<string> RowTables(IDbConnection conn) =>
         conn.Query<string>(
             @"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'fts\_%' ESCAPE '\'
-                AND name <> 'tbl_migration' AND name <> 'tbl_blind_invite' AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL%') ORDER BY name").ToList();
+                AND name <> 'tbl_migration' AND name <> 'tbl_blind_invite' AND name <> 'tbl_peer_endpoint' AND name <> 'tbl_peer_channel'
+                AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL%') ORDER BY name").ToList();
 
     /// <summary>Per table: the row count and a digest of every row (a row is its values, a blob as hex; rows sorted as text).</summary>
     public static SortedDictionary<string, (long Count, string Digest)> Rows(IDbConnection conn, bool maskTimestamps = false)

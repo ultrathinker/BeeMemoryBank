@@ -9,7 +9,8 @@
 #   2. Assembles <output>/BeeMemoryBank Blind.app:
 #        Contents/MacOS/        the publish output (one executable, BeeMemoryBank.BlindDesktop; no .pdb files, no crash-dump helper)
 #        Contents/Resources/    AppIcon.icns, desktop/BeeMemoryBank.BlindDesktop/Packaging/AppIcon.icns copied as it is (16 px to 512@2x)
-#        Contents/Info.plist    bundle id com.beememorybank.blind, version from the VERSION file, LSUIElement (no Dock icon),
+#        Contents/Info.plist    bundle id com.beememorybank.blind, version from the VERSION file, LSUIElement (no Dock icon), the Local Network
+#                               usage sentence and the Bonjour service (the copy browses mDNS for its hub),
 #                               NSHighResolutionCapable, LSMinimumSystemVersion
 #        Contents/PkgInfo       APPL????
 #   3. Checks the bundle: plutil -lint, the layout, exactly one executable, no Vault DLL, the minimum macOS version is not below what
@@ -152,6 +153,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <false/>
   <key>NSSupportsSuddenTermination</key>
   <false/>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Bee Memory Bank (blind copy) looks for the computer it backs up on your local network, so that it still finds it after the computer's address changed.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_beememorybank._tcp</string>
+  </array>
 </dict>
 </plist>
 PLIST
@@ -161,6 +168,9 @@ say "checking the bundle"
 plutil -lint "$APP/Contents/Info.plist"
 [ "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" = "$BUNDLE_ID" ] || die "bundle id differs"
 [ "$(plutil -extract LSUIElement raw "$APP/Contents/Info.plist")" = "true" ] || die "LSUIElement is not true"
+# The copy browses mDNS for its hub (docs/design/lan-peer-sync.md, section 19): macOS asks for Local Network access with this sentence.
+[ -n "$(plutil -extract NSLocalNetworkUsageDescription raw "$APP/Contents/Info.plist" 2>/dev/null)" ] || die "Info.plist has no NSLocalNetworkUsageDescription"
+[ "$(plutil -extract NSBonjourServices.0 raw "$APP/Contents/Info.plist" 2>/dev/null)" = "_beememorybank._tcp" ] || die "Info.plist does not name the Bonjour service"
 [ -f "$APP/Contents/Resources/AppIcon.icns" ] || die "no icon"
 [ -f "$APP/Contents/PkgInfo" ] || die "no PkgInfo"
 

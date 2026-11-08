@@ -13,7 +13,7 @@
     var map = {};
     try { map = JSON.parse(holder.getAttribute('data-map') || '{}'); } catch (err) { return; }
 
-    // Only a page of the Admin area of this site: the table is the server's, and still nothing but /Admin/<Name> is followed.
+    // Only a page of the Admin area of this site (and a block of it, after a #): the table is the server's, and still nothing but /Admin/<Name>[#block] is followed.
     var target = Object.prototype.hasOwnProperty.call(map, id) ? map[id] : null;
-    if (typeof target === 'string' && /^\/Admin\/[A-Za-z]+$/.test(target)) location.replace(target);
+    if (typeof target === 'string' && /^\/Admin\/[A-Za-z]+(#[A-Za-z0-9_-]+)?$/.test(target)) location.replace(target);
 })();

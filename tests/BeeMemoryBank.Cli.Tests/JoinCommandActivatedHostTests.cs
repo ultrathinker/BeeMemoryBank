@@ -46,11 +46,11 @@ public class JoinCommandActivatedHostTests : IDisposable
         using (var body = JsonDocument.Parse(join.Body))
         {
             body.RootElement.GetProperty("protocolVersion").GetInt32().Should().Be(3, "a fresh node has applied no activation");
-            body.RootElement.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()).Should().Equal([MetadataCapabilities.EnvelopeV1]);
+            body.RootElement.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()).Should().Equal(MetadataCapabilities.Advertised, "what this build advertises: the envelope, and since LAN sync peer-endpoints-v1");
         }
         using (var auth = JsonDocument.Parse(server.Requests.Single(r => r.Path == "/api/sync/authenticate").Body))
             auth.RootElement.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()).Should().Equal(
-                [MetadataCapabilities.EnvelopeV1], "an activated host takes a protocol-3 peer only with the capability");
+                MetadataCapabilities.Advertised, "an activated host takes a protocol-3 peer only with the envelope capability");
 
         VaultStoreFiles.DetectMode(_tempDir).Should().Be(VaultStoreMode.Sealed, "a node that joined is encrypted under the password it was given (BMB-306)");
         await using var services = await JoinedNode.OpenAsync(_tempDir, Password);

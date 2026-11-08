@@ -31,7 +31,7 @@ public class MigrationTests : IAsyncLifetime
     {
         using var conn = _factory.CreateConnection();
         var version = await conn.QuerySingleAsync<int>("SELECT MAX(version) FROM tbl_migration");
-        version.Should().Be(43, "the baseline is the schema of migration 40, and 041, 042 and 043 are the migrations after it");
+        version.Should().Be(45, "the baseline is the schema of migration 40, and 041 to 045 are the migrations after it");
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public class MigrationTests : IAsyncLifetime
 
         using var conn = _factory.CreateConnection();
         var count = await conn.QuerySingleAsync<int>("SELECT COUNT(*) FROM tbl_migration");
-        count.Should().Be(4, "the baseline, 041, 042 and 043");
+        count.Should().Be(6, "the baseline, 041, 042, 043, 044 and 045");
     }
 
     [Fact]
@@ -82,6 +82,6 @@ public class MigrationTests : IAsyncLifetime
 
         (await act.Should().ThrowAsync<Microsoft.Data.Sqlite.SqliteException>()).Which.Message
             .Should().Contain("2.6.2 or later").And.Contain("Update the program");
-        (await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(4, "the baseline and 041, 042, 043");
+        (await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM tbl_migration")).Should().Be(6, "the baseline and 041, 042, 043, 044, 045");
     }
 }

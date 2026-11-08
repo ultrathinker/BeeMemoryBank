@@ -40,8 +40,23 @@ public sealed class MdnsAnnouncerOptions
     public Func<bool>? AnnounceGate { get; set; }
 
     /// <summary>
+    /// When set (the desktop node), what to announce now: the port the LAN listener really serves and which surfaces, or null to announce nothing
+    /// (docs/design/lan-peer-sync.md section 5, decision D5): the record follows the listener, a changed port is announced at the next refresh, and the
+    /// node's name is in it only while the web surface is on. Takes precedence over <see cref="Port"/> and <see cref="AnnounceGate"/>.
+    /// </summary>
+    public Func<MdnsAnnouncement?>? Announcement { get; set; }
+
+    /// <summary>
     /// Optional explicit version string override. When null, the announcer reads
     /// <c>AssemblyInformationalVersion</c> (compiled from the repo-root VERSION file) at runtime.
     /// </summary>
     public string? Version { get; set; }
 }
+
+/// <summary>What the desktop node announces now: the port, whether the sync and the web surfaces are served (decision D5: the name only with the web one).</summary>
+public sealed record MdnsAnnouncement(int Port, bool Sync, bool Web)
+{
+    /// <summary>The TXT <c>surface</c> value: "sync", "web" or "sync,web".</summary>
+    public string Surface => Sync && Web ? "sync,web" : Sync ? "sync" : "web";
+}
+

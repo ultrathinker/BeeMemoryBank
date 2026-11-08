@@ -8,9 +8,11 @@ using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Channels;
 using BeeMemoryBank.Vault.Sealed;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.FullIos.Services;
@@ -25,7 +27,7 @@ public sealed record FullNodePaths(string DataDirectory)
 
 /// <summary>
 /// The full node of the iPhone app, in process: the registrations the Android ordinary app makes (storage, core, sync with the pinned
-/// default client, the join by code), without the model and without a listening server. Platform-free, so the tests build the very same
+/// default client, the join by code), without the model and without a listening server, and the cache the Bonjour discovery fills. Platform-free, so the tests build the very same
 /// composition on any OS.
 /// </summary>
 public static class FullNodeServices
@@ -43,6 +45,12 @@ public static class FullNodeServices
             .AddSync()
             .AddSingleton(new MediaStorageOptions(paths.Media))
             .AddLogging();
+
+        // Direct sync on the Wi-Fi (docs/design/lan-peer-sync.md section 16): what Bonjour showed (BonjourPeerDiscovery, registered with the platform's
+        // browser by MauiProgram) goes into this cache, and the channel planner reads it as the host's discovery in place of the empty default
+        // AddNodeSync registers.
+        services.AddSingleton<PeerDiscoveryCache>();
+        services.Replace(ServiceDescriptor.Singleton<IPeerDiscovery>(sp => sp.GetRequiredService<PeerDiscoveryCache>()));
 
         // Every sync caller takes this default client: peers with a pinned key on that key only, HTTPS only, no redirects - the same
         // composition as the Android app (MobileSyncPinningGuardTests holds that one).

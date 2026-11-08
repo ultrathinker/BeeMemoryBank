@@ -71,6 +71,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The platform-free files of the Android full app's LAN channels (what an NSD record may become, which peers a sync round calls, "Add an address"):
+         compiled here so AndroidLanChannelsTests runs them without a device. The Android glue around them (NsdPeerDiscovery, the pages) is not built here. -->
+    <Compile Include="..\..\mobile\BeeMemoryBank.Mobile\Services\LanSighting.cs" Link="AndroidApp\LanSighting.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.Mobile\Services\PhonePeers.cs" Link="AndroidApp\PhonePeers.cs" />
+    <Compile Include="..\..\mobile\BeeMemoryBank.Mobile\Services\PeerChannelService.cs" Link="AndroidApp\PeerChannelService.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- A test that names the port of its server before it binds it: one source in tests/shared (the pick is repeated when the address was taken). -->
     <Compile Include="..\shared\PortBinding.cs" Link="Shared\PortBinding.cs" />
     <Compile Include="..\shared\PortBindingTests.cs" Link="Shared\PortBindingTests.cs" />

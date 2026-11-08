@@ -35,6 +35,10 @@ public static class EventTypes
     public const string StateAnchor = "state_anchor";
     public const string SealedSecretSet = "sealed_secret_set";
 
+    // Direct sync on the LAN (docs/design/lan-peer-sync.md section 8, ADR 0011): a node's signed record of where it listens and its TLS anchors.
+    // Travels only between nodes that advertise peer-endpoints-v1 (Metadata.MetadataCapabilities.PeerEndpointsV1).
+    public const string NodeEndpoints = "node_endpoints";
+
     // Step A (docs/design/step-a-spec.md 3.1, 4.3, 5.4): the outer type of a protocol-4 content event and the two
     // control events of the metadata key. Aliases of Metadata.EventClasses, which classifies every type here.
     public const string Sealed = Metadata.EventClasses.Sealed;
@@ -112,6 +116,9 @@ public static class EventAuthorization
         EventTypes.RecoveryBoxSet,
         EventTypes.RetiredLinkSet,
         EventTypes.SealedSecretSet,
+        // A node's record of its own endpoints: always the SIGNER's own (checked by the applier, as for a recovery box), so any full node may
+        // publish one; a forged one can only add candidates, which a peer accepts only after the TLS anchor and the node key match.
+        EventTypes.NodeEndpoints,
     };
 
     /// <summary>
@@ -418,3 +425,28 @@ public record SnapshotCheckpointPayload(
     [property: JsonPropertyName("prev_checkpoint_sha256")] string? PrevCheckpointSha256,
     [property: JsonPropertyName("produced_at")]            DateTime ProducedAt
 );
+
+/// <summary>
+/// node_endpoints (docs/design/lan-peer-sync.md section 8): where a node's LAN listener serves the sync surface right now, and the TLS anchors a peer
+/// may accept for it. Published by the node about ITSELF only (<see cref="NodeId"/> must be the signer), replacing its previous record: the newest by
+/// the Lamport time of that node's own events wins on every node.
+/// </summary>
+/// <param name="NodeId">The node the record is about: always the event's own node id.</param>
+/// <param name="Seq">The author's own counter of its announcements (informational; the Lamport time decides).</param>
+/// <param name="Endpoints">At most <see cref="NodeEndpointsRules.MaxEndpoints"/>; only private-range and VPN addresses of trusted networks.</param>
+/// <param name="TlsLeafSpki">The pin of the leaf key the node serves (base64url SHA-256 of its SubjectPublicKeyInfo), or null.</param>
+/// <param name="TlsCaKey">The node's local CA public key (base64url DER SubjectPublicKeyInfo): a leaf it signs is accepted (<c>ca-pin</c>), or null.</param>
+/// <param name="Port">The LAN port, for the record (every endpoint carries its own).</param>
+public record NodeEndpointsPayload(
+    [property: JsonPropertyName("node_id")] string NodeId,
+    [property: JsonPropertyName("seq")] long Seq,
+    [property: JsonPropertyName("endpoints")] List<NodeEndpointEntry> Endpoints,
+    [property: JsonPropertyName("tls_leaf_spki")] string? TlsLeafSpki,
+    [property: JsonPropertyName("tls_ca_key")] string? TlsCaKey,
+    [property: JsonPropertyName("port")] int? Port);
+
+/// <summary>One endpoint of a <see cref="NodeEndpointsPayload"/>: an https URL and its scope (<c>lan</c> or <c>vpn</c>; <c>internet</c> is reserved).</summary>
+public record NodeEndpointEntry(
+    [property: JsonPropertyName("url")] string Url,
+    [property: JsonPropertyName("scope")] string Scope);
+

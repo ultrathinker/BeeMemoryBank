@@ -48,10 +48,10 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
     [Theory]
     [InlineData("/BlindNodes", "/Admin/BlindNodes")]
     [InlineData("/AndroidBlindCopy", "/Admin/BlindNodes#android-blind-copy")]
-    [InlineData("/Connect", "/Admin/ConnectDevice")]
+    [InlineData("/Connect", "/Admin/Devices#connect-device")]
     [InlineData("/HardDelete", "/Admin/HardDelete")]
     [InlineData("/VaultEncryption", "/Admin/StorageProtection")]
-    [InlineData("/PromotePasswordPeers", "/Admin/TrustedNodes#promote-password-peers")]
+    [InlineData("/PromotePasswordPeers", "/Admin/Devices#promote-password-peers")]
     public async Task AnOldAddress_AnswersATemporaryRedirectToThePageThatHoldsItsFunction(string oldAddress, string newAddress)
     {
         using var response = await _admin.GetAsync(oldAddress);
@@ -63,10 +63,10 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
     [Theory]
     [InlineData("/BlindNodes", "/Admin/BlindNodes")]
     [InlineData("/AndroidBlindCopy", "/Admin/BlindNodes")]
-    [InlineData("/Connect", "/Admin/ConnectDevice")]
+    [InlineData("/Connect", "/Admin/Devices")]
     [InlineData("/HardDelete", "/Admin/HardDelete")]
     [InlineData("/VaultEncryption", "/Admin/StorageProtection")]
-    [InlineData("/PromotePasswordPeers", "/Admin/TrustedNodes")]
+    [InlineData("/PromotePasswordPeers", "/Admin/Devices")]
     public async Task AnOldAddress_KeepsTheMessageAndTheErrorOfItsQuery_AndDropsAHandlerOfTheOldPage(string oldAddress, string newPage)
     {
         using var response = await _admin.GetAsync(oldAddress + "?msg=Blind%20node%20added%20and%20seeded.&err=It%20failed&detail=Because&warn=Careful&handler=Reseed");
@@ -139,8 +139,8 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
     [Fact]
     public async Task ThePagesNothingLinkedTo_AreReachedFromTheAdminPageWhereAPersonLooksForThem()
     {
-        // /RemoteAccounts (read-only mirrors from another node) from Trusted Nodes; /RekeyReport (the checklist after an offline re-key) from DEK Rotation.
-        (await (await _admin.GetAsync("/Admin/TrustedNodes")).Content.ReadAsStringAsync()).Should().Contain("href=\"/RemoteAccounts\"");
+        // /RemoteAccounts (read-only mirrors from another node) from Devices; /RekeyReport (the checklist after an offline re-key) from DEK Rotation.
+        (await (await _admin.GetAsync("/Admin/Devices")).Content.ReadAsStringAsync()).Should().Contain("href=\"/RemoteAccounts\"");
         (await (await _admin.GetAsync("/Admin/DekRotation")).Content.ReadAsStringAsync()).Should().Contain("href=\"/RekeyReport\"");
         (await _admin.GetAsync("/RemoteAccounts")).StatusCode.Should().Be(HttpStatusCode.OK);
         (await _admin.GetAsync("/RekeyReport")).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -190,7 +190,7 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
         js.Should().Contain("Nothing to delete: this vault has no articles or folders yet.");
     }
 
-    // ---------------------------------------------------------------- Trusted Nodes: the card that grants superadmin to the devices that joined with the password
+    // ---------------------------------------------------------------- Devices: the card that grants superadmin to the devices that joined with the password
 
     private async Task<Guid> AddPlainPeerAsync()
     {
@@ -205,13 +205,13 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ThePromoteCard_IsOnTrustedNodes_OnlyWhileThereAreCandidates_AndTheFormPromotesFromThePage()
+    public async Task ThePromoteCard_IsOnDevices_OnlyWhileThereAreCandidates_AndTheFormPromotesFromThePage()
     {
-        var none = WebUtility.HtmlDecode(await (await _admin.GetAsync("/Admin/TrustedNodes")).Content.ReadAsStringAsync());
+        var none = WebUtility.HtmlDecode(await (await _admin.GetAsync("/Admin/Devices")).Content.ReadAsStringAsync());
         none.Should().NotContain("id=\"promote-password-peers\"", "nothing to offer, no card");
 
         var peer = await AddPlainPeerAsync();
-        var html = await (await _admin.GetAsync("/Admin/TrustedNodes")).Content.ReadAsStringAsync();
+        var html = await (await _admin.GetAsync("/Admin/Devices")).Content.ReadAsStringAsync();
         var page = WebUtility.HtmlDecode(html);
         page.Should().Contain("id=\"promote-password-peers\"").And.Contain("device(s) joined with the master password are not superadmins yet.")
             .And.Contain("Whoever knows the master password is a superadmin.").And.Contain("If you demoted one of these devices on purpose, untick it. Blind nodes never appear here.")
@@ -219,14 +219,14 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
         page.Should().NotContain("href=\"/PromotePasswordPeers\"", "the button to the second page is gone");
 
         var token = Regex.Match(html, "__RequestVerificationToken[^>]*value=\"([^\"]+)\"").Groups[1].Value;
-        using var post = new HttpRequestMessage(HttpMethod.Post, "/Admin/TrustedNodes?handler=PromotePasswordPeers")
+        using var post = new HttpRequestMessage(HttpMethod.Post, "/Admin/Devices?handler=PromotePasswordPeers")
         {
             Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["nodeIds"] = peer.ToString(), ["__RequestVerificationToken"] = token }),
         };
         using var response = await _admin.SendAsync(post);
 
         response.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        WebUtility.UrlDecode(response.Headers.Location!.OriginalString).Should().Be("/Admin/TrustedNodes?msg=1 device(s) granted superadmin.");
+        WebUtility.UrlDecode(response.Headers.Location!.OriginalString).Should().Be("/Admin/Devices?msg=1 device(s) granted superadmin.");
         using (var scope = _api.Services.CreateScope())
             (await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(peer))!.IsSuperadmin.Should().BeTrue();
         var after = WebUtility.HtmlDecode(await (await _admin.GetAsync(response.Headers.Location.OriginalString)).Content.ReadAsStringAsync());
@@ -234,19 +234,16 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ARowOfTheTrustedNodesTable_CarriesTheClassesThatLetItLoseColumnsAndKeepItsIconsInOneRow()
+    public async Task ARowOfTheDevicesList_NamesTheDevice_LinksToItsPage_AndKeepsItsButtonInTheRow()
     {
         var peer = await AddPlainPeerAsync();
 
-        var page = WebUtility.HtmlDecode(await (await _admin.GetAsync("/Admin/TrustedNodes")).Content.ReadAsStringAsync());
+        var page = WebUtility.HtmlDecode(await (await _admin.GetAsync("/Admin/Devices")).Content.ReadAsStringAsync());
 
-        page.Should().Contain("<table class=\"version-table admin-stack\">");
-        var row = Regex.Match(page, "<tr>(?:(?!</tr>).)*OldPhone.*?</tr>", RegexOptions.Singleline).Value;
-        row.Should().Contain("<td class=\"col-name\"><strong title=\"Node ID " + peer).And.Contain("<td class=\"hide-lt-1060\">").And.Contain("<td class=\"col-api text-muted text-sm\" data-label=\"API address\">");
-        row.Should().Contain("<td class=\"col-auto\" data-label=\"Auto-restore\">").And.Contain("<td class=\"col-auto\" data-label=\"Auto-DEK rotation\">");
-        row.Should().Contain("data-label=\"Status\"").And.Contain("data-label=\"API address\"").And.Contain("data-label=\"Last contact\"");
-        var actions = Regex.Match(row, "<td class=\"col-actions\">(.*?)</td>", RegexOptions.Singleline).Groups[1].Value;
-        actions.Should().Contain("<div class=\"row-actions\">").And.Contain("label=\"Change URL\"").And.Contain("label=\"Revoke\"", "all the buttons of the row are in the one flex row");
+        page.Should().Contain("<ul class=\"device-list\" id=\"device-list\">");
+        var row = Regex.Match(page, $"<li[^>]*data-node-id=\"{peer}\".*?</li>", RegexOptions.Singleline).Value;
+        row.Should().Contain("<li class=\"device-row ").And.Contain($"<a class=\"device-name\" href=\"/Admin/Device/{peer}\">OldPhone</a>");
+        row.Should().Contain("class=\"device-open\"", "the Details button is in the row, after the sentence");
     }
 
     // ---------------------------------------------------------------- one id, one element
@@ -258,11 +255,11 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
 
     [Theory]
     [InlineData("/Admin/BlindNodes")]
-    [InlineData("/Admin/ConnectDevice")]
+    [InlineData("/Admin/Devices")]
+    [InlineData("/Admin/NetworkSettings")]
     [InlineData("/Admin/HardDelete")]
     [InlineData("/Admin/StorageProtection")]
     [InlineData("/Admin/OsAutoUnlock")]
-    [InlineData("/Admin/TrustedNodes")]
     public async Task AMergedPage_HasEveryIdOnce(string page)
     {
         var html = await (await _admin.GetAsync(page)).Content.ReadAsStringAsync();
@@ -290,7 +287,7 @@ public sealed class AdminNoSecondPageSourceTests
         "/Network",        // the network map in the main menu (read-only)
         "/Login",          // the sign-in page
         "/Lock",           // confirmation page for the lock action
-        "/RemoteAccounts", // mirrors folders read-only from ANOTHER Bee Memory Bank: a function of any signed-in user, linked from Trusted Nodes
+        "/RemoteAccounts", // mirrors folders read-only from ANOTHER Bee Memory Bank: a function of any signed-in user, linked from Devices
         "/RekeyReport",    // the checklist after an offline re-key: the desktop app opens it once, this is the way back to it
         "/Setup",          // where a wiped node goes (Reset This Node)
         "/connect/ca.crt", // a file, the certificate of this node, not a page
@@ -352,7 +349,9 @@ public sealed class AdminNoSecondPageSourceTests
         // Lock Server is the one exception, decided by the owner: its button is /Lock, an action (it locks the node and signs out) and not a page of a function.
         string[] exempt = ["LockServer.cshtml"];
         var stubs = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(AdminDir, "*.cshtml").Where(f => !Path.GetFileName(f).StartsWith('_') && Path.GetFileName(f) != "Index.cshtml" && !exempt.Contains(Path.GetFileName(f))))
+        // A page that only redirects (the route of a page the Devices section replaced) draws nothing: it is no page of the area.
+        foreach (var file in Directory.EnumerateFiles(AdminDir, "*.cshtml").Where(f => !Path.GetFileName(f).StartsWith('_') && Path.GetFileName(f) != "Index.cshtml" && !exempt.Contains(Path.GetFileName(f))
+                     && !File.ReadAllText(f + ".cs").Contains(" : LegacyPageRedirectModel(", StringComparison.Ordinal)))
         {
             var text = File.ReadAllText(file);
             var about = text.IndexOf("@section About", StringComparison.Ordinal);

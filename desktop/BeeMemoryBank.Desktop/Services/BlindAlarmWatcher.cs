@@ -51,8 +51,10 @@ public sealed class DesktopSettingsEpisodeStore(DesktopSettingsStore settings) :
 }
 
 /// <summary>
-/// Turns the node's blind-node alarms (<c>GET /node/alarms</c>, BMB-77) into notifications: one per episode, a reminder at most every
-/// <see cref="RemindEvery"/>, and the tray's "N blind nodes need attention".
+/// Turns the node's alarms (<c>GET /node/alarms</c>, BMB-77) into notifications: one per episode, a reminder at most every
+/// <see cref="RemindEvery"/>, and the tray's "N blind nodes need attention". The alarms are those of blind nodes and, since LAN sync
+/// (docs/design/lan-peer-sync.md 10), the full-peer alarm <c>peer_silent</c>: a computer, a server or a phone with no contact by any route
+/// for three days. It is notified on the same terms, and the tray counts it ("N devices need attention").
 ///
 /// <para><b>Episodes.</b> An alarm is one episode for as long as its kind, node and time stay the same (the node makes them stable; the
 /// protocol a blind node declares is not part of it). It is raised after <see cref="PollsToRaise"/> polls in a row that report it, and
@@ -67,7 +69,7 @@ public sealed class DesktopSettingsEpisodeStore(DesktopSettingsStore settings) :
 /// notices go out at once; the rest are summed up in the last one.</para>
 ///
 /// <para><b>Texts.</b> Fixed sentences per kind, written here; the node only names the kind. A locked vault reports no names, and the
-/// texts then say "a blind node".</para>
+/// texts then say "a blind node" or "a device of this network".</para>
 /// </summary>
 public sealed class BlindAlarmWatcher : IDisposable
 {
@@ -88,7 +90,10 @@ public sealed class BlindAlarmWatcher : IDisposable
     public const int PollsToClear = 2;
     public const int MaxNoticesPerBurst = 3;
 
-    private static readonly HashSet<string> KnownKinds = ["silent", "old_protocol", "pc_too_old"];
+    /// <summary>The kind of the full-peer alarm: a device with no contact by any route for days (the blind kinds are the others).</summary>
+    public const string PeerSilent = "peer_silent";
+
+    private static readonly HashSet<string> KnownKinds = ["silent", "old_protocol", "pc_too_old", PeerSilent];
 
     private sealed class Episode
     {
@@ -115,6 +120,7 @@ public sealed class BlindAlarmWatcher : IDisposable
     private DateTime _graceUntil;
     private DateTime? _lastPollAt;
     private volatile int _attention;
+    private volatile int _attentionPeers;
 
     /// <param name="poll">One poll of the node (<see cref="NodeAlarmsRequest.PollAsync"/>); it never throws.</param>
     /// <param name="notifier">The system's notice (<see cref="IShellPlatform.CreateNotifier"/>); null: the tray tooltip only.</param>
@@ -136,18 +142,26 @@ public sealed class BlindAlarmWatcher : IDisposable
         _log = log ?? Console.Error.WriteLine;
     }
 
-    /// <summary>How many blind nodes have a raised alarm now (for the tray).</summary>
+    /// <summary>How many nodes (blind nodes and full peers) have a raised alarm now (for the tray).</summary>
     public int AttentionCount => _attention;
+
+    /// <summary>How many of <see cref="AttentionCount"/> are full peers (<c>peer_silent</c>).</summary>
+    public int AttentionPeerCount => _attentionPeers;
 
     /// <summary>Raised when <see cref="AttentionCount"/> changes; on the polling thread.</summary>
     public event EventHandler? Changed;
 
-    /// <summary>The tray tooltip's addition, or null when nothing needs attention.</summary>
-    public static string? TooltipSuffix(int count) => count switch
+    /// <summary>
+    /// The tray tooltip's addition, or null when nothing needs attention. <paramref name="fullPeers"/> of the <paramref name="count"/> are
+    /// computers, servers or phones rather than blind nodes: the words are then "devices".
+    /// </summary>
+    public static string? TooltipSuffix(int count, int fullPeers = 0) => (count, fullPeers) switch
     {
-        <= 0 => null,
-        1 => "1 blind node needs attention",
-        _ => $"{count} blind nodes need attention",
+        ( <= 0, _) => null,
+        (1, 0) => "1 blind node needs attention",
+        (_, 0) => $"{count} blind nodes need attention",
+        (1, _) => "1 device needs attention",
+        _ => $"{count} devices need attention",
     };
 
     /// <summary>Starts polling every <see cref="PollInterval"/> in the background (a no-op when it already runs).</summary>
@@ -188,7 +202,7 @@ public sealed class BlindAlarmWatcher : IDisposable
                 foreach (var (key, at) in _store.Load(profile))
                     _episodes[key] = new Episode { Alarm = Restored(key), NotifiedAt = at };
                 _graceUntil = now + StartGrace;
-                SetAttention(0);
+                SetAttention(0, 0);
             }
             else if (_lastPollAt is { } last && now - last > ResumeGap)
             {
@@ -201,7 +215,8 @@ public sealed class BlindAlarmWatcher : IDisposable
 
             var changed = Track(answer.Alarms.Where(a => KnownKinds.Contains(a.Kind)));
             var raised = _episodes.Values.Where(e => e.Seen >= PollsToRaise).ToList();
-            SetAttention(raised.Select(e => e.Alarm.NodeId).Distinct().Count());
+            SetAttention(raised.Select(e => e.Alarm.NodeId).Distinct().Count(),
+                raised.Where(e => e.Alarm.Kind == PeerSilent).Select(e => e.Alarm.NodeId).Distinct().Count());
 
             if (now >= _graceUntil)
             {
@@ -285,11 +300,11 @@ public sealed class BlindAlarmWatcher : IDisposable
     /// <summary>Shows the notices of one burst; <paramref name="shown"/> gets the episodes whose notice was shown (all of a summary's, when it was).</summary>
     private async Task ShowAsync(IReadOnlyList<Episode> due, ISet<Episode> shown, CancellationToken cancellationToken)
     {
+        var now = UtcNow();
         var notices = due.Count <= MaxNoticesPerBurst
-            ? due.Select(e => (Text: TextFor(e.Alarm), Covers: (IReadOnlyList<Episode>)[e])).ToList()
-            : due.Take(MaxNoticesPerBurst - 1).Select(e => (Text: TextFor(e.Alarm), Covers: (IReadOnlyList<Episode>)[e]))
-                .Append((Text: (Title: "Blind nodes need attention", Message:
-                        $"{due.Count - (MaxNoticesPerBurst - 1)} more blind-node alarms. Open Bee Memory Bank, Blind nodes, to see them."),
+            ? due.Select(e => (Text: TextFor(e.Alarm, now), Covers: (IReadOnlyList<Episode>)[e])).ToList()
+            : due.Take(MaxNoticesPerBurst - 1).Select(e => (Text: TextFor(e.Alarm, now), Covers: (IReadOnlyList<Episode>)[e]))
+                .Append((Text: SummaryText(due.Skip(MaxNoticesPerBurst - 1).Select(e => e.Alarm).ToList()),
                     Covers: (IReadOnlyList<Episode>)due.Skip(MaxNoticesPerBurst - 1).ToList()))
                 .ToList();
         for (var i = 0; i < notices.Count; i++)
@@ -308,12 +323,23 @@ public sealed class BlindAlarmWatcher : IDisposable
         }
     }
 
-    /// <summary>The fixed title and text of an alarm's notice. Names only when the node gave one (it does not while the vault is locked).</summary>
-    public static (string Title, string Message) TextFor(BlindAlarmEntry alarm)
+    /// <summary>The one notice that sums up the alarms past <see cref="MaxNoticesPerBurst"/>.</summary>
+    private static (string Title, string Message) SummaryText(IReadOnlyList<BlindAlarmEntry> rest) =>
+        rest.All(a => a.Kind != PeerSilent)
+            ? ("Blind nodes need attention", $"{rest.Count} more blind-node alarms. Open Bee Memory Bank, Blind nodes, to see them.")
+            : ("Devices need attention", $"{rest.Count} more alarms. Open Bee Memory Bank, Devices, to see them.");
+
+    /// <summary>
+    /// The fixed title and text of an alarm's notice. Names only when the node gave one (it does not while the vault is locked).
+    /// <paramref name="now"/> (UTC; null means the system clock) is what the days of a silent device are counted to.
+    /// </summary>
+    public static (string Title, string Message) TextFor(BlindAlarmEntry alarm, DateTime? now = null)
     {
         var name = string.IsNullOrWhiteSpace(alarm.Name) ? null : $"\"{alarm.Name.Trim()}\"";
         return alarm.Kind switch
         {
+            PeerSilent => ("A device is not in contact",
+                $"{name ?? "A device of this network"} has not been heard from for {SilentFor(alarm.Since, now ?? DateTime.UtcNow)}, directly or through your other devices."),
             "old_protocol" => ("A blind node needs an update",
                 $"{name ?? "A blind node"} runs an older version of Bee Memory Bank and receives nothing until it is updated."),
             "pc_too_old" => ("Update Bee Memory Bank on this computer",
@@ -325,6 +351,14 @@ public sealed class BlindAlarmWatcher : IDisposable
                         ? $"No contact with {name} since {since.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}. Its copies and backups stop while it is away."
                         : $"No contact with {name} for a long time. Its copies and backups stop while it is away."),
         };
+    }
+
+    /// <summary>"4 days": whole days since the last contact, at least the three days after which the node raises the alarm; "several days" when there is no time.</summary>
+    private static string SilentFor(DateTime? since, DateTime now)
+    {
+        if (since is not { } last) return "several days";
+        var days = Math.Max(3, (int)Math.Floor((now - last.ToUniversalTime()).TotalDays));
+        return $"{days.ToString(CultureInfo.InvariantCulture)} days";
     }
 
     // The protocol the node declared is not part of the key: a blind node that keeps changing its answer would otherwise start a new
@@ -358,10 +392,11 @@ public sealed class BlindAlarmWatcher : IDisposable
         }
     }
 
-    private void SetAttention(int count)
+    private void SetAttention(int count, int fullPeers)
     {
-        if (_attention == count) return;
+        if (_attention == count && _attentionPeers == fullPeers) return;
         _attention = count;
+        _attentionPeers = fullPeers;
         try { Changed?.Invoke(this, EventArgs.Empty); }
         catch (Exception ex) { Log($"A tray update failed ({ex.GetType().Name})."); }
     }

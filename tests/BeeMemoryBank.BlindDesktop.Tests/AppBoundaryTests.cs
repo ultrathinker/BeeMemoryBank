@@ -34,11 +34,14 @@ public sealed class AppBoundaryTests
 
     private static readonly string BuildFolder = OnMac ? "net10.0" : "net10.0-windows10.0.19041.0";
 
-    /// <summary>The only BeeMemoryBank assemblies the app may carry: itself, its platform part, AppCore, the phone client and the shared libraries.</summary>
+    /// <summary>
+    /// The only BeeMemoryBank assemblies the app may carry: itself, its platform part, AppCore, the phone client, the shared libraries, and the neutral
+    /// mDNS scan (libs/BeeMemoryBank.Mdns, which references nothing of the product) that finds the hub after its address changed.
+    /// </summary>
     private static readonly string[] AllowedAssemblies =
     [
         "BeeMemoryBank.BlindDesktop", PlatformAssembly, .. (OnMac ? new[] { AppleLayer } : []), "BeeMemoryBank.Blind.AppCore", "BeeMemoryBank.Blind.PhoneClient",
-        "BeeMemoryBank.Core", "BeeMemoryBank.Crypto", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync", "BeeMemoryBank.Search",
+        "BeeMemoryBank.Core", "BeeMemoryBank.Crypto", "BeeMemoryBank.Storage", "BeeMemoryBank.Sync", "BeeMemoryBank.Search", "BeeMemoryBank.Mdns",
     ];
 
     /// <summary>Assemblies of the full app and of nodes: none may be in the app's output, referenced by it, or in its project graph.</summary>

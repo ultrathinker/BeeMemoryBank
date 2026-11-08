@@ -53,7 +53,9 @@ public record NetworkNode(
     int? Folders = null,
     long? Changes = null,
     string? PausedText = null,
-    DateTime? LeftAt = null);
+    DateTime? LeftAt = null,
+    string? Reachability = null,
+    string? ReachabilityText = null);
 
 /// <summary>One direction of a call: <c>From</c> calls <c>To</c>, at the address of <c>To</c>.</summary>
 /// <param name="Basis"><c>observed</c> (this node is one end of the call and measured it) or <c>expected</c> (between two other nodes: the network's rule is that every node calls every node that has an address; this node cannot see those calls).</param>

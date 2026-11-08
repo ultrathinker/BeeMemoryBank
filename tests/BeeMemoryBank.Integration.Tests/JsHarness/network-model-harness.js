@@ -165,7 +165,7 @@ const scenarios = {
         eq(M.statusText({ state: 'calls_us', lastContactAt: ago(120), pausedText: paused }, NOW), paused + ' · last call 2 min ago', 'paused, with its last call');
         eq(M.statusText({ state: 'calls_us', lastContactAt: null, pausedText: paused }, NOW), paused, 'paused, never heard');
         eq(M.statusText({ state: 'calls_us', lastContactAt: ago(120), leftAt: ago(60), pausedText: paused }, NOW),
-            'Removed from the device by its owner — revoke it under Blind nodes', 'removed wins over paused');
+            'Removed from the device by its owner — revoke it on its page in Devices', 'removed wins over paused');
         eq(M.statusText({ state: 'calls_us', lastContactAt: ago(120), pausedText: null, leftAt: null }, NOW), 'Calls this node · last call 2 min ago', 'neither: as before');
         const rows = M.nodeRows({ kind: 'blind', state: 'calls_us', lastContactAt: ago(60), pausedText: paused, isSynced: true, unsyncedCount: 0 }, { isSelf: true }, NOW);
         eq(rows[0][1], paused + ' · last call 1 min ago', 'the Status row of the card');
@@ -215,6 +215,28 @@ const scenarios = {
         assert(rule.rows.some((r) => r[0] === 'Status' && /^Expected:/.test(r[1]) && /cannot see/.test(r[1])), 'a rule says it is not seen');
         const none = M.linkRows({ from: 'a', to: 'b', basis: 'observed', state: 'unknown' }, names, NOW);
         eq(none.rows[0], ['Goes to', 'this node has no address'], 'no address');
+    },
+    // LAN sync: the node's own sentence is the status line; only a silent device is an alarm, one that is away or reached through another device is not
+    reachability_sentences_are_the_status_line_and_only_silent_is_an_alarm() {
+        const direct = { state: 'answering', online: true, reachability: 'direct_lan', reachabilityText: 'Direct, on this network', lastContactAt: ago(60), lastContactDirection: 'outbound' };
+        eq(M.statusText(direct, NOW), 'Direct, on this network · last contact 1 min ago (we → it)', 'direct');
+        eq(M.nodeTone(direct), 'ok', 'direct is green');
+        const relay = { state: 'away', online: false, reachability: 'via_relay', reachabilityText: 'Not on this network; reachable through Home-Server (5 min ago)', lastContactAt: ago(300) };
+        eq(M.statusText(relay, NOW), 'Not on this network; reachable through Home-Server (5 min ago) · last contact 5 min ago', 'through a relay');
+        assert(M.nodeTone(relay) !== 'bad', 'a device that is reachable through another one is never red');
+        assert(!/Not answering/i.test(M.statusText(relay, NOW)), 'never "not answering" for it');
+        const away = { state: 'away', online: false, reachability: 'away', reachabilityText: 'Not on this network', lastContactAt: null };
+        eq(M.statusText(away, NOW), 'Not on this network', 'away');
+        eq(M.nodeTone(away), 'idle', 'away is not red');
+        const old = { state: 'away', reachability: 'old_version', reachabilityText: 'Direct sync on this network needs an update on Desktop', lastContactAt: ago(120) };
+        eq(M.statusText(old, NOW), 'Direct sync on this network needs an update on Desktop · last contact 2 min ago', 'an older version');
+        assert(M.nodeTone(old) !== 'bad', 'an older version is no alarm');
+        const silent = { state: 'not_answering', reachability: 'silent', reachabilityText: 'Not heard from for 4 days', lastContactAt: ago(4 * 86400) };
+        eq(M.statusText(silent, NOW), 'Not heard from for 4 days · last contact 4 d ago', 'silent');
+        eq(M.nodeTone(silent), 'bad', 'silent gets the alarm colour');
+        eq(M.nodeTone({ state: 'calls_us', reachability: 'silent', reachabilityText: 'Not heard from', lastContactAt: null }), 'bad', 'a silent device that calls in as well');
+        const calls = { state: 'calls_us', reachability: 'calls_us', reachabilityText: 'Calls this device', lastContactAt: ago(120) };
+        eq(M.statusText(calls, NOW), 'Calls this device · last call 2 min ago', 'calls in');
     },
     a_connection_is_told_in_one_line() {
         const names = { a: 'ROG', b: 'hetzner', c: 'phone' };

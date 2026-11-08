@@ -43,6 +43,7 @@ public sealed partial class BlindAccountHost : IBlindAccountsController, IAsyncD
     private readonly BlindAccountRegistry _registry;
     private readonly BlindDeviceGate _gate;
     private readonly BlindDeviceUsage _deviceUsage;
+    private readonly BlindLanDirectory _lan;
     private readonly IBlindCrashPoints _crash;
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
@@ -73,6 +74,8 @@ public sealed partial class BlindAccountHost : IBlindAccountsController, IAsyncD
         _gate.UseClock(options.Time);
         // The device's usage: every account's ledger and stored bytes count towards it; the limits are whatever the registry says now.
         _deviceUsage = new BlindDeviceUsage(options.Time, Path.Combine(_registry.RootDirectory, "device-usage.json"), () => _registry.Current.DeviceLimits);
+        // Where the hubs of the device were seen on the network: one scan serves every account.
+        _lan = new BlindLanDirectory(options.LanBrowser, options.Time);
     }
 
     /// <summary>True after a <see cref="DisposeAsync"/> that returned with work still running: the root is still held, and the shutdown finishes by itself when that work ends.</summary>
@@ -1247,6 +1250,7 @@ public sealed partial class BlindAccountHost : IBlindAccountsController, IAsyncD
         // Limits: the account's policy is whatever its registry entry says now; the device's usage is the one every account shares.
         services.AddSingleton<IBlindAccountPolicySource>(new RegistryPolicySource(_registry, entry.Id));
         services.AddSingleton(_deviceUsage);
+        services.AddSingleton(_lan);
         if (_options.Conditions is { } conditions) services.AddSingleton(conditions);
         _options.ConfigureHostSeams?.Invoke(services, entry);
         BlindMobileServices.AddBlindAppCore(services, new BlindAppOptions(dataDir, dbPath, _options.Time, _options.DisplayNameFactory)

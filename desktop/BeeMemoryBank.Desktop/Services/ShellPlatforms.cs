@@ -30,6 +30,14 @@ public interface IShellPlatform
     /// </summary>
     IUserNotifier? CreateNotifier();
 
+    /// <summary>
+    /// A notice with buttons (the LAN network question, the one-time LAN notice). Null where the system has none the shell can use: the question
+    /// is then a plain notice and an item in the tray menu. Windows has none: a balloon has no buttons, and a toast with buttons needs a
+    /// registered app id and a COM activator, which the shell does not have; the question never comes up there anyway, because the
+    /// network category of Windows decides which networks are trusted.
+    /// </summary>
+    IActionNotifier? CreateActionNotifier() => null;
+
     IFileManagerReveal FileManager { get; }
 
     /// <summary>The <c>avares://</c> resource of the tray / menu-bar icon.</summary>

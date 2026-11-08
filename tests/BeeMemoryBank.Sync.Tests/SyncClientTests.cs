@@ -903,6 +903,79 @@ public class SyncClientTests : IAsyncLifetime
         Content = new StringContent(json, Encoding.UTF8, "application/json")
     };
 
+    /// <summary>
+    /// node_endpoints travels only to a peer that advertises peer-endpoints-v1 (docs/design/lan-peer-sync.md 8, 12): a 2.7.5 node never gets it, so a
+    /// locked, encrypted one (whose relay inbox refuses a type it does not know) can never stall on it; the cursor moves over it. And "withheld" is
+    /// counted apart from "dropped" (section 18).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Push_ANodeEndpointsEvent_ReachesOnlyAPeerThatTakesIt_AndTheCursorMovesOverItForTheOthers(bool peerTakesIt)
+    {
+        var identity = (await _node.NodeRepo.GetAsync())!;
+        var announcement = new SyncEvent
+        {
+            EventId = Guid.NewGuid(), NodeId = identity.NodeId, LamportTs = _node.Clock.Tick(), EventType = EventTypes.NodeEndpoints,
+            Payload = JsonSerializer.Serialize(new NodeEndpointsPayload(identity.NodeId.ToString(), 1,
+                [new NodeEndpointEntry("https://192.168.1.42:5311", "lan")], null, null, 5311)),
+            Signature = new byte[64], ProtocolVersion = SyncProtocolVersion.Current, CreatedAt = DateTime.UtcNow, ActorType = "system", ActorName = "LocalNode",
+        };
+        await _node.EventLogRepo.AppendAsync(announcement);
+        var announcementSeq = await _node.EventLogRepo.GetMaxSequenceAsync();
+
+        _mockHandler.MapRoute("/api/sync/identity", _ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                nodeId = _remoteNodeId,
+                displayName = peerTakesIt ? "Updated" : "Version 2.7.5",
+                ed25519PublicKeyB64 = Convert.ToBase64String(new byte[32]),
+                protocolVersion = SyncProtocolVersion.Current,
+                capabilities = peerTakesIt
+                    ? new[] { Metadata.MetadataCapabilities.EnvelopeV1, Metadata.MetadataCapabilities.PeerEndpointsV1 }
+                    : new[] { Metadata.MetadataCapabilities.EnvelopeV1 },
+            }), Encoding.UTF8, "application/json")
+        });
+        var pushedTypes = new List<string>();
+        _mockHandler.MapRoute("/api/sync/events", req =>
+        {
+            if (req.Method == HttpMethod.Get)
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent("[]", Encoding.UTF8, "application/json") };
+            using var doc = JsonDocument.Parse(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            var items = doc.RootElement.EnumerateArray().ToList();
+            // A locked 2.7.5 node refuses a type it does not know: it would skip it, and the push would stall on it every cycle.
+            var refused = !peerTakesIt && items.Any(i => i.GetProperty("eventType").GetString() == EventTypes.NodeEndpoints);
+            lock (pushedTypes) pushedTypes.AddRange(items.Select(i => i.GetProperty("eventType").GetString()!));
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new
+                {
+                    applied = refused ? 0 : items.Count,
+                    skipped = refused ? items.Count : 0,
+                    lastAppliedSequence = refused ? (long?)null : items.Max(i => i.GetProperty("sequenceNum").GetInt64()),
+                    dropped = 0,
+                }), Encoding.UTF8, "application/json")
+            };
+        });
+
+        await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
+
+        var position = await new SyncPushPositionRepository(_node.Factory).GetAsync(_remoteNodeId);
+        position!.LastPushedSeq.Should().BeGreaterThanOrEqualTo(announcementSeq, "the cursor moves over the announcement either way");
+        if (peerTakesIt)
+        {
+            pushedTypes.Should().Contain(EventTypes.NodeEndpoints);
+            _client.LastPush!.Withheld.Should().Be(0);
+        }
+        else
+        {
+            pushedTypes.Should().NotContain(EventTypes.NodeEndpoints, "a peer without peer-endpoints-v1 is never sent one");
+            _client.LastPush!.Withheld.Should().Be(1);
+            _client.LastPush.Dropped.Should().Be(0, "withheld is not dropped: the peer dropped nothing");
+        }
+    }
+
     private class ConcreteFixture : SyncTestFixture { }
 
     private class MockHandler : HttpMessageHandler

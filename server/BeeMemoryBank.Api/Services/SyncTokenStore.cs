@@ -65,6 +65,13 @@ public class SyncTokenStore(BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy? pol
         return nodeId;
     }
 
+    /// <summary>
+    /// What the peer behind a valid token advertised when it authenticated (null for a token this store does not hold). The pull serves a
+    /// <c>node_endpoints</c> event only to a token whose peer advertised <c>peer-endpoints-v1</c> (docs/design/lan-peer-sync.md 8).
+    /// </summary>
+    public IReadOnlyList<string>? CapabilitiesOf(string token) =>
+        _tokens.TryGetValue(token, out var entry) && entry.ExpiresAt > DateTime.UtcNow ? entry.Capabilities ?? [] : null;
+
     public bool TryValidateToken(string token, out Guid nodeId)
     {
         nodeId = default;

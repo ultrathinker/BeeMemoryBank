@@ -6,6 +6,13 @@ public interface IWhitelistRepository
 {
     Task<WhitelistEntry?> GetByNodeIdAsync(Guid nodeId, bool includeDeleted = false);
     Task<List<WhitelistEntry>> GetAllActiveAsync();
+
+    /// <summary>
+    /// The revoked rows, tombstones included (<see cref="CreateTombstoneAsync"/>): what the host of a join hands the joiner so it
+    /// refuses the adds those revokes beat. Never a list of peers: nothing that dials, shows or counts peers reads it.
+    /// </summary>
+    Task<List<WhitelistEntry>> GetAllRevokedAsync();
+
     Task<bool> GetAutoAcceptRestoreAsync(string nodeId);
     Task SetAutoAcceptRestoreAsync(string nodeId, bool autoAccept);
     Task<bool> GetAutoAcceptDekRotationAsync(string nodeId);
@@ -19,11 +26,17 @@ public interface IWhitelistRepository
     /// </summary>
     Task CreateAsync(WhitelistEntry entry);
 
-    /// <inheritdoc cref="CreateAsync"/>
+    /// <summary>
+    /// Writes the row as <paramref name="entry"/> has it, its versions included (see <see cref="CreateAsync"/>; the row's and each concern's,
+    /// <see cref="WhitelistEntry.VersionOf"/>). A row written active loses its <c>deleted_at</c>: a revoked row (a tombstone too) that is added
+    /// again is not "deleted" to the code that reads that column; a row written revoked keeps the one it has, or takes the entity's.
+    /// A writer that set only the row's version writes the row whole at it (<see cref="WhitelistEntry.NormalizeVersionsForWrite"/>).
+    /// </summary>
     Task UpdateAsync(WhitelistEntry entry);
 
     /// <summary>
-    /// Marks the peer revoked and stamps the version of the revoke onto the row.
+    /// Marks the peer revoked and stamps the version of the revoke onto the row: its membership version (migration 045) and the row's own. For a
+    /// revoke made on this node, whose version is newer than every version on the row.
     ///
     /// <para>
     /// The version is required rather than optional because this row is what a later
@@ -35,7 +48,17 @@ public interface IWhitelistRepository
     Task RevokeAsync(Guid nodeId, RowVersion version);
 
     /// <summary>
-    /// Writes only the version columns, leaving every other column — including
+    /// A revoked row for a node this node has no row for (a tombstone): status <c>R</c> at <paramref name="version"/> (its membership; the other
+    /// concerns unversioned, so the first add or update that names them fills them in), no name, no
+    /// address, no authority, and the key when the caller knows it (else an empty one, filled by the first <c>whitelist_add</c>
+    /// that names the node). It exists so a <c>whitelist_add</c> older than the revoke, arriving after it, is judged against the
+    /// revoke and refused, as on a node that saw them in the other order. Like any revoked row it is never a peer: every read of
+    /// peers asks for active rows. False when a row for the id is there already (nothing is written then).
+    /// </summary>
+    Task<bool> CreateTombstoneAsync(Guid nodeId, RowVersion version, byte[]? publicKey = null);
+
+    /// <summary>
+    /// Writes only the version columns (the row's and its membership's: the version of a revoke), leaving every other column — including
     /// <c>updated_at</c> and <c>deleted_at</c> — exactly as they are.
     ///
     /// <para>

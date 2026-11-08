@@ -25,6 +25,7 @@ public partial class App : Application
     private Avalonia.Controls.Window? _manageStoragesWindow;
     private Avalonia.Controls.Window? _settingsWindow;
     private Views.UpdateWindow? _updateWindow;
+    private LanTrayItems? _lanItems;
 
     public override void Initialize()
     {
@@ -176,6 +177,11 @@ public partial class App : Application
             menu.Items.Add(exitItem);
 
             _trayIcon.Menu = menu;
+
+            // LAN sync: "Sync on this network: trusted (Change...)" and, while a network waits for an answer, the question with its two
+            // answers, right after "Settings..." (they come and go with the node's answers).
+            _lanItems = new LanTrayItems(mainWindow, menu, settingsItem);
+            _lanItems.Refresh();
 
             // Initial tooltip reflects the active profile (no-op when only one profile exists).
             UpdateTrayTooltip();
@@ -378,7 +384,8 @@ public partial class App : Application
     /// <summary>
     /// Updates <see cref="TrayIcon.ToolTipText"/> to follow §4.5: bare product name when ≤ 1
     /// profile, "BeeMemoryBank — &lt;active profile name&gt;" when ≥ 2; followed by
-    /// "— N blind nodes need attention" while the blind-node alarm watcher has raised alarms.
+    /// "— N blind nodes need attention" (or "— N devices need attention", when a computer, a server or a phone is among them) while the
+    /// alarm watcher has raised alarms.
     /// </summary>
     private void UpdateTrayTooltip()
     {
@@ -390,7 +397,7 @@ public partial class App : Application
         if (desktop.MainWindow is not MainWindow mw) return;
 
         var title = Services.StorageDisplayLogic.FormatShellTitle(mw.Profiles, mw.ActiveProfileId);
-        _trayIcon.ToolTipText = Services.BlindAlarmWatcher.TooltipSuffix(mw.BlindAlarmCount) is { } attention
+        _trayIcon.ToolTipText = Services.BlindAlarmWatcher.TooltipSuffix(mw.BlindAlarmCount, mw.PeerAlarmCount) is { } attention
             ? $"{title} — {attention}"
             : title;
     }

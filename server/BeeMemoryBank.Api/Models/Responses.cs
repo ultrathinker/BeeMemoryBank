@@ -188,15 +188,27 @@ public record ActivityResponse(
     int Offset,
     int Limit);
 
-public record JoinResponse(JoinRemoteIdentity RemoteNode, JoinKeySlot KeySlot, List<JoinWhitelistEntry> Whitelist);
+/// <param name="Endpoints">Where the host's LAN listener serves its sync routes, its TLS anchors and its LAN port (docs/design/lan-peer-sync.md 8):
+/// optional members a joiner of an older version ignores.</param>
+/// <param name="RevokedPeers">The peers the host has revoked, with the version of each revoke (2.8.0): the joiner keeps them as revoked rows, so
+/// an add older than the revoke that reaches it later is refused. Optional, and apart from <paramref name="Whitelist"/> on purpose: a joiner of
+/// 2.7.5 or older makes an active row of every entry there, and ignores this member.</param>
+public record JoinResponse(JoinRemoteIdentity RemoteNode, JoinKeySlot KeySlot, List<JoinWhitelistEntry> Whitelist,
+    List<BeeMemoryBank.Sync.NodeEndpointEntry>? Endpoints = null, string? TlsLeafSpki = null, string? TlsCaKey = null, int? LanPort = null,
+    List<BeeMemoryBank.Sync.JoinRevokedPeer>? RevokedPeers = null);
 
 public record JoinRemoteIdentity(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion);
 
 // TlsTrust / TlsSpki: how this node reaches that peer (<c>pin</c> with the key's pin, or <c>public-ca</c>); absent = nothing recorded.
 // Optional on the wire: a node of an older version neither sends nor reads them, and the joiner then checks that peer the ordinary way.
+// LamportTs / SourceNodeId: the version of the host's row, the newest of Versions (informational: a joiner of this version takes Versions).
+// Versions: the host's version of each concern of the row (migration 045), which the joiner's row takes, so an event the host had already
+// superseded for a field loses there as it does on the host, and one the host never saw is judged field by field there as well; absent (a host of
+// 2.7.5) = every concern at version 0, as before, the fields undated (WhitelistEntry.UndatedFields); each JoinVersion says whether the host holds that field undated.
 public record JoinWhitelistEntry(
     Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false,
-    string? TlsTrust = null, string? TlsSpki = null);
+    string? TlsTrust = null, string? TlsSpki = null, long? LamportTs = null, Guid? SourceNodeId = null,
+    BeeMemoryBank.Sync.JoinPeerVersions? Versions = null);
 
 public record JoinKeySlot(
     string EncryptedMasterDekB64,

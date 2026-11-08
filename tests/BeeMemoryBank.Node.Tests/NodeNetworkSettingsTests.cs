@@ -93,6 +93,8 @@ public class NodeNetworkSettingsTests : IDisposable
             "a vault moved to another computer must start closed there, whatever the old computer chose");
 
         LanListenerState.FileName.Should().Be(VaultFiles.NetworkListenerStateFileName);
+        TrustedNetworkStore.FileName.Should().Be(VaultFiles.TrustedNetworksFileName);
+        VaultFiles.IsTransient(TrustedNetworkStore.FileName).Should().BeTrue("a network trusted on one computer is that computer's business");
         VaultFiles.IsTransient(LanListenerState.FileName).Should().BeTrue("a copied vault must not arrive claiming its listener is up");
     }
 

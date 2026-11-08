@@ -65,7 +65,13 @@ alone. On the next `GET /api/sync/events?afterSequence=X` (with X below CP), the
 That peer must wipe its data and rejoin via the snapshot flow (Setup → Join Network, or
 `bmb join`, which takes the snapshot too since 2.4.0). The peer shows this state on every page of
 its Web UI and in `bmb status` ("This node cannot catch up ... Wipe this node and join again").
-A node that joins after a compaction is not affected: it starts from the snapshot's checkpoint.
+A node that joins after a compaction is not affected: it starts from the snapshot's checkpoint for the node it
+joined, and a full peer it has never pulled from (one it learned of from the host's whitelist) is pulled from that
+peer's own `last_compaction_cp`, once (since 2.8.0): what the peer compacted, the peers it had then had received,
+and the joined node pulls the whole tail of its host. This needs the 410 body: a reverse proxy in front of the
+node must pass it through (see the Apache note in [deployment.md](deployment.md#maintenance-page-apache)). A
+position that exists is never moved by a 410, and a node that holds no position for any other full peer (a
+recovery restore) still gets the refusal.
 
 ## Audit trail
 

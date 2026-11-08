@@ -74,10 +74,11 @@
         };
     }
 
-    // How the ring and the dot of a node look: self, ok (online), bad (this node calls it and gets no answer), warn (was heard, not lately), idle (never heard).
+    // How the ring and the dot of a node look: self, ok (online), bad (this node calls it and gets no answer, or nobody has heard from it for days), warn (was
+    // heard, not lately), idle (never heard). A node that is away, or reached through another device, is never bad.
     function nodeTone(node) {
         if (node.isSelf) return 'self';
-        if (node.state === 'not_answering') return 'bad';
+        if (node.reachability === 'silent' || node.state === 'not_answering') return 'bad';
         if (node.online) return 'ok';
         return node.lastContactAt ? 'warn' : 'idle';
     }
@@ -140,14 +141,21 @@
         var dir = DIRECTION[node.lastContactDirection] || '';
         var when = node.lastContactAt ? relativeTime(node.lastContactAt, nowMs) : null;
         // A blind copy whose owner removed it from the device, or whose owner's limits told it to wait: said by this node in words of its own (a closed set).
-        if (node.leftAt) return 'Removed from the device by its owner — revoke it under Blind nodes';
+        if (node.leftAt) return 'Removed from the device by its owner — revoke it on its page in Devices';
         if (node.pausedText) return node.pausedText + (when ? ' · last call ' + when : '');
+        // Nobody has heard from it for days (an alarm): the node's sentence says for how long.
+        if (node.reachability === 'silent') return (node.reachabilityText || 'Not heard from for days') + (when ? ' \u00b7 last contact ' + when : '');
         if (node.state === 'not_answering') {
             return 'Not answering since ' + relativeTime(node.notAnsweringSince, nowMs) + (node.notAnsweringReason ? ' \u2014 ' + node.notAnsweringReason : '');
         }
+        // Not on this network, reachable through another device, or a version without LAN sync: the node's own sentence, no alarm colour.
+        if (node.state === 'away') return (node.reachabilityText || 'Not on this network') + (when ? ' \u00b7 last contact ' + when : '');
         if (node.state === 'calls_us') {
+            if (node.reachabilityText) return node.reachabilityText + (when ? ' \u00b7 last call ' + when : ' \u00b7 has not called since this node started');
             return when ? 'Calls this node \u00b7 last call ' + when : 'Has not called since this node started';
         }
+        // Direct on this network or over the internet: the node's own sentence is the status line.
+        if (node.reachabilityText) return node.reachabilityText + (when ? ' \u00b7 last contact ' + when + (dir ? ' (' + dir + ')' : '') : '');
         if (when) return (node.online ? 'Online' : 'Quiet') + ' \u00b7 last contact ' + when + (dir ? ' (' + dir + ')' : '');
         return 'Not heard from since this node started';
     }

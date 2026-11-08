@@ -50,6 +50,12 @@ public sealed class BlindAccountHostOptions
     /// <summary>Tests only: the handler at the bottom of an account's HTTP pipeline (see <see cref="BlindAppOptions.PrimaryHandlerFactory"/>).</summary>
     public Func<BlindAccountEntry, Func<HttpMessageHandler>?>? PrimaryHandlerFactory { get; init; }
 
+    /// <summary>
+    /// The head's mDNS browse (<c>_beememorybank._tcp</c>), used by every account whose hub is at a private LAN address to find the hub again after its address changed
+    /// (<see cref="BlindLanDirectory"/>). Null: the head cannot browse, and a copy reaches its hub by the pairing address and the endpoints the hub announced.
+    /// </summary>
+    public IBlindLanBrowser? LanBrowser { get; init; }
+
     /// <summary>Tests only: where a crash is simulated between two writes.</summary>
     public IBlindCrashPoints? CrashPoints { get; init; }
 

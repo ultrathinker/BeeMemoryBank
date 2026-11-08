@@ -2,6 +2,7 @@ using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Sync;
+using BeeMemoryBank.Sync.Channels;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile.Pages;
@@ -46,12 +47,11 @@ public partial class InitialSyncPage : ContentPage
             var sp = scope.ServiceProvider;
 
             var whitelist = sp.GetRequiredService<IWhitelistRepository>();
-            var syncClient = sp.GetRequiredService<SyncClient>();
             var nodeRepo = sp.GetRequiredService<INodeIdentityRepository>();
 
-            var peers = (await whitelist.GetAllActiveAsync())
-                .Where(n => !string.IsNullOrEmpty(n.ApiAddress))
-                .ToList();
+            // Every peer that has a way to be reached now (its address, what it announced at the join, an address typed here), not only those whose row
+            // has an address.
+            var peers = (await PhonePeers.CallableAsync(sp, await whitelist.GetAllActiveAsync())).ToList();
 
             if (peers.Count == 0)
             {
@@ -75,7 +75,7 @@ public partial class InitialSyncPage : ContentPage
                 {
                     if (token.IsCancellationRequested) break;
                     CounterLabel.Text = $"Downloading from {peer.DisplayName}… ({_eventsApplied} events)";
-                    var applied = await syncClient.SyncWithAsync(http, peer.ApiAddress!, peer.NodeId, token);
+                    var applied = await PeerSessions.SyncWithPeerAsync(sp, http, peer, token);
                     _eventsApplied += applied;
                     roundTotal += applied;
                     CounterLabel.Text = $"Downloaded {_eventsApplied} events";

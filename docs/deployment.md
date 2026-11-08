@@ -482,7 +482,7 @@ Alias /maintenance.html /opt/beememorybank/publish/web/wwwroot/maintenance.html
 </Directory>
 ProxyPass /maintenance.html !
 
-ProxyErrorOverride On
+ProxyErrorOverride On 502 503
 ErrorDocument 502 /maintenance.html
 ErrorDocument 503 /maintenance.html
 ```
@@ -490,6 +490,11 @@ ErrorDocument 503 /maintenance.html
 The page polls `GET /` every 3 seconds and automatically redirects to `/` once the service is back up.
 
 **Important:** The `Alias` block must appear **before** `ProxyPass /` and **before** `ProxyErrorOverride On`.
+
+Name the codes (`ProxyErrorOverride On 502 503`, Apache 2.4.47 or newer). A bare `ProxyErrorOverride On` replaces
+the body of EVERY error the node sends with an Apache page, the sync API's included: a node that is told "410
+SEQUENCE_TOO_OLD" then cannot read the checkpoint in it, reports `cp=0, head=0`, and a node that joined through
+another one stays "out of sync" with this one instead of starting from its checkpoint.
 
 ---
 

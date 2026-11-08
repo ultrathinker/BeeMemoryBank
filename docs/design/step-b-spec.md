@@ -119,7 +119,9 @@ for as long as the owner keeps it (10.7).
 - Schema: Appendix B (`BootMigrations/B001_boot_store.sql`, an embedded resource of `BeeMemoryBank.Storage` under
   `BeeMemoryBank.Storage.BootMigrations.`). Its own ledger `tbl_boot_migration (version, filename, applied_at)` and its own
   runner (`BootMigrationRunner`); the ghost rule of `MigrationRunner` (`libs/BeeMemoryBank.Storage/Sqlite/MigrationRunner.cs:37-65`)
-  never sees this ledger, and the vault's runner never sees this file. Golden `docs/boot-migrations.golden.txt`.
+  never sees this ledger, and the vault's runner never sees this file. Golden `docs/boot-migrations.golden.txt`. Later files follow it
+  (`B002_whitelist_concern_versions.sql`: the version columns vault migration 045 added to `tbl_whitelist`); an `ADD COLUMN` of a column
+  that is there already is skipped as applied, as in the vault's runner.
 - Its own connection factory (`BootStoreConnectionFactory`): plain, WAL, `foreign_keys=ON`, `busy_timeout=5000`,
   `temp_store=FILE`; never registered as `IDbConnectionFactory` (a repository of the vault must never land on it by mistake).
 - Allow-list golden `docs/design/boot-store.golden.txt`: every table and column (name and declared type), sorted. A test

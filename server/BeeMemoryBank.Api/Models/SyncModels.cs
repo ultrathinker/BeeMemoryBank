@@ -85,6 +85,10 @@ public record SyncBlobStoreResult(int Stored, int Rejected);
 /// <param name="PausedUntil">When the pause ends, as the copy said (UTC).</param>
 /// <param name="PausedText">The sentence to show: "Paused by the device's owner: daily traffic limit (until 00:00 device time)". Made by the hub from the closed token, never from the peer's words.</param>
 /// <param name="LeftAt">When the device's own owner removed the copy from the device (<c>POST /api/sync/leave</c>). The hub cannot revoke by itself: the owner of the network does.</param>
+/// <param name="Reachability">How the peer is reached (docs/design/lan-peer-sync.md 10, <see cref="BeeMemoryBank.Sync.Channels.ReachabilityStates"/>): <c>direct_lan</c>,
+/// <c>direct_internet</c>, <c>calls_us</c>, <c>via_relay</c>, <c>away</c>, <c>old_version</c>, <c>not_answering</c>, <c>silent</c> or <c>unknown</c>; null where it is not computed.</param>
+/// <param name="ReachabilityText">The sentence for it ("Direct, on this network", "Not on this network; reachable through Home-Server (2 min ago)").</param>
+/// <param name="ReachableVia">The peer that last saw it, for <c>via_relay</c>.</param>
 public record DeliveryNodeStatus(
     Guid NodeId,
     string DisplayName,
@@ -106,10 +110,14 @@ public record DeliveryNodeStatus(
     string? PausedReason = null,
     DateTime? PausedUntil = null,
     string? PausedText = null,
-    DateTime? LeftAt = null);
+    DateTime? LeftAt = null,
+    string? Reachability = null,
+    string? ReachabilityText = null,
+    string? ReachableVia = null);
 
 /// <summary>The answer of <c>POST /api/sync/nodes/{id}/check</c>: what happened when this node asked the peer now.</summary>
-/// <param name="Outcome"><c>answered</c>, <c>not_answering</c>, <c>calls_us</c> (no address: it calls this node, nothing was asked), <c>busy</c> (a cycle is running), <c>invisible</c>, <c>unknown_node</c>.</param>
+/// <param name="Outcome"><c>answered</c>, <c>not_answering</c>, <c>calls_us</c> (no address: it calls this node, nothing was asked), <c>away</c> (its addresses are all
+/// on a network this computer is not on now: nothing was asked), <c>busy</c> (a cycle is running), <c>invisible</c>, <c>unknown_node</c>.</param>
 public record NodeCheckResponse(string Outcome, string? Reason, int Applied, DeliveryNodeStatus? Node);
 
 /// <summary>Turns what this node knows about a peer into the fields of <see cref="DeliveryNodeStatus"/>; one place, so the header, the Admin page and the check agree.</summary>
@@ -119,6 +127,35 @@ public static class PeerContactView
     public const string NotAnswering = "not_answering";
     public const string CallsUs = "calls_us";
     public const string Unknown = "unknown";
+    /// <summary>
+    /// Its calls fail, but that is not a problem of this node or of the peer: it is not on this network (and maybe reachable through another peer), or
+    /// it runs a version without LAN sync on this network. Shown in words (<see cref="DeliveryNodeStatus.ReachabilityText"/>), never "not answering" (G5).
+    /// </summary>
+    public const string Away = "away";
+
+    /// <summary>What the LAN channels of a peer add to its status (docs/design/lan-peer-sync.md 10).</summary>
+    /// <param name="HasChannels">It has a way to be called: its primary address, or one it announced, mDNS showed or a person typed here.</param>
+    /// <param name="State">The reachability state (<see cref="BeeMemoryBank.Sync.Channels.ReachabilityStates"/>).</param>
+    /// <param name="Text">The sentence for it.</param>
+    /// <param name="Via">The name of the peer it is reachable through.</param>
+    public sealed record LanFacts(bool HasChannels, string State, string? Text, string? Via);
+
+    /// <summary>
+    /// Where the status endpoints get <see cref="LanFacts"/> from: registered by a full node (it has LAN channels), absent on a blind host, whose
+    /// statuses stay as they were.
+    /// </summary>
+    public interface ILanFactsSource
+    {
+        Task<LanFacts?> ForAsync(BeeMemoryBank.Core.Models.WhitelistEntry node, BeeMemoryBank.Sync.PeerContactLog.Contact contact, DateTime? pulledAt,
+            TimeSpan? syncInterval, DateTime nowUtc);
+    }
+
+    /// <summary>The facts of <paramref name="node"/> from the host's source, or null where there is none (a blind host).</summary>
+    public static Task<LanFacts?> LanFactsAsync(IServiceProvider services, BeeMemoryBank.Core.Models.WhitelistEntry node,
+        BeeMemoryBank.Sync.PeerContactLog.Contact contact, DateTime? pulledAt, TimeSpan? syncInterval, DateTime nowUtc) =>
+        services.GetService(typeof(ILanFactsSource)) is ILanFactsSource source
+            ? source.ForAsync(node, contact, pulledAt, syncInterval, nowUtc)
+            : Task.FromResult<LanFacts?>(null);
 
     /// <summary>The interval of a sync loop that was not told another (<c>BMB_SYNC_INTERVAL_SECONDS</c> sets it).</summary>
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromSeconds(60);
@@ -152,11 +189,13 @@ public static class PeerContactView
     /// <param name="pulledAt">When this node last finished a pull from it (a persisted trace of an outbound session).</param>
     /// <param name="push">The row of events delivered to it, if any.</param>
     /// <param name="syncInterval">The effective interval of this node's sync loop (<c>SyncScheduler.Interval</c>); null means <see cref="DefaultInterval"/>.</param>
+    /// <param name="lan">What the peer's LAN channels say (null: as before, the address on record alone decides whether it can be called).</param>
     public static DeliveryNodeStatus Build(
         BeeMemoryBank.Core.Models.WhitelistEntry node, BeeMemoryBank.Sync.PeerContactLog.Contact memory, DateTime? pulledAt,
-        BeeMemoryBank.Core.Models.SyncPushPosition? push, long headSeq, int unsyncedCount, DateTime nowUtc, TimeSpan? syncInterval = null)
+        BeeMemoryBank.Core.Models.SyncPushPosition? push, long headSeq, int unsyncedCount, DateTime nowUtc, TimeSpan? syncInterval = null,
+        LanFacts? lan = null)
     {
-        var canBeCalled = !string.IsNullOrEmpty(node.ApiAddress);
+        var canBeCalled = !string.IsNullOrEmpty(node.ApiAddress) || lan?.HasChannels == true;
         var blind = BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(node.NodeId);
 
         // Outbound: this process's own record, else the position the last finished pull left on disk.
@@ -181,6 +220,14 @@ public static class PeerContactView
         // the next cycle or the next check says (never an invented "answering").
         var checkedHere = memory.OutboundOkAt is not null || memory.OutboundFailingSince is not null;
         var state = notSince is not null ? NotAnswering : !canBeCalled ? CallsUs : last is null || !checkedHere ? Unknown : Answering;
+        // A peer that is elsewhere, reachable through another peer, or on this network with a version without LAN sync, is not "not answering" (G5).
+        if (state == NotAnswering && lan?.State is BeeMemoryBank.Sync.Channels.ReachabilityStates.Away
+                or BeeMemoryBank.Sync.Channels.ReachabilityStates.ViaRelay or BeeMemoryBank.Sync.Channels.ReachabilityStates.OldVersion)
+        {
+            state = Away;
+            notSince = null;
+            reason = null;
+        }
         var online = state != NotAnswering && last is { } at && nowUtc - at < OnlineWindowFor(syncInterval, !canBeCalled);
 
         // A blind copy that said, in its last report, that its owner's limits stop it: shown while that report is fresh, in the hub's own words.
@@ -197,7 +244,7 @@ public static class PeerContactView
         return new DeliveryNodeStatus(
             node.NodeId, node.DisplayName, canBeCalled ? "public" : "private", push?.LastPushedSeq ?? 0, headSeq, unsyncedCount, unsyncedCount == 0,
             last, direction, Utc(push?.PushedAt), outbound, inbound, canBeCalled, state, online, notSince, reason,
-            pausedReason, pausedUntil, pausedText, Utc(memory.LeftAt));
+            pausedReason, pausedUntil, pausedText, Utc(memory.LeftAt), lan?.State, lan?.Text, lan?.Via);
     }
 
     private static DateTime? Utc(DateTime? time) =>

@@ -232,11 +232,11 @@ public sealed class RestoreWizardPageTests(RestoreSourceFixture source) : IAsync
         var session = admin.DefaultRequestHeaders.GetValues("Cookie").Single();
 
         var index = await (await admin.GetAsync("/Admin")).Content.ReadAsStringAsync();
-        index.Should().Contain("id=\"restored-devices-notice\"", "the index says that a restore left a device waiting").And.Contain("href=\"/Admin/RestoredDevices\"");
-        var adminPage = await (await admin.GetAsync("/Admin/RestoredDevices")).Content.ReadAsStringAsync();
-        adminPage.Should().Contain("Restored devices awaiting confirmation").And.Contain("Kitchen tablet");
+        index.Should().Contain("id=\"restored-devices-notice\"", "the index says that a restore left a device waiting").And.Contain("href=\"/Admin/Devices#restored-peers\"");
+        var adminPage = await (await admin.GetAsync("/Admin/Devices")).Content.ReadAsStringAsync();
+        adminPage.Should().Contain("Restored devices waiting for your confirmation").And.Contain("Kitchen tablet");
 
-        var confirm = await PostPairsAsync(admin, "/Admin/RestoredDevices", "ConfirmRestoredPeer", [new("nodeId", phone.ToString())], session);
+        var confirm = await PostPairsAsync(admin, "/Admin/Devices", "ConfirmRestoredPeer", [new("nodeId", phone.ToString())], session);
 
         confirm.StatusCode.Should().Be(HttpStatusCode.Redirect);
         (await ActivePeersAsync()).Should().Contain(phone);

@@ -76,12 +76,12 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     // ── how the operator gets there ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task TheAdminIndex_ListsBlindNodes_AndThePageHoldsTheFunction_NotALinkToAnotherPage()
+    public async Task TheDevicesPage_LinksToAddABlindNode_AndThePageHoldsTheFunction_NotALinkToAnotherPage()
     {
-        var index = await (await _admin.GetAsync("/Admin")).Content.ReadAsStringAsync();
+        var devices = await (await _admin.GetAsync("/Admin/Devices")).Content.ReadAsStringAsync();
         var page = await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync();
 
-        index.Should().Contain("href=\"/Admin/BlindNodes\"", "the Admin index lists the page of the blind nodes");
+        devices.Should().Contain("href=\"/Admin/BlindNodes\"", "the Devices page has the button \"Add a blind node\"");
         page.Should().Contain("id=\"invite\"").And.Contain("handler=Add").And.Contain("handler=Invite").And.Contain("id=\"android-blind-copy\"",
             "the invitation, the pair code and the phone are on this page: it was a stub with a button to a second page");
         page.Should().NotContain("href=\"/BlindNodes\"").And.NotContain("href=\"/AndroidBlindCopy\"");
@@ -203,7 +203,8 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         using (var api = _api.CreateClient())
             await BlindNodeAlarmsTests.JudgedAlarmsAsync(api);
 
-        var page = WebUtility.HtmlDecode(await (await _admin.GetAsync("/Admin/BlindNodes")).Content.ReadAsStringAsync());
+        // the alarms of a blind node are on its page in Devices
+        var page = WebUtility.HtmlDecode(await (await _admin.GetAsync($"/Admin/Device/{id}")).Content.ReadAsStringAsync());
 
         page.Should().Contain("This blind node runs a newer sync protocol than this PC. Update this PC");
         page.Should().NotContain("runs an older sync protocol");
@@ -238,8 +239,24 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     private Task<(HttpStatusCode Status, string Html)> AddAsync(string code = PairCode) =>
         SubmitAsync("Add", new Dictionary<string, string> { ["code"] = code });
 
-    private Task<(HttpStatusCode Status, string Html)> ReseedAsync() =>
-        SubmitAsync("Reseed", new Dictionary<string, string> { ["nodeId"] = Guid.NewGuid().ToString() });
+    /// <summary>Posts a form of the page of one device (reseed and revoke are there since the Devices section), follows one redirect, returns the page shown.</summary>
+    private async Task<(HttpStatusCode Status, string Html)> SubmitDeviceAsync(Guid node, string handler)
+    {
+        var form = await _admin.GetAsync($"/Admin/Device/{node}");
+        var html = await form.Content.ReadAsStringAsync();
+        var session = string.Join("; ", _admin.DefaultRequestHeaders.GetValues("Cookie"));
+        var antiforgery = form.Headers.TryGetValues("Set-Cookie", out var set)
+            ? string.Join("; ", set.Select(c => c.Split(';')[0])) : "";
+        var body = new Dictionary<string, string> { ["__RequestVerificationToken"] = Token.Match(html).Groups[1].Value };
+        using var post = new HttpRequestMessage(HttpMethod.Post, $"/Admin/Device/{node}?handler={handler}") { Content = new FormUrlEncodedContent(body) };
+        post.Headers.TryAddWithoutValidation("Cookie", session + "; " + antiforgery);
+        var resp = await _admin.SendAsync(post);
+        if (resp.StatusCode is HttpStatusCode.Redirect or HttpStatusCode.Found)
+            resp = await _admin.GetAsync(resp.Headers.Location!.OriginalString);
+        return (resp.StatusCode, WebUtility.HtmlDecode(await resp.Content.ReadAsStringAsync()));
+    }
+
+    private Task<(HttpStatusCode Status, string Html)> ReseedAsync() => SubmitDeviceAsync(BlindNodeId.NewId(), "Reseed");
 
     private static string Error(string message, string? code = null) =>
         code is null ? $$"""{"error":"{{message}}"}""" : $$"""{"error":"{{message}}","code":"{{code}}"}""";
@@ -266,7 +283,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         ShowsInOrder(html,
             "Cannot add the blind node yet",
             "The device 'Galaxy Tab A7 Lite' has not been seen on the current version (sync protocol 3) for over 7 days",
-            "Update it to the latest version and open it once so it syncs, or remove it under Admin → Trusted Nodes",
+            "Update it to the latest version and open it once so it syncs, or remove it under Admin → Devices",
             "press Add again");
         html.Should().Contain($">{PairCode}</textarea>", "a failed add must not throw the pasted code away");
     }
@@ -287,16 +304,16 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         ShowsInOrder(html,
             "The device 'Old phone' runs an older version (sync protocol 2; the blind node needs 3)",
             "The device 'Hub' does not yet accept this computer as a superadmin",
-            "On 'Hub' open Admin → Trusted Nodes and make this computer a superadmin",
+            "On 'Hub' open Admin → Devices, open this computer and make it a superadmin",
             "The device 'Kitchen tablet' did not accept this computer's check",
-            "remove it under Admin → Trusted Nodes");
+            "remove it under Admin → Devices");
     }
 
     [Fact]
     public async Task APreflightRefusal_FromAnApiWithoutDetails_StillShowsItsOwnSentences()
     {
         _scripted.Add = (HttpStatusCode.Conflict,
-            """{"error":"This PC cannot add a blind node yet: x","problems":["\"Hub\" does not see this PC as superadmin: promote this PC on \"Hub\" (Admin → Trusted Nodes → superadmin) and try again."]}""");
+            """{"error":"This PC cannot add a blind node yet: x","problems":["\"Hub\" does not see this PC as superadmin: promote this PC on \"Hub\" (Admin > Devices, this PC's page, Promote to superadmin) and try again."]}""");
 
         var (_, html) = await AddAsync();
 
@@ -388,7 +405,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     public async Task ADisconnectThatFails_SaysWhatToTry()
     {
         // A node id the Api does not know: it refuses, and the page must not just say "failed".
-        var (_, html) = await SubmitAsync("Disconnect", new Dictionary<string, string> { ["nodeId"] = Guid.NewGuid().ToString() });
+        var (_, html) = await SubmitDeviceAsync(BlindNodeId.NewId(), "RevokeNode");
 
         ShowsInOrder(html, "could not be disconnected", "Try again", "superadmin");
     }

@@ -17,6 +17,7 @@
     <Project Path="libs/BeeMemoryBank.Hosting.AspNetCore/BeeMemoryBank.Hosting.AspNetCore.csproj" />
     <Project Path="libs/BeeMemoryBank.Infrastructure/BeeMemoryBank.Infrastructure.csproj" />
     <Project Path="libs/BeeMemoryBank.Media/BeeMemoryBank.Media.csproj" />
+    <Project Path="libs/BeeMemoryBank.Mdns/BeeMemoryBank.Mdns.csproj" />
     <Project Path="libs/BeeMemoryBank.Platforms.Apple/BeeMemoryBank.Platforms.Apple.csproj" />
     <Project Path="libs/BeeMemoryBank.Profiles/BeeMemoryBank.Profiles.csproj" />
     <Project Path="libs/BeeMemoryBank.Search/BeeMemoryBank.Search.csproj" />

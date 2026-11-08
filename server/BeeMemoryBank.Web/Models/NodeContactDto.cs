@@ -9,6 +9,8 @@ namespace BeeMemoryBank.Web.Models;
 /// <param name="Direction"><c>outbound</c> (we -&gt; it) or <c>inbound</c> (it -&gt; us), or null.</param>
 /// <param name="PushedAt">When events last went out to it.</param>
 /// <param name="State"><c>answering</c>, <c>not_answering</c>, <c>calls_us</c> or <c>unknown</c>.</param>
+/// <param name="Reachability">How the peer is reached (docs/design/lan-peer-sync.md 10): direct_lan, direct_internet, calls_us, via_relay, away, old_version, not_answering, silent, unknown.</param>
+/// <param name="ReachabilityText">The sentence for it, in the node's own words.</param>
 public record NodeContactDto(
     Guid NodeId, DateTime UpdatedAt, DateTime? LastContactAt = null, string? Direction = null, DateTime? PushedAt = null, string State = "unknown",
-    DateTime? NotAnsweringSince = null, string? NotAnsweringReason = null);
+    DateTime? NotAnsweringSince = null, string? NotAnsweringReason = null, string? Reachability = null, string? ReachabilityText = null);

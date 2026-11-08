@@ -12,6 +12,8 @@ public class PostBaselineTests : SquashTestBase
     private const string FortyOne = "BeeMemoryBank.Storage.Migrations.041_blind_invite.sql";
     private const string FortyTwo = "BeeMemoryBank.Storage.Migrations.042_blind_invite_server.sql";
     private const string FortyThree = "BeeMemoryBank.Storage.Migrations.043_password_hint.sql";
+    private const string FortyFour = "BeeMemoryBank.Storage.Migrations.044_peer_channels.sql";
+    private const string FortyFive = "BeeMemoryBank.Storage.Migrations.045_whitelist_concern_versions.sql";
 
     /// <summary>The trigger as 041 made it: what a database has between 041 and 042.</summary>
     private const string Trigger041 =
@@ -45,7 +47,7 @@ public class PostBaselineTests : SquashTestBase
     {
         var path = await CurrentSchemaDbAsync(NewDbPath());
 
-        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree)]);
+        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree), (44, FortyFour), (45, FortyFive)]);
     }
 
     [Fact]
@@ -122,13 +124,13 @@ public class PostBaselineTests : SquashTestBase
 
         await RunNewRunnerAsync(path);
 
-        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43);
+        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43, 44, 45);
         Query<long>(path, "SELECT COUNT(*) FROM tbl_blind_invite").Should().Be(0);
         var appliedAt = Query<string>(path, "SELECT applied_at FROM tbl_migration WHERE version = 42");
 
         await RunNewRunnerAsync(path);
 
-        LedgerRows(path).Should().Be(4);
+        LedgerRows(path).Should().Be(6);
         Query<string>(path, "SELECT applied_at FROM tbl_migration WHERE version = 42").Should().Be(appliedAt, "042 is not applied again");
     }
 
@@ -144,7 +146,7 @@ public class PostBaselineTests : SquashTestBase
 
         await RunNewRunnerAsync(path);
 
-        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree)]);
+        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree), (44, FortyFour), (45, FortyFive)]);
         Query<string>(path, "SELECT kind FROM tbl_blind_invite").Should().Be("device", "an invitation of 041 was an app copy's");
         Query<long>(path, "SELECT length(backup_key_enc) FROM tbl_blind_invite").Should().Be(5, "the key the owner has not decided on yet is still there");
         Query<long>(path, "SELECT pair_code_enc IS NULL FROM tbl_blind_invite").Should().Be(1);
@@ -161,7 +163,7 @@ public class PostBaselineTests : SquashTestBase
 
         await RunNewRunnerAsync(path);
 
-        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree)], "the 39 old rows became the baseline's, and 041, 042 and 043 followed");
+        FullLedger(path).Should().Equal([(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree), (44, FortyFour), (45, FortyFive)], "the 39 old rows became the baseline's, and 041, 042 and 043 followed");
         Query<long>(path, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'tbl_blind_invite'").Should().Be(1);
     }
 
@@ -241,8 +243,26 @@ public class PostBaselineTests : SquashTestBase
 
         await RunNewRunnerAsync(path);
 
-        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43);
+        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43, 44, 45);
         Query<long>(path, "SELECT COUNT(*) FROM pragma_table_info('tbl_user') WHERE name = 'password_hint'").Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_new_database_has_the_two_tables_of_the_LAN_sync_and_044_runs_again_harmlessly()
+    {
+        var path = await CurrentSchemaDbAsync(NewDbPath());
+        Query<string>(path, "SELECT group_concat(name) FROM pragma_table_info('tbl_peer_endpoint') ORDER BY cid")
+            .Should().Be("node_id,endpoints_json,tls_leaf_spki,tls_ca_key,port,announce_seq,lamport_ts,event_id,updated_at");
+        Query<string>(path, "SELECT group_concat(name) FROM pragma_table_info('tbl_peer_channel') ORDER BY cid")
+            .Should().Be("peer_node_id,address,source,scope,added_at,last_seen_at,last_ok_at,last_fail_at,last_fail_kind,fail_streak");
+
+        SetLedger(path, [(40, BaselineName), (41, FortyOne), (42, FortyTwo), (43, FortyThree)]);
+        await RunNewRunnerAsync(path);
+
+        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43, 44, 45);
+        SnapshotTables.Replicated.Should().Contain("tbl_peer_endpoint", "what a node announced about itself travels to a joiner");
+        SnapshotTables.Replicated.Should().NotContain("tbl_peer_channel", "this node's view of the channels is its own");
+        SnapshotTables.StrippedByDropping.Should().NotContain("tbl_peer_channel", "it is emptied, not dropped");
     }
 
     [Fact]

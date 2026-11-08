@@ -31,6 +31,17 @@ public static class StoredEventRepair
     /// <returns>The number of events removed.</returns>
     public static async Task<int> RunAsync(IServiceScopeFactory scopes, ILogger logger)
     {
+        var removed = await RemoveForbiddenEventsAsync(scopes, logger);
+
+        // Then, once, the whitelist rows an older build left wrong when their events arrived out of order (a revoke before its add): over the
+        // log as it stands after the removal above. Its failure stops nothing else; it is tried again at the next start.
+        try { await WhitelistOrderRepair.RunAsync(scopes, logger); }
+        catch (Exception ex) { logger.LogError(ex, "The whitelist repair failed; it runs again at the next start"); }
+        return removed;
+    }
+
+    private static async Task<int> RemoveForbiddenEventsAsync(IServiceScopeFactory scopes, ILogger logger)
+    {
         using var scope = scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<IDbConnectionFactory>();
 

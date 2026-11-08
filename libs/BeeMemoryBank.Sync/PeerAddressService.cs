@@ -134,9 +134,13 @@ public sealed class PeerAddressService(
             return new(PeerAddressOutcome.InUse, $"This address is already used by node {conflict.DisplayName}");
 
         var unverified = false;
-        using (var http = httpFactory.CreateClient(HttpClientName))
+        using (var baseHttp = httpFactory.CreateClient(HttpClientName))
         {
-            http.Timeout = ProbeTimeout;
+            baseHttp.Timeout = ProbeTimeout;
+            // The new address is held to the key the peer is pinned by (its leaf key is stable since LAN sync), not to whatever row has that host:port:
+            // a pinned desktop at a new LAN address answers with its own certificate, which no public CA vouches for.
+            using var session = Channels.PeerSessions.ClientFor(httpFactory, baseHttp, Blind.PeerTlsAnchor.For(entry, null), HttpClientName);
+            var http = session.Client;
             var check = await SyncAddress.CheckAsync(http, address, ct);
             switch (check.Verdict)
             {
@@ -164,8 +168,8 @@ public sealed class PeerAddressService(
         var version = await events.LogWhitelistUpdateAsync(nodeId, address, null);
         entry.ApiAddress = address;
         entry.UpdatedAt = DateTime.UtcNow;
-        entry.LamportTs = version.LamportTs;
-        entry.SourceNodeId = version.SourceNodeId;
+        // The address takes the event's version, nothing else (each field of the row has its own: WhitelistConcerns).
+        entry.StampLocal(version, WhitelistEventConcerns.ForLocalUpdate(nodeId, version.SourceNodeId, address, null));
         await whitelist.UpdateAsync(entry);
 
         // What the loop learned about the old address does not count for the new one, and the new one is tried at once (this signals a sync too).
@@ -235,8 +239,9 @@ public sealed class PeerAddressService(
         entry.TlsSpki = spki;
         entry.TlsTrust = trust;
         entry.UpdatedAt = DateTime.UtcNow;
-        entry.LamportTs = version.LamportTs;
-        entry.SourceNodeId = version.SourceNodeId;
+        // The fields the event names take its version, as on every node that receives it.
+        entry.StampLocal(version, WhitelistEventConcerns.ForLocalUpdate(entry.NodeId, version.SourceNodeId, address, proof.DisplayName,
+            proof.IsSuperadmin, proof.TlsSpki, proof.TlsTrust));
         await whitelist.UpdateAsync(entry);
 
         // What the loop learned about the old address (or the old pairing) does not count for the new one, and the new one is tried at once.
@@ -269,8 +274,8 @@ public sealed class PeerAddressService(
 
         entry.ApiAddress = address;
         var version = await events.LogWhitelistAddAsync(entry);
-        entry.LamportTs = version.LamportTs;
-        entry.SourceNodeId = version.SourceNodeId;
+        // An add writes every field of the row, and its membership.
+        entry.StampLocal(version, WhitelistEventConcerns.OfAdd);
         await (write is null ? whitelist.CreateAsync(entry) : write(entry));
 
         peerState?.PeerChanged(entry.NodeId);

@@ -6,6 +6,7 @@ using Makaretu.Dns;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using BeeMemoryBank.Mdns;
 
 namespace BeeMemoryBank.Infrastructure.Mdns;
 
@@ -41,6 +42,7 @@ public sealed class MdnsAnnouncer : BackgroundService
     private Guid _currentNodeId;
     private string _currentName = "";
     private string _currentVersion = "";
+    private MdnsAnnouncement? _currentAnnouncement;
 
     public MdnsAnnouncer(
         IServiceScopeFactory scopeFactory,
@@ -108,9 +110,25 @@ public sealed class MdnsAnnouncer : BackgroundService
 
     internal async Task EvaluateAsync(CancellationToken ct)
     {
+        // What the desktop node's listener serves now: nothing (withdraw), or a port and the surfaces. Checked first: it needs no database and no
+        // multicast socket is opened while it says no.
+        MdnsAnnouncement? announcement = null;
+        if (_options.Announcement is { } source)
+        {
+            announcement = source();
+            if (announcement is null)
+            {
+                if (_advertising)
+                {
+                    _logger.LogInformation("The LAN listener serves nothing — withdrawing mDNS announcement");
+                    StopAdvertising(reason: "listener closed");
+                }
+                return;
+            }
+        }
         // Network-setting gate: a node that is not open to the network announces nothing, and withdraws what it announced when
-        // the setting goes off. Checked first: it needs no database and no multicast socket is opened while it says no.
-        if (_options.AnnounceGate is { } gate && !gate())
+        // the setting goes off.
+        else if (_options.AnnounceGate is { } gate && !gate())
         {
             if (_advertising)
             {
@@ -151,23 +169,26 @@ public sealed class MdnsAnnouncer : BackgroundService
 
         if (!_advertising)
         {
-            StartAdvertising(nodeId, name, version);
+            StartAdvertising(nodeId, name, version, announcement);
         }
-        else if (nodeId != _currentNodeId || name != _currentName || version != _currentVersion)
+        else if (nodeId != _currentNodeId || name != _currentName || version != _currentVersion || announcement != _currentAnnouncement)
         {
-            _logger.LogInformation("Node identity/version changed — re-advertising mDNS announcement");
+            _logger.LogInformation("Node identity, version, port or surfaces changed — re-advertising mDNS announcement");
             StopAdvertising(reason: "identity changed");
-            StartAdvertising(nodeId, name, version);
+            StartAdvertising(nodeId, name, version, announcement);
         }
     }
 
-    private void StartAdvertising(Guid nodeId, string name, string version)
+    private void StartAdvertising(Guid nodeId, string name, string version, MdnsAnnouncement? announcement)
     {
         try
         {
             _discovery = new ServiceDiscovery();
-            var profile = BuildProfile(nodeId, name, version, _options.Https, _options.Port);
+            var profile = announcement is null
+                ? BuildProfile(nodeId, name, version, _options.Https, _options.Port)
+                : BuildProfile(nodeId, announcement.Web ? name : null, version, https: true, announcement.Port, surface: announcement.Surface);
             _profile = profile;
+            _currentAnnouncement = announcement;
 
             // Register in the responder catalog — this is what answers live queries from browsers.
             _discovery.Advertise(profile);
@@ -178,8 +199,9 @@ public sealed class MdnsAnnouncer : BackgroundService
             _advertising = true;
 
             _logger.LogInformation(
-                "Advertising {Service} as '{Name}' (node {NodeId}, port {Port}, https={Https}, ver={Version})",
-                MdnsConstants.QualifiedServiceName, name, nodeId, _options.Port, _options.Https, version);
+                "Advertising {Service} (node {NodeId}, port {Port}, https={Https}, surface={Surface}, ver={Version})",
+                MdnsConstants.QualifiedServiceName, nodeId, announcement?.Port ?? _options.Port, announcement is not null || _options.Https,
+                announcement?.Surface ?? "web", version);
 
             // Proactively broadcast once so already-listening browsers see us without querying.
             // Non-fatal: Advertise() already made us query-answerable.
@@ -213,6 +235,7 @@ public sealed class MdnsAnnouncer : BackgroundService
 
         TryDisposeDiscovery();
         _profile = null;
+        _currentAnnouncement = null;
         _advertising = false;
         _logger.LogInformation("Stopped advertising mDNS ({Reason})", reason);
     }
@@ -231,18 +254,21 @@ public sealed class MdnsAnnouncer : BackgroundService
     /// profile shape the announcer produces). TXT keys: <c>nodeId</c>, <c>name</c>, <c>ver</c>, <c>https</c>.
     /// </summary>
     /// <param name="serviceType">Defaults to <see cref="MdnsConstants.ServiceType"/>; overridable for isolated tests.</param>
+    /// <param name="name">The node's name, or null to leave it out (decision D5: only while the web surface is on).</param>
+    /// <param name="surface">The TXT <c>surface</c> value, or null to leave it out (a server's record).</param>
     public static ServiceProfile BuildProfile(
-        Guid nodeId, string name, string version, bool https, int port,
-        string serviceType = MdnsConstants.ServiceType)
+        Guid nodeId, string? name, string version, bool https, int port,
+        string serviceType = MdnsConstants.ServiceType, string? surface = null)
     {
         // Instance name must be unique across the LAN; the nodeId guarantees that. The friendly
         // name travels in the TXT record and is what OUR browser displays.
         var instance = new DomainName(SanitizeInstanceName(nodeId.ToString()));
         var profile = new ServiceProfile(instance, serviceType, (ushort)port);
         profile.AddProperty(MdnsConstants.TxtNodeId, nodeId.ToString());
-        profile.AddProperty(MdnsConstants.TxtName, MdnsConstants.EncodeTxtName(name));
+        if (name is not null) profile.AddProperty(MdnsConstants.TxtName, MdnsConstants.EncodeTxtName(name));
         profile.AddProperty(MdnsConstants.TxtVersion, version);
         profile.AddProperty(MdnsConstants.TxtHttps, https ? "true" : "false");
+        if (surface is not null) profile.AddProperty(MdnsConstants.TxtSurface, surface);
         return profile;
     }
 

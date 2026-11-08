@@ -5,7 +5,8 @@ using Microsoft.AspNetCore.Mvc;
 namespace BeeMemoryBank.Web.Pages.Admin;
 
 /// <summary>
-/// "Blind nodes" (plan 9): add one by its pair code, see status, protocol and last contact with the alarms of plan 5.6, reseed, disconnect. Also (release 2.7):
+/// "Add a blind node" (plan 9): add one by its pair code. The status, protocol and last contact of a blind node, its alarms (plan 5.6), reseed and disconnect are on its page
+/// in Admin &gt; Devices (<see cref="DeviceModel"/>). Also (release 2.7):
 /// invite a friend's device, which redeems the invitation, and confirm that redemption here against the match code the friend reads out; and add an Android
 /// blind copy by the code its phone shows (the page of its own, <c>/AndroidBlindCopy</c>, is folded in). Superadmin only, like the whole Admin area: every
 /// action here changes who the network trusts.
@@ -139,7 +140,7 @@ public class BlindNodesModel(ApiClient api) : AdminPageModel(api)
         if (invite is not null)
         {
             Issued = invite;
-            IssuedQr = ConnectDeviceModel.GenerateQrPngDataUri(invite.Text);
+            IssuedQr = JoinCodes.GenerateQrPngDataUri(invite.Text);
             // The page holds a bearer secret: no cache, no history entry that can be shown again.
             Response.Headers.CacheControl = "no-store";
             Response.Headers.Pragma = "no-cache";
@@ -173,31 +174,6 @@ public class BlindNodesModel(ApiClient api) : AdminPageModel(api)
             : Again(err: error ?? "The invitation could not be withdrawn.");
     }
 
-    public async Task<IActionResult> OnPostReseedAsync(Guid nodeId)
-    {
-        var (ok, error) = await Api.ReseedBlindNodeAsync(nodeId);
-        return ok
-            ? Again(msg: "Blind node reseeded.")
-            : Again(err: error!.Message, detail: error.Detail);
-    }
-
-    public async Task<IActionResult> OnPostDisconnectAsync(Guid nodeId)
-    {
-        bool ok;
-        try
-        {
-            ok = await Api.RevokeNodeAsync(nodeId);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-        {
-            var down = BlindNodeErrors.AppDidNotAnswer(ex);
-            return Again(err: down.Message, detail: down.Detail);
-        }
-        if (ok) return Again(msg: "Blind node disconnected. Wipe it on its own console.");
-        var failed = BlindNodeErrors.ForDisconnect();
-        return Again(err: failed.Message);
-    }
-
     /// <summary>
     /// "Add an Android blind copy": the phone's code and the node it will call. The answer is this page again, not a redirect, with the code that tells the phone
     /// where to call and which certificate to trust (as text and as a QR), or the reason the pairing was refused.
@@ -211,7 +187,7 @@ public class BlindNodesModel(ApiClient api) : AdminPageModel(api)
             var (paired, error) = await Api.PairBlindPhoneAsync(code.Trim(), listenerId);
             Paired = paired;
             PhoneError = error;
-            if (paired != null) CallCodeQr = ConnectDeviceModel.GenerateQrPngDataUri(paired.CallCode);
+            if (paired != null) CallCodeQr = JoinCodes.GenerateQrPngDataUri(paired.CallCode);
         }
         await LoadAsync();
         return Page();

@@ -204,8 +204,20 @@ public sealed class TrayIconAssetTests
     [Fact]
     public void TheWindowsIcon_StaysTheColoredOne()
     {
-        ShellPlatforms.For(ShellOs.Windows).TrayIconAsset.Should().EndWith("/Assets/icon.png");
+        ShellPlatforms.For(ShellOs.Windows).TrayIconAsset.Should().EndWith("/Assets/icon.ico");
         ShellPlatforms.For(ShellOs.MacOs).TrayIconAsset.Should().Contain("template");
+    }
+
+    [Fact]
+    public void TheWindowsTrayIcon_CarriesTheSmallSizesTheNotificationAreaUses()
+    {
+        // The notification area draws 16 px at 100 %, 24 at 150 % and 32 at 200 %: each is an entry of its own in the .ico (drawn for that
+        // size), so Windows never has to shrink the big picture for the tray.
+        var ico = File.ReadAllBytes(FileOf(ShellPlatforms.For(ShellOs.Windows).TrayIconAsset));
+        BitConverter.ToUInt16(ico, 2).Should().Be(1, "an .ico");
+        var count = BitConverter.ToUInt16(ico, 4);
+        var sizes = Enumerable.Range(0, count).Select(i => ico[6 + 16 * i] == 0 ? 256 : ico[6 + 16 * i]).ToList();
+        sizes.Should().Contain([16, 24, 32, 48, 256]);
     }
 
     // ── a small PNG reader (8-bit RGBA, not interlaced), so the test needs no image library ──

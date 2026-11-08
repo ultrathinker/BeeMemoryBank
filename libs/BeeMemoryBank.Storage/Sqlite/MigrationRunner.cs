@@ -36,9 +36,11 @@ public class MigrationRunner
     /// database whose ledger has only these rows after the baseline's is judged against the baseline as before (<see cref="JudgeDatabase"/>), and a restore of a
     /// backup with a missing index is still refused. A migration that changes or removes something of the baseline is not listed here.
     /// 41 is <c>041_blind_invite.sql</c>; 42 is <c>042_blind_invite_server.sql</c> (two columns of that table, and its trigger made again);
-    /// 43 is <c>043_password_hint.sql</c> (a nullable column of tbl_user and three node-level columns with defaults, nothing redefined).
+    /// 43 is <c>043_password_hint.sql</c> (a nullable column of tbl_user and three node-level columns with defaults, nothing redefined);
+    /// 44 is <c>044_peer_channels.sql</c> (two new tables of the LAN sync, tbl_peer_endpoint and tbl_peer_channel, and an index);
+    /// 45 is <c>045_whitelist_concern_versions.sql</c> (eleven columns with defaults on tbl_whitelist, filled from its version, nothing redefined).
     /// </summary>
-    internal static readonly int[] AdditiveMigrations = [41, 42, 43];
+    internal static readonly int[] AdditiveMigrations = [41, 42, 43, 44, 45];
 
     /// <summary>The resource name of the baseline, which is also its ledger row's file name.</summary>
     public const string BaselineResourceName = LegacyMigrationChain.ResourcePrefix + "040_baseline.sql";
@@ -400,14 +402,22 @@ public class MigrationRunner
     ///   CREATE TABLE           → "table ... already exists"
     ///   CREATE INDEX           → "index ... already exists"
     /// </summary>
+    /// <summary>An <c>ALTER TABLE ... ADD COLUMN</c> of a column the table has already (the boot store's runner skips only this one).</summary>
+    internal static bool IsColumnAlreadyThere(string statement, SqliteException ex)
+    {
+        var stmt = statement.TrimStart();
+        return ex.SqliteErrorCode == 1
+            && stmt.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase)
+            && stmt.Contains("ADD COLUMN", StringComparison.OrdinalIgnoreCase)
+            && ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsIdempotentError(string statement, SqliteException ex)
     {
         if (ex.SqliteErrorCode != 1) return false; // SQLITE_ERROR only
 
         var stmt = statement.TrimStart();
-        if (stmt.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase) &&
-            stmt.Contains("ADD COLUMN", StringComparison.OrdinalIgnoreCase) &&
-            ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+        if (IsColumnAlreadyThere(statement, ex))
             return true;
 
         if (stmt.StartsWith("ALTER TABLE", StringComparison.OrdinalIgnoreCase) &&

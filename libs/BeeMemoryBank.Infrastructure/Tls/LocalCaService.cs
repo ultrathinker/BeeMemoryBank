@@ -92,9 +92,13 @@ public class LocalCaService
     }
 
     /// <summary>
-    /// Gets the leaf certificate if it exists and is valid, or generates a new one.
+    /// Gets the leaf certificate if it exists and is valid, or issues a new one. A new leaf (its names changed, as with every DHCP change, fewer than 30
+    /// days are left, or a file is missing, or <paramref name="forceReissue"/>) KEEPS THE KEY of the one before whenever that key is still in the secret
+    /// store and readable (decision D4, docs/design/lan-peer-sync.md section 9): every peer that pinned this node's TLS key - a paired computer, a hub's
+    /// blind copies - keeps reaching it through address changes and renewals. A new key is made only when there is none (or it is damaged), or when
+    /// <paramref name="rotateKey"/> asks for one. A secret store that is locked or refuses right now gives no certificate this time rather than a new key.
     /// </summary>
-    public X509Certificate2? GetOrCreateLeafCertificate(bool forceReissue = false)
+    public X509Certificate2? GetOrCreateLeafCertificate(bool forceReissue = false, bool rotateKey = false)
     {
         if (!_secretStore.IsSupported)
         {
@@ -150,9 +154,62 @@ public class LocalCaService
                 }
             }
 
-            return GenerateAndStoreLeafCertificate(caCert, currentSans);
+            ECDsa? kept = null;
+            if (!rotateKey)
+            {
+                try { kept = ReadLeafKey(); }
+                catch (UserSecretStoreException ex) when (IsTransientStoreFailure(ex))
+                {
+                    return null;
+                }
+            }
+            try { return GenerateAndStoreLeafCertificate(caCert, currentSans, kept); }
+            finally { kept?.Dispose(); }
         }
         catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The leaf's key as the secret store holds it, or null when there is none or it is not a P-256 key (then a new one is made).</summary>
+    private ECDsa? ReadLeafKey()
+    {
+        byte[]? stored = null;
+        try
+        {
+            stored = _secretStore.Read("local-leaf", "default");
+            if (stored is null) return null;
+            var key = ECDsa.Create();
+            try
+            {
+                key.ImportECPrivateKey(stored, out _);
+                if (key.KeySize != 256) { key.Dispose(); return null; }
+                return key;
+            }
+            catch (CryptographicException)
+            {
+                key.Dispose();
+                return null;
+            }
+        }
+        finally
+        {
+            if (stored is not null) CryptographicOperations.ZeroMemory(stored);
+        }
+    }
+
+    /// <summary>The SubjectPublicKeyInfo of the local CA (DER), what a peer pins in <c>ca-pin</c> mode; null when there is no CA (no secret store, or it refuses).</summary>
+    public byte[]? GetCaSubjectPublicKeyInfo()
+    {
+        var der = GetCaCertificateDer();
+        if (der is null) return null;
+        try
+        {
+            using var ca = X509CertificateLoader.LoadCertificate(der);
+            return ca.PublicKey.ExportSubjectPublicKeyInfo();
+        }
+        catch (CryptographicException)
         {
             return null;
         }
@@ -340,9 +397,10 @@ public class LocalCaService
         return caCert.CopyWithPrivateKey(ecdsa);
     }
 
-    private X509Certificate2 GenerateAndStoreLeafCertificate(X509Certificate2 caCert, List<string> sortedSans)
+    private X509Certificate2 GenerateAndStoreLeafCertificate(X509Certificate2 caCert, List<string> sortedSans, ECDsa? keptKey = null)
     {
-        using var leafEcdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var fresh = keptKey is null ? ECDsa.Create(ECCurve.NamedCurves.nistP256) : null;
+        var leafEcdsa = keptKey ?? fresh!;
         var hostname = Environment.MachineName;
         var subject = $"CN=BeeMemoryBank Node {hostname}";
 
@@ -408,10 +466,14 @@ public class LocalCaService
         var certBytes = signed.Export(X509ContentType.Cert);
         File.WriteAllBytes(Path.Combine(_certsDirectory, "leaf.crt"), certBytes);
 
-        // Save private key encrypted using DPAPI
-        var privKeyBytes = leafEcdsa.ExportECPrivateKey();
-        _secretStore.Write("local-leaf", "default", privKeyBytes);
-        Array.Clear(privKeyBytes);
+        // Save the private key in the OS secret store (DPAPI file / Keychain item) - only a NEW key: a kept one is there already, and writing it again
+        // would only ask the Keychain once more.
+        if (keptKey is null)
+        {
+            var privKeyBytes = leafEcdsa.ExportECPrivateKey();
+            _secretStore.Write("local-leaf", "default", privKeyBytes);
+            Array.Clear(privKeyBytes);
+        }
 
         // Save SAN metadata
         File.WriteAllLines(Path.Combine(_certsDirectory, "leaf.san"), sortedSans);

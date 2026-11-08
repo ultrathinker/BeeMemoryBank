@@ -23,9 +23,11 @@ public class MobileSyncPinningGuardTests
     [Fact]
     public void MobileSyncCallers_UseTheFactorysDefaultClient()
     {
+        // A sync round of the phone runs through PeerSessions.SyncWithPeerAsync (LAN sync: a peer's channels); the client it is given is the
+        // fallback for a peer without an anchor, and an anchored session takes the named sync client, which AddSync() pins too.
         var callers = Directory.GetFiles(Mobile, "*.cs", SearchOption.AllDirectories)
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
-                        && File.ReadAllText(f).Contains("SyncWithAsync("))
+                        && (File.ReadAllText(f).Contains("SyncWithAsync(") || File.ReadAllText(f).Contains("PeerSessions.SyncWithPeerAsync(")))
             .ToList();
 
         callers.Should().NotBeEmpty();

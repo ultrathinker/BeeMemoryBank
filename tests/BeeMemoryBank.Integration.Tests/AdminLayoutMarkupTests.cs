@@ -12,7 +12,7 @@ public sealed class AdminLayoutMarkupTests
     private static readonly string AdminDir = Path.Combine(Web, "Pages", "Admin");
 
     /// <summary>The pages the merge of 2.7.2 touched.</summary>
-    private static readonly string[] MergedPages = ["BlindNodes", "ConnectDevice", "HardDelete", "StorageProtection", "OsAutoUnlock", "TrustedNodes"];
+    private static readonly string[] MergedPages = ["BlindNodes", "_ConnectDeviceDialog", "HardDelete", "StorageProtection", "OsAutoUnlock", "Devices", "Device", "NetworkSettings"];
 
     private static string Page(string name) => File.ReadAllText(Path.Combine(AdminDir, name + ".cshtml"));
 
@@ -43,30 +43,27 @@ public sealed class AdminLayoutMarkupTests
     }
 
     [Fact]
-    public void TheTrustedNodesTable_LosesColumnsAndStacksByTheWidthOfItsCard_AndKeepsItsIconsInOneRow()
+    public void TheChannelsTableOfADevice_StacksByTheWidthOfItsBox_AndKeepsItsRemoveButtonInTheLastCell()
     {
-        var page = Page("TrustedNodes");
-        page.Should().Contain("<table class=\"version-table admin-stack\">");
-        // the node id and the date added are the first to go: their header and their cells carry the class
-        Regex.Matches(page, "class=\"hide-lt-1060").Should().HaveCount(4, "Node ID and Added, header and cell each");
-        page.Should().Contain("<th class=\"hide-lt-1060\">Node ID</th>").And.Contain("<th class=\"hide-lt-1060\">Added</th>");
-        // the buttons of a row are one flex row inside the cell
-        page.Should().Contain("<td class=\"col-actions\">").And.Contain("<div class=\"row-actions\">");
-        // every cell that is not the name says what it is when the header is gone (data-label, drawn by the stacked layout)
-        foreach (var label in new[] { "API address", "Status", "Auto-restore", "Auto-DEK rotation", "Last contact" })
+        var page = Page("Device");
+        page.Should().Contain("<table class=\"version-table admin-stack\" id=\"channels-table\">");
+        // the box of the table is the container the stacked layout reads its width from
+        page.Should().Contain("<div class=\"device-table-wrap\">");
+        // every cell that is not the address says what it is when the header is gone (data-label, drawn by the stacked layout)
+        foreach (var label in new[] { "Source", "Scope", "Last worked", "Notes" })
             page.Should().Contain($"data-label=\"{label}\"");
+        page.Should().Contain("<td class=\"col-name\"><code>@c.Address</code></td>").And.Contain("<td class=\"col-actions\">");
         page.Should().NotContain("col-label", "the label is the data-label of the cell, not a span of its own");
 
         var css = Css();
-        css.Should().Contain(".admin-scope #promote-password-peers label { overflow-wrap: anywhere; }");
-        css.Should().Contain(".admin-scope .admin-body .card:has(> table) { container: admin-table / inline-size; }");
+        css.Should().Contain(".admin-scope .device-table-wrap { container: admin-table / inline-size;");
         css.Should().Contain(".admin-scope td.col-name { min-width: 9em; overflow-wrap: anywhere; }");
         RuleOf(css, ".admin-scope td.col-actions, .admin-scope th.col-actions {").Should().Contain("white-space: nowrap");
-        RuleOf(css, ".admin-scope .row-actions {").Should().Contain("flex-wrap: nowrap").And.Contain("gap: 2px");
-        RuleOf(css, "@container admin-table (max-width: 1060px)").Should().Contain(".hide-lt-1060").And.Contain("display: none !important");
         var stacked = RuleOf(css, "@container admin-table (max-width: 860px)");
         stacked.Should().Contain("table.admin-stack thead { display: none; }").And.Contain("td[data-label]::before { content: attr(data-label);");
-        stacked.Should().Contain("min-width: 34px; min-height: 34px", "an icon button is a thumb wide in the stacked row").And.Contain("gap: 6px");
+        // the list of devices has no table to lose columns from: a row wraps
+        Page("Devices").Should().NotContain("<table");
+        RuleOf(css, ".admin-scope .device-head {").Should().Contain("flex-wrap: wrap");
     }
 
     /// <summary>The cells of a stacked table that say what they are: data-label="..." on a td (the header row is hidden below 860px).</summary>
@@ -76,7 +73,7 @@ public sealed class AdminLayoutMarkupTests
     }
 
     [Fact]
-    public void TheAgentsTable_FollowsItsCard_LikeTrustedNodes_AndNeverHidesItsDeleteButton()
+    public void TheAgentsTable_FollowsItsCard_LikeTheOtherTables_AndNeverHidesItsDeleteButton()
     {
         var page = Page("Agents");
         page.Should().Contain("<table class=\"version-table admin-stack\">");
@@ -182,10 +179,10 @@ public sealed class AdminLayoutMarkupTests
     }
 
     [Fact]
-    public void TheConnectPage_GivesItsNotesParagraphSpacing_ItsStopButtonAMargin_AndItsJoinCodeABreak()
+    public void TheConnectDialog_GivesItsNotesParagraphSpacing_ItsStopButtonAMargin_AndItsJoinCodeABreak()
     {
-        var page = Page("ConnectDevice");
-        page.Should().Contain("<div class=\"admin-notes text-muted text-sm\"").And.Contain("<p class=\"admin-note text-muted text-sm\">This door is for joining only");
+        var page = Page("_ConnectDeviceDialog");
+        page.Should().Contain("<div class=\"admin-notes text-muted text-sm\"");
         page.Should().Contain("asp-page-handler=\"Disable\" style=\"margin-top:12px;\"", "the Stop listening button does not touch the text above it");
         Regex.Match(page, "<code style=\"[^\"]*\">@ep.Code</code>").Value.Should().Contain("overflow-wrap:anywhere").And.NotContain("word-break");
         Css().Should().Contain(".admin-scope .admin-notes p, .admin-scope .admin-note { margin: 0 0 10px; }");

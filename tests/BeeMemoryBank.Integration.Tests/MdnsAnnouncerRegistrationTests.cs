@@ -39,78 +39,60 @@ public class MdnsAnnouncerRegistrationTests
         factory.Services.GetServices<IHostedService>().Should().ContainSingle(s => s is MdnsAnnouncer);
     }
 
+    // Since LAN sync (docs/design/lan-peer-sync.md 5, D5): the desktop node's record follows what its LAN listener REALLY serves (network.listening.json,
+    // written by the node), not a setting: the sync surface on trusted networks and/or the web surface, on the port the listener holds.
     [Fact]
-    public void Announcer_OfADesktopNode_FollowsTheProfilesNetworkSettingFile_WithoutARestart()
+    public void Announcer_OfADesktopNode_FollowsTheListenersState_WithoutARestart()
     {
-        if (Environment.GetEnvironmentVariable(NetworkExposure.EnvironmentVariable) == "1") return; // this machine forces it on
-
         using var factory = new FollowTheSettingFactory();
         factory.Services.GetServices<IHostedService>().Should().ContainSingle(s => s is MdnsAnnouncer);
         var options = factory.Services.GetRequiredService<MdnsAnnouncerOptions>();
-        var store = new NodeNetworkSettingsStore(factory.DataPath);
         var listening = new LanListenerState(factory.DataPath);
 
-        options.AnnounceGate.Should().NotBeNull();
+        options.Announcement.Should().NotBeNull();
         options.RefreshInterval.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(10), "a switch must show on the network within seconds");
-        options.AnnounceGate!().Should().BeFalse("a node nobody opened announces nothing");
+        options.Announcement!().Should().BeNull("nothing listens: nothing is announced");
 
-        store.Save(new NodeNetworkSettings(DevicesOnMyNetwork: true));
-        listening.Set(true); // what the node writes once its listener is really up
-        options.AnnounceGate!().Should().BeTrue("the gate reads the files the node wrote, on every call");
+        listening.Set(new LanListenerSnapshot(true, 6000, Sync: true, Web: false, Join: false, SyncAddresses: ["192.168.1.42"]));
+        options.Announcement!().Should().Be(new MdnsAnnouncement(6000, Sync: true, Web: false), "the port the listener holds, the sync surface only");
 
-        store.Save(new NodeNetworkSettings(DevicesOnMyNetwork: false));
-        options.AnnounceGate!().Should().BeFalse();
+        listening.Set(new LanListenerSnapshot(true, 6000, Sync: true, Web: true, Join: false, SyncAddresses: ["192.168.1.42"]));
+        options.Announcement!().Should().Be(new MdnsAnnouncement(6000, Sync: true, Web: true));
+
+        listening.Set(false);
+        options.Announcement!().Should().BeNull("the record is withdrawn as soon as the listener is gone");
     }
 
-    [Fact]
-    public void Announcer_OfADesktopNode_FollowsTheListenersState_ComesUpWhenItDoes_AndWithdrawsWhenItStops()
-    {
-        if (Environment.GetEnvironmentVariable(NetworkExposure.EnvironmentVariable) == "1") return; // this machine forces it on
-
-        using var factory = new FollowTheSettingFactory();
-        var options = factory.Services.GetRequiredService<MdnsAnnouncerOptions>();
-        var listening = new LanListenerState(factory.DataPath);
-        new NodeNetworkSettingsStore(factory.DataPath).Save(new NodeNetworkSettings(DevicesOnMyNetwork: true));
-
-        options.AnnounceGate!().Should().BeFalse("port taken: the node never marked a listener as up");
-
-        listening.Set(true); // the person pressed Try again after closing the other program, and the bind worked
-        options.AnnounceGate!().Should().BeTrue();
-
-        listening.Set(false); // the listener stopped or failed
-        options.AnnounceGate!().Should().BeFalse("the record is withdrawn as soon as the listener is gone, the setting still being on");
-    }
-
-    [Fact]
-    public void Announcer_OfADesktopNode_UnderTheEnvironmentOverride_AlsoFollowsTheListener()
-    {
-        var previous = Environment.GetEnvironmentVariable(NetworkExposure.EnvironmentVariable);
-        Environment.SetEnvironmentVariable(NetworkExposure.EnvironmentVariable, "1");
-        try
-        {
-            using var factory = new FollowTheSettingFactory();
-            var options = factory.Services.GetRequiredService<MdnsAnnouncerOptions>();
-            var listening = new LanListenerState(factory.DataPath);
-
-            options.AnnounceGate!().Should().BeFalse("BMB_HTTPS_ENABLED=1 but the front could not bind 5311: nothing is announced");
-            listening.Set(true);
-            options.AnnounceGate!().Should().BeTrue();
-        }
-        finally { Environment.SetEnvironmentVariable(NetworkExposure.EnvironmentVariable, previous); }
-    }
-
-    // INT-05: the setting says "on", but the node's listener could not open port 5311 (another program has it). The node did
-    // not mark a listener as up, so the announcer must not publish https://host:5311 for a port nothing of ours serves.
+    // INT-05: "Devices on my network" is on, but the node could not open the port (another program has it): the node did not mark a listener as up, so the
+    // announcer must not publish an address nothing of ours serves.
     [Fact]
     public void Announcer_OfADesktopNode_AnnouncesNothing_WhileNoListenerIsUp_EvenWithTheSettingOn()
     {
-        if (Environment.GetEnvironmentVariable(NetworkExposure.EnvironmentVariable) == "1") return; // this machine forces it on
-
         using var factory = new FollowTheSettingFactory();
         var options = factory.Services.GetRequiredService<MdnsAnnouncerOptions>();
         new NodeNetworkSettingsStore(factory.DataPath).Save(new NodeNetworkSettings(DevicesOnMyNetwork: true));
 
-        options.AnnounceGate!().Should().BeFalse("the setting is on but nothing is listening: a dead endpoint must not be announced");
+        options.Announcement!().Should().BeNull("the setting is on but nothing is listening: a dead endpoint must not be announced");
+    }
+
+    [Fact]
+    public void Announcer_OfADesktopNode_ASyncSurfaceWithNoTrustedAddress_IsNotAnnounced()
+    {
+        using var factory = new FollowTheSettingFactory();
+        var options = factory.Services.GetRequiredService<MdnsAnnouncerOptions>();
+        new LanListenerState(factory.DataPath).Set(new LanListenerSnapshot(true, 5311, Sync: false, Web: false, Join: true, SyncAddresses: []));
+
+        options.Announcement!().Should().BeNull("only the join door is open: it is joined by its code, not found on the network");
+    }
+
+    [Fact]
+    public void Announcer_OfADesktopNode_TheStateOfAnOlderBuild_IsTheWebSurfaceOnTheDefaultPort()
+    {
+        using var factory = new FollowTheSettingFactory();
+        var options = factory.Services.GetRequiredService<MdnsAnnouncerOptions>();
+        File.WriteAllText(Path.Combine(factory.DataPath, LanListenerState.FileName), "{\"listening\":true}");
+
+        options.Announcement!().Should().Be(new MdnsAnnouncement(LanPorts.Default, Sync: false, Web: true));
     }
 
     [Fact]
@@ -119,6 +101,7 @@ public class MdnsAnnouncerRegistrationTests
         using var factory = new BmbWebApplicationFactory();
 
         factory.Services.GetRequiredService<MdnsAnnouncerOptions>().AnnounceGate.Should().BeNull();
+        factory.Services.GetRequiredService<MdnsAnnouncerOptions>().Announcement.Should().BeNull("a server has no LAN listener");
     }
 
     [Fact]

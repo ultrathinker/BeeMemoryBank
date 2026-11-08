@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace BeeMemoryBank.Web.Services;
 
 /// <summary>
-/// Talks to the desktop node's <c>/node/lan</c> endpoints for the Connect a device page and the "Devices on my network" page: status,
+/// Talks to the desktop node's <c>/node/lan</c> endpoints for Admin &gt; Devices (the Connect a device dialog) and Admin &gt; Network settings: status,
 /// open and close the temporary door, switch the permanent setting, and add or remove the firewall rule. Those endpoints live
 /// in the node's front process, not the Api, so the address comes from the node's <c>.runtime.json</c> in the data directory,
 /// and the request carries the internal key the front checks.
@@ -20,6 +20,13 @@ public sealed class NodeLanClient(HttpClient http, string? dataPath = null, stri
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// The client a page uses. The data folder is the host's own setting (<c>BeeMemoryBank:DataPath</c>, which the host reads before <c>BMB_DATA_PATH</c>), so that a
+    /// test host that names its folder reaches its stand-in node and not whatever the process environment says.
+    /// </summary>
+    public static NodeLanClient For(IHttpClientFactory httpClientFactory, Microsoft.Extensions.Configuration.IConfiguration? configuration) =>
+        new(httpClientFactory.CreateClient(), dataPath: configuration?["BeeMemoryBank:DataPath"]);
+
     public Task<LanStatus> GetAsync(CancellationToken ct = default) => SendAsync(HttpMethod.Get, "", null, ct);
     public Task<LanStatus> EnableAsync(CancellationToken ct = default) => SendAsync(HttpMethod.Post, "/enable", null, ct);
     public Task<LanStatus> DisableAsync(CancellationToken ct = default) => SendAsync(HttpMethod.Post, "/disable", null, ct);
@@ -29,6 +36,22 @@ public sealed class NodeLanClient(HttpClient http, string? dataPath = null, stri
     /// <summary>Switches "Devices on my network". The answer carries <see cref="LanStatus.Error"/> when the node refused or could not.</summary>
     public Task<LanStatus> SetDevicesOnMyNetworkAsync(bool enabled, CancellationToken ct = default) =>
         SendAsync(HttpMethod.Post, "/network", new { enabled }, ct);
+
+    /// <summary>Switches "Sync with your devices on this network" (the sync surface of the LAN listener).</summary>
+    public Task<LanStatus> SetLanSyncAsync(bool enabled, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Post, "/sync", new { enabled }, ct);
+
+    /// <summary>Moves every LAN surface to another port.</summary>
+    public Task<LanStatus> SetLanPortAsync(int port, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Post, "/port", new { port }, ct);
+
+    /// <summary>The person's answer about one network: trusted, "not this network", or forgotten (null).</summary>
+    public Task<LanStatus> AnswerNetworkAsync(string fingerprint, bool? trusted, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Post, "/networks", new { fingerprint, trusted }, ct);
+
+    /// <summary>The one-time notice about LAN sync was read.</summary>
+    public Task<LanStatus> DismissLanNoticeAsync(CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Post, "/notice/dismiss", null, ct);
 
     private async Task<LanStatus> SendAsync(HttpMethod method, string action, object? body, CancellationToken ct)
     {
@@ -79,10 +102,21 @@ public sealed class NodeLanClient(HttpClient http, string? dataPath = null, stri
     /// </summary>
     public sealed record LanStatus(
         string Mode, bool Active, string? Token, DateTimeOffset? ExpiresAt, string? SpkiPin, int Port, bool FirewallRule,
-        string? Error = null, string Setting = "off", string Platform = "other", bool FirewallManaged = false)
+        string? Error = null, string Setting = "off", string Platform = "other", bool FirewallManaged = false, LanSyncStatus? LanSync = null)
     {
         public static readonly LanStatus Unavailable = new("unavailable", false, null, null, null, 0, false);
 
         public bool IsAvailable => Mode != "unavailable";
     }
+
+    /// <summary>The sync surface (docs/design/lan-peer-sync.md 6): its setting ("on", "off", "environment"), where it answers now, the port, and the networks.</summary>
+    public sealed record LanSyncStatus(
+        string Setting, IReadOnlyList<string> Serving, int Port, string PortSource, string? BindError, bool NoticePending,
+        IReadOnlyList<LanNetwork> Networks, IReadOnlyList<LanNetworkAnswer> Answers, bool FirewallLegacyRule = false);
+
+    /// <summary>One network this computer is on. <c>Reason</c>: windows-private, windows-domain, windows-public, trusted, refused, unknown, pending, vpn-off, virtual.</summary>
+    public sealed record LanNetwork(string Interface, string Address, string Label, string? Fingerprint, bool Trusted, string Reason, bool CanAsk, string Kind);
+
+    /// <summary>An answer the person gave about a network.</summary>
+    public sealed record LanNetworkAnswer(string Fingerprint, string Label, bool Trusted, string How, DateTime At);
 }

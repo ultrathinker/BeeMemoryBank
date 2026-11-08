@@ -24,6 +24,11 @@ public static class KeyGraphWalker
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
         if (doNotEnter is not null) foreach (var skipped in doNotEnter) seen.Add(skipped); // objects the caller has judged separately
 
+        // The process's timer queue is not entered: the provider's pool holds a prune timer, and through the queue - a linked list of every live
+        // timer of every test running in parallel - the walk would reach the whole heap of the process (and, recursive, overflowed the stack). A
+        // timer's callback state is reachable from its owner anyway. An explicit stack keeps the depth off the thread's stack all the same.
+        var pending = new Stack<(object? Value, string Path)>();
+
         void Walk(object? o, string path)
         {
             if (o is null) return;
@@ -35,6 +40,7 @@ public static class KeyGraphWalker
                 return;
             }
             if (o is Type || o is Assembly || o is Module || o is MemberInfo || o is Thread || o is System.Threading.CancellationToken) return;
+            if (t.FullName is "System.Threading.TimerQueueTimer" or "System.Threading.TimerQueue") return;
             if (!t.IsValueType && !seen.Add(o)) return;
             if (o is byte[] bytes)
             {
@@ -51,7 +57,7 @@ public static class KeyGraphWalker
             {
                 if (array.GetType().GetElementType()!.IsPrimitive) return;
                 var i = 0;
-                foreach (var element in array) Walk(element, $"{path}[{i++}]");
+                foreach (var element in array) pending.Push((element, $"{path}[{i++}]"));
                 return;
             }
             for (var type = t; type != null && type != typeof(object); type = type.BaseType)
@@ -62,12 +68,20 @@ public static class KeyGraphWalker
                     object? value;
                     try { value = field.GetValue(o); }
                     catch { continue; }
-                    Walk(value, $"{path}.{field.Name}");
+                    pending.Push((value, $"{path}.{field.Name}"));
                 }
             }
         }
 
-        foreach (var (name, root) in roots) Walk(root, name);
+        foreach (var (name, root) in roots)
+        {
+            pending.Push((root, name));
+            while (pending.Count > 0)
+            {
+                var (value, path) = pending.Pop();
+                Walk(value, path);
+            }
+        }
         return hits;
     }
 

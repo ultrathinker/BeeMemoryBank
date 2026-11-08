@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.8.0 (2026-11-08)
+
+Direct sync between paired devices on your own network. Two computers that were paired with a join code now keep in step
+directly whenever they are on the same trusted network, with no server, no blind node and without opening the web page to
+the network. Two database migrations (044 and 045, schema 45) add two tables and a version for each part of a trusted
+device's entry; nothing needs doing for existing databases. A node on 2.7.5 cannot take a snapshot, a join archive or a
+blind-node package made by an updated node ("Upgrade this node first"), so update blind nodes together with the full nodes;
+ordinary sync between versions is not affected, and an updated node never sends a 2.7.5 node anything it cannot take.
+
+### Added
+
+- **Sync with your devices on this network** (Admin > Devices > Network settings), **on by default**: a desktop node answers the
+  devices it is paired with directly on its LAN port, through the sync connection only (the node-key-authenticated sync
+  routes, never the web page or MCP), and only on networks the system or you trust. On Windows a network Windows calls
+  Private (or a domain network) is trusted and a Public one is not; the card says which kind the current network is and how
+  to change it. On a Mac the network a device was paired on is trusted by itself, and any other one is untrusted until you
+  answer "Yes, sync with my devices here" (or "Not this network") on the card. A one-time notice says that it is on.
+- **The LAN port is a setting** (5311 by default; `BMB_LAN_PORT` overrides it for a run). The sync connection, Connect a
+  device and the web page on the network share it. A paired device of this version follows a new port by itself; a device of
+  an older version keeps the old address until it is updated or its address is changed on its page (Admin > Devices).
+- **A device has several ways to be reached, tried in order**: the one that worked last, then its addresses on this network
+  (all at once, two seconds each), then its internet address. A device announces where it listens (a signed `node_endpoints`
+  event), is found by mDNS after a DHCP change, and can be given addresses by hand on this computer only (the device's page,
+  "Ways to reach it", "Add an address": an IP, a name or a URL, checked to be that device before it is saved). A
+  device that only called this node (a computer that joined it) can now be called back. An address that a device announced
+  or that mDNS showed is used only on this network or a VPN, and only with that device's own certificate key: a record
+  anyone on the network can send never passes for one of your devices.
+- **Clearer status of a device**: "Direct, on this network", "Direct, over the internet", "Calls this device", "Not on this
+  network; reachable through Home-Server (2 min ago)", "Not on this network", "Direct sync on this network needs an update on
+  Desktop", and an alarm when a device has not been heard from by any route for three days. A laptop that is simply elsewhere
+  is no longer "not answering".
+- **Admin > Devices**: one section in place of seven rows. The list says in one sentence per device how it is reached, and
+  only a device that is silent or does not answer is an alarm. A page per device shows its addresses, the relays that carry
+  its changes, its rights and its certificate. Network settings, Connect a device (now a dialog) and Invisible Mode moved
+  under it; the old addresses redirect.
+- **The Android app syncs directly with your computers on the Wi-Fi**: it finds them by NSD (no location permission), calls
+  the addresses they announce and the ones it finds, says "Not on this network" for a computer that is elsewhere, and has
+  "Change address" and "Add an address" on the Status page.
+- **The iPhone app syncs directly with your computers on the same Wi-Fi**: it finds them by Bonjour, tries every address a
+  computer has, lets you add an address, and says so when Local Network access is off.
+- **The desktop apps ask once per network** whether to sync with your paired devices there, show the one-time "Direct sync
+  is on" notice, and notify you of a device that has been silent.
+- **Blind copies on a computer follow their hub on your network**: the Windows and macOS blind apps reach a hub whose address
+  changed through the endpoints it announces and mDNS, always under the hub's pinned TLS key, and the window says where the
+  hub is.
+
+### Changed
+
+- **The node's TLS certificate keeps its key when it is issued again** (a new network address, the 90-day renewal), so every
+  device that pinned it keeps reaching it. A device may also be trusted by its own certificate authority's key, which an
+  updated node announces: a new certificate it issues is accepted without pairing again.
+- **The Windows Firewall rule** that the app and the Windows service installer add is limited to the local subnet on
+  private and domain networks (it was every network profile). Pressing "Allow in Windows Firewall" replaces the rule of an
+  older version. The rule a node adds for itself with `BMB_HTTPS_ENABLED=1` keeps its scope (every network, any address).
+- **mDNS**: a desktop node announces itself whenever its sync connection listens (not only with the web page on the network), on
+  the port it really holds, with its name only while the web page is open to the network.
+- **The push log says "withheld" apart from "dropped"**: the clear content an activated blind node is not sent (it travels
+  in the baseline) is no longer counted as dropped by that node.
+- **A password hint may be as short as one character** (it was at least three): 1 to 120 characters, everywhere a hint is entered (Setup, Admin > Users, Profile, the master password, the recovery-key reset, the command line, the phone apps). It is still required, and it still must not contain the password or the user name.
+
+### Fixed
+
+- **Every node now ends with the same trusted devices, and the same rights for each, whatever order the changes reach it in.** A revoke could lose to a change of the same device made on a node that had not seen it yet, so nodes that got that change first kept trusting the device; and two changes made at the same time (a rename and taking away administrator rights) could drop one, leaving the device an administrator on some nodes. Each part of a device's entry (trusted or not, rights, name, address, certificate) now has its own version: a revoke is undone only by adding the device again, and a joining node takes each part's version from its host. At its first start an updated node puts right the entries its own log shows were wrong and logs each one; an entry whose history the log no longer holds is left as it is, with a warning when a revoke or a removal of rights may be missing (check it under Admin > Devices). A 2.7.5 node keeps its old behaviour until updated.
+- **A node no longer trusts a peer the network revoked because the revoke reached it before the add.** A node that pulls its history from
+  several peers, such as one that joined late, could get a peer's revoke before its older add. The revoke was lost and the add made the
+  peer active there, and on every node that joined through it. A revoke now leaves a revoked row behind, an update that comes before its
+  add is applied after it, a re-add wins over an older revoke that arrives later, and a join hands the joining node the host's revocations
+  (a 2.7.5 node ignores them). At its first start an updated node fixes the rows its own log shows were wrong and logs each one; a peer
+  whose revoke never reached the node stays as it is: revoke it under Admin > Devices, on the device page. A phone in the sync status now
+  gets an icon.
+- **Sync: a node that joined through one node no longer asks to be wiped by another node that has compacted its log.** The join gives a
+  node its pull position for the node it joined only; every other full node was asked for its log from the start, and one that had
+  compacted refused that on every cycle ("compacted past us (cp=0, head=0). Manual wipe & rejoin required"). A wipe and a new join made
+  the same node again, and the stuck node never reported its position, which held up that node's next compaction too. A full node this
+  node has never pulled from is now pulled from its own checkpoint, once, when this node holds a position for another full node; a
+  position that exists is never moved, and a node restored from a blind node still gets the refusal. A node already stuck this way
+  catches up by itself after the update. Behind Apache, `ProxyErrorOverride` must name its codes (`On 502 503`), or the node's answer
+  is replaced and cannot be read (docs/deployment.md).
+- **Setup keeps what you typed when it shows an error.** A refused "Start fresh" or "Connect to another device" form (passwords that differ, a hint that is not accepted, a damaged or expired join code, a node that does not answer) came back empty. It now keeps the join code or address, the user name, the hint, the name of this computer and the way of connecting you chose. Passwords that differ and a hint that is not accepted are caught before the form is sent, so nothing is reloaded for them; the passwords are never written back into the page, so after a refusal from the other node they have to be typed again.
+
 #### 2.7.5 (2026-11-06)
 
 A "getting back in" release. Bee Memory Bank has no e-mail recovery, so a new node now makes you save a recovery key, and every password comes with a hint. One database migration (043, schema 43) is added; it only adds columns and nothing needs doing for existing databases. A node on 2.7.4 cannot take a snapshot, a join archive or a blind-node package made by a 2.7.5 node (it says "Upgrade this node first"), so update blind nodes together with the full node; ordinary sync between versions is not affected.

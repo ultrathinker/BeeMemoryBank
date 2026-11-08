@@ -432,7 +432,7 @@ public static class JoinCommand
                     }
                     try
                     {
-                        await whitelistRepo.CreateAsync(new WhitelistEntry
+                        var inherited = new WhitelistEntry
                         {
                             NodeId = entry.NodeId,
                             DisplayName = entry.DisplayName,
@@ -446,7 +446,10 @@ public static class JoinCommand
                             IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin),
                             TlsTrust = tlsTrust,
                             TlsSpki = tlsSpki
-                        });
+                        };
+                        // The host's version of each field (none from a 2.7.5 host): later events are judged here as they are there.
+                        JoinRevocations.Inherit(inherited, entry.Versions);
+                        await whitelistRepo.CreateAsync(inherited);
                     }
                     catch (Microsoft.Data.Sqlite.SqliteException ex)
                     {
@@ -467,6 +470,10 @@ public static class JoinCommand
                     }
                 }
             }
+
+            // The peers the host has revoked (a host of 2.7.5 or older sends none): kept as revoked rows, so an old add for one of them that another
+            // node's log delivers later is refused here as it is on the host.
+            await JoinRevocations.ImportAsync(whitelistRepo, joinResponse.RevokedPeers, nodeId, remote.NodeId, loggerFactory.CreateLogger("BeeMemoryBank.Cli.Join"));
 
             // The snapshot (BMB-81): the vault as the host has it, signed by the host. Without it this node would start its
             // sync from sequence 0, which a host that ever compacted its log (or was re-keyed) answers with 410 forever: an
@@ -621,7 +628,7 @@ public static class JoinCommand
         (rowCertain
             ? $"The other computer still lists this node ('{displayName}', {nodeId}) as a member that has never synced: revoke it "
             : $"If the other computer recorded this node ('{displayName}', {nodeId}) before the connection failed, it lists it as a member that has never synced: revoke it ")
-        + "there (Admin -> Trusted Nodes), or it holds back compaction of that computer's event log.";
+        + "there (Admin > Devices, this node's page, Revoke), or it holds back compaction of that computer's event log.";
 
     /// <summary>The node's data folder as the provider resolved it (a re-key swap can redirect it): where media goes.</summary>
     private static string DataDirOf(IServiceProvider services) =>
@@ -651,7 +658,8 @@ public static class JoinCommand
     private record JoinResponseDto(
         JoinRemoteNodeDto RemoteNode,
         JoinKeySlotDto KeySlot,
-        List<JoinWhitelistEntryDto>? Whitelist);
+        List<JoinWhitelistEntryDto>? Whitelist,
+        List<JoinRevokedPeer>? RevokedPeers = null);
 
     private record JoinWhitelistEntryDto(
         Guid NodeId,
@@ -660,7 +668,8 @@ public static class JoinCommand
         string? ApiAddress,
         bool IsSuperadmin = false,
         string? TlsTrust = null,
-        string? TlsSpki = null);
+        string? TlsSpki = null,
+        JoinPeerVersions? Versions = null);
 
     // ProtocolVersion: a host too old to send one is below every version this node can sync with (0).
     private record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);

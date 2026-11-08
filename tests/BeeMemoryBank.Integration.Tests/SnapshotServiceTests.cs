@@ -240,8 +240,8 @@ public class SnapshotServiceTests : IAsyncLifetime
         manifest.RootElement.TryGetProperty("producerNodeId", out var pnid).Should().BeTrue();
         pnid.GetString().Should().Be(_testNodeId.ToString());
         manifest.RootElement.TryGetProperty("migrationVersion", out var mv).Should().BeTrue();
-        mv.GetInt32().Should().Be(MigrationRunner.BaselineVersion + 3,
-            "the number says which schema the snapshot has: the baseline is migration 40, as the last migration of 2.6.1 was, so a 2.6.1 node and a 2.6.2 node write and read the same number; 041 and 042 (2.7) are the two after it");
+        mv.GetInt32().Should().Be(MigrationRunner.BaselineVersion + 5,
+            "the number says which schema the snapshot has: the baseline is migration 40, as the last migration of 2.6.1 was, so a 2.6.1 node and a 2.6.2 node write and read the same number; 041 and 042 (2.7), 043 (2.7.5), 044 (LAN sync) and 045 (whitelist versions per concern) are the ones after it");
     }
 
     [Fact]

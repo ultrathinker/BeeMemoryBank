@@ -20,13 +20,14 @@ public sealed record BlindAppBackup(string Name, long Size);
 /// <see cref="BackupKeyLost"/> and <see cref="AwaitingAnswer"/> are then not known and are reported false: a store that does not answer is not a lost key.</param>
 /// <param name="LastFailure">The failure the first load or backup is in now (the same error repeated counts up), or null.</param>
 /// <param name="SourceRefusedAt">When the source first refused this device and no contact has gone through since, or null. One refusal is not "removed by the owner": the copy asks again (<see cref="BlindSourceRemoval.Judge"/>).</param>
+/// <param name="Hub">Where the hub is, in the app's own words ("Hub reached on this network at 192.168.1.231." or "Hub not on this network."), or null when there is nothing to say (see <see cref="BlindHubChannels.Status"/>). No alarm: a failure is told by the sync line.</param>
 public sealed record BlindAppStatus(Guid? NodeId, string? DisplayName, bool IsPaired, bool InitialLoadDone,
     DateTimeOffset? LastSyncAt, DateTimeOffset? LastBackupAt, BlindBackupSchedule Schedule, bool BackupKeyLost,
     string? ActiveJob, double? JobProgress, IReadOnlyList<BlindAppBackup> Backups,
     IReadOnlyList<BlindPhoneLog.Entry> RecentLog,
     string? Endpoint = null, bool AwaitingAnswer = false, string? StartError = null,
     string? KeyStoreUnavailable = null, BlindAppFailure? LastFailure = null,
-    DateTimeOffset? SourceRefusedAt = null);
+    DateTimeOffset? SourceRefusedAt = null, string? Hub = null);
 
 /// <summary>How the last long job failed, for the screen: the error's own words, when, and how many times in a row.</summary>
 public sealed record BlindAppFailure(string Title, string Message, DateTimeOffset At, int Attempts);
@@ -280,7 +281,8 @@ public sealed class BlindAppController(
             activeJob, progress,
             backups.Backups().Select(file => new BlindAppBackup(file.Name, file.Length)).ToList(), log.Latest(30),
             Endpoint: state.CallCode?.Address, AwaitingAnswer: awaiting, StartError: _startError,
-            KeyStoreUnavailable: keyStoreProblem, LastFailure: failure, SourceRefusedAt: state.SourceRefusedAt);
+            KeyStoreUnavailable: keyStoreProblem, LastFailure: failure, SourceRefusedAt: state.SourceRefusedAt,
+            Hub: paired ? (services.GetService(typeof(BlindHubChannels)) as BlindHubChannels)?.Status : null);
     }
 
     /// <summary>

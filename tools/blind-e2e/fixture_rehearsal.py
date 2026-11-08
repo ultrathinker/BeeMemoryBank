@@ -108,9 +108,17 @@ def populate(vol, pristine, image):
 
 
 # What /opt/bmb-blind/compose.yaml of the Aeza node sets besides the image (--aeza-compose): the node's environment and its limits.
-AEZA_COMPOSE = ['--memory', '700m', '--memory-swap', '700m', '--cpus', '0.6',
-                '-e', 'BMB_ROLE=blind', '-e', 'BMB_DATA_PATH=/app/data', '-e', 'BMB_BLIND_HTTPS_PORT=5610', '-e', 'BMB_BLIND_LOCAL_PORT=5612',
-                '-e', 'BMB_PUBLIC_ADDRESS=https://178.20.208.34:5610', '-e', 'BMB_API_URL=http://127.0.0.1:5612']
+# The public address is the node's own (--public-address); the container runs on a network of `none`, so it is only ever
+# written into the node's settings, never dialled. The default is a documentation address (RFC 5737).
+AEZA_COMPOSE_PUBLIC_ADDRESS = 'https://203.0.113.10:5610'
+
+
+def aeza_compose(public_address):
+    return ['--memory', '700m', '--memory-swap', '700m', '--cpus', '0.6',
+            '-e', 'BMB_ROLE=blind', '-e', 'BMB_DATA_PATH=/app/data', '-e', 'BMB_BLIND_HTTPS_PORT=5610', '-e', 'BMB_BLIND_LOCAL_PORT=5612',
+            '-e', 'BMB_PUBLIC_ADDRESS=' + public_address, '-e', 'BMB_API_URL=http://127.0.0.1:5612']
+
+
 EXTRA = []
 # Tables a node that is merely started is allowed to rewrite (none yet; add a table here only with the reason).
 TABLES_A_RUNNING_NODE_REWRITES = set()
@@ -183,9 +191,11 @@ def main():
                     help='--old is 2.6.1 or older on the 2.6 schema and --new is 2.6.2 or later (one baseline migration): expect the adoption of the '
                          'ledger and a REFUSED rollback that leaves the data directory untouched')
     ap.add_argument('--aeza-compose', action='store_true', help='run with the environment and the memory/cpu limits of the Aeza compose file')
+    ap.add_argument('--public-address', default=AEZA_COMPOSE_PUBLIC_ADDRESS,
+                    help='with --aeza-compose: the BMB_PUBLIC_ADDRESS the compose file sets (default %(default)s, a documentation address)')
     a = ap.parse_args()
     if a.aeza_compose:
-        EXTRA.extend(AEZA_COMPOSE)
+        EXTRA.extend(aeza_compose(a.public_address))
     os.makedirs(a.work, exist_ok=True)
 
     # Names unique to this run: only objects this run created are ever removed, never an earlier run's or anyone else's.

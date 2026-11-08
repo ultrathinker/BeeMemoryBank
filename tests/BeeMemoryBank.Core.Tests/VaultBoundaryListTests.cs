@@ -16,6 +16,7 @@ public class VaultBoundaryListTests
     private static readonly Assembly MacOsHost = typeof(BeeMemoryBank.BlindDesktop.MacOS.MacOsBlindPaths).Assembly;
     // the Apple platform layer (Keychain, LaunchAgent text) that the macOS blind host and the full macOS app share
     private static readonly Assembly AppleLayer = typeof(BeeMemoryBank.Platforms.Apple.Keychain.IKeychainBackend).Assembly;
+    private static readonly Assembly MdnsLayer = typeof(BeeMemoryBank.Mdns.MdnsBrowser).Assembly;
 
     private static string Location(Assembly a) => a.Location;
 
@@ -65,7 +66,7 @@ public class VaultBoundaryListTests
     public void TheTypesOfTheSharedAssembliesAreExactlyTheListedOnes()
     {
         var phone = typeof(BeeMemoryBank.Core.Services.BlindPhone.AndroidBackupRestore).Assembly;
-        var actual = Shared.Append(phone).Append(AppCore).Append(MacOsHost).Append(AppleLayer)
+        var actual = Shared.Append(phone).Append(AppCore).Append(MacOsHost).Append(AppleLayer).Append(MdnsLayer)
             .SelectMany(a => AssemblyBoundaryScanner.DefinedTypes(Location(a)).Select(n => a.GetName().Name + " " + n))
             .OrderBy(x => x, StringComparer.Ordinal).ToList();
         actual.Should().HaveCountGreaterThan(300);
@@ -122,6 +123,11 @@ public class VaultBoundaryListTests
         AssemblyBoundaryScanner.Scan([Location(AppleLayer)], VaultBoundary.Forbidden()).Should().BeEmpty();
         AssemblyBoundaryScanner.DefinedTypes(Location(AppleLayer)).Should().NotBeEmpty();
         AssemblyBoundaryScanner.DuplicatedTypes(Shared.Append(phone).Append(AppCore).Append(MacOsHost).Append(AppleLayer).Append(Vault).Select(Location)).Should().BeEmpty();
+        // the mDNS scan is in every desktop blind binary (it finds the hub after its address changed) and in the full app: the same rules
+        MdnsLayer.GetName().Name.Should().Be("BeeMemoryBank.Mdns");
+        AssemblyBoundaryScanner.Scan([Location(MdnsLayer)], VaultBoundary.Forbidden()).Should().BeEmpty();
+        AssemblyBoundaryScanner.DefinedTypes(Location(MdnsLayer)).Should().NotBeEmpty();
+        AssemblyBoundaryScanner.DuplicatedTypes(Shared.Append(phone).Append(AppCore).Append(MacOsHost).Append(AppleLayer).Append(MdnsLayer).Append(Vault).Select(Location)).Should().BeEmpty();
     }
 
     // ---- controls: the scanner must find what is there -------------------------------------------------------------------

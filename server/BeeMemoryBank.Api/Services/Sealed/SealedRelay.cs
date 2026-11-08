@@ -256,7 +256,12 @@ public sealed class SealedRelay : ISealedRelay
         if (_gate is { State: VaultState.Importing }) return SealedRefusal(context, 503, "vault_sealed_range", null);
         if (!await CanServeAfterAsync(after, ct)) return SealedRefusal(context, 503, "vault_sealed_range", null);
 
-        var rows = await _inbox.ReadAfterAsync(after, limit, ct);
+        // A puller that does not advertise peer-endpoints-v1 (a 2.7.5 node) is never served a node_endpoints event, here as from the open log: it
+        // would hand it on to a locked, encrypted 2.7.5 node, which refuses the type and stalls (docs/design/lan-peer-sync.md 8). The page is filled
+        // with the rows it may have, reading the inbox on, so a page of withheld rows never hides the rows after them.
+        var header = context.Request.Headers.Authorization.ToString();
+        var capabilities = _tokens.CapabilitiesOf(header.StartsWith("Bearer ", StringComparison.Ordinal) ? header["Bearer ".Length..] : "");
+        var rows = await ReadServableAsync(after, limit, capabilities, ct);
         var events = new List<SyncEvent>(rows.Count);
         long size = 0;
         foreach (var row in rows)
@@ -267,6 +272,21 @@ public sealed class SealedRelay : ISealedRelay
             size += eventSize;
         }
         return Results.Ok(events);
+    }
+
+    /// <summary>At most <paramref name="limit"/> rows of the inbox after <paramref name="after"/> that a puller with these capabilities may have.</summary>
+    private async Task<List<RelayEventRow>> ReadServableAsync(long after, int limit, IReadOnlyCollection<string>? capabilities, CancellationToken ct)
+    {
+        var page = new List<RelayEventRow>();
+        var cursor = after;
+        while (true)
+        {
+            var batch = await _inbox.ReadAfterAsync(cursor, limit, ct);
+            page.AddRange(batch.Where(r => !MetadataCapabilities.IsWithheldFrom(r.Event.EventType, capabilities)));
+            if (page.Count >= limit) return page.GetRange(0, limit);
+            if (batch.Count < limit) return page;
+            cursor = batch[^1].RelaySeq;
+        }
     }
 
     /// <summary>After a clean close, serve from <c>sealed_head</c>; after a crash, from <c>seq_floor - 1</c> (6.3).</summary>

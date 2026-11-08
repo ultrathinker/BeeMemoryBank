@@ -36,6 +36,16 @@ public static class NodeDependencyInjection
         services.TryAddSingleton<Metadata.IHeldEventDrain, Metadata.NoHeldEventDrain>();
         services.TryAddSingleton<Metadata.IHeldEventStatus, Metadata.HeldEventStatus>();
 
+        // Direct sync on the LAN (docs/design/lan-peer-sync.md): what peers announced, this node's ways to reach them and how each went, the order
+        // they are tried in, and the reachability state the status shows. The host's LAN discovery (mDNS on a desktop, NSD/Bonjour on a phone)
+        // replaces the empty default.
+        services.AddScoped<Channels.PeerEndpointStore>();
+        services.AddScoped<Channels.PeerChannelStore>();
+        services.AddScoped<Channels.PeerDialer>();
+        services.AddSingleton<Channels.PeerReachability>();
+        services.TryAddSingleton<Channels.ILocalNetworks, Channels.SystemLocalNetworks>();
+        services.TryAddSingleton<Channels.IPeerDiscovery, Channels.NoPeerDiscovery>();
+
         services.AddScoped<EventApplier>();
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();

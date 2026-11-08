@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -75,6 +76,30 @@ public interface IUserNotifier
         Notify(title, message);
         return true;
     }
+}
+
+/// <summary>One button of a <see cref="IActionNotifier"/> notice.</summary>
+/// <param name="Id">What <see cref="IActionNotifier.TryNotifyAsync"/> hands back when the person chooses it.</param>
+/// <param name="Title">The button's text.</param>
+/// <param name="OpensApp">The button brings the app to the front (the system starts it in the foreground).</param>
+public sealed record NoticeAction(string Id, string Title, bool OpensApp = false);
+
+/// <summary>
+/// A notice with buttons, for a question the person answers from the notice itself (the LAN network question, the one-time LAN notice).
+/// Presentation only, like <see cref="IUserNotifier"/>, but it says whether the notice was shown, because the caller then falls back to a
+/// plain notice and the tray menu. Never throws.
+/// </summary>
+public interface IActionNotifier
+{
+    /// <summary>The id the system gives to a click on the notice itself, not on one of its buttons.</summary>
+    const string DefaultActionId = "default";
+
+    /// <summary>
+    /// Shows the notice. <paramref name="onAction"/> is called, once, with the id of the button the person chose
+    /// (<see cref="DefaultActionId"/> for a click on the notice); it is never called when the notice is dismissed.
+    /// </summary>
+    /// <returns>True when the system took the notice; false when it could not be shown (no permission, not an app bundle).</returns>
+    Task<bool> TryNotifyAsync(string title, string message, IReadOnlyList<NoticeAction> actions, Action<string> onAction, CancellationToken cancellationToken = default);
 }
 
 /// <summary>What the "lock the node" request made when the computer went to sleep ended with.</summary>

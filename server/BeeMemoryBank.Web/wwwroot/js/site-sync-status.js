@@ -1,7 +1,7 @@
 // ===== Sync Status Widget & Modal =====
 // One implementation for both places that show it (the header dropdown and the "Sync Delivery Status" dialog of the article page).
 // BMB-313: the times are CONTACT times (any completed session, with whose call it was), not the time of the last push of events; a node that does not
-// answer says since when and why; a double-click on a node asks it now. Invisible Mode is not switched here any more (Admin > Invisible Mode); while it is
+// answer says since when and why; a double-click on a node asks it now. Invisible Mode is not switched here any more (Admin > Network settings); while it is
 // on, the sync icon carries a badge.
 (function () {
     var btn = document.getElementById('syncStatusBtn');
@@ -40,7 +40,8 @@
 
     function getNodeIcon(n) {
         var name = (n.displayName || '').toLowerCase();
-        if (name.includes('phone') || name.includes('mobile') || n.nodeType === 'private') return 'smartphone';
+        // 'phone', not 'smartphone': the bundled Shoelace icon set has no 'smartphone', and an unknown name draws nothing.
+        if (name.includes('phone') || name.includes('mobile') || n.nodeType === 'private') return 'phone';
         if (name.includes('laptop') || name.includes('desktop')) return 'laptop';
         return 'cloud';
     }
@@ -53,11 +54,12 @@
         if (!data.isInvisible) return '';
         return '<div class="sync-invisible-note">' +
                '<sl-icon name="eye-slash"></sl-icon> Invisible Mode is on: this node calls nobody and answers nobody. ' +
-               '<a href="/Admin/InvisibleMode">Change it in Admin</a></div>';
+               '<a href="/Admin/NetworkSettings#invisible-mode">Change it in Admin</a></div>';
     }
 
     // ---- what a node's row says -------------------------------------------------------------------------------------------------------
     var checking = {};   // node id -> true while a double-click is being answered
+    var lastSeen = {};   // node id -> the node as the last redraw had it, so a row can be redrawn in place (its last contact) while it is checked
     var checks = {};     // node id -> { html, at }: what the last double-click found; shown in the row for a minute (the rows are drawn again every few seconds)
 
     function checkLine(n) {
@@ -82,13 +84,20 @@
         rememberOpen();
     }
 
+    // "Checking this node now..." is said in ONE place of a row: in its details when they are open, else in its second line. Both used to say it,
+    // and a check opens the details, so an open row showed the line twice, one under the other.
     function nodeMeta(n) {
         if (checking[n.nodeId]) {
             return '<sl-spinner style="font-size:0.9rem;vertical-align:-2px;"></sl-spinner> Checking this node now...';
         }
         var lines = [];
         var direction = DIRECTION[n.lastContactDirection] || '';
-        if (n.state === 'not_answering') {
+        // How it is reached (direct on this network, through another device, not on this network, needs an update, silent): the node's own sentence.
+        // Only a silent device is an alarm; one that is away or reached through another device is not.
+        if (n.reachabilityText) lines.push(reachabilitySentence(n));
+        if (n.state === 'away') {
+            if (n.lastContactAt) lines.push('Last contact ' + getRelativeTime(n.lastContactAt) + (direction ? ' (' + direction + ')' : ''));
+        } else if (n.state === 'not_answering') {
             lines.push('<span class="sync-bad">Not answering since ' + clockTime(n.notAnsweringSince) + ' (' + getRelativeTime(n.notAnsweringSince) + ')</span>');
             if (n.notAnsweringReason) lines.push(syncEscapeHtml(n.notAnsweringReason));
             if (n.lastContactAt) lines.push('Last contact ' + getRelativeTime(n.lastContactAt) + (direction ? ' (' + direction + ')' : ''));
@@ -113,9 +122,19 @@
         return lines.join('<br>');
     }
 
-    // After the name: green when it is alive, red when this node calls it and gets no answer (a failure is not left to be found under the chevron).
+    // The node's own sentence for how it reaches a device. A silent device (nobody has heard from it for days) is an alarm, in the alarm colour; every other
+    // state is said plainly.
+    function reachabilitySentence(n) {
+        var text = syncEscapeHtml(n.reachabilityText);
+        return n.reachability === 'silent' ? '<span class="sync-bad">' + text + '</span>' : text;
+    }
+
+    // After the name: green when it is alive, red when this node calls it and gets no answer or nobody has heard from it for days (a failure is not left to
+    // be found under the chevron). A device that is away gets no tag at all.
     function nodeName(n, size) {
-        var tag = n.state === 'not_answering'
+        var tag = n.reachability === 'silent'
+            ? ' <small class="sync-bad" style="font-size:' + size + ';">SILENT</small>'
+            : n.state === 'not_answering'
             ? ' <small class="sync-bad" style="font-size:' + size + ';">NOT ANSWERING</small>'
             : n.online ? ' <small style="color:var(--sl-color-success-600);font-size:' + size + ';">ONLINE</small>' : '';
         return syncEscapeHtml(n.displayName) + tag;
@@ -123,7 +142,10 @@
 
     // The second line of a closed row: when it was last heard from, in either direction.
     function summaryLine(n) {
-        if (checking[n.nodeId]) return '<sl-spinner style="font-size:0.9rem;vertical-align:-2px;"></sl-spinner> Checking this node now...';
+        if (checking[n.nodeId] && !expanded[n.nodeId]) return '<sl-spinner style="font-size:0.9rem;vertical-align:-2px;"></sl-spinner> Checking this node now...';
+        if (n.state === 'away' && n.reachabilityText) return reachabilitySentence(n);
+        // The node's sentence is the status line; when it is not about being away, the time of the last contact follows it.
+        if (n.reachabilityText) return reachabilitySentence(n) + (n.lastContactAt ? ' \u00b7 last contact ' + getRelativeTime(n.lastContactAt) : '');
         if (n.lastContactAt) return 'Last contact ' + getRelativeTime(n.lastContactAt);
         return n.state === 'calls_us' ? 'No call since this node started' : 'No contact since this node started';
     }
@@ -148,6 +170,7 @@
     }
 
     function dropdownRow(n) {
+        lastSeen[n.nodeId] = n;
         var open = !!expanded[n.nodeId];
         return '<div class="sync-node-item' + (open ? ' is-open' : '') + '" data-node-id="' + syncEscapeHtml(n.nodeId) + '" title="Double-click to check this node now">' +
             '<sl-icon name="' + getNodeIcon(n) + '" style="font-size:1.1rem;color:' + (n.online ? 'var(--accent)' : 'var(--text-secondary)') + ';"></sl-icon>' +
@@ -206,7 +229,7 @@
         var meta = row && row.querySelector('.sync-node-meta');
         if (meta) meta.innerHTML = nodeMeta({ nodeId: id });
         var summary = row && row.querySelector('.sync-node-summary');
-        if (summary) summary.innerHTML = summaryLine({ nodeId: id });
+        if (summary) summary.innerHTML = summaryLine(lastSeen[id] || { nodeId: id });
         var details = row && row.querySelector('.sync-node-details');
         if (details) details.hidden = false;
         redraw();
@@ -235,6 +258,9 @@
         var row = chevron.closest('[data-node-id]');
         var details = row && row.querySelector('.sync-node-details');
         if (details) details.hidden = !open;
+        // While the node is checked, the line moves with the details: under the name when they close, in them when they open.
+        var summary = row && row.querySelector('.sync-node-summary');
+        if (summary && checking[id]) summary.innerHTML = summaryLine(lastSeen[id] || { nodeId: id });
         if (row) row.className = row.className.replace(/\s*\bis-open\b/g, '') + (open ? ' is-open' : '');
         chevron.setAttribute('aria-expanded', open ? 'true' : 'false');
         var label = chevron.getAttribute('aria-label') || '';

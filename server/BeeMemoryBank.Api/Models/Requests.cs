@@ -73,6 +73,10 @@ public record CreateAgentRequest(string Name, string? Description);
 
 /// <param name="ProtocolVersion">The sync protocol the joiner declares (2.6 and later send it; docs/design/step-a-spec.md 5.1, 11).</param>
 /// <param name="Capabilities">What the joiner advertises (<c>metadata-envelope-v1</c>); a 2.5 joiner sends neither.</param>
+/// <param name="Endpoints">Where the joiner's LAN listener will serve its sync routes (docs/design/lan-peer-sync.md 8); absent from older joiners.</param>
+/// <param name="TlsLeafSpki">The pin of the joiner's TLS leaf key; absent from older joiners.</param>
+/// <param name="TlsCaKey">The joiner's local CA public key (base64url SubjectPublicKeyInfo); absent from older joiners.</param>
+/// <param name="LanPort">The joiner's LAN port; absent from older joiners.</param>
 public record JoinRequest(
     string MasterPassword,
     Guid NodeId,
@@ -80,7 +84,11 @@ public record JoinRequest(
     string Ed25519PublicKeyB64,
     string? ApiAddress = null,
     int? ProtocolVersion = null,
-    string[]? Capabilities = null);
+    string[]? Capabilities = null,
+    List<BeeMemoryBank.Sync.NodeEndpointEntry>? Endpoints = null,
+    string? TlsLeafSpki = null,
+    string? TlsCaKey = null,
+    int? LanPort = null);
 
 /// <summary>
 /// <c>POST /api/join/abort</c>: the joiner of <see cref="NodeId"/> takes back the row its join made. The same proof as the join (the master

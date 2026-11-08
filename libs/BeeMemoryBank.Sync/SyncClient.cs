@@ -34,7 +34,9 @@ public class SyncClient(
     Metadata.ISyncProtocolPolicy? protocolPolicy = null,
     IWhitelistRepository? whitelistRepo = null,
     // What a peer says it runs on is kept here for the network map; a hand-built client without it just does not remember.
-    PeerContactLog? contacts = null)
+    PeerContactLog? contacts = null,
+    // What other peers report about the rest (their my-standing): "not on this network, reachable through X" (docs/design/lan-peer-sync.md 10).
+    Channels.PeerReachability? reachability = null)
 {
     // WhenWritingNull: the push body is written through this too, and the stripped envelope
     // fields (SyncWire.Strip) must vanish from the wire, not ride along as explicit nulls.
@@ -63,7 +65,8 @@ public class SyncClient(
     /// side's counter is not touched: other peers hold positions in that space.</para>
     /// <para>Not for a phone: the mobile hosts call <see cref="SyncWithAsync"/>, where a peer that pulled below a blind
     /// node's checkpoint still gets its 410. A 410 from a peer that is not blind is a real wipe-and-rejoin case and stays
-    /// one. A <see cref="PushGapException"/> is the other direction (the peer is behind us) and is never adopted.</para>
+    /// one, except for a full peer this node has never pulled from (<see cref="AdoptFullPeerCheckpointAsync"/>, in
+    /// <see cref="SyncWithAsync"/>, so the phones have it too). A <see cref="PushGapException"/> is the other direction (the peer is behind us) and is never adopted.</para>
     /// <para>The accepted limit: a blind peer can still claim a checkpoint inside its own log (or, with an empty log, any
     /// checkpoint), which equals withholding the events below it, and a peer that withholds events can do that anyway. What
     /// it withholds is not lost: the phones that pushed those events to it also sync with this node directly. Nothing here
@@ -116,6 +119,53 @@ public class SyncClient(
         if (ex.CurrentHeadSeq > 0 && ex.LastCompactionCp > ex.CurrentHeadSeq)
             return $"its checkpoint ({ex.LastCompactionCp}) is above the head ({ex.CurrentHeadSeq}) it reports for the same log";
         return null;
+    }
+
+    /// <summary>
+    /// A node that joined from a snapshot holds a pull position for its host only (SnapshotJoin): the package carries no
+    /// positions, and the host's would be in other nodes' sequence spaces anyway. Every other full peer, imported from the
+    /// host's whitelist, is first asked for its log from 0, and one that has compacted answers 410 SEQUENCE_TOO_OLD on
+    /// every cycle: the node asked to be wiped and joined again, which made the same node again, never pushed or reported
+    /// to that peer, and so held up the peer's next compaction too (as a peer that never synced).
+    /// <para>What a full peer compacted, every peer it had then had received: its compaction refuses while any active
+    /// peer is behind the cut or never synced (CompactionService), unless an operator forces it, which strands those
+    /// peers visibly. This node holds a cursor for another full peer and pulls that peer's whole tail from it (a cursor
+    /// below that peer's own checkpoint is a refusal there, never silence), so what lies at or below this checkpoint
+    /// reaches it from there. So a full peer it has NEVER pulled from may be pulled from its own checkpoint, once. Adopted
+    /// only when ALL of these hold, otherwise the 410 stays the refusal it was: (a) the code is SEQUENCE_TOO_OLD; (b) no
+    /// pull position for the peer exists (TryAdoptAsync only ever creates the row, so a cursor that exists is never moved
+    /// and a second 410 is a refusal); (c) the checkpoint is above zero and not above the head the same body reports;
+    /// (d) this node holds a pull position for another full peer - a node restored from a blind node holds none, and what
+    /// the peer cut may never have reached it.</para>
+    /// <para>The accepted limit: a peer that compacted after the host's snapshot and before it learned of this node,
+    /// while this node cannot reach the host, leaves what the host received from it in between to the relays (any peer
+    /// this node syncs with that holds it). The refusal it replaces gave this node nothing of that peer at all.</para>
+    /// </summary>
+    /// <returns>The position to pull from now, or null when the 410 stays a refusal.</returns>
+    private async Task<long?> AdoptFullPeerCheckpointAsync(SnapshotRequiredException ex, Guid peerNodeId)
+    {
+        var why = await WhyNotToAdoptAsync(ex, peerNodeId);
+        if (why is null && (ex.CurrentHeadSeq <= 0 || ex.LastCompactionCp > ex.CurrentHeadSeq))
+            why = $"its checkpoint ({ex.LastCompactionCp}) is not inside the log it reports (head {ex.CurrentHeadSeq})";
+        if (why is null && !(await syncPositionRepo.GetAllAsync())
+                .Any(p => p.RemoteNodeId != peerNodeId && !BlindNodeId.IsBlind(p.RemoteNodeId)))
+            why = "this node holds no pull position for any other full peer, so what it compacted may never have reached this node";
+        if (why is not null)
+        {
+            logger.LogWarning("Not taking the checkpoint of {NodeId} ({Url}) as the pull position: {Why}.", peerNodeId, ex.RemoteUrl, why);
+            return null;
+        }
+
+        // Another sync with the same peer created the row between the read and here: pull from that one (where a further 410 is a refusal).
+        if (!await syncPositionRepo.TryAdoptAsync(peerNodeId, ex.LastCompactionCp))
+            return (await syncPositionRepo.GetAsync(peerNodeId))?.LastSequenceNum;
+
+        logger.LogWarning(
+            "{NodeId} ({Url}) has compacted its log up to checkpoint {Cp} (its head is {Head}), and this node never pulled from it " +
+            "(it joined through another node). Everything at or below the checkpoint was received by that peer's peers, so the pull " +
+            "position for it is now {Cp}.",
+            peerNodeId, ex.RemoteUrl, ex.LastCompactionCp, ex.CurrentHeadSeq, ex.LastCompactionCp);
+        return ex.LastCompactionCp;
     }
 
     /// <summary>What the Blind nodes page shows as "adopted checkpoint N". A failure to note it must not fail the sync.</summary>
@@ -259,7 +309,19 @@ public class SyncClient(
             var position = await syncPositionRepo.GetAsync(remoteIdentity.NodeId);
             var afterSeq = position?.LastSequenceNum ?? 0;
 
-            var remoteEvents = await PullEventsAsync(http, remoteApiBase, token, afterSeq, ct);
+            List<SyncEvent> remoteEvents;
+            try
+            {
+                remoteEvents = await PullEventsAsync(http, remoteApiBase, token, afterSeq, ct);
+            }
+            catch (SnapshotRequiredException ex) when (position is null && !BlindNodeId.IsBlind(remoteIdentity.NodeId))
+            {
+                // A full peer this node has never pulled from, compacted: see AdoptFullPeerCheckpointAsync. A blind peer
+                // has its own rule (SyncWithPeerAsync), and a cursor that exists never gets here.
+                if (await AdoptFullPeerCheckpointAsync(ex, remoteIdentity.NodeId) is not { } adopted) throw;
+                afterSeq = adopted;
+                remoteEvents = await PullEventsAsync(http, remoteApiBase, token, afterSeq, ct);
+            }
             logger.LogDebug("Received {Count} events from {NodeId}", remoteEvents.Count, remoteIdentity.NodeId);
 
             // Protocol 2: events name their ciphertext by hash. Fetch every blob this page needs
@@ -391,7 +453,9 @@ public class SyncClient(
 
         var pushPosition = await pushPositionRepo.GetAsync(remoteIdentity.NodeId);
         long pushAfter = pushPosition?.LastPushedSeq ?? 0;
-        int totalApplied = 0, totalSkipped = 0, totalDropped = 0;
+        // Withheld is not dropped (docs/design/lan-peer-sync.md 18): those events were never sent, the peer dropped nothing. Counted apart, and still a
+        // reason to save the push position (the cursor moved over them).
+        int totalApplied = 0, totalSkipped = 0, totalDropped = 0, totalWithheld = 0;
         long localMaxSeq = await eventLogRepo.GetMaxSequenceAsync();
 
         // Gap detector (plan 5.1): relaying "everything after pushAfter" would start at the oldest
@@ -410,6 +474,12 @@ public class SyncClient(
         // historic rows included. Such rows are left out of what is sent and the cursor moves over them as if accepted;
         // the next baseline carries what they changed.
         var withholdClearContent = BlindNodeId.IsBlind(remoteIdentity.NodeId) && protocolPolicy is { SealsMetadata: true };
+        // A peer that does not advertise peer-endpoints-v1 (a 2.7.5 node) never gets a node_endpoints event: a locked, encrypted 2.7.5 node refuses an
+        // unknown type in its relay inbox, and every later push would stall behind it (docs/design/lan-peer-sync.md 8, 12). The cursor moves over it.
+        var peerCapabilities = remoteIdentity.Capabilities ?? [];
+        bool Withheld(SyncEvent e) =>
+            (withholdClearContent && Metadata.EventClasses.IsClearContent(e.ProtocolVersion, e.EventType))
+            || Metadata.MetadataCapabilities.IsWithheldFrom(e.EventType, peerCapabilities);
 
         logger.LogInformation("Push to {Remote}: localMaxSeq={MaxSeq}, pushAfter={After}", remoteIdentity.NodeId, localMaxSeq, pushAfter);
         // True when the loop ran out of events to send (not when it stopped on a stall): everything after the cursor
@@ -424,9 +494,7 @@ public class SyncClient(
             logger.LogInformation("Push page to {Remote}: {Count} events", remoteIdentity.NodeId, page.Count);
             if (page.Count == 0) { drained = true; break; }
 
-            var sendable = withholdClearContent
-                ? page.Where(e => !Metadata.EventClasses.IsClearContent(e.ProtocolVersion, e.EventType)).ToList()
-                : page;
+            var sendable = page.Where(e => !Withheld(e)).ToList();
             var withheld = page.Count - sendable.Count;
 
             bool stalled = false;
@@ -500,13 +568,13 @@ public class SyncClient(
             {
                 // Everything sendable in the page was accepted: the withheld rows, trailing ones included, are passed over.
                 pushAfter = Math.Max(pushAfter, page[^1].SequenceNum);
-                totalDropped += withheld;
+                totalWithheld += withheld;
             }
 
             if (page.Count < PushFetchSize) { drained = true; break; }
         }
 
-        if (totalApplied + totalDropped > 0)
+        if (totalApplied + totalDropped + totalWithheld > 0)
         {
             await pushPositionRepo.UpsertAsync(new SyncPushPosition
             {
@@ -514,9 +582,15 @@ public class SyncClient(
                 LastPushedSeq = pushAfter,
                 PushedAt = DateTime.UtcNow
             });
-            logger.LogInformation("Push: applied {Applied}, dropped {Dropped}, skipped {Skipped} on {NodeId}",
-                totalApplied, totalDropped, totalSkipped, remoteIdentity.NodeId);
+            if (totalWithheld > 0)
+                logger.LogInformation(
+                    "Push: applied {Applied}, dropped {Dropped}, withheld {Withheld} ({Why}), skipped {Skipped} on {NodeId}",
+                    totalApplied, totalDropped, totalWithheld, WithheldReason(withholdClearContent), totalSkipped, remoteIdentity.NodeId);
+            else
+                logger.LogInformation("Push: applied {Applied}, dropped {Dropped}, skipped {Skipped} on {NodeId}",
+                    totalApplied, totalDropped, totalSkipped, remoteIdentity.NodeId);
         }
+        LastPush = new PushCounts(totalApplied, totalDropped, totalWithheld, totalSkipped);
 
         // BMB-315: what a push sends is "everything but what the peer wrote itself". When all that is left after the cursor is the
         // peer's own events (the page is empty), the cursor used to stay where it was for ever: the delivery status counted the
@@ -526,7 +600,43 @@ public class SyncClient(
         if (drained && pushPosition != null && pushAfter < localMaxSeq)
             await pushPositionRepo.AdvanceCursorAsync(remoteIdentity.NodeId, localMaxSeq);
 
+        // What this peer sees of the others, every few minutes: "not on this network, reachable through it" for the peers this node cannot call itself.
+        if (reachability is not null && reachability.ShouldAskStanding(remoteIdentity.NodeId, DateTime.UtcNow))
+            await AskStandingAsync(http, remoteApiBase, token, remoteIdentity, identity.NodeId, ct);
+
         return appliedCount;
+    }
+
+    /// <summary>The counters of the last push this client made (a test reads them).</summary>
+    public PushCounts? LastPush { get; private set; }
+
+    /// <summary>What one push did: applied and dropped by the peer, withheld by this node (never sent), skipped (stays for the next cycle).</summary>
+    public sealed record PushCounts(int Applied, int Dropped, int Withheld, int Skipped);
+
+    private static string WithheldReason(bool clearContentForBlind) => clearContentForBlind
+        ? "clear content for a blind node, carried by the baseline, and events the peer's version does not take"
+        : "events the peer's version does not take";
+
+    private async Task AskStandingAsync(HttpClient http, string baseUrl, string token, RemoteIdentity remote, Guid self, CancellationToken ct)
+    {
+        try
+        {
+            using var bound = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            bound.CancelAfter(TimeSpan.FromSeconds(10));
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/sync/my-standing");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            using var resp = await http.SendAsync(req, bound.Token);
+            if (!resp.IsSuccessStatusCode) return;
+            if (resp.Content.Headers.ContentLength is > 1024 * 1024) return;
+            var standing = await resp.Content.ReadFromJsonAsync<MyStanding>(JsonOpts, bound.Token);
+            if (standing is not null && standing.ResponderNodeId == remote.NodeId)
+                reachability!.NoteStanding(remote.NodeId, remote.DisplayName, standing, self, DateTime.UtcNow);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or OperationCanceledException or NotSupportedException)
+        {
+            // Evidence, not a duty: a peer that does not answer it leaves the others as they were.
+            logger.LogDebug("my-standing of {NodeId} could not be read ({Type})", remote.NodeId, ex.GetType().Name);
+        }
     }
 
     // BMB-307: an address that answers 404 (or with a page that is not an identity) has no sync server behind it; that is said as such

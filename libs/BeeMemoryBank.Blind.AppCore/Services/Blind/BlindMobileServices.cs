@@ -7,6 +7,7 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
+using BeeMemoryBank.Sync.Channels;
 using BeeMemoryBank.Sync.Metadata;
 using Dapper;
 using Microsoft.Extensions.DependencyInjection;
@@ -117,6 +118,20 @@ public static partial class BlindMobileServices
 
         services.AddLogging();
 
+        // The hub's channels (docs/design/lan-peer-sync.md sections 7 and 16): what the hub announced (tbl_peer_endpoint, written by the applier), this copy's own record of how each
+        // address went (tbl_peer_channel), the order they are tried in, and the checks of a TLS key against the hub's anchor. The host's mDNS browse (IBlindLanBrowser) is optional:
+        // without one the hub is reached by its pairing address and its announced endpoints.
+        services.AddSingleton<PeerEndpointStore>();
+        services.AddSingleton<PeerChannelStore>();
+        services.AddSingleton<PeerDialer>();
+        services.AddSingleton<PeerReachability>();
+        services.TryAddSingleton<ILocalNetworks, SystemLocalNetworks>();
+        services.TryAddSingleton(sp => new BlindLanDirectory(
+            sp.GetService<IBlindLanBrowser>(), sp.GetRequiredService<TimeProvider>(), sp.GetService<ILogger<BlindLanDirectory>>()));
+        services.TryAddSingleton<IPeerDiscovery>(sp => sp.GetRequiredService<BlindLanDirectory>().Discovery);
+        services.AddSingleton<SpkiPinRegistry>();
+        services.AddSingleton(sp => new BlindHubChannels(sp, sp.GetRequiredService<BlindLanDirectory>(), sp.GetRequiredService<TimeProvider>()));
+
         // Pinned HTTP client and maintenance detection
         services.AddTransient<MaintenanceDetectingHandler>();
         services.AddTransient<BlindHttpHandler>();
@@ -126,7 +141,12 @@ public static partial class BlindMobileServices
                 $"Refused {host}: it answered with another key than the one pinned when this phone was paired. Nothing was sent."),
             host => BlindRunReport.Record(sp.GetRequiredService<BlindPhoneLog>(), "certificate",
                 $"Refused {host}: its certificate is not valid (expired, issued for another name, self-signed or from an authority this device does not trust). Nothing was sent."),
-            primaryHandlerOverride: options.PrimaryHandlerFactory) { Metering = sp.GetRequiredService<BlindMeteringTap>() });
+            primaryHandlerOverride: options.PrimaryHandlerFactory)
+        {
+            Metering = sp.GetRequiredService<BlindMeteringTap>(),
+            Hub = sp.GetRequiredService<BlindHubChannels>(),
+            Pins = sp.GetRequiredService<SpkiPinRegistry>(),
+        });
         services.AddSingleton<IHttpClientFactory>(sp => sp.GetRequiredService<BlindHttpClientProvider>());
         services.AddTransient<HttpClient>(sp => sp.GetRequiredService<BlindHttpClientProvider>().GetClient());
 

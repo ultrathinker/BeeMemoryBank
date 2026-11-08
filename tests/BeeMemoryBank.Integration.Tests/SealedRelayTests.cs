@@ -156,6 +156,37 @@ public class SealedRelayTests
         (await h.PullAsync(token, after: served[0].SequenceNum)).Select(e => e.EventId).Should().Equal(events.Skip(1).Select(e => e.EventId));
     }
 
+    [Fact]
+    public async Task APullerWithoutPeerEndpointsV1_IsNeverServedANodeEndpointsEvent_AndGetsTheRowsAfterIt()
+    {
+        // docs/design/lan-peer-sync.md 8: a 2.7.5 node pulling from a locked relay would hand node_endpoints on to a locked, encrypted 2.7.5 node,
+        // which refuses the type and stalls. The page is filled past the withheld rows, so a page of them never hides what follows.
+        await using var h = await SealedRelayHost.StartAsync();
+        var author = await h.AddPeerAsync();
+        var oldPuller = await h.AddPeerAsync();
+        var newPuller = await h.AddPeerAsync();
+        var announce = (long seq) => SealedRelayHost.ControlEvent(author, EventTypes.NodeEndpoints,
+            new NodeEndpointsPayload(author.Id.ToString(), seq, [new("https://192.168.1.20:5311", "lan")], null, null, 5311), originSequence: seq + 1);
+        var first = SealedRelayHost.SealedEvent(author, originSequence: 1);
+        var last = SealedRelayHost.SealedEvent(author, originSequence: 5);
+        await Applied(await h.PushAsync(await h.TokenAsync(author), first, announce(1), announce(2), announce(3), last));
+
+        var oldToken = await h.TokenAsync(oldPuller, capabilities: [MetadataCapabilities.EnvelopeV1]);
+        var oldPage = await PullPageAsync(h, oldToken, after: 100, limit: 2);
+        oldPage.Select(e => e.EventId).Should().Equal([first.EventId, last.EventId], "the three announcements are withheld, the page is filled past them");
+
+        var newToken = await h.TokenAsync(newPuller);
+        var newPage = await PullPageAsync(h, newToken, after: 100, limit: 2);
+        newPage.Select(e => e.EventType).Should().Equal([EventClasses.Sealed, EventTypes.NodeEndpoints]);
+    }
+
+    private static async Task<List<SyncEvent>> PullPageAsync(SealedRelayHost h, string token, long after, int limit)
+    {
+        var response = await h.SendAsync(HttpMethod.Get, $"/api/sync/events?afterSequence={after}&limit={limit}", token);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        return (await response.Content.ReadFromJsonAsync<List<SyncEvent>>())!;
+    }
+
     private static bool Ed25519Verifies(RelayPeer author, SyncEvent evt) =>
         BeeMemoryBank.Crypto.Ed25519Signer.Verify(author.PublicKey, EventSignature.BuildPayload(evt), evt.Signature);
 

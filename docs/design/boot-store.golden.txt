@@ -52,6 +52,8 @@ tbl_relay_event.signature BLOB
 tbl_relay_report.remote_node_id TEXT
 tbl_relay_report.reported_seq INTEGER
 tbl_relay_report.updated_at TEXT
+tbl_whitelist.address_lamport_ts INTEGER
+tbl_whitelist.address_source_node_id TEXT
 tbl_whitelist.api_address TEXT
 tbl_whitelist.auto_accept_dek_rotation INTEGER
 tbl_whitelist.auto_accept_restore INTEGER
@@ -67,9 +69,18 @@ tbl_whitelist.last_capabilities TEXT
 tbl_whitelist.last_capabilities_seen_at TEXT
 tbl_whitelist.last_protocol_seen_at TEXT
 tbl_whitelist.last_protocol_version INTEGER
+tbl_whitelist.member_lamport_ts INTEGER
+tbl_whitelist.member_source_node_id TEXT
+tbl_whitelist.name_lamport_ts INTEGER
+tbl_whitelist.name_source_node_id TEXT
 tbl_whitelist.node_id TEXT
 tbl_whitelist.source_node_id TEXT
 tbl_whitelist.status TEXT
+tbl_whitelist.superadmin_lamport_ts INTEGER
+tbl_whitelist.superadmin_source_node_id TEXT
+tbl_whitelist.tls_lamport_ts INTEGER
+tbl_whitelist.tls_source_node_id TEXT
 tbl_whitelist.tls_spki TEXT
 tbl_whitelist.tls_trust TEXT
+tbl_whitelist.undated_fields INTEGER
 tbl_whitelist.updated_at TEXT

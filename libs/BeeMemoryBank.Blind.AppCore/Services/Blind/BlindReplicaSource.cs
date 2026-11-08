@@ -13,13 +13,13 @@ public sealed class BlindReplicaSource(BlindPhoneReplicaClient client, BlindHttp
 {
     public Task FetchAndInstallAsync(
         BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
-        client.FetchAndInstallAsync(http.GetClient(target), target, workDirectory, progress, ct);
+        http.WithClientAsync(target, BlindHubCall.Package, exempt: false, (web, hub) => client.FetchAndInstallAsync(web, hub, workDirectory, progress, ct), ct);
 
     public Task<bool> UpdateBaselineAsync(
         BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
-        client.UpdateBaselineAsync(http.GetClient(target), target, workDirectory, progress, ct);
+        http.WithClientAsync(target, BlindHubCall.Package, exempt: false, (web, hub) => client.UpdateBaselineAsync(web, hub, workDirectory, progress, ct), ct);
 
     public Task<BlindBaselineCheck> CheckBaselineAsync(
         BlindCallCode target, string workDirectory, IProgress<double>? progress, CancellationToken ct) =>
-        client.CheckBaselineAsync(http.GetClient(target), target, workDirectory, progress, ct);
+        http.WithClientAsync(target, BlindHubCall.Package, exempt: false, (web, hub) => client.CheckBaselineAsync(web, hub, workDirectory, progress, ct), ct);
 }

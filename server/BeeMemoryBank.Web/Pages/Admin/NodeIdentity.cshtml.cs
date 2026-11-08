@@ -1,11 +1,4 @@
-using BeeMemoryBank.Web.Models;
-using BeeMemoryBank.Web.Services;
-
 namespace BeeMemoryBank.Web.Pages.Admin;
 
-public class NodeIdentityModel(ApiClient api) : AdminPageModel(api)
-{
-    public NodeIdentityDto? Identity { get; private set; }
-
-    public async Task OnGetAsync() => Identity = await Api.GetIdentityAsync();
-}
+/// <summary><c>/Admin/NodeIdentity</c> of 2.7.5 and earlier: the identity of this node is on the card "This device" of Admin &gt; Devices. The old address stays for bookmarks and links (a GET answers a redirect, with its query).</summary>
+public class NodeIdentityRedirectModel() : LegacyPageRedirectModel(AdminRoutes.Devices, "this-device");

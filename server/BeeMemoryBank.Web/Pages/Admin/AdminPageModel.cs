@@ -43,7 +43,7 @@ public abstract class AdminPageModel(ApiClient api) : PageModel
     public virtual IReadOnlyList<string> PageScripts => [];
 
     /// <summary>Ends a handler: this page again, with the message of the action. A handler with nothing to say passes nothing.</summary>
-    protected IActionResult Back(string? msg = null, string? err = null, string? detail = null) => RedirectToPage(null, null, new { msg, err, detail });
+    protected virtual IActionResult Back(string? msg = null, string? err = null, string? detail = null) => RedirectToPage(null, null, new { msg, err, detail });
 
     // ---- what two pages show alike ---------------------------------------------------------------------------------------------------------------------
 

@@ -21,7 +21,8 @@ public class FullIosSourceTests
     {
         var plist = Plist(App("Platforms", "iOS", "Info.plist"));
 
-        plist["NSLocalNetworkUsageDescription"].Value.Should().Contain("home network");
+        plist["NSLocalNetworkUsageDescription"].Value.Should().Contain("sync directly with your computers on this Wi-Fi");
+        plist["NSBonjourServices"].Elements("string").Select(s => s.Value).Should().Equal("_beememorybank._tcp");
         plist["NSFaceIDUsageDescription"].Value.Should().Contain("never stored");
         plist.Should().NotContainKey("UIUserInterfaceStyle", "light and dark follow the system");
         plist.Should().NotContainKey("UIBackgroundModes", "the app runs only the seconds iOS grants a leaving app; it keeps nothing open");

@@ -1,0 +1,210 @@
+@page
+@using BeeMemoryBank.Web.Services
+@model BeeMemoryBank.Web.Pages.Admin.DevicesModel
+@{
+    var self = Model.Network?.Self;
+    var lan = Model.LanSync;
+}
+
+@section About {
+    <p>
+        These are the devices that belong to this network: the computers, servers and phones this node syncs with, and the blind nodes that keep its encrypted
+        backups. A device that is not on this list is not accepted, and a device that is revoked stops being accepted by every node that receives the revocation.
+        Each row says in one sentence how this node reaches the device: directly on this network, directly over the internet, through another device, or not at all.
+    </p>
+    <p>
+        <strong>Being away is not a fault.</strong> A laptop on a trip is &ldquo;Not on this network&rdquo; and, when another device has seen it, &ldquo;reachable through&rdquo;
+        that device; it catches up when it is back. Only a device nobody has heard from for three days, or one this node calls and gets no answer from, is marked as an
+        alarm. Open a device for its addresses, what it may do on its own, and how its certificate is trusted.
+        To mirror selected folders read-only from a different Bee Memory Bank, use <a href="/RemoteAccounts">Remote Accounts</a>.
+    </p>
+}
+
+@if (Model.ShowLanNotice)
+{
+    @* D9: LAN sync is on by default after the update; said once. *@
+    <sl-alert id="lan-notice" variant="primary" open style="margin-bottom:16px;">
+        <sl-icon slot="icon" name="info-circle"></sl-icon>
+        <strong>Direct sync with your devices on this network is on.</strong> Devices already paired with this one keep in step with it directly on a network you trust,
+        without your server. Only the sync connection is opened, never the web page. You can change it under <a href="@AdminRoutes.NetworkSettings">Network settings</a>.
+        <form data-busy="short" method="post" asp-page-handler="DismissLanNotice" style="margin-top:8px;">
+            <sl-button type="submit" size="small">Got it</sl-button>
+        </form>
+    </sl-alert>
+}
+
+<div class="devices-actions">
+    <sl-button variant="primary" size="small" class="btn-open-dialog" id="btn-connect-device" data-dialog-id="dlg-connect-device">
+        <sl-icon slot="prefix" name="phone"></sl-icon> Connect a device
+    </sl-button>
+    <sl-button size="small" id="btn-add-blind-node" href="@AdminRoutes.BlindNodes">
+        <sl-icon slot="prefix" name="shield-lock"></sl-icon> Add a blind node
+    </sl-button>
+</div>
+
+<div class="card devices-self" id="this-device">
+    <h3 class="devices-card-title"><sl-icon name="laptop"></sl-icon> This device</h3>
+    @if (self is not null || Model.Identity is not null)
+    {
+        var name = self?.DisplayName ?? Model.Identity!.DisplayName;
+        <p class="devices-self-line" id="this-device-line">
+            <strong>@name</strong>
+            @if (self is not null)
+            {
+                <span class="text-muted">&middot; @DeviceRows.KindOf(self)@(DeviceRows.PlatformOf(self) is { } platform ? " (" + platform + ")" : "") &middot; @DeviceRows.VersionOf(self)</span>
+            }
+        </p>
+    }
+    @if (lan is not null)
+    {
+        <p class="devices-self-line" id="this-device-network">
+            <span class="text-muted">On this network:</span> @LanNetworkWords.Networks(lan) &middot; @LanNetworkWords.Listening(lan).
+            <a href="@AdminRoutes.NetworkSettings">Network settings</a>
+        </p>
+    }
+    else if (!Model.Lan.IsAvailable)
+    {
+        <p class="devices-self-line text-muted text-sm" id="this-device-network">
+            This node is not the desktop app, so it has no LAN listener of its own: which computers can reach it is decided by how it was started.
+            <a href="@AdminRoutes.NetworkSettings">Network settings</a> says what applies.
+        </p>
+    }
+    @if (Model.RestoredPeers.Count > 0)
+    {
+        <p class="devices-self-line" id="restored-devices-notice">
+            <sl-icon name="shield-exclamation" style="color:var(--sl-color-warning-600);"></sl-icon>
+            Restored devices waiting for confirmation: <strong>@Model.RestoredPeers.Count</strong> <a href="#restored-peers">Review</a>
+        </p>
+    }
+    @if (Model.Identity is { } identity)
+    {
+        <details class="devices-identity" id="node-identity">
+            <summary>Identity of this node</summary>
+            <p class="text-muted text-sm" style="margin:8px 0;">
+                The ID names this node in the lists of the other nodes and in the log of changes; they check every change from this node against the public key. Nothing here is
+                secret and nothing here can be changed: use it to check that a device you are pairing is the one you think it is. A node that is wiped, or restored from a snapshot as a
+                new node, gets a new identity.
+            </p>
+            <div class="article-meta">
+                <span><strong>ID:</strong>
+                    <span class="article-id-badge" title="Click to copy" data-bmb-copy="@identity.NodeId">@identity.NodeId</span>
+                </span>
+            </div>
+            <div style="margin-top:12px;">
+                <label class="text-sm text-muted">Ed25519 Public Key</label>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                    <code style="font-size:0.78rem;word-break:break-all;flex:1;" id="pubkey-val">@identity.Ed25519PublicKeyB64</code>
+                    <sl-icon-button id="btn-copy-pubkey" class="btn-copy-pubkey" data-target="pubkey-val" name="clipboard" label="Copy"></sl-icon-button>
+                </div>
+            </div>
+        </details>
+    }
+</div>
+
+@if (Model.PasswordPeersToPromote.Count > 0)
+{
+    <!-- BMB-42: devices joined before "whoever knows the master password is a superadmin"; the card is here only while there are any -->
+    <div class="card" id="promote-password-peers" style="margin-bottom:16px;border-color:var(--sl-color-warning-600);">
+        <h3 class="devices-card-title"><sl-icon name="shield-check"></sl-icon> Grant superadmin to devices joined with the password</h3>
+        <sl-alert variant="warning" open style="margin-bottom:12px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>@Model.PasswordPeersToPromote.Count device(s) joined with the master password are not superadmins yet.</strong>
+            Their hard deletes and password changes are refused by the rest of the network, so the copies drift apart.
+        </sl-alert>
+        <p style="margin-bottom:12px;">
+            Whoever knows the master password is a superadmin. These devices joined before that
+            rule, so the network still treats them as ordinary peers: a hard delete or a password
+            change made on them is applied there but refused everywhere else, and the copies drift
+            apart. Granting them superadmin tells every node, one device at a time.
+        </p>
+        <p class="text-muted text-sm" style="margin-bottom:16px;">
+            If you demoted one of these devices on purpose, untick it. Blind nodes never appear here.
+        </p>
+        <form data-busy="short" method="post" asp-page-handler="PromotePasswordPeers">
+            @foreach (var c in Model.PasswordPeersToPromote)
+            {
+                <div style="margin-bottom:8px;">
+                    <label>
+                        <input type="checkbox" name="nodeIds" value="@c.NodeId" checked />
+                        <strong>@c.DisplayName</strong>
+                        <code class="text-sm">@c.NodeId.ToString()[..8]&hellip;</code>
+                        <span class="text-muted text-sm">@(c.ApiAddress ?? "")</span>
+                    </label>
+                </div>
+            }
+            <div style="margin-top:16px;">
+                <sl-button type="submit" variant="warning" size="small">
+                    <sl-icon slot="prefix" name="shield-check"></sl-icon> Grant superadmin to the ticked devices
+                </sl-button>
+            </div>
+        </form>
+    </div>
+}
+
+@if (Model.RestoredPeers.Count > 0)
+{
+    <div class="card" id="restored-peers" style="margin-bottom:16px;">
+        <h3 class="devices-card-title"><sl-icon name="shield-exclamation"></sl-icon> Restored devices waiting for your confirmation</h3>
+        <p class="text-muted text-sm" style="margin:0 0 8px;">
+            A restore gave this node back the devices it trusted. A device with proof (an integrity anchor signed under your master key) came back switched on. These came back
+            <strong>switched off</strong>: they cannot sign in with their key, sync or write anything here until you decide. Confirm the ones you recognise; a confirmed device does not get
+            superadmin rights back by itself (open it to promote it). For a device you do not recognise, do nothing: it stays off, and it can join again by being paired from scratch.
+        </p>
+        @foreach (var peer in Model.RestoredPeers)
+        {
+            <div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap;">
+                <span style="flex:1;min-width:200px;overflow-wrap:anywhere;"><strong>@peer.DisplayName</strong> <code style="font-size:0.78rem;">@peer.NodeId</code> @peer.ApiAddress</span>
+                <form data-busy="short" method="post" asp-page-handler="ConfirmRestoredPeer" style="display:inline;">
+                    <input type="hidden" name="nodeId" value="@peer.NodeId" />
+                    <sl-button size="small" type="submit">Confirm</sl-button>
+                </form>
+            </div>
+        }
+    </div>
+}
+
+@if (Model.Network is null)
+{
+    <sl-alert variant="warning" open id="devices-unavailable">
+        <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+        Could not load the devices. Check the API connection.
+    </sl-alert>
+}
+else if (Model.Rows.Count == 0)
+{
+    <div class="card" id="devices-empty" style="text-align:center;padding:40px;">
+        <sl-icon name="people" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+        <p class="text-muted" style="margin:0;">No other device yet. Press <strong>Connect a device</strong> to join a phone or another computer, or <strong>Add a blind node</strong> for an encrypted copy.</p>
+    </div>
+}
+else
+{
+    <ul class="device-list" id="device-list">
+        @foreach (var row in Model.Rows)
+        {
+            <li class="device-row tone-@row.Tone.ToString().ToLowerInvariant()" data-node-id="@row.NodeId" data-tone="@row.Tone.ToString().ToLowerInvariant()">
+                <span class="device-mark" title="@row.ToneWords"><sl-icon name="@row.Icon"></sl-icon><span class="sr-only">@row.ToneWords</span></span>
+                <div class="device-main">
+                    <div class="device-head">
+                        <a class="device-name" href="@AdminRoutes.DeviceOf(row.NodeId)">@row.Name</a>
+                        <span class="device-kind text-muted text-sm">@row.Kind@(row.Platform is { } p ? " (" + p + ")" : "") &middot; @row.Version</span>
+                    </div>
+                    <div class="device-status">@row.Status@(row.Delivery is { } delivery ? " · " + delivery : "")</div>
+                    @if (row.Contact is { } contact)
+                    {
+                        <div class="device-contact text-muted text-sm">@contact</div>
+                    }
+                </div>
+                <sl-button size="small" href="@AdminRoutes.DeviceOf(row.NodeId)" class="device-open">Details</sl-button>
+            </li>
+        }
+    </ul>
+}
+
+<p class="devices-links">
+    <sl-button size="small" variant="text" href="/Network"><sl-icon slot="prefix" name="diagram-3"></sl-icon> Network map</sl-button>
+    <sl-button size="small" variant="text" href="@AdminRoutes.NetworkSettings"><sl-icon slot="prefix" name="wifi"></sl-icon> Network settings</sl-button>
+    <sl-button size="small" variant="text" href="@AdminRoutes.Compaction"><sl-icon slot="prefix" name="journal-text"></sl-icon> Event log &amp; compaction</sl-button>
+</p>
+
+<partial name="_ConnectDeviceDialog" model="Model" />

@@ -3,14 +3,15 @@ extern alias WebApp;
 using System.Net;
 using System.Text;
 using ApiClient = WebApp::BeeMemoryBank.Web.Services.ApiClient;
-using ConnectDeviceModel = WebApp::BeeMemoryBank.Web.Pages.Admin.ConnectDeviceModel;
+using DevicesModel = WebApp::BeeMemoryBank.Web.Pages.Admin.DevicesModel;
 using NodeLanClient = WebApp::BeeMemoryBank.Web.Services.NodeLanClient;
 
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// "Connect a device" on its Admin page (release 2.7.2: the page <c>/Connect</c> is folded in). Opening the page only asks the node for its status; the door to the
-/// network is opened by the button, a POST, and nothing else. The node is a stand-in that writes down what it was asked.
+/// "Connect a device", the dialog of Admin &gt; Devices (it was a page of its own, <c>/Admin/ConnectDevice</c>, and before that <c>/Connect</c>). Opening the page only asks
+/// the node for its status; the door to the network is opened by the button of the dialog, a POST, and nothing else. The node is a stand-in that writes down what it
+/// was asked.
 /// </summary>
 public sealed class ConnectDevicePageTests : IDisposable
 {
@@ -51,7 +52,15 @@ public sealed class ConnectDevicePageTests : IDisposable
         }
     }
 
-    private sealed class Page(StandInNode node, string dataPath) : ConnectDeviceModel(new ApiClient(new HttpClient()), null!)
+    /// <summary>An Api that has nothing to say: the list of devices is empty, and the dialog is what the tests look at.</summary>
+    private sealed class SilentApi : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+    }
+
+    private sealed class Page(StandInNode node, string dataPath)
+        : DevicesModel(new ApiClient(new HttpClient(new SilentApi()) { BaseAddress = new Uri("http://api.test") }), null!, null!)
     {
         protected override NodeLanClient Client => new(new HttpClient(node), dataPath, "key-of-the-test");
     }
@@ -68,6 +77,7 @@ public sealed class ConnectDevicePageTests : IDisposable
         _node.Requests.Should().Equal(["GET /node/lan"], "a page that is merely opened must not open the node to the network");
         page.Lan.Active.Should().BeFalse();
         page.Endpoints.Should().BeEmpty("no join code is shown while the door is closed");
+        page.ConnectOpen.Should().BeFalse("the dialog is drawn closed until the person opens it");
     }
 
     [Fact]
@@ -80,6 +90,7 @@ public sealed class ConnectDevicePageTests : IDisposable
         _node.Requests.Should().Equal(["POST /node/lan/enable"]);
         page.Lan.Active.Should().BeTrue();
         page.Lan.Token.Should().Be(Token);
+        page.ConnectOpen.Should().BeTrue("the answer to the button of the dialog is the page with the dialog open");
 
         var later = NewPage();
         await later.OnGetAsync(CancellationToken.None);

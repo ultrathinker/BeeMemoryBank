@@ -142,6 +142,7 @@ app.MapRecoveryEndpoints();
 app.MapBlindRestoreEndpoints();
 app.MapRestoreEndpoints();
 app.MapWhitelistEndpoints();
+app.MapPeerChannelEndpoints();
 app.MapAgentEndpoints();
 app.MapFavoriteEndpoints();
 app.MapBrandingEndpoints();

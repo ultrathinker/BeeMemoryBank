@@ -38,7 +38,7 @@ public sealed class ShellPlatformsTests
         platform.Os.Should().Be(ShellOs.Windows);
         platform.CreateAutostart().Should().BeOfType<AutostartService>();
         platform.FileManager.Should().BeOfType<WindowsFileManager>();
-        platform.TrayIconAsset.Should().Be("avares://BeeMemoryBank.Desktop/Assets/icon.png");
+        platform.TrayIconAsset.Should().Be("avares://BeeMemoryBank.Desktop/Assets/icon.ico", "the tray takes the hand-drawn small entries of the .ico");
         platform.TrayIconIsTemplate.Should().BeFalse();
         platform.QuitMenuText.Should().Be("Exit");
         platform.InterceptsApplicationQuit.Should().BeFalse("on Windows only the tray menu and the update restart end the app, and they already stop the node");

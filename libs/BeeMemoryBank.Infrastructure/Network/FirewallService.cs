@@ -63,6 +63,9 @@ public class FirewallService
                 $"name={_ruleName}", "protocol=TCP", $"localport={port}");
 
             var label = string.IsNullOrWhiteSpace(appName) ? "BeeMemoryBank" : appName;
+            // No profile and no remote bound, as before: this is the rule of the legacy BMB_HTTPS_ENABLED front, which serves everything because its
+            // owner asked for that, and may be the internet door of a port-forwarded node. The LAN listener's own rule is the bounded one
+            // (Front/LanFirewall.cs, docs/design/lan-peer-sync.md 6.2 and 19).
             var exitCode = RunNetsh("advfirewall", "firewall", "add", "rule",
                 $"name={_ruleName}", "dir=in", "action=allow", "protocol=TCP", $"localport={port}",
                 $"description=Inbound HTTPS listener for {label}");

@@ -58,15 +58,24 @@ public class PasswordHintTests : TestFixture
         => PasswordHintPolicy.Validate(hint, "Correct-Horse-9", "admin").Should().Be(PasswordHintPolicy.RequiredMessage);
 
     [Theory]
-    [InlineData("ab", false, "2 characters")]
-    [InlineData("abc", true, "3 characters")]
+    [InlineData("x", true, "1 character: the owner's minimum, a hint only has to be there")]
+    [InlineData("ab", true, "2 characters")]
     [InlineData("012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789", true, "120 characters")]
     [InlineData("0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890", false, "121 characters")]
-    public void TheLengthBounds_AreThreeToAHundredAndTwenty(string hint, bool accepted, string because)
+    public void TheLengthBounds_AreOneToAHundredAndTwenty(string hint, bool accepted, string because)
     {
         var problem = PasswordHintPolicy.Validate(hint, "Correct-Horse-9", "admin");
         if (accepted) problem.Should().BeNull(because);
-        else problem.Should().Contain("3 to 120", because);
+        else problem.Should().Contain("1 to 120", because);
+    }
+
+    [Fact]
+    public void AOneCharacterHint_StillFollowsTheOtherRules()
+    {
+        PasswordHintPolicy.MinimumLength.Should().Be(1);
+        PasswordHintPolicy.Validate(" ", "Correct-Horse-9", "admin").Should().Be(PasswordHintPolicy.RequiredMessage, "a hint is still required");
+        PasswordHintPolicy.Validate("x", "Correct-Horse-9", "x").Should().Contain("must not contain the username");
+        PasswordHintPolicy.Validate("\u0007", "Correct-Horse-9", "admin").Should().Contain("control characters");
     }
 
     [Fact]
@@ -198,7 +207,7 @@ public class PasswordHintTests : TestFixture
         var byName = () => Users.SetPasswordHintAsync(admin!.Id, "I am admin");
         await byName.Should().ThrowAsync<ArgumentException>().WithMessage("*must not contain the username*");
 
-        var tooShort = () => Users.SetPasswordHintAsync(admin!.Id, "ab");
-        await tooShort.Should().ThrowAsync<ArgumentException>().WithMessage("*3 to 120*");
+        var tooLong = () => Users.SetPasswordHintAsync(admin!.Id, new string('h', PasswordHintPolicy.MaximumLength + 1));
+        await tooLong.Should().ThrowAsync<ArgumentException>().WithMessage("*1 to 120*");
     }
 }

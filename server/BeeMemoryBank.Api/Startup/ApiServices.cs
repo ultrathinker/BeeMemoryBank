@@ -18,6 +18,7 @@ using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using BeeMemoryBank.Mdns;
 
 namespace BeeMemoryBank.Api.Startup;
 
@@ -123,14 +124,53 @@ if (!role.IsBlind && !string.Equals(builder.Configuration["BMB_MDNS_ENABLED"], "
         // withdraws when it goes off. The file is the one the node itself reads and writes, in the data folder.
         if (string.Equals(builder.Configuration["BMB_MDNS_FOLLOWS_NETWORK_SETTING"], "1", StringComparison.Ordinal))
         {
-            // Both: the setting (or BMB_HTTPS_ENABLED=1) says it is wanted, the node's listener state says it really listens. A port
-            // that could not be bound (another program has it) must not be announced, and the record is withdrawn when the listener stops.
-            var networkSettings = new BeeMemoryBank.Infrastructure.Network.NodeNetworkSettingsStore(dataPath);
+            // What the node's LAN listener really serves (network.listening.json, written by the Node): the sync surface on trusted networks and/or
+            // the web surface, on the port it really holds. A port that could not be bound is not announced, a changed port is announced at the next
+            // refresh, and the record is withdrawn when the listener stops. The name is in it only with the web surface (decision D5).
             var listenerState = new BeeMemoryBank.Infrastructure.Network.LanListenerState(dataPath);
-            o.AnnounceGate = () => networkSettings.Current().Enabled && listenerState.IsListening();
+            o.Announcement = () => listenerState.Read() is { Announceable: true } state
+                ? new BeeMemoryBank.Infrastructure.Mdns.MdnsAnnouncement(state.Port, state.Sync && state.SyncAddresses.Count > 0, state.Web)
+                : null;
             o.RefreshInterval = TimeSpan.FromSeconds(10);
         }
     });
+}
+
+// ── LAN sync of a desktop node (docs/design/lan-peer-sync.md): its mDNS browse for paired peers, and the announcement of its own endpoints ──
+// bmbd says it is the desktop node (BMB_MDNS_FOLLOWS_NETWORK_SETTING=1): it runs the LAN listener whose state these follow. A server or Docker node has
+// no LAN listener (its reverse proxy is its door) and announces nothing of it; a blind node authors nothing.
+if (!role.IsBlind && string.Equals(builder.Configuration["BMB_MDNS_FOLLOWS_NETWORK_SETTING"], "1", StringComparison.Ordinal))
+{
+    var lanSettings = new BeeMemoryBank.Infrastructure.Network.NodeNetworkSettingsStore(dataPath);
+    builder.Services.AddSingleton<BeeMemoryBank.Sync.Channels.PeerDiscoveryCache>();
+    builder.Services.AddSingleton<BeeMemoryBank.Sync.Channels.IPeerDiscovery>(sp => sp.GetRequiredService<BeeMemoryBank.Sync.Channels.PeerDiscoveryCache>());
+    builder.Services.AddMdnsBrowser();
+    builder.Services.AddHostedService(sp => new BeeMemoryBank.Infrastructure.Mdns.MdnsPeerBrowser(
+        sp.GetRequiredService<BeeMemoryBank.Mdns.MdnsBrowser>(),
+        sp.GetRequiredService<BeeMemoryBank.Sync.Channels.PeerDiscoveryCache>(),
+        () => lanSettings.Load().LanSync && !sp.GetRequiredService<BeeMemoryBank.Core.Services.InvisibleModeService>().IsInvisible,
+        async ct =>
+        {
+            // The paired peers: only their records are noted (a flood of strangers' records fills nothing). A vault that cannot be read now notes none.
+            try
+            {
+                using var scope = sp.GetRequiredService<IServiceScopeFactory>().CreateScope();
+                var active = await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetAllActiveAsync();
+                return active.Select(n => n.NodeId).ToHashSet();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return null;
+            }
+        },
+        sp.GetRequiredService<ILogger<BeeMemoryBank.Infrastructure.Mdns.MdnsPeerBrowser>>()));
+    builder.Services.AddScoped<BeeMemoryBank.Api.Services.Lan.NodeEndpointsPublisher>();
+    builder.Services.AddHostedService(sp => new BeeMemoryBank.Api.Services.Lan.NodeEndpointsAnnouncer(
+        sp.GetRequiredService<IServiceScopeFactory>(),
+        sp.GetRequiredService<BeeMemoryBank.Core.Services.InvisibleModeService>(),
+        sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
+        dataPath,
+        sp.GetRequiredService<ILogger<BeeMemoryBank.Api.Services.Lan.NodeEndpointsAnnouncer>>()));
 }
 builder.Services.AddHttpClient();
 builder.Services.AddTransient<HttpClient>(sp =>
@@ -299,6 +339,8 @@ else
     // learns of the cycles it was there for, and until one completes after it exists the page and the alarms say "warming up".
     builder.Services.AddHostedService<BlindAlarmStarter>();
     builder.Services.AddSingleton<BlindNodeManager>();
+    // The reachability of full peers on the status pages (docs/design/lan-peer-sync.md 10): a full node has LAN channels, a blind host has none.
+    builder.Services.AddScoped<BeeMemoryBank.Api.Models.PeerContactView.ILanFactsSource, BeeMemoryBank.Api.Services.Lan.LanStatusFactsSource>();
     builder.Services.AddSingleton<BeeMemoryBank.Sync.Blind.IBlindPeerReseeder>(sp => sp.GetRequiredService<BlindNodeManager>());
     // Pairing an Android blind node, which calls one of the nodes above (plan section 10).
     builder.Services.AddSingleton<BeeMemoryBank.Api.Services.BlindPhone.BlindPhonePairingService>();

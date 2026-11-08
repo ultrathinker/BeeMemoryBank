@@ -1,6 +1,7 @@
 using BeeMemoryBank.Infrastructure.Mdns;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using BeeMemoryBank.Mdns;
 
 namespace BeeMemoryBank.Infrastructure;
 

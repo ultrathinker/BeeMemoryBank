@@ -87,8 +87,48 @@ public sealed class BlindNodeManager(
         return nodes.Select(n => n with { Alarms = banners[n.NodeId].Distinct().ToList() }).ToList();
     }
 
-    /// <summary>Which blind nodes need attention now (<see cref="BlindAlarmService"/>).</summary>
-    public async Task<BlindAlarmReport> GetAlarmsAsync() => _alarms.Judge(await ReadAsync());
+    /// <summary>
+    /// Which blind nodes need attention now (<see cref="BlindAlarmService"/>), and which full peers have been silent: no direct contact and no evidence
+    /// through another peer for <see cref="BeeMemoryBank.Sync.Channels.PeerReachability.SilentAfter"/> (kind <c>peer_silent</c>, docs/design/lan-peer-sync.md
+    /// 10). Judged on the same terms: nothing in invisible mode or before a sync cycle has completed since the start or a wake-up.
+    /// </summary>
+    public async Task<BlindAlarmReport> GetAlarmsAsync()
+    {
+        var report = _alarms.Judge(await ReadAsync());
+        if (report.State != BlindAlarmReport.Judged) return report;
+        var peers = await FullPeerAlarmsAsync(report.Locked);
+        return peers.Count == 0 ? report : report with { Alarms = [.. report.Alarms, .. peers] };
+    }
+
+    /// <summary>The kind of the full-peer alarm: a full node (a computer, a server, a phone) silent for days.</summary>
+    public const string PeerSilent = "peer_silent";
+
+    private async Task<IReadOnlyList<BlindAlarm>> FullPeerAlarmsAsync(bool locked)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var sp = scope.ServiceProvider;
+        var self = (await sp.GetRequiredService<INodeIdentityRepository>().GetAsync())?.NodeId;
+        var rows = (await sp.GetRequiredService<IWhitelistRepository>().GetAllActiveAsync())
+            .Where(r => !BlindNodeId.IsBlind(r.NodeId) && r.NodeId != self).ToList();
+        if (rows.Count == 0) return [];
+        var pulled = (await sp.GetRequiredService<ISyncPositionRepository>().GetAllAsync()).ToDictionary(p => p.RemoteNodeId, p => (DateTime?)p.UpdatedAt);
+        var contacts = sp.GetService<PeerContactLog>();
+        var interval = sp.GetService<SyncScheduler>()?.Interval;
+        var now = UtcNow();
+        var alarms = new List<BlindAlarm>();
+        foreach (var r in rows)
+        {
+            var contact = contacts?.Get(r.NodeId, r.ApiAddress) ?? new PeerContactLog.Contact();
+            var facts = await BeeMemoryBank.Api.Services.Lan.LanStatusFacts.ForAsync(sp, r, contact, pulled.GetValueOrDefault(r.NodeId), interval, now);
+            if (facts?.State != BeeMemoryBank.Sync.Channels.ReachabilityStates.Silent) continue;
+            // A peer this node never heard of in any way since it was added is not "silent for days": it may never have been switched on.
+            var since = Latest(contact.OutboundOkAt, contact.InboundAt, pulled.GetValueOrDefault(r.NodeId), r.LastProtocolSeenAt);
+            alarms.Add(new BlindAlarm(PeerSilent, r.NodeId, locked ? null : r.DisplayName, since, null, Notify: true, Banner: false));
+        }
+        return alarms;
+    }
+
+    private static DateTime? Latest(params DateTime?[] times) => times.Where(t => t is not null).Select(t => DateTime.SpecifyKind(t!.Value, DateTimeKind.Utc)).DefaultIfEmpty().Max() is { } m && m != default ? m : null;
 
     /// <summary>Every active blind row with its contact facts; no alarms yet.</summary>
     private async Task<IReadOnlyList<BlindNodeStatus>> ReadAsync()

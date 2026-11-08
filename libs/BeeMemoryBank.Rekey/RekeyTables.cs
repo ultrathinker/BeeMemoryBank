@@ -52,6 +52,9 @@ public static class RekeyTables
         // may join, and a re-keyed node revokes every peer; a redeemed one also holds the device's backup key sealed under the OLD master key, which nothing
         // can open any more (and the D1 check would find it). The owner invites again.
         (TableFate.Cleared, ["tbl_blind_invite"]),
+        // PeerRevokeStep (L): what the peers announced about themselves and this node's ways to reach them (migration 044, LAN sync). Every peer is
+        // revoked by a re-key; nothing in them is sealed, and nothing of it holds for the re-keyed node.
+        (TableFate.Cleared, ["tbl_peer_endpoint", "tbl_peer_channel"]),
         // KeyMaterialStep (L): the sentinel and identity key, the owner's slot (others removed), agents' wrapped
         // DEKs, node data keys (retired-master-dek:* removed; chat re-wrapped by ChatRekeyStep), rotation chain columns.
         (TableFate.KeyMaterial,

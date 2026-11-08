@@ -165,6 +165,7 @@ BeeMemoryBank.Sync.EventLogger+AuthoringFlow
 BeeMemoryBank.Sync.EventLogger+AuthoringScope
 BeeMemoryBank.Sync.JoinAbortClient
 BeeMemoryBank.Sync.JoinAbortOutcome
+BeeMemoryBank.Sync.JoinRevocations
 BeeMemoryBank.Sync.JoinSnapshotCipher
 BeeMemoryBank.Sync.JoinTls
 BeeMemoryBank.Sync.LazySlotRewrapService

@@ -194,8 +194,9 @@ public partial class SnapshotService
         }
 
         // Kept from the old hand-written pass because it is narrower than "empty the table":
-        // a joiner legitimately inherits the ACTIVE whitelist so it knows who its peers are, but
-        // revoked and pending rows are this node's own history and say nothing useful there.
+        // a joiner legitimately inherits the ACTIVE whitelist so it knows who its peers are; revoked
+        // and pending rows stay out of the package (a join imports no whitelist from it: the revoked
+        // peers reach a joiner in the join answer's revokedPeers, with their versions).
         using var whitelistCmd = conn.CreateCommand();
         whitelistCmd.CommandText = "DELETE FROM tbl_whitelist WHERE status != 'A'";
         whitelistCmd.ExecuteNonQuery();

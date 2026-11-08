@@ -914,11 +914,13 @@ public sealed partial class BlindSeedService(
             if (!ConflictResolver.IncomingWins(row.Version, grant))
                 throw new InvalidOperationException(
                     $"The producer's row ({row.LamportTs}) is not older than the grant ({grantAt}); nothing is switched.");
-            row.LamportTs = grant.LamportTs;
-            row.SourceNodeId = grant.SourceNodeId;
+            // The grant writes the row whole (membership, authority, key, address, trust): every concern takes its version.
+            row.SetAllVersions(grant);
             row.Status = "A";
             row.IsSuperadmin = true;
             row.Ed25519PublicKey = pairedKey;
+            // A tombstone (a revoke this node saw before any add) has no name of its own.
+            if (string.IsNullOrWhiteSpace(row.DisplayName)) row.DisplayName = claimed.DisplayName;
             row.ApiAddress = BeeMemoryBank.Sync.PeerAddressPolicy.ForStorage(claimed.ApiAddress) ?? row.ApiAddress;
             ApplyClaimedTrust(row, claimed);
             row.UpdatedAt = now;
@@ -926,7 +928,7 @@ public sealed partial class BlindSeedService(
         }
         else
         {
-            await whitelist.CreateAsync(new WhitelistEntry
+            var producer = new WhitelistEntry
             {
                 NodeId = claimed.NodeId,
                 DisplayName = claimed.DisplayName,
@@ -938,9 +940,10 @@ public sealed partial class BlindSeedService(
                 Status = "A",
                 CreatedAt = now,
                 UpdatedAt = now,
-                LamportTs = grant.LamportTs,
-                SourceNodeId = grant.SourceNodeId
-            });
+            };
+            // As in the branch above: the grant is this node's decision at a known version, so every concern takes it, dated.
+            producer.SetAllVersions(grant);
+            await whitelist.CreateAsync(producer);
         }
         logger.LogInformation("Blind seed: {Producer} used this node's pair code; it manages this node from now on (superadmin)",
             producerNodeId);

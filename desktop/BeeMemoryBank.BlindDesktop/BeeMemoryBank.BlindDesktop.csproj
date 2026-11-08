@@ -8,8 +8,9 @@
     the host picks the one of the OS it is built for: the RID when one is given (win-*, osx-*), otherwise the build machine.
 
     It does NOT reference the Vault, Hosting, desktop/BeeMemoryBank.Desktop or desktop/BeeMemoryBank.Node, starts no web server and
-    no child process, and listens on no port: it only calls the paired computer over pinned HTTPS (AppBoundaryTests proves it on the
-    published output).
+    no child process, and listens on no TCP port: it only calls the paired computer over pinned HTTPS (AppBoundaryTests proves it on the
+    published output). One more thing it does on the network: when the paired computer is at a private LAN address and has moved, it looks
+    for it with one short mDNS scan (Lan/MdnsHubBrowser.cs), at most every five minutes, and never otherwise.
   -->
 
   <PropertyGroup>
@@ -50,6 +51,15 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <!-- The same QR library the Android blind app uses (PNG output, no System.Drawing). -->
     <PackageReference Include="QRCoder" />
+  </ItemGroup>
+
+  <!--
+    The mDNS scan that finds the paired computer again after its address changed (Lan/MdnsHubBrowser.cs) is the product's own, in the neutral
+    libs/BeeMemoryBank.Mdns, which references nothing of the product. Not Infrastructure: it holds the full app's secret stores and the local CA,
+    and no file of it may reach a blind app (InfrastructureBoundaryTests).
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\libs\BeeMemoryBank.Mdns\BeeMemoryBank.Mdns.csproj" />
   </ItemGroup>
 
   <ItemGroup>

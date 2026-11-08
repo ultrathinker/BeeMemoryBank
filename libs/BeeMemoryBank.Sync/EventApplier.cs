@@ -303,6 +303,15 @@ public partial class EventApplier(
             // A row a restore kept unconfirmed is not an answer yet: defer, it applies once confirmed.
             if (revoked is { Status: BeeMemoryBank.Core.Models.WhitelistStatuses.Unconfirmed })
                 throw new OriginatorUnconfirmedException(evt.NodeId);
+            // A tombstone that no add has named the key of: this node has heard of the node only through a revoke, which may yet be followed by a
+            // newer add (a re-add) on its way here. Until an add arrives that is "never heard of", as before the tombstone existed: deferred. Once
+            // one has (refused, older than the revoke, it still binds the key) the row is an answer like any revoked row.
+            if (revoked is { Status: BeeMemoryBank.Core.Models.WhitelistStatuses.Revoked, Ed25519PublicKey.Length: 0 })
+            {
+                logger.LogWarning("Event {EventId} ({Type}) deferred: originator {NodeId} is known here only from a revoke, no add for it has arrived yet",
+                    evt.EventId, evt.EventType, evt.NodeId);
+                throw new OriginatorNotWhitelistedException(evt.NodeId);
+            }
             if (revoked != null)
             {
                 logger.LogWarning("Event {EventId} ({Type}) rejected: originator {NodeId} is revoked",
@@ -528,6 +537,7 @@ public partial class EventApplier(
             case EventTypes.SealedSecretSet: await ApplySealedSecretSetAsync(evt); break;
             case EventTypes.MetadataKeySet: await ApplyMetadataKeySetAsync(evt); break;
             case EventTypes.MetadataActivation: await ApplyMetadataActivationAsync(evt); break;
+            case EventTypes.NodeEndpoints: await ApplyNodeEndpointsAsync(evt); break;
             default:
                 // Skip unknown event types (forward compatibility)
                 break;

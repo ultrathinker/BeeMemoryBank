@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using BeeMemoryBank.BlindDesktop.Lan;
 using BeeMemoryBank.BlindDesktop.Platform;
 using BeeMemoryBank.BlindDesktop.Scheduling;
 using BeeMemoryBank.BlindDesktop.Services;
@@ -58,9 +59,10 @@ public sealed class BlindDesktopRuntime : IAsyncDisposable
     /// <param name="displayName">How this device names itself when an account's identity is made; the machine name by default.</param>
     /// <param name="exporter">Where "Save to..." writes; the Avalonia save-file dialog by default (checks without a window pass their own).</param>
     /// <param name="primaryHandler">Tests only: the handler at the bottom of an account's HTTP pipeline, in place of the pinned or public-CA socket handler (see <see cref="BlindAccountHostOptions.PrimaryHandlerFactory"/>).</param>
+    /// <param name="lanBrowser">How a hub at a private LAN address is found again after it changed address: the product's mDNS scan by default (<see cref="MdnsHubBrowser"/>); checks and tests pass their own.</param>
     public static BlindDesktopRuntime Create(IBlindDesktopPlatform platform, Func<TopLevel?> window, TimeProvider? time = null,
         BlindDeviceSchedulerOptions? scheduler = null, Func<string>? displayName = null, IBlindBackupExporter? exporter = null,
-        Func<BlindAccountEntry, Func<HttpMessageHandler>?>? primaryHandler = null)
+        Func<BlindAccountEntry, Func<HttpMessageHandler>?>? primaryHandler = null, IBlindLanBrowser? lanBrowser = null)
     {
         time ??= TimeProvider.System;
         var notifications = new AccountNotifications();
@@ -77,6 +79,7 @@ public sealed class BlindDesktopRuntime : IAsyncDisposable
             // A computer: an invited account starts with its limits but without the two phone switches (a PC on Ethernet is allowed; a person who wants them turns them on).
             IsPhone = false,
             PrimaryHandlerFactory = primaryHandler,
+            LanBrowser = lanBrowser ?? new MdnsHubBrowser(),
             ConfigureHostSeams = (services, account) =>
             {
                 services.AddSingleton(backupExporter);

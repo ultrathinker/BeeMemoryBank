@@ -104,6 +104,10 @@ public class InfrastructureBoundaryTests
         graph[Infrastructure].References.Should().Contain("BeeMemoryBank.Platforms.Apple");
         Closure(graph, "BeeMemoryBank.BlindDesktop.MacOS").Should().Contain("BeeMemoryBank.Platforms.Apple").And.NotContain(Infrastructure);
         Closure(graph, "BeeMemoryBank.Platforms.Apple").Should().BeEmpty("the Apple layer references nothing of the product");
+        // The mDNS scan, likewise: Infrastructure and the desktop blind app both reference it, and it references nothing of the product.
+        graph[Infrastructure].References.Should().Contain("BeeMemoryBank.Mdns");
+        Closure(graph, "BeeMemoryBank.BlindDesktop").Should().Contain("BeeMemoryBank.Mdns").And.NotContain(Infrastructure);
+        Closure(graph, "BeeMemoryBank.Mdns").Should().BeEmpty("the mDNS layer references nothing of the product");
     }
 
     [Fact]

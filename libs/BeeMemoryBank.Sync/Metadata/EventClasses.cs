@@ -34,6 +34,9 @@ public static class EventClasses
         EventTypes.RecoveryBoxSet, EventTypes.RecoveryBoxRetire, EventTypes.RetiredLinkSet,
         EventTypes.StateAnchor, EventTypes.SealedSecretSet,
         MetadataKeySet, MetadataActivation,
+        // Clear on purpose (decision D3): only private and VPN addresses and public keys; a locked node can read it, and ADR 0009 already accepts
+        // peer addresses and TLS pins in clear. It reaches only nodes that advertise peer-endpoints-v1.
+        EventTypes.NodeEndpoints,
     };
 
     public static bool IsSealable(string eventType) => Sealable.Contains(eventType);

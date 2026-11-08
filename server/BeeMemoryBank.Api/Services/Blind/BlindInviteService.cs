@@ -969,14 +969,18 @@ public sealed class BlindInviteService(
             }
             else
             {
-                // Our add is in the log already. If the local row carries a LATER write, somebody revoked the device after we added it: that is theirs to decide.
+                // Our add is in the log already. If the local row's membership carries a LATER write, somebody revoked the device after we added it:
+                // that is theirs to decide. (Membership, not the row's own version: an update of a field says nothing about who is a member.)
                 version = new RowVersion(own.LamportTs, own.NodeId);
-                if (existing is not null && !ConflictResolver.IncomingWins(existing.Version, version)) throw new EnrolmentSupersededException();
+                if (existing is not null && !ConflictResolver.IncomingWins(existing.VersionOf(WhitelistConcerns.Membership), version))
+                    throw new EnrolmentSupersededException();
             }
             await HitAsync("logged");
 
-            device.LamportTs = version.LamportTs;
-            device.SourceNodeId = version.SourceNodeId;
+            // An add writes every field of the row, and its membership. Written again from an add logged before (a retry), a field of the old
+            // row that an update made newer than that add keeps its value, as every other node judges the add.
+            device.StampLocal(version, WhitelistEventConcerns.OfAdd);
+            if (own is not null && existing is not null) WhitelistEventConcerns.KeepNewerFields(existing, device, version);
             if (existing is null) await whitelist.CreateAsync(device);
             else await whitelist.UpdateAsync(device);
         }
@@ -1035,7 +1039,9 @@ public sealed class BlindInviteService(
         var ownVersion = new RowVersion(own.LamportTs, own.NodeId);
         var whitelist = sp.GetRequiredService<IWhitelistRepository>();
         var local = await whitelist.GetByNodeIdAsync(nodeId, includeDeleted: true);
-        if (local is not null && ConflictResolver.IncomingWins(ownVersion, local.Version)) return;   // somebody else wrote the entry after our add
+        // Somebody else decided the device's membership after our add (revoked it, or added it again): theirs to keep. A field changed since
+        // (a rename) does not make the device anyone else's, as at the confirmation (EnrolAsync).
+        if (local is not null && ConflictResolver.IncomingWins(ownVersion, local.VersionOf(WhitelistConcerns.Membership))) return;
 
         var revoke = await sp.GetRequiredService<IEventLogger>().LogWhitelistRevokeAsync(nodeId);
         if (local is { Status: "A" }) await whitelist.RevokeAsync(nodeId, revoke);

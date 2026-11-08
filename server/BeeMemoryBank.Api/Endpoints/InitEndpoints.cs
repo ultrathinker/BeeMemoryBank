@@ -198,6 +198,12 @@ public static class InitEndpoints
                 // header comes only after the host has built the whole snapshot, by its own 30-minute budget.
                 http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
 
+                // Where this node's LAN listener will serve its sync routes, and its TLS anchors (docs/design/lan-peer-sync.md 8): the host stores them
+                // at once, so it can call this node from the first minute. Optional members an older host ignores.
+                var lanDataPath = Services.Lan.LanJoinExchange.DataPath(ctx.RequestServices);
+                var hostAddress = Uri.TryCreate(remoteBase, UriKind.Absolute, out var hostUri) && System.Net.IPAddress.TryParse(hostUri.Host.Trim('[', ']'), out var hostIp)
+                    ? hostIp : null;
+                var lanOffer = string.IsNullOrEmpty(lanDataPath) ? null : Services.Lan.LanJoinExchange.OwnOffer(lanDataPath, hostAddress);
                 var joinRequest = new
                 {
                     masterPassword = req.Password,
@@ -207,7 +213,11 @@ public static class InitEndpoints
                     apiAddress = (string?)null,
                     // A fresh node has applied no activation: it declares 3 and says what it can read (docs/design/step-a-spec.md 5.1, 11).
                     protocolVersion = BeeMemoryBank.Sync.SyncProtocolVersion.Current,
-                    capabilities = BeeMemoryBank.Sync.Metadata.MetadataCapabilities.Advertised
+                    capabilities = BeeMemoryBank.Sync.Metadata.MetadataCapabilities.Advertised,
+                    endpoints = lanOffer?.Endpoints,
+                    tlsLeafSpki = lanOffer?.TlsLeafSpki,
+                    tlsCaKey = lanOffer?.TlsCaKey,
+                    lanPort = lanOffer?.LanPort,
                 };
 
                 // The host writes this node's row as soon as it accepts the join. From there on a failure leaves that row behind unless the host
@@ -223,9 +233,9 @@ public static class InitEndpoints
                         return $"The other computer was told and no longer lists this node ('{req.DisplayName}').";
                     return rowCertain
                         ? $"The other computer still lists this node ('{req.DisplayName}') as a member that has never synced: revoke it there " +
-                          "(Admin -> Trusted Nodes), or it holds back compaction of that computer's event log."
+                          "(Admin > Devices, this node's page, Revoke), or it holds back compaction of that computer's event log."
                         : $"If the other computer recorded this node ('{req.DisplayName}') before the connection failed, it lists it as a member that has never synced: " +
-                          "revoke it there (Admin -> Trusted Nodes), or it holds back compaction of that computer's event log.";
+                          "revoke it there (Admin > Devices, this node's page, Revoke), or it holds back compaction of that computer's event log.";
                 }
 
                 HttpResponseMessage response;
@@ -444,7 +454,7 @@ public static class InitEndpoints
                                 continue;
                             }
 
-                            await whitelistRepo.CreateAsync(new WhitelistEntry
+                            var inherited = new WhitelistEntry
                             {
                                 NodeId = entry.NodeId,
                                 DisplayName = entry.DisplayName,
@@ -461,7 +471,10 @@ public static class InitEndpoints
                                 IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin),
                                 TlsTrust = tlsTrust,
                                 TlsSpki = tlsSpki
-                            });
+                            };
+                            // The host's version of each field (none from a 2.7.5 host): later events are judged here as they are there.
+                            BeeMemoryBank.Sync.JoinRevocations.Inherit(inherited, entry.Versions);
+                            await whitelistRepo.CreateAsync(inherited);
                         }
                         catch (Exception ex)
                         {
@@ -487,6 +500,10 @@ public static class InitEndpoints
                         // from its own local CA, which no ordinary check here trusts, so the later sync would otherwise fail.
                         TlsSpki = code?.SpkiPin
                     });
+
+                    // The peers the host has revoked (a host of 2.7.5 or older sends none): kept as revoked rows, so an old add for one of them
+                    // that another node's log delivers later is refused here as it is on the host.
+                    await BeeMemoryBank.Sync.JoinRevocations.ImportAsync(whitelistRepo, joinResponse.RevokedPeers, nodeId, remote.NodeId, logger);
                 }
                 catch (Exception ex) when (!hostTold)
                 {
@@ -578,6 +595,13 @@ public static class InitEndpoints
 
                         logger.LogInformation("Snapshot join complete. CP={Cp}, Lamport={Lamport}",
                             cpSeq, cappedLamport);
+
+                        // After the import (which replaces the replicated tables): what the host said about its LAN endpoints and anchors, and the
+                        // network it was reached through, trusted from now on (decision D1). Both best effort.
+                        await Services.Lan.LanJoinExchange.NoteOtherSideAsync(ctx.RequestServices, remote.NodeId, joinResponse.Endpoints,
+                            joinResponse.TlsLeafSpki, joinResponse.TlsCaKey, joinResponse.LanPort, logger);
+                        if (!string.IsNullOrEmpty(lanDataPath) && code != null)
+                            Services.Lan.LanJoinExchange.TrustPairingNetwork(lanDataPath, hostAddress, logger);
                     }
                     finally
                     {
@@ -719,7 +743,12 @@ public static class InitEndpoints
     private sealed record JoinResponseDto(
         JoinRemoteNodeDto RemoteNode,
         JoinKeySlotDto KeySlot,
-        List<JoinWhitelistEntryDto>? Whitelist);
+        List<JoinWhitelistEntryDto>? Whitelist,
+        List<BeeMemoryBank.Sync.NodeEndpointEntry>? Endpoints = null,
+        string? TlsLeafSpki = null,
+        string? TlsCaKey = null,
+        int? LanPort = null,
+        List<BeeMemoryBank.Sync.JoinRevokedPeer>? RevokedPeers = null);
 
     private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion);
 
@@ -730,7 +759,8 @@ public static class InitEndpoints
         string? ApiAddress,
         bool IsSuperadmin = false,
         string? TlsTrust = null,
-        string? TlsSpki = null);
+        string? TlsSpki = null,
+        BeeMemoryBank.Sync.JoinPeerVersions? Versions = null);
 
     private sealed record JoinKeySlotDto(
         string EncryptedMasterDekB64,

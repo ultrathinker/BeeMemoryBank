@@ -19,7 +19,9 @@ namespace BeeMemoryBank.Sync.Tests;
 /// answers 410 SEQUENCE_TOO_OLD to a pull from below it. A full node that has no pull position for it (a re-key
 /// clears them) must adopt that checkpoint and go on, or it never pushes anything to the blind node again. Only a
 /// blind peer, and only through the full node's entry (<see cref="SyncClient.SyncWithPeerAsync"/>, the scheduler's and
-/// the reseed's); a phone's <see cref="SyncClient.SyncWithAsync"/> and a full peer's 410 stay refusals.
+/// the reseed's); a phone's <see cref="SyncClient.SyncWithAsync"/> and a full peer's 410 stay refusals. (This node holds
+/// no position for any other full peer; a node that does takes a full peer's checkpoint by its own rule, see
+/// <see cref="SyncFullPeerCheckpointTests"/>.)
 /// </summary>
 public class SyncBlindCheckpointTests : IAsyncLifetime
 {

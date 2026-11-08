@@ -130,14 +130,14 @@ public sealed class AdminPagesSuccessTests : IAsyncLifetime
     {
         var peer = await AddPeerAsync("Kitchen phone", superadmin: true);
 
-        var demoted = await PostAsync("/Admin/TrustedNodes", "SetPeerSuperadmin", ("nodeId", peer.ToString()), ("isSuperadmin", "false"));
+        var demoted = await PostAsync($"/Admin/Device/{peer}", "SetPeerSuperadmin", ("isSuperadmin", "false"));
 
-        demoted.Should().StartWith("/Admin/TrustedNodes?msg=Peer demoted.");
+        demoted.Should().StartWith($"/Admin/Device/{peer}?msg=Peer demoted.");
         (await PeerAsync(peer)).IsSuperadmin.Should().BeFalse();
 
-        var promoted = await PostAsync("/Admin/TrustedNodes", "SetPeerSuperadmin", ("nodeId", peer.ToString()), ("isSuperadmin", "true"));
+        var promoted = await PostAsync($"/Admin/Device/{peer}", "SetPeerSuperadmin", ("isSuperadmin", "true"));
 
-        promoted.Should().Be("/Admin/TrustedNodes?msg=Peer promoted to superadmin.");
+        promoted.Should().Be($"/Admin/Device/{peer}?msg=Peer promoted to superadmin.");
         (await PeerAsync(peer)).IsSuperadmin.Should().BeTrue();
     }
 
@@ -147,39 +147,39 @@ public sealed class AdminPagesSuccessTests : IAsyncLifetime
         var trusted = await AddPeerAsync("Trusted laptop", superadmin: true);
         var contentOnly = await AddPeerAsync("Content-only tablet", superadmin: false);
 
-        (await PostAsync("/Admin/TrustedNodes", "SetAutoAcceptRestore", ("nodeId", trusted.ToString()), ("autoAccept", "true")))
-            .Should().StartWith("/Admin/TrustedNodes?msg=Auto-accept restore enabled");
+        (await PostAsync($"/Admin/Device/{trusted}", "SetAutoAcceptRestore", ("autoAccept", "true")))
+            .Should().StartWith($"/Admin/Device/{trusted}?msg=Auto-accept restore enabled");
         (await PeerAsync(trusted)).AutoAcceptRestore.Should().BeTrue();
-        (await PostAsync("/Admin/TrustedNodes", "SetAutoAcceptRestore", ("nodeId", trusted.ToString()), ("autoAccept", "false")))
-            .Should().StartWith("/Admin/TrustedNodes?msg=Auto-accept restore disabled");
+        (await PostAsync($"/Admin/Device/{trusted}", "SetAutoAcceptRestore", ("autoAccept", "false")))
+            .Should().StartWith($"/Admin/Device/{trusted}?msg=Auto-accept restore disabled");
         (await PeerAsync(trusted)).AutoAcceptRestore.Should().BeFalse();
 
-        (await PostAsync("/Admin/TrustedNodes", "SetAutoAcceptDekRotation", ("nodeId", trusted.ToString()), ("autoAccept", "true")))
-            .Should().StartWith("/Admin/TrustedNodes?msg=Auto-accept DEK rotation enabled");
+        (await PostAsync($"/Admin/Device/{trusted}", "SetAutoAcceptDekRotation", ("autoAccept", "true")))
+            .Should().StartWith($"/Admin/Device/{trusted}?msg=Auto-accept DEK rotation enabled");
         (await PeerAsync(trusted)).AutoAcceptDekRotation.Should().BeTrue();
-        (await PostAsync("/Admin/TrustedNodes", "SetAutoAcceptDekRotation", ("nodeId", trusted.ToString()), ("autoAccept", "false")))
-            .Should().StartWith("/Admin/TrustedNodes?msg=Auto-accept DEK rotation disabled");
+        (await PostAsync($"/Admin/Device/{trusted}", "SetAutoAcceptDekRotation", ("autoAccept", "false")))
+            .Should().StartWith($"/Admin/Device/{trusted}?msg=Auto-accept DEK rotation disabled");
         (await PeerAsync(trusted)).AutoAcceptDekRotation.Should().BeFalse();
 
-        var refused = await PostAsync("/Admin/TrustedNodes", "SetAutoAcceptDekRotation", ("nodeId", contentOnly.ToString()), ("autoAccept", "true"));
+        var refused = await PostAsync($"/Admin/Device/{contentOnly}", "SetAutoAcceptDekRotation", ("autoAccept", "true"));
 
-        refused.Should().StartWith("/Admin/TrustedNodes?err=Failed to update auto-accept DEK rotation setting").And.Contain("superadmin peer");
+        refused.Should().StartWith($"/Admin/Device/{contentOnly}?err=Failed to update auto-accept DEK rotation setting").And.Contain("superadmin peer");
         (await PeerAsync(contentOnly)).AutoAcceptDekRotation.Should().BeFalse("a peer that may not steer the cluster is not armed to rewrap the vault unattended");
     }
 
     [Fact]
-    public async Task ARevokedNode_LeavesTheListOfTrustedNodes()
+    public async Task ARevokedNode_LeavesTheListOfDevices()
     {
         var peer = await AddPeerAsync("Old tablet", superadmin: false);
-        (await GetAsync("/Admin/TrustedNodes")).Should().Contain("Old tablet");
+        (await GetAsync("/Admin/Devices")).Should().Contain("Old tablet");
 
-        var revoked = await PostAsync("/Admin/TrustedNodes", "RevokeNode", ("nodeId", peer.ToString()));
+        var revoked = await PostAsync($"/Admin/Device/{peer}", "RevokeNode");
 
-        revoked.Should().Be("/Admin/TrustedNodes?msg=Node access revoked");
+        revoked.Should().Be("/Admin/Devices?msg=Node access revoked", "the page of a revoked device is gone: the answer is the list");
         (await PeerAsync(peer)).Status.Should().NotBe("A");
         using (var scope = _api.Services.CreateScope())
             (await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetAllActiveAsync()).Select(e => e.NodeId).Should().NotContain(peer);
-        (await GetAsync("/Admin/TrustedNodes")).Should().NotContain("Old tablet");
+        (await GetAsync("/Admin/Devices")).Should().NotContain("Old tablet");
     }
 
     [Fact]
@@ -189,10 +189,9 @@ public sealed class AdminPagesSuccessTests : IAsyncLifetime
         var peer = await AddPeerAsync("Office server", superadmin: true);
         _scripted.Answer("PUT", $"/api/whitelist/{peer}/address", "{}");
 
-        var done = await PostAsync("/Admin/TrustedNodes", "ChangeNodeAddress",
-            ("nodeId", peer.ToString()), ("newApiAddress", "https://office.example:5311"), ("password", AdminPassword));
+        var done = await PostAsync($"/Admin/Device/{peer}", "ChangeNodeAddress", ("newApiAddress", "https://office.example:5311"), ("password", AdminPassword));
 
-        done.Should().Be("/Admin/TrustedNodes?msg=Node address updated");
+        done.Should().Be($"/Admin/Device/{peer}?msg=Node address updated");
         var sent = JsonSerializer.Deserialize<JsonElement>(_scripted.BodiesOf("PUT", $"/api/whitelist/{peer}/address").Single());
         sent.GetProperty("newApiAddress").GetString().Should().Be("https://office.example:5311");
         sent.GetProperty("password").GetString().Should().Be(AdminPassword);
@@ -205,10 +204,9 @@ public sealed class AdminPagesSuccessTests : IAsyncLifetime
         var peer = await AddPeerAsync("Office server", superadmin: true);
         _scripted.Answer("PUT", $"/api/whitelist/{peer}/hub", """{"entry":null,"pin":"ab:cd","publiclyTrusted":false,"notice":"The key it presents now is recorded."}""");
 
-        var done = await PostAsync("/Admin/TrustedNodes", "SetBlindCallable",
-            ("nodeId", peer.ToString()), ("trust", "pin"), ("address", "https://hub.example:5311"), ("password", AdminPassword), ("expectedPin", "ab:cd"));
+        var done = await PostAsync($"/Admin/Device/{peer}", "SetBlindCallable", ("trust", "pin"), ("address", "https://hub.example:5311"), ("password", AdminPassword), ("expectedPin", "ab:cd"));
 
-        done.Should().Be("/Admin/TrustedNodes?msg=Blind copies can now be paired to call this node. The key it presents now is recorded.");
+        done.Should().Be($"/Admin/Device/{peer}?msg=Blind copies can now be paired to call this node. The key it presents now is recorded.");
         var sent = JsonSerializer.Deserialize<JsonElement>(_scripted.BodiesOf("PUT", $"/api/whitelist/{peer}/hub").Single());
         sent.GetProperty("trust").GetString().Should().Be("pin");
         sent.GetProperty("address").GetString().Should().Be("https://hub.example:5311");
@@ -216,8 +214,8 @@ public sealed class AdminPagesSuccessTests : IAsyncLifetime
         sent.GetProperty("password").GetString().Should().Be(AdminPassword);
 
         _scripted.Answer("PUT", $"/api/whitelist/{peer}/hub", """{"entry":null,"pin":null,"publiclyTrusted":false,"notice":null}""");
-        (await PostAsync("/Admin/TrustedNodes", "SetBlindCallable", ("nodeId", peer.ToString()), ("trust", "off"), ("password", AdminPassword)))
-            .Should().Be("/Admin/TrustedNodes?msg=Blind copies can no longer be paired to call this node.");
+        (await PostAsync($"/Admin/Device/{peer}", "SetBlindCallable", ("trust", "off"), ("password", AdminPassword)))
+            .Should().Be($"/Admin/Device/{peer}?msg=Blind copies can no longer be paired to call this node.");
     }
 
     // ---------------------------------------------------------------- the keys of agents
@@ -335,8 +333,7 @@ public sealed class AdminPagesSuccessTests : IAsyncLifetime
         _scripted.Answer("PUT", $"/api/whitelist/{peer}/address",
             """{"error":"The address did not answer as this node.","code":"address_mismatch"}""", HttpStatusCode.BadRequest);
 
-        var done = await PostAsync("/Admin/TrustedNodes", "ChangeNodeAddress",
-            ("nodeId", peer.ToString()), ("newApiAddress", "https://office.example:5311"), ("password", AdminPassword));
+        var done = await PostAsync($"/Admin/Device/{peer}", "ChangeNodeAddress", ("newApiAddress", "https://office.example:5311"), ("password", AdminPassword));
 
         var target = WebUtility.UrlDecode(done);
         target.Should().Contain("err=The address did not answer as this node.");

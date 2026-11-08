@@ -56,7 +56,7 @@ internal sealed class AccountRig : IDisposable
         Func<BlindAccountEntry, Func<HttpMessageHandler>?>? handler = null, BlindDeviceGate? gate = null,
         Action<IServiceCollection, BlindAccountEntry>? overrides = null, IBlindSecretStoreFactory? secrets = null,
         TimeSpan? drain = null, IBlindAccountLifecycle? lifecycle = null, TimeSpan? leaveTimeout = null,
-        TimeProvider? time = null, IBlindDeviceConditions? conditions = null)
+        TimeProvider? time = null, IBlindDeviceConditions? conditions = null, IBlindLanBrowser? lanBrowser = null)
     {
         var options = new BlindAccountHostOptions
         {
@@ -75,6 +75,7 @@ internal sealed class AccountRig : IDisposable
             LeaveTimeout = leaveTimeout ?? TimeSpan.FromMilliseconds(300),
             Lifecycle = lifecycle,
             Conditions = conditions,
+            LanBrowser = lanBrowser,
             Time = time ?? TimeProvider.System,
             RootLockWait = TimeSpan.FromMilliseconds(150),
         };
