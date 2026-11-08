@@ -106,7 +106,7 @@ public sealed class HubChannelsTests
 
         // A machine with nodes of the product on its network hears them; one without multicast hears nothing. Either way the answer is a list of plain values.
         heard.Should().NotBeNull();
-        heard.Should().OnlyContain(s => s.Port > 0 && s.Host.Length > 0);
+        heard.Should().NotContain(s => s.Port <= 0 || s.Host.Length == 0);
     }
 
     [Fact]
