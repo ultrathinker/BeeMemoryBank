@@ -36,7 +36,9 @@ public class SyncClient(
     // What a peer says it runs on is kept here for the network map; a hand-built client without it just does not remember.
     PeerContactLog? contacts = null,
     // What other peers report about the rest (their my-standing): "not on this network, reachable through X" (docs/design/lan-peer-sync.md 10).
-    Channels.PeerReachability? reachability = null)
+    Channels.PeerReachability? reachability = null,
+    // The TLS key of a peer this device holds none for (a join before 2.5.1 did not store it), taken from the standing of a trusted node (BMB-337).
+    PeerTlsBackfill? tlsBackfill = null)
 {
     // WhenWritingNull: the push body is written through this too, and the stripped envelope
     // fields (SyncWire.Strip) must vanish from the wire, not ride along as explicit nulls.
@@ -630,12 +632,30 @@ public class SyncClient(
             if (resp.Content.Headers.ContentLength is > 1024 * 1024) return;
             var standing = await resp.Content.ReadFromJsonAsync<MyStanding>(JsonOpts, bound.Token);
             if (standing is not null && standing.ResponderNodeId == remote.NodeId)
+            {
                 reachability!.NoteStanding(remote.NodeId, remote.DisplayName, standing, self, DateTime.UtcNow);
+                await FillMissingTlsKeysAsync(remote.NodeId, standing, self);
+            }
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or OperationCanceledException or NotSupportedException)
         {
             // Evidence, not a duty: a peer that does not answer it leaves the others as they were.
             logger.LogDebug("my-standing of {NodeId} could not be read ({Type})", remote.NodeId, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// What the answer says about how the responder reaches its peers, for a peer this device holds no TLS key for (<see cref="PeerTlsBackfill"/>).
+    /// The id is the one the session was verified against (the answer's own was only compared with it above). A failure to write must not fail
+    /// a session that went through: the key is asked for again after the next standing.
+    /// </summary>
+    private async Task FillMissingTlsKeysAsync(Guid verifiedResponder, MyStanding standing, Guid self)
+    {
+        if (tlsBackfill is null) return;
+        try { await tlsBackfill.FillAsync(verifiedResponder, standing, self); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Could not take the TLS keys {ResponderId} reports for its peers", verifiedResponder);
         }
     }
 

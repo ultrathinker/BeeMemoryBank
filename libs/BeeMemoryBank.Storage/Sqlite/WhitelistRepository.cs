@@ -244,6 +244,26 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
             new { nodeId, now });
     }
 
+    public async Task<bool> FillMissingTlsTrustAsync(Guid nodeId, string trust, string tlsSpki, Guid trustedResponder)
+    {
+        // A blind node is never the source of a key, whatever its row says (see Normalized): a function of the id, so nothing can change it between here and the write.
+        if (BlindNodeId.IsBlind(trustedResponder)) return false;
+        using var conn = OpenConnection();
+        // One statement, so the tests and the write are not apart: an event that wrote a mode or a key a moment ago is never overwritten, a row whose TLS trust
+        // an event ever wrote (undated bit cleared: an explicit "off" leaves empty columns too) is left alone, and the responder is still an active superadmin.
+        // Only the two columns change - no version column, no updated_at, the concern stays undated - so nothing is replicated and a later event wins as it always did.
+        var written = await conn.ExecuteAsync(
+            @"UPDATE tbl_whitelist
+              SET tls_trust = @trust, tls_spki = @tlsSpki
+              WHERE node_id = @nodeId COLLATE NOCASE AND status = 'A'
+                AND COALESCE(tls_trust, '') = '' AND COALESCE(tls_spki, '') = ''
+                AND (undated_fields & @tlsConcern) = @tlsConcern
+                AND EXISTS (SELECT 1 FROM tbl_whitelist responder
+                            WHERE responder.node_id = @trustedResponder COLLATE NOCASE AND responder.status = 'A' AND responder.is_superadmin = 1)",
+            new { nodeId, trust, tlsSpki, trustedResponder, tlsConcern = (int)WhitelistConcerns.Tls });
+        return written > 0;
+    }
+
     public async Task<bool> GetAutoAcceptRestoreAsync(string nodeId)
     {
         if (BlindNodeId.IsBlind(nodeId)) return false; // see Normalized

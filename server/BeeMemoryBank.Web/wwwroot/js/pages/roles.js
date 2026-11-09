@@ -190,6 +190,21 @@
         });
     });
 
+    // A link from the folder marks of the tree (BMB-338) is /Roles?access=<role name>: open that role's Folder Access dialog right away.
+    // The custom elements are upgraded after this script has run, and a dialog is shown or filled before that only half-way, so wait for them.
+    (function openRequestedFolderAccess() {
+        var url = new URL(window.location.href);
+        var wanted = url.searchParams.get('access');
+        if (!wanted) return;
+        var button = Array.prototype.find.call(document.querySelectorAll('.btn-role-folder-access'), function (b) { return b.dataset.name === wanted; });
+        // Take it out of the address so that a reload (or a bookmark) does not reopen the dialog.
+        url.searchParams.delete('access');
+        try { history.replaceState(history.state, '', url.pathname + url.search + url.hash); } catch (e) { }
+        if (!button) return;
+        Promise.all(['sl-dialog', 'sl-input', 'sl-select', 'sl-switch', 'sl-icon-button', 'sl-badge'].map(function (tag) { return customElements.whenDefined(tag); }))
+            .then(function () { openRoleFolderAccess(button.dataset.name, button.dataset.display); });
+    })();
+
     ['form-add-role', 'form-edit-role'].forEach(function (fid) {
         var handlers = { 'form-add-role': submitAddRole, 'form-edit-role': submitEditRole };
         var form = document.getElementById(fid);

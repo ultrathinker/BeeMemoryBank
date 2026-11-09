@@ -8,6 +8,18 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static class TreeEndpoints
 {
+    /// <summary>
+    /// The two answers the folder marks are drawn from depend on WHO asks (the caller's own read-only folders, or the
+    /// superadmin's overview of other people's rights). They must never be stored by the browser or a cache and replayed to
+    /// whoever signs in next in the same browser. First in the filter chain, so the refusals carry it too; the Web proxy
+    /// relays <c>Cache-Control</c> from the API.
+    /// </summary>
+    private static ValueTask<object?> NoStore(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        context.HttpContext.Response.Headers.CacheControl = "no-store";
+        return next(context);
+    }
+
     public static void MapTreeEndpoints(this WebApplication app)
     {
         app.MapGet("/api/tree", async (HttpContext ctx, TreeService svc, CallerScopeHolder scopeHolder) =>
@@ -89,7 +101,20 @@ public static class TreeEndpoints
 
             var (_, _, readOnlyPaths) = await folderAccess.GetFullAccessInfoAsync(userId);
             return Results.Ok(new { paths = readOnlyPaths.OrderBy(p => p).ToArray() });
-        }).RequireInternalKey().WithTags("Access");
+        }).AddEndpointFilter(NoStore).RequireInternalKey().WithTags("Access");
+
+        // The folder-rights overview behind the marks in the tree: every folder that has a rule set
+        // DIRECTLY on it, with the users and roles those rules name. Rules live on users and roles,
+        // so this is the one place that turns them around into "per folder". It names other people
+        // and what they may or may not see, so it is gated EXACTLY like /api/restrictions/* (the
+        // Users and Roles pages that Edit links to): superadmin, and never an agent token. Everyone
+        // else gets their own state from /api/access/readonly-paths above and never reaches this.
+        app.MapGet("/api/access/folder-marks", async (IFolderAclRepository userRules, IRoleAclRepository roleRules) =>
+        {
+            var rows = await userRules.ListMarkRowsAsync();
+            rows.AddRange(await roleRules.ListMarkRowsAsync());
+            return Results.Ok(new { folders = FolderMarks.Build(rows) });
+        }).AddEndpointFilter(NoStore).RequireInternalKey().RequireSuperadmin().RequireNonAgent().WithTags("Access");
 
         app.MapGet("/api/access/folder-permissions", async (HttpContext ctx, FolderAccessService folderAccess, string path) =>
         {

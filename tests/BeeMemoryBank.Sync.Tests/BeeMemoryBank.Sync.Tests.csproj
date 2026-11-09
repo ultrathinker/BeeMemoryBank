@@ -40,4 +40,9 @@
     <!-- The rescan of a folder that is still changing: one source in tests/shared, for the MetadataCanaries copy of this project. -->
     <Compile Include="..\shared\MetadataCanariesRescanTests.cs" Link="Shared\MetadataCanariesRescanTests.cs" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- A whitelist row as a device that joined long ago really holds it, built with the statements of those releases and the real migration 045 (BMB-337): one source in tests/shared. -->
+    <Compile Include="..\shared\LegacyWhitelistRows.cs" Link="Shared\LegacyWhitelistRows.cs" />
+  </ItemGroup>
 </Project>

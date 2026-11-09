@@ -47,6 +47,8 @@ public static class NodeDependencyInjection
         services.TryAddSingleton<Channels.IPeerDiscovery, Channels.NoPeerDiscovery>();
 
         services.AddScoped<EventApplier>();
+        // The key of a peer a device holds none for, from a trusted node's standing (BMB-337): the sync client takes it when it is registered.
+        services.AddScoped<PeerTlsBackfill>();
         services.AddScoped<SyncClient>();
         services.AddScoped<HardDeleteService>();
 

@@ -34,4 +34,9 @@ public sealed record PeerProtocolSeen(
     // Step A (spec 5.2, A.6): the capabilities and application version the responder last saw from this peer, and when.
     [property: JsonPropertyName("capabilities")] IReadOnlyList<string>? Capabilities = null,
     [property: JsonPropertyName("app_version")] string? AppVersion = null,
-    [property: JsonPropertyName("capabilities_seen_at")] DateTime? CapabilitiesSeenAt = null);
+    [property: JsonPropertyName("capabilities_seen_at")] DateTime? CapabilitiesSeenAt = null,
+    // How the responder reaches this peer over TLS, as the join hands it on (JoinTls): "pin" with the key's pin, "public-ca", or neither. A device that
+    // joined before it was sent has no key for a blind node, and takes it from here (PeerTlsBackfill). Optional both ways: an older node sends neither
+    // and ignores them.
+    [property: JsonPropertyName("tls_trust")] string? TlsTrust = null,
+    [property: JsonPropertyName("tls_spki")] string? TlsSpki = null);

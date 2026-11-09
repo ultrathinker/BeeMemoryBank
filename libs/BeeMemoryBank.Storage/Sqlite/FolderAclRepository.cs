@@ -69,6 +69,29 @@ public class FolderAclRepository(DbConnectionFactory factory) : BaseRepository(f
             new { userId, folderId });
     }
 
+    public async Task<List<FolderAclMarkRow>> ListMarkRowsAsync()
+    {
+        // One join, three tables: the rule, who it belongs to and the folder's CURRENT path.
+        // Inactive users (a deleted account keeps its rows) and superadmins (they bypass folder
+        // rules, so a row left from before a promotion is inert) are left out, and so are
+        // soft-deleted folders.
+        using var conn = OpenConnection();
+        return (await conn.QueryAsync<FolderAclMarkRow>(
+            @"SELECT 'user'                  AS SubjectType,
+                     CAST(a.user_id AS TEXT) AS SubjectId,
+                     u.username              AS SubjectName,
+                     a.folder_id             AS FolderId,
+                     f.path                  AS FolderPath,
+                     a.effect                AS Effect,
+                     a.is_read_only          AS IsReadOnly
+                FROM tbl_folder_acl_entry a
+                JOIN tbl_user   u ON u.id = a.user_id AND u.is_active = 1
+                                 AND u.role <> @superadmin COLLATE NOCASE
+                JOIN tbl_folder f ON f.id = a.folder_id AND f.status = 'A'
+               ORDER BY f.path, u.username",
+            new { superadmin = UserRoles.Superadmin })).ToList();
+    }
+
     public async Task<List<int>> GetUserIdsByFolderIdAsync(Guid folderId)
     {
         using var conn = OpenConnection();

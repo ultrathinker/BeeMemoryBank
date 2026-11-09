@@ -262,6 +262,21 @@
         });
     });
 
+    // A link from the folder marks of the tree (BMB-338) is /Users?access=<user id>: open that user's Folder Access dialog right away.
+    // The custom elements are upgraded after this script has run, and a dialog is shown or filled before that only half-way, so wait for them.
+    (function openRequestedFolderAccess() {
+        var url = new URL(window.location.href);
+        var wanted = url.searchParams.get('access');
+        if (!wanted) return;
+        var button = Array.prototype.find.call(document.querySelectorAll('.btn-user-folder-access'), function (b) { return b.dataset.uid === wanted; });
+        // Take it out of the address so that a reload (or a bookmark) does not reopen the dialog.
+        url.searchParams.delete('access');
+        try { history.replaceState(history.state, '', url.pathname + url.search + url.hash); } catch (e) { }
+        if (!button) return;
+        Promise.all(['sl-dialog', 'sl-input', 'sl-select', 'sl-switch', 'sl-icon-button', 'sl-badge'].map(function (tag) { return customElements.whenDefined(tag); }))
+            .then(function () { openUserFolderAccess(button.dataset.uid, button.dataset.name, button.dataset.role); });
+    })();
+
     // Form submit or Enter key submits the active dialog
     ['form-add-user', 'form-change-password', 'form-edit-user'].forEach(function(fid) {
         var handlers = { 'form-add-user': submitAddUser, 'form-change-password': submitChangePassword, 'form-edit-user': submitEditUser };

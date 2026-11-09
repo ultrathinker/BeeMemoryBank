@@ -18,6 +18,8 @@
     --tree-hover: rgba(108, 99, 255, 0.12);
     --tree-active: rgba(108, 99, 255, 0.22);
     --code-color: #e8a0bf;
+    /* Folder access mark (the diamond inside the folder icon). One variable for every theme; Light has its own below. */
+    --folder-mark-diamond: #ff9500;
 }
 
 /* 1. Light (standard) */
@@ -34,6 +36,8 @@
     --tree-hover: rgba(37, 99, 235, 0.08);
     --tree-active: rgba(37, 99, 235, 0.16);
     --code-color: #b91c1c;
+    /* Folder access mark: the deeper orange for a light background. */
+    --folder-mark-diamond: #e06c00;
 }
 
 /* 2. Dark Classic */
@@ -930,6 +934,76 @@ a.search-result-title:hover {
     border-radius: 4px;
     pointer-events: none;
 }
+
+/* ===== Folder access marks (BMB-338) =====
+   A folder with a rule set directly on it keeps its outline folder icon and gets an orange diamond inside it. There is one
+   kind of mark, whatever the rules are. The icon is an inline <svg> built by site-folder-marks.js in the same 16x16 box and
+   with the same margin as the plain <sl-icon name="folder2">, so the row does not move. The CONTOUR takes no colour of its
+   own: it is painted with currentColor, i.e. the colour the row's link has (also when the row is active), exactly as the plain
+   icon is, so the two look the same apart from the diamond. Only the diamond has a colour, --folder-mark-diamond (the root
+   block and the Light block above; a theme whose sidebar is itself orange can set its own). */
+.tree-folder-mark {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-right: 4px;
+    border-radius: 3px;
+}
+.tree-folder-mark-svg { display: block; width: 1em; height: 1em; }
+.tree-folder-mark-diamond { fill: var(--folder-mark-diamond); }
+.tree-folder-mark[role="button"] { cursor: pointer; }
+.tree-folder-mark:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* The shared hint: ONE element on <body> for the whole tree (the sidebar scrolls and would clip a per-row one). */
+.folder-mark-tip {
+    position: fixed;
+    z-index: 2000;
+    max-width: 360px;
+    padding: 8px 10px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    font-size: 0.82rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+}
+.folder-mark-tip[hidden] { display: none; }
+/* The title ("Custom permissions") is set apart from the lines below it. */
+.folder-mark-tip-title {
+    font-weight: 600;
+    padding-bottom: 5px;
+    margin-bottom: 5px;
+    border-bottom: 1px solid var(--border);
+}
+.folder-mark-tip-line + .folder-mark-tip-line { margin-top: 2px; }
+.folder-mark-tip-muted { color: var(--text-secondary); margin-top: 6px !important; }
+
+.folder-mark-dialog::part(body) { padding-top: 8px; }
+.folder-mark-dialog-path { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.folder-mark-dialog-path code { font-size: 0.9rem; }
+.folder-mark-dialog-heading {
+    margin: 12px 0 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--sl-color-neutral-600);
+}
+.folder-mark-dialog-list { list-style: none; margin: 0; padding: 0; }
+.folder-mark-dialog-list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--sl-color-neutral-200);
+}
+.folder-mark-dialog-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.folder-mark-dialog-edit { flex-shrink: 0; color: var(--sl-color-primary-600); font-size: 0.85rem; text-decoration: none; }
+.folder-mark-dialog-edit:hover { text-decoration: underline; }
+.folder-mark-dialog-note { margin: 14px 0 0; font-size: 0.8rem; color: var(--sl-color-neutral-600); }
 
 /* ===== Splitter ===== */
 .splitter {

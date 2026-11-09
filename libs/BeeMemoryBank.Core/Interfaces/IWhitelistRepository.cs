@@ -89,4 +89,17 @@ public interface IWhitelistRepository
     /// pairing. Touches no version column, so nothing is replicated.
     /// </summary>
     Task ResetLocalBookkeepingAsync(Guid nodeId, DateTime now);
+
+    /// <summary>
+    /// Gives an ACTIVE row the TLS mode and key a trusted node reported for it, but only when the row has neither (<c>tls_trust</c> and
+    /// <c>tls_spki</c> both empty) AND nothing ever wrote its TLS trust on purpose: the TLS concern is still undated (<see cref="WhitelistEntry.UndatedFields"/>,
+    /// migration 045: what a join, a restore or an older build left, whose writer nobody knows). Empty columns alone are not enough: a whitelist event that
+    /// turned the setting off (<c>tls_trust: none</c>) stores the same empty columns, with the concern dated by that event, and must stay off.
+    /// The node the key comes from (<paramref name="trustedResponder"/>) must be an active superadmin row at the moment of the write, and not a blind node.
+    /// One conditional statement for all of it, so it cannot overwrite what a whitelist event wrote a moment before, nor write after the responder lost its
+    /// authority, and a mode or key that is there (a pin, <c>public-ca</c>, a mode this build does not know) is never changed. Local bookkeeping like
+    /// <see cref="RecordProtocolVersionAsync"/>: it writes no event and touches no version column, the row's and each concern's (the concern stays undated),
+    /// so any later whitelist event still wins over it as it would over an empty value. True when this call wrote the row.
+    /// </summary>
+    Task<bool> FillMissingTlsTrustAsync(Guid nodeId, string trust, string tlsSpki, Guid trustedResponder);
 }

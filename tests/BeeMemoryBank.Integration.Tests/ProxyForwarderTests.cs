@@ -369,6 +369,36 @@ public class ProxyForwarderTests
         (await page.Content.ReadAsStringAsync()).Should().Contain("Re-pair every blind node now").And.Contain("rekey-report.js");
     }
 
+    [Fact]
+    public async Task FolderMarks_AreSuperadminOnly_AtTheWebGate_AndNeverReachTheApiForARegularUser()
+    {
+        // BMB-338: the overview names other people and their rights. A regular user is refused by the Web gate itself,
+        // before anything is forwarded; the superadmin gets the real answer.
+        var before = _fx.ApiCalls.Count;
+        var bob = await _fx.Bob.GetAsync("/api-proxy/access/folder-marks");
+        bob.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await bob.Content.ReadAsStringAsync()).Should().Contain("superadmin only");
+        _fx.ApiCalls.Count.Should().Be(before, "the refusal is local: the API is not even asked");
+
+        var admin = await _fx.Admin.GetAsync("/api-proxy/access/folder-marks");
+        admin.StatusCode.Should().Be(HttpStatusCode.OK);
+        admin.Headers.CacheControl.Should().NotBeNull("the proxy relays the API's Cache-Control");
+        admin.Headers.CacheControl!.NoStore.Should().BeTrue("the answer depends on who is signed in");
+        (await admin.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("folders").ValueKind.Should().Be(JsonValueKind.Array);
+    }
+
+    [Fact]
+    public async Task OwnReadOnlyPaths_AreOpenToARegularUser_ThroughTheProxy()
+    {
+        // BMB-338: what a non-admin's tree marks are drawn from. The API answers about the caller and nobody else.
+        var bob = await _fx.Bob.GetAsync("/api-proxy/access/readonly-paths");
+
+        bob.StatusCode.Should().Be(HttpStatusCode.OK);
+        bob.Headers.CacheControl.Should().NotBeNull("the proxy relays the API's Cache-Control");
+        bob.Headers.CacheControl!.NoStore.Should().BeTrue("the answer is about the signed-in user only");
+        (await bob.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("paths").ValueKind.Should().Be(JsonValueKind.Array);
+    }
+
     // ── Deny-by-default ──────────────────────────────────────────────────────────
 
     [Fact]

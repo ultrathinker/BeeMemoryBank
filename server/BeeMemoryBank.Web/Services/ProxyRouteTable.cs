@@ -94,6 +94,11 @@ public static class ProxyRouteTable
     {
         // ── Tree / search / folders / articles (any authenticated user) ──────────
         ["tree"] = new("/api/tree", [new("GET", null)]),
+        // The folder marks of the tree (BMB-338). The caller's own read-only folders are for everyone
+        // (the API answers about the caller and nobody else); the per-folder overview names other
+        // people and their rights, so it is superadmin, like the Users and Roles pages it links to.
+        ["access/readonly-paths"] = new("/api/access/readonly-paths", [new("GET", null)]),
+        ["access/folder-marks"] = new("/api/access/folder-marks", [new("GET", UserRoles.Superadmin)]),
         ["search"] = new("/api/search", [new("GET", null)]),
         // No GET on the collection itself: the API has no GET /api/folders (reads go through
         // /tree). The one folder read the UI makes is /folders/search (tree move dialogs and the

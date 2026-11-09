@@ -68,6 +68,27 @@ public class RoleAclRepository(DbConnectionFactory factory) : BaseRepository(fac
             new { folderId })).ToList();
     }
 
+    public async Task<List<FolderAclMarkRow>> ListMarkRowsAsync()
+    {
+        // The rule, its role and the folder's CURRENT path in one join. Soft-deleted folders are
+        // left out, and so is the superadmin role (it bypasses folder rules; RoleService refuses to
+        // add any, so a row there could only be stale).
+        using var conn = OpenConnection();
+        return (await conn.QueryAsync<FolderAclMarkRow>(
+            @"SELECT 'role'         AS SubjectType,
+                     r.name         AS SubjectId,
+                     r.display_name AS SubjectName,
+                     a.folder_id    AS FolderId,
+                     f.path         AS FolderPath,
+                     a.effect       AS Effect,
+                     a.is_read_only AS IsReadOnly
+                FROM tbl_role_folder_acl_entry a
+                JOIN tbl_role   r ON r.name = a.role_name AND r.name <> @superadmin COLLATE NOCASE
+                JOIN tbl_folder f ON f.id = a.folder_id AND f.status = 'A'
+               ORDER BY f.path, r.display_name",
+            new { superadmin = UserRoles.Superadmin })).ToList();
+    }
+
     public async Task<Dictionary<string, int>> CountEntriesPerRoleAsync()
     {
         using var conn = OpenConnection();

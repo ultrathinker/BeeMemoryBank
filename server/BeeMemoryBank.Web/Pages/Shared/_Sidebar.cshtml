@@ -1,3 +1,11 @@
+@{
+    // Folder access marks (BMB-338). Only WHICH call the tree makes is decided here, from the signed-in role: a superadmin gets the
+    // marks with names (the API and the Web proxy refuse everyone else that call), anybody else only their own read-only
+    // folders. No rule, name or path is rendered into the page.
+    var folderMarksMode = User.Identity?.IsAuthenticated != true
+        ? ""
+        : User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "superadmin") ? "admin" : "self";
+}
 <div class="sidebar" id="app-sidebar">
     <div class="sidebar-header">
         <sl-input id="sidebar-search-input" placeholder="Search..." size="small" clearable type="search" autocomplete="nope-bmb-sidebar" name="sidebar-tree-search">
@@ -40,7 +48,7 @@
 
     <div class="sidebar-tree-wrap">
         <div class="sidebar-tree-top-fade" aria-hidden="true"></div>
-        <div class="sidebar-tree" id="tree-container"></div>
+        <div class="sidebar-tree" id="tree-container" data-folder-marks="@folderMarksMode"></div>
     </div>
 
     <sl-dialog id="dlg-add-folder-sidebar" label="Add Folder" class="bmb-fp-host">

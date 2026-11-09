@@ -26,4 +26,11 @@ public interface IRoleAclRepository
     /// <summary>Rule count per role name, for the roles list UI. Roles with no rules are
     /// absent from the result rather than present with a zero.</summary>
     Task<Dictionary<string, int>> CountEntriesPerRoleAsync();
+
+    /// <summary>
+    /// Every role rule on a live folder (the superadmin role excluded: it bypasses folder rules),
+    /// with the role's display name and the folder's current path resolved by the same query.
+    /// Feeds the folder-marks overview; see <see cref="FolderAclMarkRow"/>.
+    /// </summary>
+    Task<List<FolderAclMarkRow>> ListMarkRowsAsync();
 }

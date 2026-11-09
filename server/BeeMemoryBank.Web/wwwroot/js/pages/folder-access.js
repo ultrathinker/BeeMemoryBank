@@ -37,6 +37,12 @@ window.folderAccess = (function () {
         return '/api-proxy/restrictions/' + subjectType + '/' + encodeURIComponent(subjectId);
     }
 
+    // After a rule was added, switched or removed: redraw the list, and let the sidebar tree re-read which folders carry a rule (BMB-338).
+    function changed() {
+        load();
+        if (window.bmbFolderMarks) window.bmbFolderMarks.reload();
+    }
+
     function open(type, id, label, options) {
         subjectType = type;
         subjectId = id;
@@ -208,7 +214,7 @@ window.folderAccess = (function () {
             if (searchInput) searchInput.value = '';
             var dropdown = getDropdown();
             if (dropdown) dropdown.style.display = 'none';
-            load();
+            changed();
         }, { quiet: true, error: function (err) { showDlgError('restriction-error', err.message); } });
     }
 
@@ -267,7 +273,7 @@ window.folderAccess = (function () {
                 var removeBtn = e.target.closest('.acl-remove');
                 if (removeBtn) {
                     await bmbBusy.run(removeBtn, function () {
-                        return bmbBusy.request(basePath() + '/' + removeBtn.dataset.folder, { method: 'DELETE' }).then(function () { load(); });
+                        return bmbBusy.request(basePath() + '/' + removeBtn.dataset.folder, { method: 'DELETE' }).then(function () { changed(); });
                     }, { quiet: true, error: function (err) { showDlgError('restriction-error', err.message); } });
                     return;
                 }
@@ -278,7 +284,7 @@ window.folderAccess = (function () {
                             method: 'PATCH',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ isReadOnly: roBtn.dataset.ro === 'true' })
-                        }).then(function () { load(); });
+                        }).then(function () { changed(); });
                     }, { quiet: true, error: function (err) { showDlgError('restriction-error', err.message); } });
                 }
             });

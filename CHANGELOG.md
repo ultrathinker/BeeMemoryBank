@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.8.1 (2026-11-09)
+
+A small release. Folders with their own access rules are marked in the folder tree, and a device that joined long ago can reach a blind node
+again. There is no database migration and nothing to do for existing databases; a 2.8.0 node and a 2.8.1 node work together as they are.
+
+### Added
+
+- **Marks on the folders that have their own access rules.** In the folder tree, a folder with a rule set directly on it
+  (hidden from someone, read-only for someone, or open to someone) now shows its folder icon with an orange diamond inside it;
+  only the icon changes, not the folder name. Hover over the icon to see "Custom permissions" and who is affected (up to
+  three names per line, then "and N more"); click it to see the full lists and to go straight to the Folder Access dialog of
+  that user or role on the Users or Roles page. Subfolders that only inherit a rule get no mark. Administrators see all of
+  this; everybody else sees the same marked folder only where a folder is read-only for them, with the hint "Read only for
+  you", and never another person's rules or names.
+
+### Fixed
+
+- **A device that joined long ago can reach a blind node again.** A blind node is trusted by the certificate key pinned on its entry, and a
+  device that joined before 2.5.1 (an Android phone that joined with 2.3.0, for example) never received that key: it kept saying "no answer:
+  its certificate was not accepted" for the blind node while sync with its hub worked. During ordinary sync such a device now takes the
+  missing key from a trusted administrator device (a full node, never a blind one), about every five minutes, and only for a device whose
+  entry has no certificate setting at all and whose setting nobody ever changed on purpose. An entry that already has a key, or says "public
+  CA", is never changed, a setting that was turned off stays off, and a change of that setting made later on another device still wins. Nothing needs doing: after the next sync with the hub the blind node is reached on the
+  sync that follows.
+
 #### 2.8.0 (2026-11-08)
 
 Direct sync between paired devices on your own network. Two computers that were paired with a join code now keep in step

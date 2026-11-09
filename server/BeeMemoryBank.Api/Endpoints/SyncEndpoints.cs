@@ -543,10 +543,16 @@ public static class SyncEndpoints
             var storeSource = services.GetService<IBlindStoreSummarySource>();
             return Results.Ok(new BeeMemoryBank.Sync.Blind.MyStanding(
                 self.NodeId, policy.Declared, caller.IsSuperadmin, reseedNeeded,
-                rows.Select(r => new BeeMemoryBank.Sync.Blind.PeerProtocolSeen(
-                    r.NodeId, r.DisplayName, r.LastProtocolVersion, r.LastProtocolSeenAt, r.CreatedAt,
-                    r.LastCapabilitiesSeenAt is null ? null : MetadataCapabilities.Parse(r.LastCapabilities),
-                    r.LastAppVersion, r.LastCapabilitiesSeenAt)).ToList(),
+                rows.Select(r =>
+                {
+                    // How this node reaches the peer over TLS, by the rule the join hands it on (JoinTls): a device that joined before 2.5.1 holds no key
+                    // for a blind node and takes it from here (PeerTlsBackfill). A damaged pin is not reported (both come out empty).
+                    JoinTls.TryInherit(r.TlsTrust, r.TlsSpki, out var tlsTrust, out var tlsSpki);
+                    return new BeeMemoryBank.Sync.Blind.PeerProtocolSeen(
+                        r.NodeId, r.DisplayName, r.LastProtocolVersion, r.LastProtocolSeenAt, r.CreatedAt,
+                        r.LastCapabilitiesSeenAt is null ? null : MetadataCapabilities.Parse(r.LastCapabilities),
+                        r.LastAppVersion, r.LastCapabilitiesSeenAt, tlsTrust, tlsSpki);
+                }).ToList(),
                 await new BeeMemoryBank.Sync.Blind.BlindState(db).GetDekExposureAsync(),
                 MetadataCapabilities.Advertised, BuildVersion.Current, policy.SealsMetadata,
                 storeSource is null ? null : await storeSource.GetSummaryAsync()));

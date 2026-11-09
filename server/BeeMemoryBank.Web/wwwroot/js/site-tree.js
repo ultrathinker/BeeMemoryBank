@@ -77,6 +77,8 @@
             if (!html) html = '<div class="tree-empty-folder" style="padding-left:' + (8 + (depth + 1) * 20) + 'px;color:var(--sl-color-neutral-400);font-size:0.8rem;">empty</div>';
             container.innerHTML = html;
             container.setAttribute('data-loaded', '1');
+            // Folder access marks (site-folder-marks.js): rows added by a lazy expansion get marked too.
+            if (window.bmbFolderMarks) window.bmbFolderMarks.decorate(container);
         }
 
         function isPathLoaded(path) {
@@ -150,6 +152,8 @@
         }
 
         loadTree = function () {
+            // A tree refresh also re-reads which folders carry a rule (it decorates the rows itself when it arrives).
+            if (window.bmbFolderMarks) window.bmbFolderMarks.reload();
             return fetch('/api-proxy/tree/children?path=/')
                 .then(function (r) { return r.json(); })
                 .then(function (data) {
@@ -163,6 +167,7 @@
                     (data.articles || []).forEach(function (a) { html += renderArticleRow(a, -1); });
                     html += '</div>';
                     treeContainer.innerHTML = html;
+                    if (window.bmbFolderMarks) window.bmbFolderMarks.decorate(treeContainer);
 
                     var pathsToExpand = Array.from(expandedPaths);
                     if (pathsToExpand.length === 0) {
@@ -218,6 +223,7 @@
             var container = treeContainer.querySelector('.tree-children[data-owner-path="' + path + '"]');
             if (!container) return Promise.resolve();
             container.removeAttribute('data-loaded');
+            if (window.bmbFolderMarks) window.bmbFolderMarks.reload();
             return fetch('/api-proxy/tree/children?path=' + encodeURIComponent(path))
                 .then(function (r) { return r.json(); })
                 .then(function (data) {

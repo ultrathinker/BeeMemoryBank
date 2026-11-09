@@ -116,6 +116,7 @@ Singleton BeeMemoryBank.Sync.Metadata.IMetadataActivationObserver => BeeMemoryBa
 Singleton BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy => BeeMemoryBank.Sync.Metadata.SyncProtocolPolicy
 Singleton BeeMemoryBank.Sync.PeerContactLog => BeeMemoryBank.Sync.PeerContactLog
 Singleton BeeMemoryBank.Sync.PeerNewerProtocolState => BeeMemoryBank.Sync.PeerNewerProtocolState
+Scoped BeeMemoryBank.Sync.PeerTlsBackfill => BeeMemoryBank.Sync.PeerTlsBackfill
 Scoped BeeMemoryBank.Sync.Recovery.RecoverySetBuilder => BeeMemoryBank.Sync.Recovery.RecoverySetBuilder
 Singleton BeeMemoryBank.Sync.SnapshotRequiredState => BeeMemoryBank.Sync.SnapshotRequiredState
 Scoped BeeMemoryBank.Sync.SyncClient => BeeMemoryBank.Sync.SyncClient

@@ -7,7 +7,8 @@ namespace BeeMemoryBank.Sync;
 /// How a peer is reached over TLS, as the join hands it from the host to the joiner: the host's whitelist row for each
 /// other peer says <c>pin</c> (with the key's pin) or <c>public-ca</c>, and the joiner records the same, so that it checks
 /// that peer exactly as the host does (<see cref="SpkiPinRegistry"/>). One rule for both sides and for all three joins
-/// (<c>/api/join</c> and its callers: <c>bmb join</c>, the Setup page, the phone).
+/// (<c>/api/join</c> and its callers: <c>bmb join</c>, the Setup page, the phone). The standing a node answers (<c>my-standing</c>) reports the same pair for each
+/// peer, and a device that joined before the join carried them takes it from there for a peer that has none (<see cref="PeerTlsBackfill"/>).
 ///
 /// <para>Both fields are optional on the wire. A host of an older version sends neither; the joiner then records no mode
 /// and no pin, as it always did. A joiner of an older version ignores them.</para>

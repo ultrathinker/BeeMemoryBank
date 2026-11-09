@@ -167,7 +167,6 @@ BeeMemoryBank.Sync.JoinAbortClient
 BeeMemoryBank.Sync.JoinAbortOutcome
 BeeMemoryBank.Sync.JoinRevocations
 BeeMemoryBank.Sync.JoinSnapshotCipher
-BeeMemoryBank.Sync.JoinTls
 BeeMemoryBank.Sync.LazySlotRewrapService
 BeeMemoryBank.Sync.PendingIndexProcessor
 BeeMemoryBank.Sync.Recovery.AnchorVerification
