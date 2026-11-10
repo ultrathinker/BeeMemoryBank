@@ -317,8 +317,14 @@ public class LanListenerTests : IAsyncLifetime
     {
         await using var listener = New(new FixedBindPlanner(IPAddress.Loopback));
         await listener.SetSyncAsync(true);
-        var joined = new List<IPAddress?>();
-        await using var door = new LanJoinListener(listener, () => _cert, TimeProvider.System, joined.Add);
+        // The door tells who joined after the join's answer has gone out, so the client can read 200 a moment before the call: wait for it.
+        var joinedOn = new TaskCompletionSource<IPAddress?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var joinedCalls = 0;
+        await using var door = new LanJoinListener(listener, () => _cert, TimeProvider.System, address =>
+        {
+            Interlocked.Increment(ref joinedCalls);
+            joinedOn.TrySetResult(address);
+        });
         using var client = PinnedClient(listener);
 
         (await client.GetAsync("/api/sync/snapshot/for-join")).StatusCode.Should().Be(HttpStatusCode.NotFound, "no session is open");
@@ -331,11 +337,12 @@ public class LanListenerTests : IAsyncLifetime
         using var join = new HttpRequestMessage(HttpMethod.Post, "/api/join") { Content = new StringContent("{}") };
         join.Headers.Add(LanJoinListener.TokenHeader, session.Token);
         (await client.SendAsync(join)).StatusCode.Should().Be(HttpStatusCode.OK);
-        joined.Should().ContainSingle().Which.Should().Be(IPAddress.Loopback, "the network a device was paired on is told, to be trusted");
+        (await joinedOn.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be(IPAddress.Loopback, "the network a device was paired on is told, to be trusted");
 
         await door.DisableAsync();
         (await client.GetAsync("/api/sync/snapshot/for-join")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await client.GetStringAsync("/api/sync/identity")).Should().Be(ApiBody, "closing the door leaves the sync surface alone");
+        Volatile.Read(ref joinedCalls).Should().Be(1, "one join is told once");
     }
 
     // ─── The state the announcers follow ────────────────────────────────────
