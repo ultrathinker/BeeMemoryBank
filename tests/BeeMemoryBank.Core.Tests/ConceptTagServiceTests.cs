@@ -40,7 +40,7 @@ public class ConceptTagServiceTests : TestFixture
     {
         // Arrange
         var article = await ArticleService.CreateAsync("Apple Article", "/Path", [], "Content");
-        await _conceptTagRepo.AddToArticleAsync(article.Id, new List<string> { "Apple", "Banana" });
+        await _conceptTagRepo.SetForArticleAsync(article.Id, new List<string> { "Apple", "Banana" });
 
         // Act
         var results = await _degradedService.ListAsync("~Apple");
@@ -67,24 +67,32 @@ public class ConceptTagServiceTests : TestFixture
     }
 
     [Fact]
-    public async Task AddToArticle_WhenModelUnavailable_StillAssociatesTags()
+    public async Task AddTags_WhenModelUnavailable_StillAssociatesTags()
     {
-        // Arrange
+        // Arrange: an ArticleService whose tag service has no embedding model (the production
+        // tag-adding path is ArticleService.AddTagsAsync, which writes the event with the tags).
+        var degradedArticles = new ArticleService(
+            ArticleRepo, new ArticleBodyRepository(Factory), Session, new NodeIdentityRepository(Factory), new NullLamportClock(),
+            new NullEventLogger(), new MediaRepository(Factory, ScopeHolder), FolderRepo, new ArticleVersionRepository(Factory, ScopeHolder),
+            new NullActorProvider(), _degradedService, Factory);
         var article = await ArticleService.CreateAsync("Fig Article", "/Path", [], "Content");
 
         // Act
-        await _degradedService.AddToArticleAsync(article.Id, new List<string> { "Fig", "Grape" });
+        var added = await degradedArticles.AddTagsAsync(article.Id, new List<string> { "Fig", "Grape" });
 
         // Assert
+        added.Should().Be(2);
         var tags = await _conceptTagRepo.GetByArticleIdAsync(article.Id);
         tags.Should().BeEquivalentTo("Fig", "Grape");
+        var withEmbeddings = await _conceptTagRepo.GetWithEmbeddingsAsync();
+        withEmbeddings.Should().BeEmpty("no model, so no embeddings; the tags are still stored");
     }
 
     [Fact]
     public async Task BackfillEmbeddings_CaseOnlyDuplicateTagNames_DoesNotThrow()
     {
         // tbl_concept_tag.name is UNIQUE but not COLLATE NOCASE at the DB level -- every current
-        // write path (AddToArticleAsync etc.) enforces case-insensitive uniqueness before insert,
+        // write path (SetForArticleAsync etc.) enforces case-insensitive uniqueness before insert,
         // but rows from before that enforcement existed (or any other path that bypasses it) can
         // still collide under OrdinalIgnoreCase. This broke in production: BackfillEmbeddingsAsync
         // built its "already embedded" lookup with ToDictionary(..., OrdinalIgnoreCase), which
@@ -112,7 +120,7 @@ public class ConceptTagServiceTests : TestFixture
     {
         // Arrange
         var article = await ArticleService.CreateAsync("Lemon Article", "/Path", [], "Content");
-        await _conceptTagRepo.AddToArticleAsync(article.Id, new List<string> { "Lemon", "Mango" });
+        await _conceptTagRepo.SetForArticleAsync(article.Id, new List<string> { "Lemon", "Mango" });
 
         // Act
         var act = () => _degradedService.BackfillEmbeddingsAsync();
@@ -126,7 +134,7 @@ public class ConceptTagServiceTests : TestFixture
     {
         // Arrange
         var article = await ArticleService.CreateAsync("Nectarine Article", "/Path", [], "Content");
-        await _conceptTagRepo.AddToArticleAsync(article.Id, new List<string> { "Nectarine" });
+        await _conceptTagRepo.SetForArticleAsync(article.Id, new List<string> { "Nectarine" });
 
         // Act
         await _degradedService.RenameAsync("Nectarine", "Orange");
@@ -150,8 +158,8 @@ public class ConceptTagServiceTests : TestFixture
     {
         var a = await ArticleService.CreateAsync("Plum Article", "/Path", [], "Content");
         var b = await ArticleService.CreateAsync("Quince Article", "/Path", [], "Content");
-        await _conceptTagRepo.AddToArticleAsync(a.Id, new List<string> { "Plum", "Fruit" });
-        await _conceptTagRepo.AddToArticleAsync(b.Id, new List<string> { "Quince" });
+        await _conceptTagRepo.SetForArticleAsync(a.Id, new List<string> { "Plum", "Fruit" });
+        await _conceptTagRepo.SetForArticleAsync(b.Id, new List<string> { "Quince" });
 
         var batch = await _conceptTagRepo.GetByArticleIdsAsync(new[] { a.Id, b.Id });
 

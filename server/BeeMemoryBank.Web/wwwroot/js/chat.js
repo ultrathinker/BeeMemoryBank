@@ -59,6 +59,8 @@
     var justCreatedConversationId = null;
     var sending = false;
     var abortCtrl = null;
+    // The draft that "Open in AI chat" on the Dream page brings to /AI (pages/ai-dream-draft.js, started at the end of this file); null on the homepage chat.
+    var dreamDraft = null;
     // Staged image attachments: an array of {mime, dataBase64, previewUrl}, rendered as a
     // horizontally-scrollable row of thumbnails above the composer, in the order added.
     var stagedAttachments = [];
@@ -509,6 +511,7 @@
 
     function openConversation(id) {
         if (sending) return;
+        if (dreamDraft) dreamDraft.drop();
         currentConversationId = id;
         messagesEl.innerHTML = '';
         fetch('/api-proxy/chat/conversations/' + id + '/messages', { headers: { 'Accept': 'application/json' } })
@@ -556,6 +559,7 @@
 
     function newConversation() {
         if (sending) return;
+        if (dreamDraft) dreamDraft.drop();
         currentConversationId = null;
         messagesEl.innerHTML = '';
         greet();
@@ -614,14 +618,26 @@
             return;
         }
         var text = (inputEl.value || '').trim();
-        if (!text) return;
+        // The task from Dream, after Edit: the node checks the advice before it goes (pages/ai-dream-draft.js sends it, or says why not).
+        if (dreamDraft && dreamDraft.composerSend(text)) return;
+        sendText(text);
+    }
+
+    // Sends one user turn made of `text`. From the composer (Enter) the staged images go with it and the field is emptied; a draft (opts.draft: Run on the
+    // draft from Dream) goes as it is, alone, and leaves the field and the staged images as they are. Returns the turn's promise (it ends with the turn, and
+    // gives the turn: `accepted` when the node named the conversation, `refused` when it refused the turn before saving anything (refusedBeforeSaving),
+    // `aborted` when it was stopped), or null when nothing was sent.
+    function sendText(text, opts) {
+        if (sending || !text) return null;
+        var fromComposer = !(opts && opts.draft);
 
         // Staged images are always attachable now — the SERVER decides how to route them (inline
         // to a vision-capable text model, or delegated to a separate vision model).
-        var attachments = stagedAttachments.map(function (a) {
+        var staged = fromComposer ? stagedAttachments : [];
+        var attachments = staged.map(function (a) {
             return { mime: a.mime, dataBase64: a.dataBase64 };
         });
-        var stagedPreviews = stagedAttachments.map(function (a) { return a.previewUrl; });
+        var stagedPreviews = staged.map(function (a) { return a.previewUrl; });
 
         var bubble = addBubble('user', renderMarkdown(text));
         if (bubble.firstElementChild)
@@ -633,8 +649,10 @@
                 renderImageFigure(imgRow, previewUrl, null, 'user-upload');
             });
         }
-        inputEl.value = '';
-        clearAttachment();
+        if (fromComposer) {
+            inputEl.value = '';
+            clearAttachment();
+        }
         hideEmpty();
         // Home mode, mechanism A: the first send collapses the welcome block into chat view.
         if (homeWelcome) setWelcomeCollapsed(true);
@@ -649,7 +667,7 @@
         // /AI never sets this (homeWelcome is null there), so its behavior is unchanged.
         if (homeWelcome && !currentConversationId) body.pinToHome = true;
         if (attachments.length) body.attachments = attachments;
-        runTurn(makeTurn(), '/api-proxy/chat/stream', body);
+        return runTurn(makeTurn(), '/api-proxy/chat/stream', body);
     }
 
     // Builds a fresh assistant turn: an empty bubble with a "Thinking…" placeholder + tool-status slot.
@@ -691,10 +709,11 @@
 
     // Streams one SSE response into `turn` — the initial /stream turn (send) OR a /confirm
     // continuation (resumeConfirm). Owns the Send/Stop button state and abort lifecycle.
+    // The promise it returns always resolves, with the turn, once the stream has ended.
     function runTurn(turn, url, bodyObj) {
         setSending(true);
         abortCtrl = new AbortController();
-        streamTurn(url, bodyObj, turn).then(function () {
+        return streamTurn(url, bodyObj, turn).then(function () {
             finalizeTurn(turn);
             // Refresh the sidebar only when a turn fully finishes (a paused/confirm turn refreshes
             // when it eventually completes, or on the next turn).
@@ -706,7 +725,7 @@
             // user can click Allow/Deny. resumeConfirm re-arms it for the continuation.
             setSending(false);
             abortCtrl = null;
-        });
+        }).then(function () { return turn; });
     }
 
     function streamTurn(url, bodyObj, turn) {
@@ -728,6 +747,7 @@
             // landing on a 200 text/html page. Detect it and show a human message instead of
             // ever dumping raw HTML into the chat bubble.
             if (resp.redirected && resp.url && resp.url.indexOf('/Login') >= 0) {
+                turn.refused = true; // the Web's sign-in check answered before the request reached the Api: nothing was saved
                 throw new Error('Your session expired. Please reload the page and sign in again.');
             }
             return resp.text().then(function (bodyText) {
@@ -736,6 +756,7 @@
                     var parsed = JSON.parse(bodyText);
                     if (parsed && typeof parsed.error === 'string') msg = parsed.error;
                 } catch (e) { /* not JSON */ }
+                turn.refused = refusedBeforeSaving(resp.status, msg !== null, !!(bodyObj && bodyObj.attachments && bodyObj.attachments.length));
                 if (!msg) {
                     // Never surface raw markup (or any unparseable body) as the "AI answer".
                     msg = ct.indexOf('text/html') >= 0
@@ -745,6 +766,23 @@
                 throw new Error(msg);
             });
         });
+    }
+
+    // Whether an answer that is not a stream is a refusal that comes before the message is saved (the draft from Dream then gives its task back and takes
+    // its mark back; any other answer leaves the turn unconfirmed, as a stream that broke). What /api/chat/stream and its passthrough can answer instead of
+    // a stream (ChatEndpoints.Stream.cs, ChatProxyEndpoints.cs):
+    //   4xx with { error }        its own checks (message, length, sign-in, rate limit, locked vault, no key or model, attachments, conversation) and the
+    //                             filters in front of it: all before the conversation is created and the message saved;
+    //   502 with { error }        the vision step: before as well;
+    //   500 with { error }        an unexpected error, through the Api's exception handler: before the save, except on the path of attached images,
+    //                             which still prepares them (unguarded) after the save;
+    //   502 with nothing          the Web's passthrough lost the Api's answer: the Api may have saved the message;
+    //   2xx that is not a stream  nothing the endpoint answers: unknown.
+    // (The sign-in redirect of the Web is judged before this: it comes before the request reaches the Api.)
+    function refusedBeforeSaving(status, nodeSaidWhy, hadImages) {
+        if (status >= 400 && status < 500) return true;
+        if (status >= 500 && status < 600 && nodeSaidWhy) return !(status === 500 && hadImages);
+        return false;
     }
 
     // Finalize the bubble on stream end. A turn PAUSED for confirmation keeps its streamed text
@@ -776,6 +814,7 @@
     function handleTurnError(turn, err) {
         if (err && err.name === 'AbortError') {
             // Stopped by the user or navigation. Keep whatever streamed; mark as interrupted.
+            turn.aborted = true;
             turn.statusEl.textContent = '';
             if (turn.thinkingEl) turn.thinkingEl.open = false;
             if (!turn.assistantRaw) {
@@ -935,6 +974,7 @@
             // renderSidebar can flash the new row once it appears.
             if (!currentConversationId) justCreatedConversationId = obj.conversationId;
             currentConversationId = obj.conversationId;
+            turn.accepted = true; // the node took the turn: the message is saved in the conversation
             loadHistory();
         } else if (eventType === 'delta' && obj) {
             // Append text to a DEDICATED child element, never to streamEl's own textContent —
@@ -1434,6 +1474,25 @@
     greet();
     loadHistory();
     loadModelLabel();
+
+    // "Open in AI chat" on the Dream page opens /AI?dreamAdvice=<id> in a new tab. pages/ai-dream-draft.js (loaded on /AI only, where the chat sidebar is; never
+    // on the homepage chat) asks the node for that advice's task and shows it as a draft: nothing is sent until the person presses Run, or edits it and sends it.
+    // This file reads nothing of the address itself; the draft gets the few things of the chat it needs, and sends only through sendText.
+    if (chatSidebar && window.bmbAiDreamDraft) {
+        dreamDraft = window.bmbAiDreamDraft.start({
+            messages: messagesEl,
+            input: inputEl,
+            composer: composerEl,
+            hideEmpty: hideEmpty,
+            isSending: function () { return sending; },
+            // Run sends the draft as the first message of a new conversation: the view is emptied, as "New chat" does.
+            startNew: function () {
+                currentConversationId = null;
+                messagesEl.innerHTML = '';
+            },
+            sendText: sendText
+        });
+    }
 
     // Home mode: restore the pinned conversation (a real server-side per-user flag on the
     // chat_conversation row — survives navigation AND logout/login). Pinned → open straight

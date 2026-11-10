@@ -223,7 +223,15 @@ public record ChatCompleteResponse(
     string Content,
     int PromptTokens,
     int CompletionTokens,
-    string Model);
+    string Model)
+{
+    /// <summary>Why the provider stopped (<c>finish_reason</c>: "stop", "length" when the output cap was hit, ...); null when
+    /// it did not say.</summary>
+    public string? FinishReason { get; init; }
+
+    /// <summary>The model reasoned before it answered (a reasoning text, reasoning details or reasoning tokens came back).</summary>
+    public bool HasReasoning { get; init; }
+}
 
 // ── Streaming + conversation persistence ────────────────────────────────────
 

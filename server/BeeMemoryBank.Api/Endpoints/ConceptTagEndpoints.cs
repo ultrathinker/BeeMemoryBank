@@ -148,22 +148,26 @@ public static class ConceptTagEndpoints
             return Results.Ok(new { conceptTags });
         }).RequireInternalKey().WithTags("ConceptTags");
 
-        // GET /api/articles/{id}/related — get related articles via shared concept tags
-        app.MapGet("/api/articles/{id:guid}/related", async (Guid id, HttpContext ctx, IConceptTagRepository conceptTagRepo, ArticleService articleService) =>
+        // GET /api/articles/{id}/related?limit=N — short ranked list: rare shared tags plus nearness by meaning (tags alone while locked)
+        app.MapGet("/api/articles/{id:guid}/related", async (Guid id, HttpContext ctx, IConceptTagRepository conceptTagRepo, ArticleService articleService, SessionService session, int limit = RelatedArticle.DefaultLimit) =>
         {
 
             var article = await articleService.GetMetadataAsync(id);
             if (article == null)
                 return Results.NotFound(new ErrorResponse($"Article {id} not found"));
 
-            var related = await conceptTagRepo.GetRelatedArticlesAsync(id);
+            // The article vectors are derived from article bodies: while the vault is locked, tags only.
+            var related = await conceptTagRepo.GetRelatedArticlesAsync(id, RelatedArticle.ClampLimit(limit), includeMeaning: session.IsUnlocked);
             return Results.Ok(related.Select(r => new
             {
                 id = r.Id,
                 title = r.Title,
                 treePath = r.TreePath,
                 sharedConcepts = r.SharedConcepts,
-                strength = r.Strength
+                strength = r.Strength,
+                reasons = r.Reasons,
+                semanticPercent = r.SemanticPercent,
+                possibleDuplicate = r.PossibleDuplicate
             }));
         }).RequireInternalKey().WithTags("ConceptTags");
 

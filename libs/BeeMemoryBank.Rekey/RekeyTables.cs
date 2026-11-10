@@ -94,5 +94,14 @@ public static class RekeyTables
             ["chat_model"] = TableFate.Plaintext,
             ["chat_settings"] = TableFate.Plaintext,
             ["chat_user_settings"] = TableFate.Plaintext,
+            // Dream (server/BeeMemoryBank.Api/Dream/Storage/DreamSchema.cs): advice, rules and the journal keep their
+            // JSON sealed under the chat key (ChatColumns.All); runs, settings and the examined registry hold only
+            // numbers, enumerations and ids.
+            ["dream_advice"] = TableFate.Resealed,
+            ["dream_rule"] = TableFate.Resealed,
+            ["dream_run_event"] = TableFate.Resealed,
+            ["dream_run"] = TableFate.Plaintext,
+            ["dream_settings"] = TableFate.Plaintext,
+            ["dream_examined"] = TableFate.Plaintext,
         };
 }

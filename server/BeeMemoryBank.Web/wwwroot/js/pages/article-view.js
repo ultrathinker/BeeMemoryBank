@@ -944,43 +944,6 @@
         });
     })();
 
-    // Related articles
-    (function () {
-        var prev = document.getElementById('related-prev');
-        var next = document.getElementById('related-next');
-        if (!prev || !next) return;
-        var list = document.getElementById('related-list');
-        var info = document.getElementById('related-pager-info');
-        if (!articleId) return;
-        var page = 1, pageSize = 5, totalPages = 1;
-
-        function escRel(s) {
-            return String(s == null ? '' : s)
-                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-        }
-        function load(p) {
-            prev.loading = next.loading = true;
-            fetch('/api-proxy/article/' + articleId + '/related?page=' + p + '&pageSize=' + pageSize)
-                .then(function (r) { return r.json(); })
-                .then(function (d) {
-                    page = d.page; totalPages = d.totalPages;
-                    list.innerHTML = (d.items || []).map(function (r) {
-                        return '<div class="related-item" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);">'
-                            + '<div><a href="/Article/View?id=' + r.id + '" style="font-weight:500;">' + escRel(r.title) + '</a>'
-                            + '<div style="font-size:0.78rem;color:var(--sl-color-neutral-500);">' + escRel((r.sharedConcepts || []).join(', ')) + '</div></div>'
-                            + '<sl-badge variant="neutral" pill>' + r.strength + '</sl-badge>'
-                            + '</div>';
-                    }).join('');
-                    info.textContent = 'Page ' + page + ' of ' + totalPages + ' · ' + d.total + ' items';
-                    prev.disabled = page <= 1;
-                    next.disabled = page >= totalPages;
-                })
-                .finally(function () { prev.loading = next.loading = false; });
-        }
-        prev.addEventListener('click', function () { if (page > 1) load(page - 1); });
-        next.addEventListener('click', function () { load(page + 1); });
-    })();
-
     // Copy article
     (function () {
         var btn = document.getElementById('btn-copy-article');

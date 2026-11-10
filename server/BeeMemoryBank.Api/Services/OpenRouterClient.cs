@@ -37,11 +37,41 @@ public sealed class OpenRouterClient
 
     /// <summary>Requests a non-streaming completion. The plaintext <paramref name="apiKey"/>
     /// is used only for this request and is not retained by the client.</summary>
-    public async Task<ChatCompleteResponse> CompleteAsync(
+    public Task<ChatCompleteResponse> CompleteAsync(
         string apiKey,
         string model,
         IReadOnlyList<ChatRoleMessage> messages,
         CancellationToken cancellationToken = default)
+        => CompleteCoreAsync(apiKey, model, messages, maxTokens: null, temperature: null, reasoningEffort: null, logErrorBody: true, cancellationToken);
+
+    /// <summary>Same request with a cap on the answer's length (<c>max_tokens</c>), a sampling temperature and
+    /// OpenRouter's unified <c>reasoning: { effort }</c> parameter (models that do not reason ignore it); null leaves
+    /// any of them out of the request. For a model that reasons first, <c>max_tokens</c> covers the reasoning and the
+    /// answer together, which is why the effort is asked low and the cap set generously. This is the Dream model
+    /// step's call, and it differs from the chat's in one more way: the body of an upstream error is NOT written to
+    /// the log (only the status), because a provider's refusal can quote an excerpt of what it was sent (a moderation
+    /// error repeats the flagged input), and what Dream sends is the text of notes. The answer says why the provider
+    /// stopped (<see cref="ChatCompleteResponse.FinishReason"/>) and whether the model reasoned
+    /// (<see cref="ChatCompleteResponse.HasReasoning"/>).</summary>
+    public Task<ChatCompleteResponse> CompleteAsync(
+        string apiKey,
+        string model,
+        IReadOnlyList<ChatRoleMessage> messages,
+        int? maxTokens,
+        double? temperature,
+        string? reasoningEffort,
+        CancellationToken cancellationToken = default)
+        => CompleteCoreAsync(apiKey, model, messages, maxTokens, temperature, reasoningEffort, logErrorBody: false, cancellationToken);
+
+    private async Task<ChatCompleteResponse> CompleteCoreAsync(
+        string apiKey,
+        string model,
+        IReadOnlyList<ChatRoleMessage> messages,
+        int? maxTokens,
+        double? temperature,
+        string? reasoningEffort,
+        bool logErrorBody,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new ArgumentException("API key is required.", nameof(apiKey));
@@ -54,7 +84,10 @@ public sealed class OpenRouterClient
         {
             Model = model,
             Messages = messages,
-            Stream = false
+            Stream = false,
+            MaxTokens = maxTokens,
+            Temperature = temperature,
+            Reasoning = string.IsNullOrWhiteSpace(reasoningEffort) ? null : new ReasoningPayload { Effort = reasoningEffort }
         };
 
         using var req = new HttpRequestMessage(HttpMethod.Post, CompletionUrl);
@@ -66,7 +99,10 @@ public sealed class OpenRouterClient
 
         if (!resp.IsSuccessStatusCode)
         {
-            _logger.LogWarning("OpenRouter completion failed: HTTP {Status} body={Body}", (int)resp.StatusCode, body);
+            if (logErrorBody)
+                _logger.LogWarning("OpenRouter completion failed: HTTP {Status} body={Body}", (int)resp.StatusCode, body);
+            else
+                _logger.LogWarning("OpenRouter completion failed: HTTP {Status}", (int)resp.StatusCode);
             throw new OpenRouterHttpException((int)resp.StatusCode,
                 $"OpenRouter completion failed (HTTP {(int)resp.StatusCode}).");
         }
@@ -82,7 +118,11 @@ public sealed class OpenRouterClient
             Content: choice.Message?.Content ?? "",
             PromptTokens: doc.Usage?.PromptTokens ?? 0,
             CompletionTokens: doc.Usage?.CompletionTokens ?? 0,
-            Model: doc.Model ?? model);
+            Model: doc.Model ?? model)
+        {
+            FinishReason = choice.FinishReason,
+            HasReasoning = ReportsReasoning(choice.Message, doc.Usage),
+        };
     }
 
     /// <summary>
@@ -369,6 +409,16 @@ public sealed class OpenRouterClient
         [JsonPropertyName("model")] public string Model { get; init; } = "";
         [JsonPropertyName("messages")] public IReadOnlyList<ChatRoleMessage> Messages { get; init; } = [];
         [JsonPropertyName("stream")] public bool Stream { get; init; }
+        // Null for the chat (JsonOpts leaves nulls out); set by the Dream model step.
+        [JsonPropertyName("max_tokens")] public int? MaxTokens { get; init; }
+        [JsonPropertyName("temperature")] public double? Temperature { get; init; }
+        [JsonPropertyName("reasoning")] public ReasoningPayload? Reasoning { get; init; }
+    }
+
+    // OpenRouter's unified reasoning parameter; only the Dream model step sets it.
+    private sealed class ReasoningPayload
+    {
+        [JsonPropertyName("effort")] public string Effort { get; init; } = "";
     }
 
     // Tool-calling request shape. tool_calls / tool_call_id on individual messages are
@@ -627,6 +677,10 @@ public sealed class OpenRouterClient
         [JsonPropertyName("content")] public string? Content { get; set; }
         // Present on assistant turns that requested tool calls (tool loop).
         [JsonPropertyName("tool_calls")] public List<ChoiceToolCall>? ToolCalls { get; set; }
+        // What a reasoning model thought before it answered (OpenRouter): read only to know that it did. Kept as raw
+        // JSON, so whatever shape a provider sends cannot break the reading of a completion the chat also uses.
+        [JsonPropertyName("reasoning")] public JsonElement? Reasoning { get; set; }
+        [JsonPropertyName("reasoning_details")] public JsonElement? ReasoningDetails { get; set; }
     }
 
     private sealed class ChoiceToolCall
@@ -647,6 +701,22 @@ public sealed class OpenRouterClient
         [JsonPropertyName("prompt_tokens")] public int PromptTokens { get; set; }
         [JsonPropertyName("completion_tokens")] public int CompletionTokens { get; set; }
         [JsonPropertyName("total_tokens")] public int TotalTokens { get; set; }
+        [JsonPropertyName("completion_tokens_details")] public JsonElement? CompletionTokensDetails { get; set; }
+    }
+
+    /// <summary>True when the provider says the model reasoned: a reasoning text, reasoning details, or reasoning tokens in
+    /// the usage. Tolerant of any shape (a provider that sends something else simply reads as "no").</summary>
+    private static bool ReportsReasoning(ChoiceMessage? message, Usage? usage)
+    {
+        if (message?.Reasoning is { } text)
+        {
+            if (text.ValueKind == JsonValueKind.String ? !string.IsNullOrWhiteSpace(text.GetString())
+                : text.ValueKind is JsonValueKind.Object or JsonValueKind.Array) return true;
+        }
+        if (message?.ReasoningDetails is { ValueKind: JsonValueKind.Array } details && details.GetArrayLength() > 0) return true;
+        return usage?.CompletionTokensDetails is { ValueKind: JsonValueKind.Object } d
+               && d.TryGetProperty("reasoning_tokens", out var n) && n.ValueKind == JsonValueKind.Number
+               && n.TryGetInt64(out var tokens) && tokens > 0;
     }
 
     // Streaming chunk shapes (OpenAI-compatible SSE `data:` payload). Property names are

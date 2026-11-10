@@ -153,6 +153,10 @@ public sealed class ChatDbInitializer
             await indexCmd.ExecuteNonQueryAsync();
         }
 
+        // The Dream tables (plan 3.2) live in chat.db for the same reasons the chat does: local to the node, never in a
+        // snapshot or a sync event, sealed under the chat key. Their DDL is the feature's own (DreamSchema).
+        await BeeMemoryBank.Api.Dream.DreamSchema.EnsureAsync(conn);
+
         _logger.LogInformation("chat.db schema initialized");
     }
 

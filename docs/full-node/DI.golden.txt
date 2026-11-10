@@ -1,3 +1,23 @@
+Scoped BeeMemoryBank.Api.Dream.DreamAdviceValidator => BeeMemoryBank.Api.Dream.DreamAdviceValidator
+Scoped BeeMemoryBank.Api.Dream.DreamApplyService => BeeMemoryBank.Api.Dream.DreamApplyService
+Singleton BeeMemoryBank.Api.Dream.DreamCoordinator => BeeMemoryBank.Api.Dream.DreamCoordinator
+Scoped BeeMemoryBank.Api.Dream.DreamCorpusBuilder => BeeMemoryBank.Api.Dream.DreamCorpusBuilder
+Scoped BeeMemoryBank.Api.Dream.DreamPromptBuilder => BeeMemoryBank.Api.Dream.DreamPromptBuilder
+Scoped BeeMemoryBank.Api.Dream.DreamReferenceChecker => BeeMemoryBank.Api.Dream.DreamReferenceChecker
+Scoped BeeMemoryBank.Api.Dream.DreamRunner => BeeMemoryBank.Api.Dream.DreamRunner
+Scoped BeeMemoryBank.Api.Dream.DreamStore => BeeMemoryBank.Api.Dream.DreamStore
+Scoped BeeMemoryBank.Api.Dream.IDreamDetector => BeeMemoryBank.Api.Dream.TagVariantsDetector
+Scoped BeeMemoryBank.Api.Dream.IDreamDetector => BeeMemoryBank.Api.Dream.UnusedTagsDetector
+Scoped BeeMemoryBank.Api.Dream.IDreamDetector => BeeMemoryBank.Api.Dream.EmptyFolderDetector
+Scoped BeeMemoryBank.Api.Dream.IDreamDetector => BeeMemoryBank.Api.Dream.TestLeftoversDetector
+Scoped BeeMemoryBank.Api.Dream.IDreamDetector => BeeMemoryBank.Api.Dream.ExactDuplicateDetector
+Scoped BeeMemoryBank.Api.Dream.IDreamDetector => BeeMemoryBank.Api.Dream.NearDuplicateDetector
+Scoped BeeMemoryBank.Api.Dream.IDreamDetector => BeeMemoryBank.Api.Dream.MisplacedArticleDetector
+Scoped BeeMemoryBank.Api.Dream.IDreamModelClient => BeeMemoryBank.Api.Dream.OpenRouterDreamModelClient
+Scoped BeeMemoryBank.Api.Dream.IDreamModelTask => BeeMemoryBank.Api.Dream.PairVerdictTask
+Scoped BeeMemoryBank.Api.Dream.IDreamModelTask => BeeMemoryBank.Api.Dream.FolderReviewTask
+Scoped BeeMemoryBank.Api.Dream.IDreamModelTask => BeeMemoryBank.Api.Dream.TreeReviewTask
+Scoped BeeMemoryBank.Api.Dream.PairCandidateSource => BeeMemoryBank.Api.Dream.PairCandidateSource
 Singleton BeeMemoryBank.Api.Endpoints.RestoreProgress => BeeMemoryBank.Api.Endpoints.RestoreProgress
 Singleton BeeMemoryBank.Api.Endpoints.SyncEndpoints+SyncChallengeRateLimiter => BeeMemoryBank.Api.Endpoints.SyncEndpoints+SyncChallengeRateLimiter
 Singleton BeeMemoryBank.Api.Helpers.LongOperationGate => BeeMemoryBank.Api.Helpers.LongOperationGate
@@ -280,6 +300,7 @@ Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Servi
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.AuditLogPruningHostedService
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.RemoteAccountSyncScheduler
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor
+Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Dream.DreamScheduler
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.BlindBackup.BlindBackupScheduleService
 Singleton Microsoft.Extensions.Hosting.IHostedService => factory
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.BlindAlarmStarter
@@ -289,6 +310,7 @@ Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Vault.Sea
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Vault.Sealed.RelayMaintenance
 Singleton Microsoft.Extensions.Hosting.IHostedService => Microsoft.AspNetCore.Hosting.GenericWebHostService
 # hosted services at run time
+BeeMemoryBank.Api.Dream.DreamScheduler
 BeeMemoryBank.Api.Services.AuditLogPruningHostedService
 BeeMemoryBank.Api.Services.BaselineScheduler
 BeeMemoryBank.Api.Services.BlindAlarmStarter

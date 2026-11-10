@@ -55,6 +55,14 @@ namespace BeeMemoryBank.Core.Tests;
 /// three lines up" is a dataflow question no source-line scan answers honestly) and flagged instead
 /// in the task report that added this test. A human still has to read that.
 /// </para>
+///
+/// <para>
+/// <b>A write hidden inside a service is covered separately</b>, because this scan only sees repository-typed
+/// variables outside Core: see <see cref="TagTypes_ExposeNoPerArticleWriteBesidesTheTransactionalSetter"/> and
+/// <see cref="SetForArticleAsync_IsOnlyCalledWhereTheArticleEventIsWrittenInTheSameTransaction"/> for tags (the case that
+/// slipped through: <c>bee_add_tags</c>, BMB-343), and <c>McpWriteToolEventContractTests</c> in Integration.Tests for every
+/// MCP tool, which checks what a real call leaves in the event log instead of reading source.
+/// </para>
 /// </summary>
 public class RepositoryWriteGuardrailTests
 {
@@ -410,6 +418,99 @@ public class RepositoryWriteGuardrailTests
             $"every direct repository write from outside BeeMemoryBank.Core must be justified in " +
             $"AllowList (see RepositoryWriteGuardrailTests.cs). All {failures.Count} finding(s):" +
             Environment.NewLine + string.Join(Environment.NewLine, failures.Select(f => "  - " + f)));
+    }
+
+    // ── The hole the scan above cannot see: a bare write that hides INSIDE a service ───────────────────────────────
+    //
+    // `bee_add_tags` / `bee_remove_tag` called `ConceptTagService.AddToArticleAsync` / `RemoveFromArticleAsync`: a
+    // service-looking name over a bare tag-table write. The scan above only looks at variables typed as a repository
+    // interface and only outside Core, so a service in Core that forwards a write without logging an event is invisible
+    // to it. The tag set is part of the state a peer rebuilds from events (StateDigest), so such a write exists on one
+    // node only and the next article_update from another node erases it. The two tests below close that door for tags;
+    // McpWriteToolEventContractTests (Integration.Tests) closes it for every MCP tool by looking at the log itself.
+
+    /// <summary>
+    /// The only per-article tag writer the repository interface and the tag service may expose. It replaces the whole
+    /// set and logs nothing, so it is meant to run INSIDE a transaction that also writes the article's event
+    /// (<see cref="BareTagWriteCallers"/>). A second writer next to it — an "add one", a "remove one" — is the shape that
+    /// was the bug: it appears here as a failure, and the way out is <c>ArticleService.AddTagsAsync/RemoveTagAsync</c>
+    /// (read-modify-write under the article's lock, as an event), not a new entry.
+    /// </summary>
+    [Fact]
+    public void TagTypes_ExposeNoPerArticleWriteBesidesTheTransactionalSetter()
+    {
+        var offenders = new List<string>();
+        foreach (var type in new[] { typeof(IConceptTagRepository), typeof(BeeMemoryBank.Core.Services.ConceptTagService) })
+        {
+            foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                var perArticle = method.GetParameters().Any(p => p.ParameterType == typeof(Guid)
+                    && p.Name!.Contains("article", StringComparison.OrdinalIgnoreCase));
+                if (!perArticle) continue;
+                if (ReadPrefixes.Any(prefix => method.Name.StartsWith(prefix, StringComparison.Ordinal))) continue;
+                if (method.Name == "SetForArticleAsync") continue;
+                offenders.Add($"{type.Name}.{method.Name}");
+            }
+        }
+
+        offenders.Should().BeEmpty(
+            "a tag write that takes an article id and is not SetForArticleAsync is a write with no event of its own: " +
+            "route it through ArticleService (CreateAsync/UpdateAsync/AddTagsAsync/RemoveTagAsync), which stores the tags and " +
+            "the article_update event in one transaction");
+    }
+
+    /// <summary>
+    /// Where <c>SetForArticleAsync</c> — the one tag write that logs nothing itself — may be called from: the two places
+    /// that write the event in the same transaction. Anywhere else it is a tag change no peer hears about.
+    /// </summary>
+    private static readonly (string File, string Reason)[] BareTagWriteCallers =
+    [
+        ("libs/BeeMemoryBank.Vault/Core/Services/ArticleService.cs",
+            "CreateAsync and UpdateAsync (and through it AddTagsAsync/RemoveTagAsync): the tags, the article row and the article event are one transaction."),
+        ("libs/BeeMemoryBank.Sync/EventApplier.Article.cs",
+            "Applies a peer's article_create/article_update, whose payload carries the tag set: the event already exists, it is the thing being applied."),
+        ("libs/BeeMemoryBank.Core/Services/ConceptTagService.cs",
+            "The service's own forward to the repository (it precomputes the embeddings outside the caller's transaction first)."),
+    ];
+
+    [Fact]
+    public void SetForArticleAsync_IsOnlyCalledWhereTheArticleEventIsWrittenInTheSameTransaction()
+    {
+        var repoRoot = FindRepoRoot();
+        var allowed = BareTagWriteCallers.Select(a => a.File).ToHashSet(StringComparer.Ordinal);
+        var call = new Regex(@"\.\s*SetForArticleAsync\s*\(");
+        var failures = new List<string>();
+        var filesScanned = 0;
+
+        foreach (var root in new[] { "libs", "server", "desktop", "mobile" })
+        {
+            var dir = Path.Combine(repoRoot, root);
+            if (!Directory.Exists(dir)) continue;
+            foreach (var file in Directory.EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories))
+            {
+                var normalized = file.Replace('\\', '/');
+                if (normalized.Contains("/bin/") || normalized.Contains("/obj/")) continue;
+                filesScanned++;
+
+                var relative = Path.GetRelativePath(repoRoot, file).Replace('\\', '/');
+                if (allowed.Contains(relative)) continue;
+                // The repository implementation defines the method; it is not a call site.
+                if (relative == "libs/BeeMemoryBank.Storage/Sqlite/ConceptTagRepository.cs") continue;
+
+                var text = File.ReadAllText(file);
+                foreach (Match m in call.Matches(text))
+                {
+                    var lineNo = CountLines(text, m.Index);
+                    failures.Add($"{relative}:{lineNo}: `{LineAt(text, lineNo).Trim()}`");
+                }
+            }
+        }
+
+        filesScanned.Should().BeGreaterThan(200, "the scan must actually be reading the source tree");
+        failures.Should().BeEmpty(
+            "SetForArticleAsync replaces an article's tag set and writes no event, so a peer never hears of the change and " +
+            "its next article_update erases it. Go through ArticleService (CreateAsync/UpdateAsync/AddTagsAsync/RemoveTagAsync). " +
+            "Call sites found:" + Environment.NewLine + string.Join(Environment.NewLine, failures.Select(f => "  - " + f)));
     }
 
     /// <summary>

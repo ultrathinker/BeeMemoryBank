@@ -52,16 +52,16 @@
     {
         <div class="card mt-md">
             <h4 style="font-size:0.95rem;margin-bottom:14px;">
-                <sl-icon name="diagram-3"></sl-icon> Related Articles (@Model.RelatedArticles.Count)
+                <sl-icon name="diagram-3"></sl-icon> Related Articles
             </h4>
-            @foreach (var rel in Model.RelatedArticles.OrderByDescending(r => r.Strength).Take(10))
+            @foreach (var rel in Model.RelatedArticles.OrderByDescending(r => r.Strength))
             {
                 <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);">
                     <div>
                         <a href="/Article/View?id=@rel.Id" target="_top" style="font-weight:500;">@rel.Title</a>
-                        <div style="font-size:0.78rem;color:var(--sl-color-neutral-500);">@string.Join(", ", rel.SharedConcepts)</div>
+                        <div style="font-size:0.78rem;color:var(--sl-color-neutral-500);">@string.Join(" · ", rel.Reasons ?? rel.SharedConcepts)</div>
                     </div>
-                    <sl-badge variant="neutral" pill>@rel.Strength</sl-badge>
+                    <sl-badge variant="@(rel.PossibleDuplicate ? "warning" : "neutral")" pill>@rel.Strength%</sl-badge>
                 </div>
             }
         </div>

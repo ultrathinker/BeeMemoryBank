@@ -50,6 +50,10 @@ Nothing about the tools, the addresses or the keys changes, and agents take no p
 
 ## 7 Tool Groups
 
+One feature deliberately has no tools here: **Dream**, the sleep-time advice pass (docs/dream.md).
+Its runs, advice and settings are superadmin-only over the `/api/dream` REST group and are never
+reachable over MCP — an agent cannot start a run, read advice, or apply or dismiss anything.
+
 ### bee_search, bee_search_content (BeeSearchTools.cs)
 Search by title, folder names, and optionally full article body content. Does not require unlock for basic search.
 - `bee_search` — `keywords: string` — fast metadata search (title, folder names). Returns: `[{id, title, treePath}]`
@@ -57,7 +61,7 @@ Search by title, folder names, and optionally full article body content. Does no
 
 ### bee_list_articles, bee_get_article, bee_get_tree, bee_get_article_versions, bee_get_article_version, bee_get_article_diff, bee_get_image, bee_get_file (BeeReadTools.cs)
 - `bee_list_articles` — list articles with optional path filter (`treePath: string?`) and `updatedAfter` filter. Returns: `[{id, title, treePath, status, createdAt, updatedAt}]`
-- `bee_get_article` — metadata and optionally decrypted content (`id: Guid`, `content: bool`, default false). Returns: `{id, title, treePath, tags, relatedCount, relatedStrength, content?, files?, createdAt, updatedAt}`. `files` is present only when the article has attached files, also with `content=false`: `[{mediaId, fileName, contentType, sizeBytes, kind ("image" or "attachment"), createdAt}]`, metadata only
+- `bee_get_article` — metadata and optionally decrypted content (`id: Guid`, `content: bool`, default false). Returns: `{id, title, treePath, tags, relatedCount, relatedStrength, content?, files?, createdAt, updatedAt}`. `relatedCount` is how many other articles the caller can see that share at least one rare tag with this one (a tag carried by more than 20 articles and more than 5% of the vault links nothing and is not counted), and `relatedStrength` is the number of rare tags shared with them in all; both are a cheap tags-only summary, the ranked list is `bee_get_related`. `files` is present only when the article has attached files, also with `content=false`: `[{mediaId, fileName, contentType, sizeBytes, kind ("image" or "attachment"), createdAt}]`, metadata only
 - `bee_get_tree` — folder tree with their articles (`path: string?`)
 - `bee_get_article_versions` — list version history for an article, metadata only (`id: Guid`). Returns: `[{id, versionNumber, title, treePath, createdAt, updatedBy}]`
 - `bee_get_article_version` — get decrypted content of a specific version (`id: Guid`, `versionNumber: int`). Requires unlocked session. Returns version metadata + decrypted `content`
@@ -87,11 +91,11 @@ Search by title, folder names, and optionally full article body content. Does no
 - `bee_delete_file` — delete a file of an article, an inline image or a file attachment (`id: Guid`, or `articleId: Guid` + `fileName: string`, never both forms; an error lists the ids when several files share the name; an unlinked upload is deleted by `id`). Two steps like `bee_delete_article`: without `confirm: true` it only describes the file and returns a warning. A soft delete, the same as the delete button of the web UI, and it reaches the other devices by sync. Refuses the files of a password-protected article and a folder that is read-only for the caller. When the article text still embeds the image (`![](/api/media/{id})`) the answer says the reference becomes a broken image.
 
 ### Tag tools (BeeConceptTools.cs)
-- `bee_get_related` — find articles related to a given article via shared tags. Returns: `[{id, title, treePath, strength, sharedTags}]`
+- `bee_get_related` — a short ranked list of the articles related to a given article (`id: Guid`, `limit: int`, 1-20, default 7). An article is related when it shares RARE tags with the given one (each shared tag is weighed `ln((N + 1) / (df + 1))`, N active articles and df the articles with the tag; a tag on more than `max(20, 5% of N)` articles weighs nothing) and/or is close to it by meaning (the 20 nearest article vectors that stand out by a Z score of at least 2 from the article's own similarity distribution). The two parts are scaled to 0-1 by the best row of the list and combined as `0.6 * tags + 0.4 * meaning`. Rows with a total of zero are not listed; protected (second-password) articles have no vector and are never a meaning neighbour. Only articles the caller may read are listed, and the caller's folder filter is applied before the list is cut. While the vault is locked the meaning part is skipped (the vectors are derived from article bodies, the same rule as ranked search in `bee_search_content`) and the list is made of shared tags alone; the REST endpoint `GET /api/articles/{id}/related` behaves the same. Returns: `[{id, title, treePath, strength, sharedTags, reasons, possibleDuplicate}]`: `strength` is 0-100, `sharedTags` the rare tags both have (at most 3, rarest first), `reasons` one phrase per reason (`shared tag: rust`, `similar meaning: 87%`, `possible duplicate`), `possibleDuplicate` is true at 95% similarity or more
 - `bee_search_by_tag` — find all articles carrying a specific tag. Returns: `[{id, title, treePath}]`
-- `bee_list_tags` — list tags with optional substring or semantic filter. Returns: `[{name, articleCount}]`
-- `bee_add_tags` — add tags to an article (additive). Returns updated tag list.
-- `bee_remove_tag` — remove a specific tag from an article.
+- `bee_list_tags` — list tags with optional substring or semantic filter; without a filter the busiest tags come first. Returns: `[{name, articleCount}]`
+- `bee_add_tags` — add tags to an article (additive). A real change is an edit of the article like any other: it moves `updatedAt` and the article's version, writes one `article_update` event carrying the full tag set (so the tags reach the other nodes), and is refused in a read-only folder. Tags already on the article (any letter case) and repeats in the input are ignored; when nothing is new the article is left completely untouched (no event, no `updatedAt` change). Returns a text confirmation with the count of newly added tags, e.g. `Added 2 tag(s) to article 'Foo'.`
+- `bee_remove_tag` — remove a specific tag from an article (case-insensitive). A real removal is an edit of the article exactly as for `bee_add_tags`; if the tag was not on the article the answer says `(no-op)` and nothing changes. The tag stays in the global vocabulary. Concurrent calls on one article are applied one after the other, so none loses another's change.
 - `bee_rename_tag` — rename a tag globally (affects all articles).
 - `bee_merge_tags` — merge source tag into target (source is deleted, all articles updated).
 - `bee_delete_tag` — delete a tag globally (removes from all articles).
@@ -132,7 +136,7 @@ server/BeeMemoryBank.Api/McpTools/
 └── TokenEstimator.cs    — token estimation for truncation
 ```
 
-## 33 MCP Tools
+## 34 MCP Tools
 
 | Group | Tools |
 |---|---|

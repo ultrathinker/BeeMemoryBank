@@ -2,6 +2,7 @@
 using System.Text.Json;
 using System.Text.Encodings.Web;
 using BeeMemoryBank.Api.Helpers;
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using ModelContextProtocol.Server;
 
@@ -12,7 +13,8 @@ public class BeeConceptTools(
     ConceptTagService conceptTagService,
     ArticleService articleService,
     IHttpContextAccessor httpContextAccessor,
-    McpResponseManager responseManager)
+    McpResponseManager responseManager,
+    SessionService session)
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -28,25 +30,33 @@ public class BeeConceptTools(
 
     [McpServerTool(Name = "bee_get_related")]
     [Description(
-        "Get articles related to the given article via shared tags.\n" +
-        "Returns JSON array sorted by strength DESC: [{ id, title, treePath, sharedTags, strength }]. " +
-        "'sharedTags' is the list of tag names both articles have in common; 'strength' is the count " +
-        "of those shared tags (higher = more related). Returns [] if nothing is related.")]
+        "Get a short list of articles related to the given article: those that share RARE tags with it " +
+        "(a tag carried by many articles links nothing and is ignored) or that are close to it by meaning.\n" +
+        "Returns JSON array sorted by strength DESC: [{ id, title, treePath, sharedTags, strength, reasons, possibleDuplicate }]. " +
+        "'strength' is 0-100 (higher = more related). 'reasons' says why the article is listed, e.g. " +
+        "[\"shared tag: rust\", \"similar meaning: 87%\"]; 'sharedTags' is the rare tag names both articles have " +
+        "(at most 3, rarest first); 'possibleDuplicate' is true when the two are so similar they may be copies of one another. " +
+        "Only articles the caller may read are listed. While the vault is locked the list is made of shared tags " +
+        "alone (nearness by meaning is skipped, as in bee_search_content). Returns [] if nothing is related.")]
     public async Task<string> GetRelated(
-        [Description("Article ID (GUID).")] Guid id)
+        [Description("Article ID (GUID).")] Guid id,
+        [Description("Max number of related articles to return. Range 1–20. Default: 7.")] int limit = 7)
     {
         var article = await articleService.GetMetadataAsync(id);
         if (article == null)
             return $"Error: article {id} not found";
 
-        var related = await conceptTagService.GetRelatedArticlesAsync(id);
+        // The article vectors are derived from article bodies: while locked, tags only.
+        var related = await conceptTagService.GetRelatedArticlesAsync(id, RelatedArticle.ClampLimit(limit), includeMeaning: session.IsUnlocked);
         var json = JsonSerializer.Serialize(related.Select(r => new
         {
             id = r.Id,
             title = r.Title,
             treePath = r.TreePath,
             sharedTags = r.SharedConcepts,
-            strength = r.Strength
+            strength = r.Strength,
+            reasons = r.Reasons,
+            possibleDuplicate = r.PossibleDuplicate
         }), JsonOpts);
         return responseManager.ProcessResponse(json);
     }
@@ -98,6 +108,9 @@ public class BeeConceptTools(
     [McpServerTool(Name = "bee_add_tags")]
     [Description(
         "Add tags to an article. Additive — does not remove existing tags.\n" +
+        "Adding at least one new tag is an edit of the article like any other: it marks the article as " +
+        "changed (updatedAt, version) and reaches other nodes. Adding nothing new changes nothing. " +
+        "Refused in a read-only folder.\n" +
         "The returned count reflects only NEWLY added tags: duplicates in the input and tags " +
         "already on the article are not counted. If everything was already present, returns 0. " +
         "Tags new to the vocabulary get embeddings generated automatically for future semantic search.\n" +
@@ -113,17 +126,12 @@ public class BeeConceptTools(
             if (article == null)
                 return $"Error: article {id} not found";
 
-            // Counter must reflect actual additions, not input size:
-            // dedupe the input (case-insensitive) and subtract what the article already has.
-            var existing = await conceptTagService.GetByArticleIdAsync(id);
-            var existingSet = new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
-            var newCount = tags
-                .Where(t => !string.IsNullOrWhiteSpace(t))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count(t => !existingSet.Contains(t));
-
-            await conceptTagService.AddToArticleAsync(id, tags);
-            return $"Added {newCount} tag(s) to article '{article.Title}'.";
+            // Through ArticleService, never a bare tag-table write: the service reads the tag set, merges and
+            // writes it back under the article's write lock, as an article_update that carries the whole set,
+            // and counts what was really new from that same read. A bare write stores the tag on this node
+            // only, and the next article_update from any other node wipes it.
+            var added = await articleService.AddTagsAsync(id, tags);
+            return $"Added {added} tag(s) to article '{article.Title}'.";
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -131,6 +139,10 @@ public class BeeConceptTools(
             return kind == WriteAclDenialKind.ReadOnly
                 ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
                 : "Access denied: article is in a restricted folder for this agent.";
+        }
+        catch (KeyNotFoundException)
+        {
+            return $"Error: article {id} not found";
         }
         catch (Exception ex)
         {
@@ -141,9 +153,11 @@ public class BeeConceptTools(
     [McpServerTool(Name = "bee_remove_tag")]
     [Description(
         "Remove a specific tag from an article. Does not affect other articles or the global vocabulary.\n" +
+        "A real removal is an edit of the article like any other: it marks the article as changed " +
+        "(updatedAt, version) and reaches other nodes. Refused in a read-only folder.\n" +
         "Idempotent: if the tag was not on the article, returns \"...was not on article '...' (no-op)\" " +
-        "instead of \"Removed tag '...' from article '...'\". Use this to distinguish a real removal " +
-        "from a typo/no-op.\n" +
+        "instead of \"Removed tag '...' from article '...'\" and changes nothing. Use this to distinguish " +
+        "a real removal from a typo/no-op.\n" +
         "Returns plain-text confirmation (not JSON).")]
     [BeeMemoryBank.Api.Helpers.RequiresUnlockedSession]
     public async Task<string> RemoveTag(
@@ -157,11 +171,9 @@ public class BeeConceptTools(
                 return $"Error: article {id} not found";
 
             // Honest response: report no-op distinctly so a typo in tag name is visible to the caller.
-            var existing = await conceptTagService.GetByArticleIdAsync(id);
-            var wasPresent = existing.Any(t => string.Equals(t, tag, StringComparison.OrdinalIgnoreCase));
-
-            await conceptTagService.RemoveFromArticleAsync(id, tag);
-            return wasPresent
+            // The service decides it from the same read it writes from, under the article's write lock.
+            var removed = await articleService.RemoveTagAsync(id, tag);
+            return removed
                 ? $"Removed tag '{tag}' from article '{article.Title}'."
                 : $"Tag '{tag}' was not on article '{article.Title}' (no-op).";
         }
@@ -171,6 +183,10 @@ public class BeeConceptTools(
             return kind == WriteAclDenialKind.ReadOnly
                 ? $"Access denied: folder '{path}' is read-only for your user. Use bee_copy_to to copy the content into a writable folder."
                 : "Access denied: article is in a restricted folder for this agent.";
+        }
+        catch (KeyNotFoundException)
+        {
+            return $"Error: article {id} not found";
         }
         catch (Exception ex)
         {

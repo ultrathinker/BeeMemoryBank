@@ -41,5 +41,13 @@ internal static class ChatColumns
             id => Encoding.UTF8.GetBytes($"bmb-chat-api-key-prefix-v1:{Guid.Parse(id):D}"), PlainCleared: "''"),
         new("chat_conversation", "title_ciphertext", "title_iv", "title_key_v", "title", false,
             id => Encoding.UTF8.GetBytes($"bmb-chat-conversation-title-v1:{Guid.Parse(id):D}"), PlainCleared: "''"),
+        // Dream's JSON payloads (BeeMemoryBank.Api.Dream.DreamAad spells the same AADs; a test keeps them equal). Sealed
+        // from the first write: no legacy plaintext column.
+        new("dream_advice", "payload_ciphertext", "payload_iv", "payload_key_v", null, false,
+            id => Encoding.UTF8.GetBytes($"bmb-dream-advice-v1:{Guid.Parse(id):D}")),
+        new("dream_rule", "payload_ciphertext", "payload_iv", "payload_key_v", null, false,
+            id => Encoding.UTF8.GetBytes($"bmb-dream-rule-v1:{Guid.Parse(id):D}")),
+        new("dream_run_event", "payload_ciphertext", "payload_iv", "payload_key_v", null, false,
+            id => Encoding.UTF8.GetBytes($"bmb-dream-event-v1:{Guid.Parse(id):D}")),
     ];
 }

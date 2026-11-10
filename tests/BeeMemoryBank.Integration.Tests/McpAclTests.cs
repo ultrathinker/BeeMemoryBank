@@ -131,7 +131,7 @@ public class McpAclTests : IAsyncLifetime
         var copySvc = new CopyService(_articleService, folderSvc, mediaService, articleRepo, folderRepo, _conceptTagService, _scopeHolder);
         _writeTools = new BeeWriteTools(_articleService, folderRepo, articleRepo, folderSvc, copySvc, _scopeHolder, NullLogger<BeeWriteTools>.Instance, responseManager);
         _uploadTools = new BeeUploadTools(_articleService, mediaService, _session, responseManager);
-        _conceptTools = new BeeConceptTools(_conceptTagService, _articleService, _httpContextAccessor, responseManager);
+        _conceptTools = new BeeConceptTools(_conceptTagService, _articleService, _httpContextAccessor, responseManager, _session);
         _auditTools = new BeeAuditTools(eventLogRepo, articleRepo, whitelistRepo, nodeRepo, _httpContextAccessor, _scopeHolder, responseManager);
 
         // Create /Secret and /Public folders
@@ -695,7 +695,10 @@ public class McpAclTests : IAsyncLifetime
         var publicArticle = await _articleService.CreateAsync("Public Related", "/Public", [], "text");
         var secret = await _articleService.CreateAsync("Secret Related", "/Secret", [], "text");
 
-        // Both share a concept tag
+        // Both share a concept tag. A tag counts by how rare it is (ln((N + 1) / (df + 1))), so the vault needs a few
+        // other articles: a tag on every article of a two-article vault links nothing.
+        await _articleService.CreateAsync("Related Filler 1", "/Public", [], "text");
+        await _articleService.CreateAsync("Related Filler 2", "/Public", [], "text");
         await _conceptTagService.SetForArticleAsync(publicArticle.Id, ["acl-test-concept"]);
         await _conceptTagService.SetForArticleAsync(secret.Id, ["acl-test-concept"]);
 

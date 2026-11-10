@@ -11,7 +11,6 @@ namespace BeeMemoryBank.Web.Endpoints;
 /// <item>The protected-article POSTs (and both copy routes) reshape the API's response
 /// ({"protected": true} / {"relocked": true} / {"changed": true} / {"newArticleId": ...}) into the
 /// {"ok": true} contract the browser JavaScript relies on.</item>
-/// <item>GET /api-proxy/article/{id}/related does Web-side ordering + pagination.</item>
 /// <item>GET/PUT /api-proxy/article/{id}/concept-tags reshape {"conceptTags":[...]} into a bare
 /// array / 204, which the API does not do.</item>
 /// </list>
@@ -128,18 +127,6 @@ public static class ArticleProxyEndpoints
             if (req == null) return Results.BadRequest(new { error = "body required" });
             var ok = await api.SetArticleConceptTagsAsync(id, req.ConceptTags ?? []);
             return ok ? Results.NoContent() : Results.StatusCode(502);
-        }).RequireAuthorization();
-
-        app.MapGet("/api-proxy/article/{id:guid}/related", async (Guid id, ApiClient api, int page = 1, int pageSize = 5) =>
-        {
-            var all = await api.GetRelatedArticlesAsync(id) ?? [];
-            var ordered = all.OrderByDescending(r => r.Strength).ToList();
-            var total = ordered.Count;
-            var totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)pageSize));
-            if (page < 1) page = 1;
-            if (page > totalPages) page = totalPages;
-            var items = ordered.Skip((page - 1) * pageSize).Take(pageSize);
-            return Results.Ok(new { items, total, page, pageSize, totalPages });
         }).RequireAuthorization();
     }
 }

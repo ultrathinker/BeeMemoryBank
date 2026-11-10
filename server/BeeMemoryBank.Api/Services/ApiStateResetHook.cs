@@ -20,6 +20,10 @@ namespace BeeMemoryBank.Api.Services;
 /// alone: they are node-local operational config (the configured model catalogue, the global chat
 /// toggle), not vault content.
 /// </para>
+/// <para>
+/// <b>Dream</b> (also chat.db) — its runs, advice, journal, dismiss rules and examined registry name the old vault's
+/// articles, folders and tags, so they go too; its settings row stays with the schedule turned off.
+/// </para>
 /// </summary>
 public sealed class ApiStateResetHook(ChatDbConnectionFactory chatDbConnFactory, SyncTokenStore syncTokens) : INodeResetHook
 {
@@ -33,12 +37,21 @@ public sealed class ApiStateResetHook(ChatDbConnectionFactory chatDbConnFactory,
 
         using var chatConn = chatDbConnFactory.CreateConnection();
         using var chatTx = chatConn.BeginTransaction();
-        foreach (var chatTable in new[] { "chat_attachment", "chat_message", "chat_conversation", "chat_api_key" })
+        foreach (var chatTable in new[] { "chat_attachment", "chat_message", "chat_conversation", "chat_api_key" }
+                     .Concat(BeeMemoryBank.Api.Dream.DreamSchema.ResetTables))
         {
             using var chatDel = chatConn.CreateCommand();
             chatDel.Transaction = chatTx;
             chatDel.CommandText = $"DELETE FROM [{chatTable}]";
             chatDel.ExecuteNonQuery();
+        }
+        // Dream's settings row stays (limits, model choice), but the nightly run is turned off: it is enabled per node
+        // on purpose, and a reset node is a different vault.
+        using (var dreamSchedule = chatConn.CreateCommand())
+        {
+            dreamSchedule.Transaction = chatTx;
+            dreamSchedule.CommandText = BeeMemoryBank.Api.Dream.DreamSchema.ResetSettingsSql;
+            dreamSchedule.ExecuteNonQuery();
         }
         chatTx.Commit();
         return Task.CompletedTask;

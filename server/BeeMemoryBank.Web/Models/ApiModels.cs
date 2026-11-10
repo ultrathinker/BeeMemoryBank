@@ -58,7 +58,10 @@ public record RelatedArticleDto(
     string Title,
     string TreePath,
     List<string> SharedConcepts,
-    int Strength);
+    int Strength,
+    List<string>? Reasons = null,
+    int? SemanticPercent = null,
+    bool PossibleDuplicate = false);
 
 public record SnapshotDto(Guid? FileId, string FileName, long SizeBytes, DateTime CreatedAt);
 

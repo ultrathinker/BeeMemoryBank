@@ -1,0 +1,940 @@
+{
+  "version": 1,
+  "notes": [
+    "Dream package X1: a hand-written corpus of plausible notes with planted defects, used to check the rule detectors in tests and on the stand. About 120 short notes, all English.",
+    "Planted defects (see expected[]): 2 exact duplicate pairs, 3 near-duplicate pairs, 6 misplaced articles (3 kids-puzzle notes in /Inbox above the /Kids/Puzzles cluster of 12, 3 sourdough notes in /Inbox above the /Cooking/Sourdough cluster of 12), 2 tag-variant groups, 5 unused tags, 2 empty folders, junk-note folders /test and /Test.",
+    "Scores follow section 3.6 of the dream plan. Fixed by formula: merge_tags 85, delete_unused_tags 60, delete_empty_folder 55, test_leftovers 50, duplicate_exact 95. Formula-dependent on measured similarity: near_duplicate clamp(round(100*sim) - 25, 50, 75), so expected[] carries the clamp bounds (scoreMin/scoreMax); with real embeddings of these near-copies sim should clear 0.95, which lands the score in 70..75. move_article round(40 + 50*share) with share in [0.6, 1.0], so expected[] carries 70..90; the corpus is built so share should be close to 1 (a 12-note cluster against 2 same-topic siblings), landing near 83-90.",
+    "The move_article condition 'not changed in the last 3 days' cannot hold right after seeding: the test harness has to backdate or fake the clock when exercising that detector.",
+    "The tag tech-debt (normalizes to techdebt) is a deliberate decoy next to the technical debt / technical-debt pair (both normalize to technicaldebt): a correct normalizer must NOT merge tech-debt with them.",
+    "The folder /Personal/Safe Recovery Sheet is passphrase-protected and its body carries the unique marker string QX9107-PROTECTED-CANARY. Detector and model tests assert that this string never appears in any request, advice or event.",
+    "The long note /Home/Maintenance weekend in October deliberately mixes two unrelated topics; no advice is expected from it.",
+    "Exact-duplicate rules are embedding-free on purpose: each planted pair is byte-identical in title and body (same normalized-title and same normalized-body hash).",
+    "In each exact-duplicate pair the copy seeded later (listed later in articles[]) is the one the trash rule picks when no article references the pair by id: the /Imported copy of Wifi Printer Setup and the /Maintenance copy of Router Reboot Routine."
+  ],
+  "folders": [
+    "/Kids/Puzzles",
+    "/Cooking/Sourdough",
+    "/Inbox",
+    "/test",
+    "/Test",
+    "/Guides",
+    "/Imported",
+    "/Home Network",
+    "/Work",
+    "/Home",
+    "/Maintenance",
+    "/Personal",
+    "/Finance",
+    "/Health",
+    "/Travel",
+    "/Travel/Visas 2019",
+    "/Cars",
+    "/Garden",
+    "/Projects",
+    "/Projects/Ideas Parking",
+    "/Reading"
+  ],
+  "articles": [
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Riddle: the two guards",
+      "tags": ["kids"],
+      "body": "Two guards stand at a fork in the road. One always tells the truth, the other always lies, and you cannot tell which is which. You may ask exactly one question. The classic answer is to ask either guard which road the OTHER guard would call safe, then take the opposite one. I wrote it on a card for the kids before the trip; both of them cracked it after a while of arguing with each other. Next time I want a harder variant with three forks."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Logic grid puzzle: four houses",
+      "tags": ["kids"],
+      "body": "Four houses in a row, each a different color, each with a different pet. Clues: the green house is immediately left of the white one, the person with the dog lives at one end, the person in the middle drinks tea, and the cat owner lives next to the house with the blue door. I redrew the grid twice before it clicked. Good rainy-afternoon puzzle for the kids, takes about twenty minutes with a printed grid and a pencil."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Math puzzle: the three sisters",
+      "tags": ["kids"],
+      "body": "The product of the three sisters' ages is thirty-six, and the sum equals the number on the house across the street. That is not enough information, says the guest, and the mother answers: my oldest one plays chess. With that hint the ages are nine, two and two, because only that set has a single maximum. The kids argued about why the hint matters, which is the whole point of the puzzle. Whole numbers only, no twins older than nine."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Word ladder: cold to warm",
+      "tags": ["kids"],
+      "body": "Change one letter at a time and every step must be a real word: cold, cord, word, ward, warm. Four steps, and the kids found a second path through colt and wart that I could not make work at first. We do one ladder at breakfast now, usually from the word of the day. Keep the chains to four or five letters, anything longer stalls."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Riddle: the fisherman's catch",
+      "tags": ["kids"],
+      "body": "A fisherman catches five fish without heads, seven without tails and nine without even a body. How many did he catch? Zero: fish without heads, tails or bodies do not exist. It is a play on words, not a math one, which is worth saying out loud for the kids so they stop adding numbers. Works best told out loud, on paper everyone just stares at the digits."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Chess puzzle: mate in two",
+      "tags": ["kids"],
+      "body": "White: king on g1, queen on d3, rook on e1, two pawns near the center. Black: king on h8, rook on a8, three pawns around g7. Mate in two starts with the quiet queen move to d5, not the flashy check. I set this up on the kitchen board for the kids; the oldest found the quiet move after three tries. Set it up from any tactics book, page 42, exercise 7, if the piece list here is not clear."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Sudoku variant for beginners",
+      "tags": ["kids"],
+      "body": "A four by four grid with colors instead of digits worked well as a first sudoku for the kids. Rules are the same: every row, every column and every two by two block holds each color once. Draw the grid on paper, prefill four cells, and let them argue. Move to six by six before touching the classic nine by nine, the jump is too big otherwise."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Cipher game: Caesar shift",
+      "tags": ["kids"],
+      "body": "Write a short message, shift every letter by three, and hand over the key as a decoder wheel made from two paper circles. The kids decoded the snack plan before breakfast was over, which was the point. A shift of thirteen is its own reverse and worth showing once. Longer messages get tiring by hand, keep them under ten words."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Treasure hunt: living room clues",
+      "tags": ["kids"],
+      "body": "Five clues hidden around the living room, each one pointing to the next: under the sofa cushion with the torn seam, inside the board game box we never open, behind the photo frame on the shelf, taped under the coffee table, and the last one in the cookie jar. The final clue leads to a small bag of chocolate coins. Took ten minutes to set up and the kids demanded a harder round immediately."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Logic puzzle: truth-tellers and liars",
+      "tags": ["kids"],
+      "body": "Three islanders: one always tells the truth, one always lies, one alternates. You meet them at a crossroads and may ask two questions total. Ask the middle one what the left one would say about the right one, then ask something you already know the answer to, to identify the alternator. This one is a step harder than the two guards riddle and needs the kids to keep notes."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Riddle: what gets wetter as it dries",
+      "tags": ["kids"],
+      "body": "A towel. Classic, short, and still the kids' favorite because they can retell it at school without any setup. I keep a small list of these one-line riddles for car rides: a towel, a candle, an echo, a shadow. The trick to a good retelling is to pause before the last word."
+    },
+    {
+      "path": "/Kids/Puzzles",
+      "title": "Number puzzle: the locked safe",
+      "tags": ["kids"],
+      "body": "The safe opens with a three digit code. The digits sum to twelve, the middle digit is twice the first, and the book claims the code reads the same upside down on a seven segment display. We worked out the sum and the doubling easily and then argued about the upside down part until bed, because the book's own answer did not survive the flip test. Treat it as a discussion starter, the arithmetic half is solid."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Starter feeding schedule",
+      "tags": ["cooking"],
+      "body": "The starter lives in the tall jar on the counter. Feed it once a day in summer and every second day in winter: fifty grams of the starter, fifty grams of flour, fifty grams of water at room temperature, stir with the long spoon, lid on loosely. Discard down to a hundred grams when the jar passes half. After feeding it should smell yogurt-sour, not sharp."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "My basic sourdough recipe",
+      "tags": ["cooking"],
+      "body": "Five hundred grams of white flour, three hundred fifty grams of water, one hundred grams of active starter, ten grams of salt. Mix flour and water first, rest half an hour, then add starter and salt. Four sets of folds every half hour, then bulk until it rises by half, shape, cold proof overnight, bake covered at 240 for twenty minutes and uncovered for twenty two."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Hydration explained",
+      "tags": ["cooking"],
+      "body": "Hydration is water weight divided by flour weight, starter moisture included if you want to be exact. My daily loaf sits at seventy percent, which handles our flour fine; the whole rye attempt at eighty percent turned into batter. If a new bag of flour behaves differently, drop the water by two percent first and look at the dough, not the scale."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Autolyse: what it actually does",
+      "tags": ["cooking"],
+      "body": "Resting flour and water alone for half an hour lets the flour hydrate and the gluten start building without salt slowing it down. In practice the dough stops tearing when you fold it and the crumb evens out. I skipped it for months and could not tell, then did a side by side with two bowls and the autolysed bowl was visibly more relaxed at shaping. Worth the wait on weekend loaves."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Scoring patterns",
+      "tags": ["cooking"],
+      "body": "One confident slash at thirty degrees with the blade held shallow scores better than five timid ones. The ear comes from the slash opening under the steam, not from pressing harder. My plain diagonal works every time; the wheat stalk pattern looks nice before the bake and disappears in it. Wipe the blade between cuts on wet dough."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Troubleshooting gummy crumb",
+      "tags": ["cooking"],
+      "body": "Gummy crumb in my loaves came from three things, in order of how often: underbaking, slicing warm, and too much starter relative to flour. The fix that worked: bake to an internal two hundred five, cool on a rack for at least an hour no matter who begs, and cut the starter back to a hundred grams. The thermometer was the single best purchase for this."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Dutch oven method",
+      "tags": ["cooking"],
+      "body": "Preheat the cast iron pot with the oven at two hundred forty, dump the cold proofed loaf in on parchment, score, lid on for twenty minutes, lid off until the crust is dark enough. Steam from the wet dough is trapped by the lid, that is the whole trick. The pot handles stay hot for ages, keep the glove next to the pot, not in the drawer."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Cold proof overnight",
+      "tags": ["cooking"],
+      "body": "Shape, into the floured banneton, into the fridge for twelve to sixteen hours, bake straight from the cold. The cold proof trades a bit of rise for flavor and a skin that scores cleanly. On busy days this is the whole reason sourdough is feasible: the dough waits for me, not the other way around. Longer than eighteen hours and it over-acids for my taste."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Making a rye starter",
+      "tags": ["cooking"],
+      "body": "Started from fifty grams of whole rye flour and fifty grams of pineapple juice on day one, then rye flour and water from day three. It took nine days to smell right, sour but round, with bubbles up the sides of the jar. Rye ferments faster than white and forgives more. The old white starter now gets fed with a spoon of rye in the mix and rises stronger for it."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Banneton alternatives",
+      "tags": ["cooking"],
+      "body": "No banneton needed: a colander with a smooth, well floured tea towel works the same for the overnight proof. The ring pattern will not be as crisp, the shape holds fine. Rice flour on the towel sticks less than wheat. I used the colander for two months before buying the real one, and honestly the real one earns its keep only on the showy loaves."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "When is the starter ready to bake with",
+      "tags": ["cooking"],
+      "body": "Ready means it doubles within four to six hours of a feeding and smells tangy-sweet, not like acetone. The float test lies more often than it helps; judge by rise marks on the rubber band around the jar. If it doubles but smells sharp, feed twice at shorter intervals before baking with it. Baking on the rise, not after the peak, gives the best oven spring."
+    },
+    {
+      "path": "/Cooking/Sourdough",
+      "title": "Crust too thick: what to change",
+      "tags": ["cooking"],
+      "body": "A crust like armor came from two long bakes and a dry oven. Shorter uncovered time, a tray of water on the floor of the oven for the first ten minutes, and storing the loaf cut side down on the board softened it. Cooling fully before bagging matters too; warm bread in a bag steams its own crust into leather. The crumb did not change with any of this, only the shell."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Riddle for the train ride",
+      "tags": ["kids"],
+      "body": "For the train ride: I have keys but open no locks, space but no rooms, and you can enter but not go in. Answer: a keyboard. Save it for the middle hour of the trip when the kids start to fidget, it buys about ten minutes of quiet. I have a second one ready, the one about a stamp and a letter."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Logic puzzle: the four switches",
+      "tags": ["kids"],
+      "body": "Four switches outside a room, one lamp inside, you may enter only once. Flip switch one for a while, switch it off, flip switch two and walk in: light on means two, warm bulb means one, cold and dark means three, and the untouched one is four. The kids needed the warm-bulb hint, then reconstructed the rest themselves. Works with a real lamp and a helper who closes the door."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Word puzzle: hidden cities",
+      "tags": ["kids"],
+      "body": "Find the hidden city in each sentence: comparison hides PARIS, more models hides ROME, to-strava-log hides OSTRAVA, least-breath hides BREST. I wrote six of these for the kids, two are broken, keep the four that work and promise a prize per city found. Next round needs longer sentences so the names hide better."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Starter smells like nail polish",
+      "tags": ["cooking"],
+      "body": "The jar on the counter smells like nail polish remover tonight, sharp over the sour. That is acetone from a hungry starter, not a lost one. Feeding twice today, fifty and fifty again, and a warmer spot away from the draft fixed it last time this happened. If the liquid on top is dark, pour it off first, feed, and give it six hours before judging."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Feeding the starter on vacation week",
+      "tags": ["cooking"],
+      "body": "For the trip week: feed the starter well the night before we leave, then into the coldest shelf of the fridge with the lid loose. It sulks, it does not die. Back home it gets one feeding, waits until it doubles, and then the first loaf of the weekend goes normally. The rubber band trick to mark the rise level works the same cold."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Why my crumb is dense",
+      "tags": ["cooking"],
+      "body": "Dense crumb traced to a weak starter and a short bulk, in that order. The jar was doubling in eight hours, not four, and I was shaping on the clock, not on the rise. Since I wait for the fifty percent rise mark even if it takes nine hours, and bake with the starter at its peak, the loaves opened up. Patience was the missing ingredient, nothing else changed."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Dentist: move the checkup",
+      "tags": [],
+      "body": "The six month checkup collides with the audit week at work. Call the practice and move it to the first week of the following month, morning slot if possible. The small print on the reminder card says cleaning is included, ask to confirm. The last x-ray is two years old, they will probably want a new one."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Washing machine warranty",
+      "tags": ["home"],
+      "body": "Washing machine bought on the twelfth of March, two year manufacturer warranty, so it runs to next March. Serial on the sticker inside the door hatch starts with WM and I photographed it this time. Keep the paper invoice in the blue folder on the hallway shelf, not in the kitchen drawer where the old one lived."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Gift ideas for mom",
+      "tags": [],
+      "body": "Shortlist: the ceramic mug she kept admiring at the market stall, a subscription to the history magazine she reads at the library, or the good hand cream from the pharmacy that is annoyingly expensive. Birthday is in three weeks, so order the magazine this week. She returns scented things, nothing with perfume."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Book binding repair",
+      "tags": ["reading"],
+      "body": "The cookbook's spine split along the glue line. Plan: clamp it with the big clips from the garage, run thin PVA into the gap with a toothpick, wipe the excess, dry overnight under weight. Waxed paper between the clamp and the cover so nothing sticks. If the spine holds for a month, do the same to the atlas."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Parking permit renewal",
+      "tags": [],
+      "body": "The resident parking permit expires at the end of next month. The city office wants the registration paper, a proof of address no older than three months, and the fee by card, which their website contradictorily says is cash only. Go in person on a Tuesday morning, the queue was short last time."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Laptop fan cleaning",
+      "tags": [],
+      "body": "The old laptop roars like a kettle. Order the small torx driver, then open the bottom plate, lift the fan, and pick the felt out of the heatsink fins with a wooden skewer. One drop of oil on the fan axle is controversial, skip it if the fan spins freely. Do it over the bathtub, the felt travels."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Bike tire puncture kit refresh",
+      "tags": [],
+      "body": "The puncture kit in the saddle bag is missing the small tire levers, someone borrowed them. Add: two fresh glue tubes, the old ones hardened, and a piece of chalk to mark the hole. Check the spare patch kit expiry date on the box, patches do age. Pump the tires this weekend regardless, the rear reads low."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Water filter cartridge schedule",
+      "tags": ["home"],
+      "body": "The under-sink filter cartridge lasts six months, changed last on the fifth of May. The spare cartridge is in the box under the kitchen sink behind the trash bags. Order a new spare when I change this one, the delivery takes a week and the tap starts to taste flat a month before the six months are up."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Phone storage cleanup",
+      "tags": [],
+      "body": "Storage is full again. Delete the downloaded series episodes, empty the recently deleted album, and offload the two big games I have not opened since spring. Then back the photos up to the computer first, not after deleting, learned that the hard way. Target: two gigabytes free so the camera stops refusing video."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Fungus gnats on the houseplants",
+      "tags": ["home"],
+      "body": "The little black flies over the pots are fungus gnats, the larvae live in wet soil. Let the top two centimeters dry between waterings, add a sand layer on the pots, and hang the yellow sticky cards. The infested fern gets a bottom-watering tray only. Two weeks of discipline and last time they were gone."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Mail hold for the trip",
+      "tags": ["travel"],
+      "body": "Ask the post office to hold the mail for the trip week, form online or at the counter. The neighbor takes the parcels the postman otherwise leaves on the step. Cancel the milk delivery for the same days, last time the bottles piled up and one went over in the sun."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Podcast notes: the harbor district episode",
+      "tags": ["reading"],
+      "body": "Good episode on how the harbor district gentrified twice, once after the ferries, once after the lofts. Numbers that stuck: ferry ridership fell by half in nine years, warehouse conversions took off only when the tram line returned. Worth sending to the cousin who studies urban planning. The follow-up episode is behind their club paywall, skip it."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Emergency contact list",
+      "tags": ["home"],
+      "body": "Update the printed emergency list on the fridge: plumber, electrician, roof person, neighbor with the spare key, and the after-hours pharmacy. The roof person changed their number, ask at the hardware store for the new one, they advertise there. Laminate it this time, the paper one has a coffee ring over the plumber."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Curtain rod measurements",
+      "tags": ["home"],
+      "body": "Window in the small bedroom: one hundred forty centimeters wide, the rod should reach twenty past each side, so one hundred eighty total. Ceiling mount, brackets need to clear the radiator by three centimeters. The current rod is seventy and the curtains eat half the window, which is why the room reads dark."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Dishwasher rebate",
+      "tags": ["home"],
+      "body": "The dishwasher model qualifies for the utility rebate, form due within sixty days of the invoice. Need: the invoice photo, the energy label photo, and the meter number from the sticker in the hallway closet. The form asks for the model number with the suffix, the suffix is on the door edge sticker, not on the front."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Parcel for the neighbor",
+      "tags": [],
+      "body": "The neighbor on the fourth floor is at her daughter's until Friday. Her parcel arrives Thursday: accept it, keep it on our hallway shelf, not on the floor, and hand it over with the vase she left when the taxi came. She left cookies as payment last time, do not expect them, do not refuse them."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Kitchen bulb sizes",
+      "tags": ["home"],
+      "body": "The kitchen hood takes two G4 bulbs, the ceiling takes one E27 with the wide base, and the counter strip is a built-in LED unit, not replaceable, which I keep forgetting. Buy three G4 spares and one E27 spare and put them in the pantry box with the fuses. Warm white for the hood, the cool ones made the counters look like a lab."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Ant traps under the sink",
+      "tags": ["home"],
+      "body": "The ant line comes in under the sink corner where the pipe collar is cracked. Two bait stations by the pipe, one by the window frame, and fresh silicone into the collar once the line is gone. Do not spray the line itself, the bait needs them carrying. Last invasion took nine days to clear with this setup."
+    },
+    {
+      "path": "/Inbox",
+      "title": "Office chair return window",
+      "tags": [],
+      "body": "The office chair's gas lift sinks overnight, which defeats the point. Return window closes in eleven days, so decide: replacement part, which the shop says takes a month, or full return and reorder the model with the ten year warranty. Measure the desk clearance first, the alternative model sits two centimeters taller at minimum."
+    },
+    {
+      "path": "/test",
+      "title": "Scratch note for the sync check",
+      "tags": [],
+      "body": "Scratch body for the write check. Counter 0001. If this row survives the round trip the create path works. Nothing to see here, drop after the run."
+    },
+    {
+      "path": "/test",
+      "title": "Scratch: second write test",
+      "tags": [],
+      "body": "Second scratch row, counter 0002, same purpose as the first: prove the write path end to end and leave nothing behind. Timestamps are whatever the server stamps, do not compare them. The checker only counts rows."
+    },
+    {
+      "path": "/test",
+      "title": "Temp note for the importer run",
+      "tags": [],
+      "body": "Leftover from the importer run: the manifest here is a stub, three lines, no files attached. Kept only to see how the folder listing copes with a folder of three stubs. Safe to drop whenever."
+    },
+    {
+      "path": "/Test",
+      "title": "Scratch note from the camera import",
+      "tags": [],
+      "body": "Draft made during the camera import test: the folder was supposed to receive the copied notes from the phone backup, only this one landed. Counter 0007. Leave it until the import script is fixed, then it goes."
+    },
+    {
+      "path": "/Test",
+      "title": "Placeholder for the backup probe",
+      "tags": [],
+      "body": "Probe row for the backup check, counter 0008. The checker looks for one row here with a body it can hash, this is the row. Change nothing about the first line, the hash covers it."
+    },
+    {
+      "path": "/Test",
+      "title": "Old run output sample",
+      "tags": [],
+      "body": "Sample output row kept from an old run of the tool, numbers 12, 34, 56 in the order they printed. It was easier to keep the row than to explain to the tool why the folder was empty. Nothing here is measured, the numbers are typed by hand."
+    },
+    {
+      "path": "/Guides",
+      "title": "Wifi Printer Setup",
+      "tags": ["network", "guide", "how-to"],
+      "body": "Printer lives on the shelf by the stairs. Steps: hold the wireless button on the printer until the light blinks, then in the router page open the WPS section and press connect within two minutes. On the laptop add a printer by IP, the reservation is 192.168.1.44, driver from the vendor page, not from the disc. Print the test page from the laptop, not from the phone, to confirm the driver. If the light blinks amber instead, hold the same button eight seconds and start over."
+    },
+    {
+      "path": "/Guides",
+      "title": "Setting Up a Guest Network",
+      "tags": ["network", "guide", "how-to"],
+      "body": "A separate guest network keeps visitors off the main one. Open the router's guest section, give it its own name, for instance upstairs-guest, pick an easy password, and enable client isolation, which stops guest devices from reaching the printers and the storage box. Limit guest speed to half of the line, so nobody's movie night crowds out the work calls. Rotate the guest password every few months, and leave the main password alone; it has been stable for a year on purpose."
+    },
+    {
+      "path": "/Guides",
+      "title": "How to Defrost the Freezer",
+      "tags": ["home", "guide", "how-to"],
+      "body": "Defrost when the drawer rails start to fight, twice a year here. Move the food to the neighbor's freezer in the cool bags, unplug, and put the steaming kettle inside with the door closed; a bowl of hot water on each shelf halves the wait. Never chip with a knife, the previous owner did and the puncture story is why we know the repair person. Towel at the bottom, swap when soaked, done in about two hours."
+    },
+    {
+      "path": "/Guides",
+      "title": "Scanning Old Photos Workflow",
+      "tags": ["guide", "how-to"],
+      "body": "Six hundred dpi for anything smaller than a postcard, three hundred for the big prints, and the flatbed's dust reminder run before each batch. File names carry year, album and number, the backlog sheet tracks which album is done. Color restoration off by default, on only for the faded seventies prints, it goes cartoonish otherwise. One session is one album, no more, that is the pace that survived three weekends already."
+    },
+    {
+      "path": "/Guides",
+      "title": "Winter Tire Changeover",
+      "tags": ["car", "guide", "howto"],
+      "body": "Changeover weekends: around the October holidays to winter, after Easter back to summer, gravel storage bags reused yearly. Jack points are the two arrows under the sills, the manual's picture is clearer than the sticker. Torque the wheel bolts to the number on the key card, in the star pattern, re-check after fifty kilometers. Winter set goes on the car with the rims marked left and right from last spring's note on the tires themselves."
+    },
+    {
+      "path": "/Guides",
+      "title": "Packing for a Hike",
+      "tags": ["travel", "guide", "How To"],
+      "body": "Layer one: moisture, so no cotton anywhere. The pack list that finally worked: thin merino base, fleece, shell, and a spare pair of socks in the lid pocket where they stay dry. Water is two bottles plus the filter straw, the stream map is the paper one, phone maps die past the ridge. Headlamp even for a day trip, the cave detour taught that. Snacks above all: the nut mix earns its weight by the second hour."
+    },
+    {
+      "path": "/Guides",
+      "title": "Archiving Old Laptops",
+      "tags": ["guide", "howto"],
+      "body": "Before a laptop goes to the shelf for good: personal files to the archive share, then two wipes of the system disk, then the battery set to half charge and taken out if it comes out. The sleeve gets a paper tag: model, year, wiped date, battery state. One machine per shelf gap, chargers in the box with the cables, labeled by the same tag word. Nothing here holds data anymore, the tag is for the future trip to recycling."
+    },
+    {
+      "path": "/Imported",
+      "title": "Wifi Printer Setup",
+      "tags": ["network", "guide", "how-to"],
+      "body": "Printer lives on the shelf by the stairs. Steps: hold the wireless button on the printer until the light blinks, then in the router page open the WPS section and press connect within two minutes. On the laptop add a printer by IP, the reservation is 192.168.1.44, driver from the vendor page, not from the disc. Print the test page from the laptop, not from the phone, to confirm the driver. If the light blinks amber instead, hold the same button eight seconds and start over."
+    },
+    {
+      "path": "/Imported",
+      "title": "Evernote import: climbing gear checklist",
+      "tags": [],
+      "body": "Imported from the old notebook. Harness: check the stitching at the tie-in point each season, retire at any fray. Rope: ten millimeter, sixty meters, wash it once a year in the mesh bag. Slings and carabiners: count them after every trip, the count lives in this note. Helmet replaced after the drop two seasons ago, do not lend it since."
+    },
+    {
+      "path": "/Imported",
+      "title": "Import dump: 2019 tax folder",
+      "tags": [],
+      "body": "Contents of the old tax folder, imported as one note and kept for the retention period. Figures: the deduction was 4 120, the refund came to 613, and the advisor charged 180 for the review. All papers from that year are shredded already; only these numbers remain. Nothing here is needed for the current filings."
+    },
+    {
+      "path": "/Imported",
+      "title": "Old phone backup memo",
+      "tags": [],
+      "body": "Stale memo from the phone backup import. Every password listed here was rotated at least twice since; the vault holds the current ones, this copy stays only as a record that the migration happened. If a login from this era still fails, the answer is the vault, not this note. Do not add new entries here."
+    },
+    {
+      "path": "/Imported",
+      "title": "Photo scan session log",
+      "tags": [],
+      "body": "Log of the first scanning session after the import: ninety four photos from the two green albums, six rejected for blur, and the 1970s beach series came out best at six hundred dpi. The second session covers the box photos and the albums with the black pages. Notes on the backs were transcribed where the handwriting was legible, the rest marked unknown."
+    },
+    {
+      "path": "/Home Network",
+      "title": "Guest Wi-Fi Setup",
+      "tags": ["network", "how-to"],
+      "body": "Guests get their own network, not the main password. In the router page open the guest section, set a separate name like upstairs-guest, a simple password, and turn on client isolation so guest devices cannot see the printers or the storage box. Cap the speed at half so streaming guests do not choke the work calls. Change the guest password every few months; the main one has not changed in a year and should stay that way."
+    },
+    {
+      "path": "/Home Network",
+      "title": "Router Reboot Routine",
+      "tags": ["network", "home"],
+      "body": "The router forgets things slowly, so a schedule beats a crisis: first Tuesday of the month, unplug for a full minute, not ten seconds. Order matters: modem first, wait, then router. After it comes back, check the printer reservation still answers and the TV box reconnects on its own. If a device stays offline after that, forget the network on the device and join again. The whole ritual takes four minutes and prevents most of the evening calls to support."
+    },
+    {
+      "path": "/Home Network",
+      "title": "NAS share map",
+      "tags": ["network", "home"],
+      "body": "Shares on the storage box, documented because the names drifted: media is read for everyone, photos are write for the two laptops only, archive is locked to the desktop. The scrap folder gets emptied every quarter, this quarter it is due. Backups: the photos share syncs nightly to the external drive in the drawer, the media share does not, it is re-downloadable by design."
+    },
+    {
+      "path": "/Home Network",
+      "title": "VLAN plan for the flat",
+      "tags": ["network"],
+      "body": "Three segments on the managed switch: main for the family devices, work for the two laptops, and guest, isolated. The work segment keeps the printer out, printing from the work laptops goes through the main segment queue, which is odd but keeps the printer on the trusted side. Inter-segment rules: work may reach main for the storage box only, guest may reach nothing. The plan fits on this note, which is the point of flat-sized networks."
+    },
+    {
+      "path": "/Home Network",
+      "title": "Printer IP reservation",
+      "tags": ["network", "home"],
+      "body": "The printer keeps 192.168.1.44 via the router reservation, tied to the printed MAC label under the tray. When the router was replaced last spring the reservation table did not survive, the printer silently took a new address and the laptop queue stalled for two days before anyone checked. Now the reservation note lives here and the printer answers a ping in the weekly check script."
+    },
+    {
+      "path": "/Home Network",
+      "title": "DNS filtering box notes",
+      "tags": ["network"],
+      "body": "The little filtering box on the shelf answers DHCP for the flat, upstream is the router. Blocklists updated monthly, the aggressive list once broke the grocery chain's card page, disabled for that domain, noted here so it stays disabled. Query log kept for a week only. If the internet feels broken, the first check is this box, the second is the cable modem, in that order, learned again last Tuesday."
+    },
+    {
+      "path": "/Home Network",
+      "title": "Cable box labels",
+      "tags": ["network", "home"],
+      "body": "Everything in the cable box now has two labels: the port letter on the switch and the room name on the cable itself, applied at both ends. The patch layout: A media, B printer, C access point, D desk, E spare, F uplink. The label maker survived exactly long enough, new tape cassette is on the shopping list. Next visitor who unplugs something gets to follow the letters, not guess."
+    },
+    {
+      "path": "/Work",
+      "title": "Backup Rotation Policy",
+      "tags": ["work"],
+      "body": "Current scheme, in force since January: three copies, two kinds of media, one off site. The work laptop syncs to the office server nightly, an external SSD takes a full copy every Friday and alternates with a second drive that lives at the other office. Monthly, one Friday copy is restored to a scratch folder and checked against a file list, because a backup that has never been restored is a rumor. The old monthly single drive plan is retired and kept only for the tape archives."
+    },
+    {
+      "path": "/Work",
+      "title": "Retired Backup Plan",
+      "tags": ["work"],
+      "body": "Retired scheme, kept for reference, replaced in January: one copy on a single external drive, rotated monthly, stored in the same building, never restored to verify. The laptop synced to the office server nightly, that part survives in the current scheme. Everything else was wrong in a small fire drill: the drive sat next to the machine it was backing up and the monthly restore check did not exist. Do not follow this note, read Backup Rotation Policy instead."
+    },
+    {
+      "path": "/Work",
+      "title": "Deploy runbook: payments service",
+      "tags": ["work", "tech-debt"],
+      "body": "Deploy window is Tuesday morning, traffic lowest. Steps: tag the build, let the pipeline finish both stages, run the migration check script first, then the canary at five percent for fifteen minutes. Watch the two graphs that matter: settlement queue age and the decline rate. Rollback is one command but takes the queue down with it, so fix forward for queue lag, roll back only for wrong numbers. The staging card numbers are in the vault, not in this note."
+    },
+    {
+      "path": "/Work",
+      "title": "Retro actions: sprint 41",
+      "tags": ["work", "technical-debt"],
+      "body": "Three actions carried out of sprint 41. First, the flaky checkout test gets quarantined until the fixture is rebuilt, owner: the test rotation. Second, the review backlog rule: nothing older than two days, enforced by moving the board column on the wall, not by another bot. Third, the config drift between staging and production gets one consolidated diff doc, reviewed at the next architecture slot. None of these are tickets yet, that is the follow up."
+    },
+    {
+      "path": "/Work",
+      "title": "Onboarding checklist: new developer",
+      "tags": ["work", "technical debt"],
+      "body": "Day one: accounts, repository access, and the build running on the laptop before lunch, the build alone took half a day last time, start it early. Week one: shadow the support rotation for one afternoon, it changes how carefully people read the error reports. Month one: ship one change behind a flag end to end, including the rollout note. The reading list lives in the team drive, two papers and one postmortem, in that order."
+    },
+    {
+      "path": "/Work",
+      "title": "Interview loop: platform role",
+      "tags": ["work", "tech-debt"],
+      "body": "Loop for the platform opening, four conversations, no whiteboard. Systems talk: walk through an incident the candidate owned, listen for the blast radius thinking. Coding: a small migration script exercise on their own laptop, not ours. Values: a conflict story, dug into twice. Wrap up same day, the score sheet is one page with three questions, none of them about vibes. Candidate pool so far: two strong, one maybe."
+    },
+    {
+      "path": "/Work",
+      "title": "Incident postmortem: cache stampede",
+      "tags": ["work", "technical debt"],
+      "body": "The expiry of the big catalog cache lined up with a deploy, ten thousand keys refilled at once, database pinned at maximum for four minutes. What worked: the queue degrades, it does not fall over. What changes: expiries get jitter, a warm-up refill job ships behind a flag, and the dashboard gains the refill rate graph that everyone improvised during the event. The timeline, the alert text and the exact graphs live in the postmortem doc, linked from the incident channel topic."
+    },
+    {
+      "path": "/Work",
+      "title": "1:1 notes: our new hire",
+      "tags": ["work"],
+      "body": "Second 1:1 with the new hire on the platform team. Doing well: the support rotation notes were the cleanest anyone has written, adopted as the template. To watch: takes the quiet tasks nobody claims, which is kind, but the review queue drains slower. Agreed: one flagged stretch task per sprint. Next month: the on-call shadowing starts, pairs with the rotation owner first."
+    },
+    {
+      "path": "/Work",
+      "title": "VPN split tunnel decision",
+      "tags": ["work"],
+      "body": "Decision recorded: split tunnel for the research subnet only, full tunnel stays for anything touching customer data. The research group loses the video call quality complaints, the compliance team keeps its single choke point for the regulated flows. Reviewed in six months or at the first audit, whichever comes first. The routing table change is two lines, the paperwork was, as usual, longer than the change."
+    },
+    {
+      "path": "/Home",
+      "title": "Thermostat Settings for Winter",
+      "tags": ["home"],
+      "body": "Winter program on the heat pump thermostat starts mid October: comfort hours until twenty one, then the slow slide to the night value. The comfort ceiling is 22 degrees here, night setback 16, and the hot water follows the room schedule one degree behind. Boost never exceeds the ceiling, it just gets there faster. In the bathroom the floor sensor wins, in every other room the air sensor decides. Last year's 20.5 ceiling felt cold at the desk, hence the change."
+    },
+    {
+      "path": "/Home",
+      "title": "Maintenance weekend in October",
+      "tags": ["home", "network", "garden"],
+      "body": "Long weekend, two projects finished, both half documented at the time, corrected here.\n\nNetwork first. The closet shelf finally got a proper switch to replace the chained cheap ones: eight ports, managed just enough to see which port is up. Cables relabeled A through F, the label maker dying after the letter F was the reason the old spaghetti existed in the first place. The storage box and the printer got the two top ports, reservations checked in the router page, 192.168.1.44 for the printer held. The access point moved from the hallway shelf to the stairwell ceiling mount, which killed the dead corner in the back room entirely; the cable run for it took the longest, along the door frame and under the stairs, two clips short. Speeds around the flat now sit within a fifth of each other, measured with the phone in four corners, three runs each, worst corner written on the masking tape on the switch.\n\nThen the irrigation half. The drip line in the vegetable beds lost two emitters to lime, both replaced with the pressure compensating kind, and the inline filter got its first real cleaning since installation: brown sludge, half a tea spoon, rinsed out with the hose. The timer program changed from twice daily short runs to one longer morning run, the beds read visibly better by the evening, and the water meter reading over the week dropped by a cubic meter. The tomato section gets a second line next spring, tees are already bought and in the shed box with the fittings. One lesson recorded for next time: flush the lines before the first freeze, not the week after; the drained winterizing saved nothing this year because the filter was already half clogged."
+    },
+    {
+      "path": "/Home",
+      "title": "Serial numbers: big appliances",
+      "tags": ["home"],
+      "body": "Copied off the plates and photographed as well: fridge starts FF, washer WM, dishwasher DX, oven ends in the letter K. The paper folder with the invoices sits on the hallway shelf, second folder from the left. Warranty ends: washer next March, dishwasher the year after, oven five years out. The fridge plate is inside the cool drawer, nobody finds it without the photo."
+    },
+    {
+      "path": "/Home",
+      "title": "Paint chips decision",
+      "tags": ["home"],
+      "body": "Three chips taped to the living room wall for a week: warm gray, greige, and the one the store called sand. The sand one survived daylight and lamps without going pink, so it wins for the big wall; the warm gray goes on the hallway only. Buy the washable grade for the hallway, the stairs take the scuffs. Painting weekend is the first one after the birthday trip."
+    },
+    {
+      "path": "/Home",
+      "title": "Wall anchors for the bookshelf",
+      "tags": ["home"],
+      "body": "The new bookshelf sits on a drywall section, so: locate two studs, they are sixteen inches apart as usual, four heavy anchors elsewhere. Loaded with books means the anchors get the real test, choose the steel kind rated double the expected load. The stud finder agreed with the knock test this time, which it did not in the kids' room, there the map from the last attempt is still taped inside the closet door."
+    },
+    {
+      "path": "/Home",
+      "title": "Door hinge squeak fixes",
+      "tags": ["home"],
+      "body": "Three squeaky doors, three different culprits found: the kitchen door needed a drop of oil in the top hinge only, the bathroom door hinge pin was worn shiny and got swapped with the spare, and the bedroom door was rubbing the frame, which a quarter turn of the top screw fixed. The silicone spray stays in the garage for the car, kitchen doors get the food-safe oil."
+    },
+    {
+      "path": "/Maintenance",
+      "title": "Thermostat Program",
+      "tags": ["home", "maintenance"],
+      "body": "The heat pump thermostat runs the winter program from mid October: comfort until twenty one, then a slow drop to the night value. Comfort ceiling is set to 20.5 degrees, night setback to 17, and the water heater follows one degree behind the room target. Boost heats at full power only until the ceiling, it does not jump past it. The floor sensor takes precedence in the bathroom zone, the air sensor everywhere else."
+    },
+    {
+      "path": "/Maintenance",
+      "title": "Router Reboot Routine",
+      "tags": ["network", "home"],
+      "body": "The router forgets things slowly, so a schedule beats a crisis: first Tuesday of the month, unplug for a full minute, not ten seconds. Order matters: modem first, wait, then router. After it comes back, check the printer reservation still answers and the TV box reconnects on its own. If a device stays offline after that, forget the network on the device and join again. The whole ritual takes four minutes and prevents most of the evening calls to support."
+    },
+    {
+      "path": "/Maintenance",
+      "title": "Smoke alarm battery calendar",
+      "tags": ["home", "maintenance"],
+      "body": "All four alarms take the same battery, changed every October in one session, the loud chirp a month later means one was missed, usually the hallway. The test button pressed per alarm at the change, and the kitchen one gets the real smoke test with a blown out match twice a year. Dates written inside the cover of each alarm, the pencil holds better than the marker there. Spare batteries live in the fuse box drawer."
+    },
+    {
+      "path": "/Maintenance",
+      "title": "HVAC filter sizes",
+      "tags": ["home", "maintenance"],
+      "body": "The air handler takes the thick twenty five centimeter filter, the return grille in the hallway takes the thin one, sizes written here because the packaging numbers faded: thick one is thirty by fifty, thin one is twenty five by forty. Change rhythm: thick quarterly, thin monthly during heating season. Arrow on the frame points toward the unit, not the room, the wrong way costs airflow within days. Buy the thick ones in a three pack, the thin ones in a six."
+    },
+    {
+      "path": "/Maintenance",
+      "title": "Gutter cleaning checklist",
+      "tags": ["home", "maintenance"],
+      "body": "Twice a year, after the leaf fall and before the spring rains. Ladder on the flat ground piece, never the slope, bucket on the hook not the roof. Scoop into the bucket, then the hose flush from the far end, watch both downpipes run clear. The right downpipe holds a bird guard, check its mesh. The joint above the porch drips after every cleaning, one new gasket on the shelf waiting, fit it this round."
+    },
+    {
+      "path": "/Personal",
+      "title": "Safe Recovery Sheet",
+      "tags": ["personal"],
+      "protectedPassphrase": "jar-mango-lantern",
+      "body": "Everything needed after a lost key weekend, kept under the second password on purpose. The safe in the bedroom closet: the key card carries the code QX9107-PROTECTED-CANARY written on its back in pencil. Spare car key hangs behind the coat rod, in the pocket of the gray jacket. The documents folder lives on the top shelf, in the red binder, and the binder is the only copy outside the bank box. The passphrase itself is written inside the cover of the paper notebook on the same shelf, not anywhere digital."
+    },
+    {
+      "path": "/Finance",
+      "title": "Budget spreadsheet structure",
+      "tags": ["finance"],
+      "body": "One sheet per month, four columns that stayed: fixed, groceries, the rest, surprise. Fixed is everything with a due date, groceries is the two shops plus the market, surprise exists so the rest column stays honest. The yearly sheet only sums and compares months, no formulas beyond that. The categories survived three years, resist renaming them, the history is the value."
+    },
+    {
+      "path": "/Finance",
+      "title": "Dividend calendar",
+      "tags": ["finance"],
+      "body": "The paying season is March, June, September, December, with the two smaller positions paying in May and November off cycle. Reinvestment is manual: the cash sits in the account until the next quarterly buy, smallest lot first. The tax slip arrives late, file it with the March papers, not with the year end stack where it got lost twice. Nothing here is a recommendation, it is a diary."
+    },
+    {
+      "path": "/Finance",
+      "title": "Bank fee comparison",
+      "tags": ["finance"],
+      "body": "Ran the real numbers across three banks for a year of statements: the flat fee bank won by a little, the percentage bank punishes busy months, and the free one charges everywhere else. Switching cost is the standing orders, eleven of them, the template import was worth it. The old account stays open one quarter, minimum balance, as a fallback while the cards and the phone wallet all move."
+    },
+    {
+      "path": "/Finance",
+      "title": "Sinking funds list",
+      "tags": ["finance"],
+      "body": "The envelopes that keep the year calm: car inspection, insurance lump, holiday, appliance replacement, and the repair buffer. Each gets a fixed slice monthly, the appliance one feeds from the retired washing machine fund that finally paid out. Rule from last year stands: the repair buffer may absorb a car month, the holiday one may not. Balances checked on the same day as the budget sheet."
+    },
+    {
+      "path": "/Health",
+      "title": "Dental cleaning interval",
+      "tags": ["health"],
+      "body": "Twelve months turned out too long, the hygienist found three pockets at the last visit; six months is the new interval, booked ahead twice at a time so the slots do not vanish. The two problem spots are lower left, brushing there last every time so the timer does not run out on them. Sensitivity after cleaning lasts a day, plan hot drinks accordingly."
+    },
+    {
+      "path": "/Health",
+      "title": "Stretching for desk days",
+      "tags": ["health"],
+      "body": "The set that survives: hip flexor lunge, doorway chest stretch, and the standing forward hang, three minutes total, twice a day on desk days. The neck rolls everyone does did nothing, dropped. Trigger: every second meeting break, not a fixed clock time, fixed times die in busy weeks. The standing desk helps the hips but not the shoulders, the doorway stretch is the only thing that touched those."
+    },
+    {
+      "path": "/Health",
+      "title": "Allergy medicine schedule",
+      "tags": ["health"],
+      "body": "Season starts with the birch, usually the second week of April, first pill goes in before the first sneeze, not after. One tablet in the morning through May, eye drops as needed in the evening. The pharmacy brand swap two years ago was fine, the generic works the same. Car kit holds a strip of tablets and the eye drops, the jacket pocket kit idea failed because jackets rotate."
+    },
+    {
+      "path": "/Health",
+      "title": "Sleep experiment notes",
+      "tags": ["health"],
+      "body": "Three weeks of fixed wake time, seven days a week, beat every gadget intervention tried before. Lights out flexibility stays, wake time does not move, even after the late match. Caffeine cutoff at fourteen hundred, moved from noon, cost two sleepy days and then nothing. The tracker says the deep sleep share rose a little; honestly the mornings feeling less brutal is the evidence that counts."
+    },
+    {
+      "path": "/Travel",
+      "title": "Packing list: the core",
+      "tags": ["travel"],
+      "body": "The core list that fits the carry on: three shirts, one sweater, the shell, two pairs of pants, socks and underwear for four days, wash as needed. Tech pouch: charger, one cable per device, the plug adapters in the small bag that lives inside. Documents folder: copies of the passport, the insurance card, and the first hotel address printed, phones die at the worst counter. The list is on the closet door, tick it, do not trust memory at six in the morning."
+    },
+    {
+      "path": "/Travel",
+      "title": "Japan trip plan",
+      "tags": ["travel"],
+      "body": "Fourteen days, two bases, no more: a week in the big eastern city with a day trip towards the coast, then the train south for the older capital and its temples. Rail pass math says point to point tickets win this route, skip the pass. Book the small family inn two months ahead, it has six rooms and filled up last time by six weeks out. Pocket cash budget: the shrines and the small eateries are still coin country, the card works everywhere else."
+    },
+    {
+      "path": "/Travel",
+      "title": "Campsite checklist",
+      "tags": ["travel"],
+      "body": "Load order fixed after the wet night: tent and tarp access first from the car tail, stove bag and water next, sleeping gear last, dry on top. The checklist now includes the camp shoes, forgotten twice, and the lighter, forgotten once, in that order of shame. Firewood is bought there, never carried, the local rule is on the site board. Breakfast is oatmeal with the shelf stable milk, done in one pot, pot scrubbed before coffee."
+    },
+    {
+      "path": "/Cars",
+      "title": "Oil change intervals",
+      "tags": ["car"],
+      "body": "The manual says every fifteen thousand or once a year, the shop stamps say the real pattern: about eleven thousand because the year runs out first. Book the slot for late February, it lines up with the inspection month and one trip does both. The filter part number is on the last invoice, photograph it, the shop's catalog lookup guessed twice already. Synthetic only, the older engine ticks on the cheap stuff for a week after."
+    },
+    {
+      "path": "/Cars",
+      "title": "Winter kit box",
+      "tags": ["car"],
+      "body": "The box lives behind the passenger seat from October to Easter: scraper, gloves, the blanket, jumper cables, and the folding shovel after the snowed in year. Two chocolate bars rotate at each season change, they age in the cold. The warning triangle and the vest moved permanently into the side pocket after the roadside stop where the vest was home in the closet. Check the tire pressures the same day the box goes in."
+    },
+    {
+      "path": "/Cars",
+      "title": "Tire pressure table",
+      "tags": ["car"],
+      "body": "Door sticker values, winter and summer differ: summer front 2.2, rear 2.1; winter front 2.3, rear 2.2, cold checked, which means before the ten minute drive to the station, not after. Full load adds 0.2 to the rear on long trips, the sticker's second line. The compressor in the trunk tray has its own gauge, it reads a tenth high, trust the stick gauge and top to the sticker."
+    },
+    {
+      "path": "/Cars",
+      "title": "Battery tender routine",
+      "tags": ["car"],
+      "body": "The second car sits enough to need the tender between December and March: connect to the garage outlet, green light means maintenance mode, blink means check the clamps. Once a month the car runs for fifteen minutes regardless, electrics on, to keep the alternator honest. The tender cable is zip tied to the shelf so it does not walk away again. Spring disconnect order: outlet first, then the negative clamp."
+    },
+    {
+      "path": "/Garden",
+      "title": "Compost layering",
+      "tags": ["garden", "how-to"],
+      "body": "The bin works when layers alternate: a browns layer, leaves or shredded cardboard, then a greens layer, clippings or kitchen scraps, then close with browns again. The smelly month happened when the grass went in alone in thick mats, fluffed with cardboard it recovered in two weeks. Turn monthly in the warm season, ignore it in winter, and water the pile only in August when it looks like dust. Ready compost comes from the bottom hatch, never from the top."
+    },
+    {
+      "path": "/Garden",
+      "title": "Tomato varieties that worked",
+      "tags": ["garden"],
+      "body": "Three seasons of notes distilled: the small balcony variety fruits reliably even in the cool summer, the big beefsteak only earned its space once in three years, and the middle sized red one is the keeper for sauce. Cages beat single stakes here, the wind takes the stakes. Seed from the keeper's best fruit dried on paper and stored in the tin sprouted at the same rate as bought seed, so the line continues."
+    },
+    {
+      "path": "/Garden",
+      "title": "Drip irrigation timer log",
+      "tags": ["garden"],
+      "body": "Timer programs as actually run: one morning run at six, twenty minutes, beds A and B; the seedling tray gets the short afternoon top up only in July. Changed from two morning runs to one longer after the water meter week, roots went deeper and the evening look improved. Winter: batteries out, valves closed, lines flushed before the first forecast freeze, the filter cleaned at the same time. Next spring's part list: two pressure compensating emitters, one spare timer battery."
+    },
+    {
+      "path": "/Garden",
+      "title": "Spring bulb map",
+      "tags": ["garden"],
+      "body": "What went in and where, so autumn digging does not repeat last year's daffodil massacre: crocuses along the south path, tulips in the bed by the fence, daffodils under the apple tree where they can naturalize. Depths followed the bag, roughly three times the bulb height, sand pinch under each in the clay spots. The map is a photo of the bed with markings, printed and taped inside the shed door. Bloom order worked out as planted: crocuses, then daffodils, then tulips."
+    },
+    {
+      "path": "/Projects",
+      "title": "Kitchen shelf build",
+      "tags": ["project", "home"],
+      "body": "Two pine boards, four black brackets, the wall is brick so the hammer drill comes out. Cut list: one ninety centimeter, one sixty, both twenty deep. The sixty goes over the coffee corner, ninety by the window, brackets into the mortar joints not the bricks. Oiled twice before mounting, the third coat after the first coffee ring appears. Level checked with the phone in both directions, the window shelf sits two millimeters proud and stays that way, nobody sees it."
+    },
+    {
+      "path": "/Projects",
+      "title": "Photo book plan",
+      "tags": ["project", "reading"],
+      "body": "The year's book: one spread per month, three photos a spread, no collages, captions of one line. Order the strong horizontal shots, the verticals become the month openers at half width. The cover is the ferry photo from the spring weekend. Draft order set in the couch session: months first, then the two holiday spreads, cover last. Print house picked by the sample pack, their matte paper won by a distance."
+    },
+    {
+      "path": "/Projects",
+      "title": "Standing desk assembly",
+      "tags": ["project", "work"],
+      "body": "Assembly order that avoided the redo: frame flat on the floor, crossbar loose, feet on, then the top, then square it up and tighten everything once. Cable tray under the back edge, power strip zip tied into it, one slack loop for the lifting cables or they snag at full height. Memory presets: sitting and standing heights saved, the third preset deleted because nobody used it. First week: alternate every hour, the calves complain otherwise."
+    },
+    {
+      "path": "/Reading",
+      "title": "Reading queue",
+      "tags": ["reading"],
+      "body": "The shelf queue in honest order: the big novel everyone has finished except here, the attention book borrowed twice already, the history of the canal era, and the short story collection for the night stand. Rule from last year: one in, one out, the queue may not grow past the shelf gap. The library app holds the next two, so the shelf only holds what is started, not what is hoped for."
+    },
+    {
+      "path": "/Reading",
+      "title": "Highlights: the attention book",
+      "tags": ["reading"],
+      "body": "Marks worth keeping: focus is a setting, not a talent, arrange the room for it and it arrives. The chapter on meetings says forty minutes is a real hour, the last twenty belong to nobody, schedule around it. The author's notebook habit is one page, not three, which is why it survives contact with actual days. The last chapter repeats the first, the book knew it, says so, and does it anyway."
+    },
+    {
+      "path": "/Reading",
+      "title": "Quote bank",
+      "tags": ["reading"],
+      "body": "Lines copied out and kept, sources on the left: the canal era history gave the one about water finding the level of its patience, the novel gave the sentence about the kitchen radio lasting longer than the marriages it played through. The pocket notebook gets a quote only when copied twice, once in the margin, once here. Six quotes this year, the bank holds forty one, the rule is not to pad it."
+    }
+  ],
+  "unusedTags": [
+    "wordpress",
+    "sailing",
+    "pottery",
+    "film-photography",
+    "tax-2023"
+  ],
+  "expected": [
+    {
+      "kind": "duplicate_exact",
+      "objects": [
+        { "role": "subject", "folder": "/Guides", "title": "Wifi Printer Setup" },
+        { "role": "other", "folder": "/Imported", "title": "Wifi Printer Setup" }
+      ],
+      "score": 95,
+      "note": "Byte-identical copies: same normalized title and same normalized body hash. No references to either id, so the rule falls to the tie-break and proposes trashing the later-seeded /Imported copy."
+    },
+    {
+      "kind": "duplicate_exact",
+      "objects": [
+        { "role": "subject", "folder": "/Home Network", "title": "Router Reboot Routine" },
+        { "role": "other", "folder": "/Maintenance", "title": "Router Reboot Routine" }
+      ],
+      "score": 95,
+      "note": "Byte-identical copies; the later-seeded /Maintenance copy is the trash pick under the tie-break."
+    },
+    {
+      "kind": "near_duplicate",
+      "objects": [
+        { "role": "subject", "folder": "/Home Network", "title": "Guest Wi-Fi Setup" },
+        { "role": "other", "folder": "/Guides", "title": "Setting Up a Guest Network" }
+      ],
+      "scoreMin": 50,
+      "scoreMax": 75,
+      "note": "Same steps reworded. Score is clamp(round(100*sim) - 25, 50, 75); these should qualify via sim >= 0.95, giving 70..75, and must NOT qualify as exact (titles and body hashes differ)."
+    },
+    {
+      "kind": "near_duplicate",
+      "objects": [
+        { "role": "subject", "folder": "/Work", "title": "Backup Rotation Policy" },
+        { "role": "other", "folder": "/Work", "title": "Retired Backup Plan" }
+      ],
+      "scoreMin": 50,
+      "scoreMax": 75,
+      "note": "Outdated version and its replacement, sharing most of the wording. Same score formula as the other near pairs; a model verdict for this pair would be superseded, but the rule-only run expects near_duplicate."
+    },
+    {
+      "kind": "near_duplicate",
+      "objects": [
+        { "role": "subject", "folder": "/Maintenance", "title": "Thermostat Program" },
+        { "role": "other", "folder": "/Home", "title": "Thermostat Settings for Winter" }
+      ],
+      "scoreMin": 50,
+      "scoreMax": 75,
+      "note": "Same heat pump, conflicting values (20.5/17 vs 22/16). Rule-only run expects near_duplicate; a model verdict for this pair would be contradiction."
+    },
+    {
+      "kind": "move_article",
+      "objects": [
+        { "role": "subject", "folder": "/Inbox", "title": "Riddle for the train ride" },
+        { "role": "target", "folder": "/Kids/Puzzles" }
+      ],
+      "scoreMin": 70,
+      "scoreMax": 90,
+      "note": "Kids-puzzle note in /Inbox above the /Kids/Puzzles cluster of 12. share = strong neighbours in the target folder; the corpus is built for share near 1, so scores near 83-90 are expected. Needs the 3-day untouched condition handled by the harness."
+    },
+    {
+      "kind": "move_article",
+      "objects": [
+        { "role": "subject", "folder": "/Inbox", "title": "Logic puzzle: the four switches" },
+        { "role": "target", "folder": "/Kids/Puzzles" }
+      ],
+      "scoreMin": 70,
+      "scoreMax": 90,
+      "note": "Second misplaced puzzle note, same target cluster."
+    },
+    {
+      "kind": "move_article",
+      "objects": [
+        { "role": "subject", "folder": "/Inbox", "title": "Word puzzle: hidden cities" },
+        { "role": "target", "folder": "/Kids/Puzzles" }
+      ],
+      "scoreMin": 70,
+      "scoreMax": 90,
+      "note": "Third misplaced puzzle note, same target cluster."
+    },
+    {
+      "kind": "move_article",
+      "objects": [
+        { "role": "subject", "folder": "/Inbox", "title": "Starter smells like nail polish" },
+        { "role": "target", "folder": "/Cooking/Sourdough" }
+      ],
+      "scoreMin": 70,
+      "scoreMax": 90,
+      "note": "Sourdough note in /Inbox above the /Cooking/Sourdough cluster of 12."
+    },
+    {
+      "kind": "move_article",
+      "objects": [
+        { "role": "subject", "folder": "/Inbox", "title": "Feeding the starter on vacation week" },
+        { "role": "target", "folder": "/Cooking/Sourdough" }
+      ],
+      "scoreMin": 70,
+      "scoreMax": 90,
+      "note": "Second misplaced sourdough note."
+    },
+    {
+      "kind": "move_article",
+      "objects": [
+        { "role": "subject", "folder": "/Inbox", "title": "Why my crumb is dense" },
+        { "role": "target", "folder": "/Cooking/Sourdough" }
+      ],
+      "scoreMin": 70,
+      "scoreMax": 90,
+      "note": "Third misplaced sourdough note."
+    },
+    {
+      "kind": "merge_tags",
+      "objects": [
+        { "role": "target", "tag": "how-to" },
+        { "role": "other", "tag": "howto" },
+        { "role": "other", "tag": "How To" }
+      ],
+      "score": 85,
+      "note": "All three normalize to howto; how-to is the most used (7 article assignments vs 2 and 1), so it is the merge target."
+    },
+    {
+      "kind": "merge_tags",
+      "objects": [
+        { "role": "target", "tag": "technical debt" },
+        { "role": "other", "tag": "technical-debt" }
+      ],
+      "score": 85,
+      "note": "Both normalize to technicaldebt; technical debt is the more used (2 vs 1). The decoy tech-debt (techdebt) must NOT appear in this advice or form its own group."
+    },
+    {
+      "kind": "delete_unused_tags",
+      "objects": [
+        { "tag": "wordpress" },
+        { "tag": "sailing" },
+        { "tag": "pottery" },
+        { "tag": "film-photography" },
+        { "tag": "tax-2023" }
+      ],
+      "score": 60,
+      "note": "One advice per run listing the unused tag names, up to 50."
+    },
+    {
+      "kind": "delete_empty_folder",
+      "objects": [
+        { "role": "subject", "folder": "/Projects/Ideas Parking" }
+      ],
+      "score": 55,
+      "note": "No articles, no subfolders, name not test-like."
+    },
+    {
+      "kind": "delete_empty_folder",
+      "objects": [
+        { "role": "subject", "folder": "/Travel/Visas 2019" }
+      ],
+      "score": 55,
+      "note": "No articles, no subfolders, name not test-like."
+    },
+    {
+      "kind": "test_leftovers",
+      "objects": [
+        { "role": "subject", "folder": "/test" }
+      ],
+      "score": 50,
+      "note": "Level-1 folder named test, 3 junk notes (at most 30)."
+    },
+    {
+      "kind": "test_leftovers",
+      "objects": [
+        { "role": "subject", "folder": "/Test" }
+      ],
+      "score": 50,
+      "note": "Level-1 folder named Test (case-insensitive match), 3 junk notes. Paths are case-sensitive in the store, so /test and /Test are two separate folders and two separate advices."
+    }
+  ]
+}

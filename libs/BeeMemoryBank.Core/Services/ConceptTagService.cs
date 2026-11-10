@@ -131,31 +131,6 @@ public class ConceptTagService(
         }
     }
 
-    public async Task AddToArticleAsync(Guid articleId, List<string> conceptNames)
-    {
-        var existingAll = await repo.GetWithEmbeddingsAsync();
-        var existingNames = new HashSet<string>(existingAll.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
-
-        await repo.AddToArticleAsync(articleId, conceptNames);
-
-        foreach (var name in conceptNames.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (!existingNames.Contains(name))
-            {
-                try
-                {
-                    var embedding = embeddingGenerator.GenerateQuery(name);
-                    var bytes = FloatsToBytes(embedding);
-                    await repo.UpdateEmbeddingAsync(name, bytes, ModelVersion);
-                }
-                catch (ModelUnavailableException)
-                {
-                    break;
-                }
-            }
-        }
-    }
-
     public async Task BackfillEmbeddingsAsync()
     {
         var all = await repo.GetAllAsync();
@@ -197,7 +172,6 @@ public class ConceptTagService(
     /// transaction, rather than trusting whatever casing the caller passed in.</summary>
     public Task<List<string>> GetByArticleIdAsync(Guid articleId, System.Data.IDbTransaction? transaction) =>
         repo.GetByArticleIdAsync(articleId, transaction);
-    public Task RemoveFromArticleAsync(Guid articleId, string conceptName) => repo.RemoveFromArticleAsync(articleId, conceptName);
     public async Task RenameAsync(string name, string newName)
     {
         using var authoring = await eventLogger.BeginAuthoringAsync();
@@ -226,7 +200,8 @@ public class ConceptTagService(
         await repo.DeleteAsync(name);
         await eventLogger.LogConceptTagDeleteAsync(name);
     }
-    public Task<List<RelatedArticle>> GetRelatedArticlesAsync(Guid articleId) => repo.GetRelatedArticlesAsync(articleId);
+    public Task<List<RelatedArticle>> GetRelatedArticlesAsync(Guid articleId, int limit = RelatedArticle.DefaultLimit, bool includeMeaning = true) => repo.GetRelatedArticlesAsync(articleId, limit, includeMeaning);
+    public Task<(int Count, int SharedTagTotal)> GetRelatedTagSummaryAsync(Guid articleId) => repo.GetRelatedTagSummaryAsync(articleId);
     public Task<List<(Guid Id, string Title, string TreePath)>> SearchByConceptAsync(string concept) => repo.SearchByConceptAsync(concept);
 
     private static float CosineSimilarity(float[] a, float[] b)

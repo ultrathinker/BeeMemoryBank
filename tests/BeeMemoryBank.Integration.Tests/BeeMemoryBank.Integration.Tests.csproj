@@ -88,4 +88,11 @@
     <!-- A whitelist row as a device that joined long ago really holds it, built with the statements of those releases and the real migration 045 (BMB-337): one source in tests/shared. -->
     <Compile Include="..\shared\LegacyWhitelistRows.cs" Link="Shared\LegacyWhitelistRows.cs" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Dream (plan 3.1): the planted corpus and its loader, one source in tests/shared/Dream. The tests themselves live in Dream/ of this project.
+         The JSON is embedded because the loader reads it as a resource. -->
+    <Compile Include="..\shared\Dream\*.cs" Link="Shared\Dream\%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\shared\Dream\dream-corpus.json" Link="Shared\Dream\dream-corpus.json" />
+  </ItemGroup>
 </Project>

@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.9.0 (2026-11-10)
+
+Dream: a maintenance pass over your notes that writes down advice and never changes the bank by itself. Related notes
+are now ranked by rare shared tags and by meaning, and tags changed over MCP sync like any other change. The main
+database has no migration. Dream keeps six tables of its own in chat.db, created on the first start; they belong to the
+node alone and are never synchronised, never part of a snapshot, and a blind node has no Dream, so a 2.8.x node and a
+2.9.0 node work together as they are.
+
+### Added
+
+- **Dream** (the header item right after Search, superadmin only). A run looks for exact duplicates, notes that sit in
+  the wrong folder, tags spelled several ways, unused tags, empty folders and leftovers of testing, and, when a model is
+  switched on, judges pairs of similar notes, busy folders and the shape of the folder tree. Each finding is an advice
+  card with a score from 0 to 100, what is proposed and why, the note, folder or tag it is about (each a link), and
+  what found it (the built-in rules or the model by name). Nothing changes until a person presses a button: **Apply**
+  makes the change through the ordinary article, tag and folder services with that person's rights (version history,
+  the trash, sync and the activity log work exactly as for a hand edit), and a card whose advice was already applied
+  or dismissed in another tab says so instead of doing it twice. **Open in AI chat** opens the chat in a new tab with
+  the task as a draft that is sent only when you press Run (Edit puts it in the message box, Cancel drops it, a link
+  leads back to the advice).
+- **Runs** start by hand on the Dream page, with two independent switches (the built-in rules and the AI model), a
+  trial run whose advice is kept apart, and limits for the number of advice and the minutes, or nightly in a time
+  window you choose (Admin > Search and AI > Dream; **the nightly run is off by default**). A manual run can be
+  continued by the next one: what was already examined is remembered and not paid for twice. **View all rules**
+  describes every rule and every model step with the thresholds and limits the code actually uses.
+- **The model** is any text model of the chat's model catalogue, called through the chat's own OpenRouter keys. With
+  the model off (the default) nothing leaves the node. Notes under a second password, notes subscribed from another
+  node and folders you exclude are never read or sent. A run has a call budget and an estimated token budget; the
+  model's answer is checked against a schema, and the text of a note is treated as data, never as instructions.
+
+### Changed
+
+- **Related notes** are ranked by rare shared tags (a tag on a large part of the vault no longer links everything to
+  everything) together with nearness by meaning from the note vectors. Each row says why it is listed (shared tags,
+  similarity, a possible duplicate); the article page, the REST endpoint and `bee_get_related` show 7 rows by default
+  and at most 20, filtered by the caller's folder access before the list is cut.
+
+### Fixed
+
+- **Tags added or removed over MCP** (`bee_add_tags`, `bee_remove_tag`) now go through the article service like an
+  edit on the web page: the note gets a new version and a sync event, a read-only folder is respected, and the next
+  edit made on another node no longer erases the tag (BMB-343).
+
 #### 2.8.1 (2026-11-09)
 
 A small release. Folders with their own access rules are marked in the folder tree, and a device that joined long ago can reach a blind node

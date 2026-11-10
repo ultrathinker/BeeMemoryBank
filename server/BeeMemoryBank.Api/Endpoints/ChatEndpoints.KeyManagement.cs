@@ -30,13 +30,13 @@ public static partial class ChatEndpoints
     /// <summary>A decrypted egress key held transiently for one chat turn. The plaintext lives only in
     /// memory for the duration of the failover attempt(s); the caller nulls the list reference when the
     /// turn ends (same posture as the prior single-key path — string memory is GC-managed).</summary>
-    private sealed record KeyMaterial(Guid Id, string PlaintextKey);
+    internal sealed record KeyMaterial(Guid Id, string PlaintextKey);
 
     /// <summary>Every available key was tried and failed. Surfaced as a 502 (JSON endpoints) or an
     /// <c>event: error</c> SSE frame (streaming loop). Deliberately NOT derived from
     /// <see cref="InvalidOperationException"/> so it is distinguishable from a malformed-but-200
     /// upstream response (which has nothing to do with a bad key and must not be failovered).</summary>
-    private sealed class AllKeysExhaustedException : Exception
+    internal sealed class AllKeysExhaustedException : Exception
     {
         public AllKeysExhaustedException(string message) : base(message) { }
     }
@@ -79,7 +79,7 @@ public static partial class ChatEndpoints
     /// empty list only if nothing is available, which the caller maps to a clear "no key / all
     /// cooling down" error. Decryption needs an unlocked vault, so callers gate on
     /// <c>session.IsUnlocked</c> first.</summary>
-    private static async Task<List<KeyMaterial>> DecryptAvailableKeysAsync(
+    internal static async Task<List<KeyMaterial>> DecryptAvailableKeysAsync(
         ChatSettingsRepository repo, SessionService session)
     {
         var rows = await repo.ListAvailableOrderedAsync();
@@ -104,7 +104,7 @@ public static partial class ChatEndpoints
     /// key. Throws <see cref="AllKeysExhaustedException"/> if every key failed. Used by the
     /// non-streaming endpoints; the streaming path has its own (<see cref="StreamWithFailoverAsync"/>)
     /// that additionally enforces "failover only before the first byte".</summary>
-    private static async Task<T> RunWithFailoverAsync<T>(
+    internal static async Task<T> RunWithFailoverAsync<T>(
         ChatSettingsRepository repo, IReadOnlyList<KeyMaterial> keys,
         Func<string, CancellationToken, Task<T>> attempt, CancellationToken ct)
     {

@@ -257,6 +257,9 @@ if (!role.IsBlind)
     // matching PendingEmbeddingProcessor. On a node with nothing legacy left (and on every fresh node)
     // a tick is one empty partial-index lookup per table.
     builder.Services.AddHostedService<BeeMemoryBank.Api.Services.ChatHistoryBackfillProcessor>();
+    // Dream's nightly run and its sweep (plan 3.5): same condition and same polling shape as the backfill above - it
+    // waits for a usable vault and does nothing while locked. Its other services are registered with the chat's below.
+    builder.Services.AddHostedService<BeeMemoryBank.Api.Dream.DreamScheduler>();
 }
 // Same migration, run to completion right before every DEK rotation (initiator and peer), so no
 // chat row is left sealed under a DEK the node is about to retire. See IDekRotationHook.
@@ -308,6 +311,35 @@ builder.Services.AddSingleton<ChatDestructiveOpCounter>();
 // Curated read-only tool surface for the native AI chat. Scoped (depends on the
 // ambient CallerScope + SessionService, both request-scoped). See ChatToolDispatcher.
 builder.Services.AddScoped<ChatToolDispatcher>();
+
+// ── Dream ───────────────────────────────────────────────────────────────────────
+// The sleep-time housekeeping of the notes (docs/dream.md): its tables live in chat.db (DreamSchema, created by
+// ChatDbInitializer), its routes are /api/dream (superadmin, never an agent). Full node only: a blind node holds no
+// plaintext to look at. Every class is registered here once, so the packages that fill them never edit this file; a
+// run resolves the detectors and model tasks as IEnumerable in its own scope.
+if (!role.IsBlind)
+{
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.DreamStore>();
+    builder.Services.AddSingleton<BeeMemoryBank.Api.Dream.DreamCoordinator>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.DreamRunner>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.DreamCorpusBuilder>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamDetector, BeeMemoryBank.Api.Dream.TagVariantsDetector>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamDetector, BeeMemoryBank.Api.Dream.UnusedTagsDetector>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamDetector, BeeMemoryBank.Api.Dream.EmptyFolderDetector>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamDetector, BeeMemoryBank.Api.Dream.TestLeftoversDetector>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamDetector, BeeMemoryBank.Api.Dream.ExactDuplicateDetector>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamDetector, BeeMemoryBank.Api.Dream.NearDuplicateDetector>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamDetector, BeeMemoryBank.Api.Dream.MisplacedArticleDetector>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.PairCandidateSource>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamModelClient, BeeMemoryBank.Api.Dream.OpenRouterDreamModelClient>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamModelTask, BeeMemoryBank.Api.Dream.PairVerdictTask>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamModelTask, BeeMemoryBank.Api.Dream.FolderReviewTask>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamModelTask, BeeMemoryBank.Api.Dream.TreeReviewTask>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.DreamAdviceValidator>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.DreamApplyService>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.DreamReferenceChecker>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.DreamPromptBuilder>();
+}
 BlindRoleServices.AddLargeBodyLimits(builder.Services);
 builder.Services.AddOpenApi();
 

@@ -1,0 +1,69 @@
+/* ===== Dream page: comparing trial runs ===== */
+/* Same variables and surfaces as dream.css (the scope class sets --dream-high and the rest); nothing here is a colour of its own. */
+
+.dream-cmp-intro { margin: 0 0 12px; max-width: 80ch; color: var(--text-secondary); line-height: 1.5; font-size: .92rem; }
+
+/* ---- the runs to pick from ---- */
+.dream-cmp-picker { display: grid; gap: 8px; max-height: 360px; overflow: auto; padding: 2px; }
+.dream-cmp-run { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); }
+.dream-cmp-run-title { font-weight: 600; overflow-wrap: anywhere; }
+.dream-cmp-run-sub { grid-column: 1 / -1; padding-left: 28px; font-size: .8rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.dream-cmp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0 18px; }
+.dream-cmp-hint { flex: 1 1 280px; min-width: 0; font-size: .85rem; color: var(--text-secondary); }
+
+/* ---- the summary above the table ---- */
+.dream-cmp-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
+.dream-cmp-tools sl-select { min-width: 220px; }
+#dream-cmp-summary sl-alert { margin: 0 0 10px; }
+.dream-cmp-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 20px; padding: 14px 18px; margin: 0 0 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); }
+.dream-cmp-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 0 0 16px; }
+.dream-cmp-col { padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); }
+.dream-cmp-col-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 8px; }
+.dream-cmp-letter {
+    display: inline-flex; flex: none; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 6px;
+    background: var(--accent); color: #fff; font-weight: 700; font-size: .9rem;
+}
+.dream-cmp-model { font-weight: 600; overflow-wrap: anywhere; }
+.dream-cmp-facts { display: grid; gap: 2px; margin: 0; font-size: .85rem; }
+.dream-cmp-facts div { display: flex; justify-content: space-between; gap: 10px; }
+.dream-cmp-facts dt { color: var(--text-secondary); }
+.dream-cmp-facts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+
+/* ---- the table: one grid per row, so a row can open under itself ---- */
+.dream-cmp-scroll { overflow-x: auto; }
+.dream-cmp-grid { min-width: 600px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg-card); }
+.dream-cmp-head, .dream-cmp-row, .dream-cmp-more {
+    display: grid; grid-template-columns: minmax(220px, 2.2fr) repeat(var(--cols, 3), minmax(120px, 1fr));
+}
+.dream-cmp-head { background: var(--bg-secondary); border-bottom: 1px solid var(--border); font-weight: 600; }
+.dream-cmp-h { display: flex; align-items: center; gap: 8px; padding: 10px 12px; min-width: 0; border-left: 1px solid var(--border); }
+.dream-cmp-head .dream-cmp-first { padding: 10px 12px; }
+.dream-cmp-row { border-top: 1px solid var(--border); border-left: 4px solid transparent; }
+.dream-cmp-row.is-disagree { border-left-color: var(--dream-medium); }
+.dream-cmp-row.is-only-one { border-left-color: var(--dream-live); }
+.dream-cmp-first { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 10px 12px; }
+.dream-cmp-objects { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; font-size: .88rem; }
+.dream-cmp-objects li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-width: 0; }
+.dream-cmp-objects sl-icon { flex: none; align-self: center; color: var(--text-secondary); }
+.dream-cmp-objects a { color: var(--text-primary); font-weight: 500; overflow-wrap: anywhere; }
+.dream-cmp-flags { display: flex; flex-wrap: wrap; gap: 4px; }
+.dream-cmp-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; padding: 10px 12px; border-left: 1px solid var(--border); --band: var(--dream-low); }
+.dream-cmp-cell.band-high { --band: var(--dream-high); }
+.dream-cmp-cell.band-medium { --band: var(--dream-medium); }
+.dream-cmp-cell.band-low { --band: var(--dream-low); }
+.dream-cmp-cell.is-odd { background: color-mix(in srgb, var(--dream-medium) 14%, transparent); }
+.dream-cmp-cell.tone-error { background: color-mix(in srgb, var(--dream-bad) 8%, transparent); }
+.dream-cmp-cell.tone-none { color: var(--text-secondary); }
+.dream-cmp-score { font-size: 1.3rem; font-weight: 700; line-height: 1.1; color: var(--band); font-variant-numeric: tabular-nums; }
+.dream-cmp-kind { font-size: .78rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.dream-cmp-none { font-size: 1.1rem; }
+
+.dream-cmp-more { grid-column: 1 / -1; border-top: 1px dashed var(--border); background: var(--bg-secondary); }
+.dream-cmp-more::before { content: "What each run said"; padding: 10px 12px; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-secondary); }
+.dream-cmp-said { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 10px 12px; border-left: 1px solid var(--border); }
+.dream-cmp-said p { margin: 0; font-size: .85rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dream-cmp-morerows { margin-top: 10px; }
+
+@media (max-width: 900px) {
+    .dream-cmp-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -177,6 +177,7 @@ app.MapDownloadEndpoints();
     app.MapAutoUnlockEndpoints();
     app.MapRekeyReportEndpoints();
     app.MapChatEndpoints();
+    app.MapDreamEndpoints();
     app.MapMcp("/mcp");
     }
 

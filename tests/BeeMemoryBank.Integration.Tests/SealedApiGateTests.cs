@@ -93,6 +93,8 @@ public sealed class SealedApiGateTests(SealedNodeTemplate template) : IClassFixt
             "SyncScheduler", "CleanupService", "PendingIndexProcessor", "PendingEmbeddingProcessor", "AuditLogPruningHostedService",
             "RemoteAccountSyncScheduler", "ChatHistoryBackfillProcessor", "RecoveryReconcileWatcher", "StateAnchorScheduler", "MdnsAnnouncer",
             "BaselineScheduler", "BlindInviteSweeper",
+            // Dream: its nightly run and sweep read chat.db and the vault.
+            "DreamScheduler",
         ];
         var types = node.Services.GetServices<IHostedService>().Select(s => s.GetType()).Distinct().ToList();
 

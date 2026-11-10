@@ -552,7 +552,8 @@ BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.ConceptTagRepository+ConceptT
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.ConceptTagRepository+EdgePairRow
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.ConceptTagRepository+GraphEdgeRow
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.ConceptTagRepository+PairStatRow
-BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.ConceptTagRepository+RelatedArticleRow
+BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.ConceptTagRepository+RelatedTagHitRow
+BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.ConceptTagRepository+RelatedTagRow
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.ConceptTagRepository+TagFreqRow
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.ConflictVersionRepository
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.DapperConfig
@@ -585,6 +586,8 @@ BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.MigrationRunner+MigrationRow
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository+MasterPasswordNoticeRow
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.NodeIdentityRepository+SessionSettingsRow
+BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.RelatedArticleRanker
+BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.RelatedCandidate
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.RemoteAccountRepository
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.RemoteApiTokenRepository
 BeeMemoryBank.Storage BeeMemoryBank.Storage.Sqlite.RemoteSubscriptionRepository

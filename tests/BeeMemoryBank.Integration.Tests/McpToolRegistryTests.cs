@@ -162,7 +162,7 @@ public class McpToolRegistryTests
     /// <see cref="McpToolRegistry"/>'s own resolution, so an unnamed tool cannot slip past by
     /// deserializing to null here while registering fine in production.
     /// </summary>
-    private static HashSet<string> AllToolNames()
+    internal static HashSet<string> AllToolNames()
     {
         var assembly = typeof(BeeSearchTools).Assembly;
 

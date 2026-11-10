@@ -1,0 +1,266 @@
+@page
+@model BeeMemoryBank.Web.Pages.DreamModel
+@{
+    ViewData["Title"] = "Dream";
+}
+
+@section HeadStyles {
+    <link rel="stylesheet" href="/css/dream.css" asp-append-version="true" />
+    <link rel="stylesheet" href="/css/dream-compare.css" asp-append-version="true" />
+}
+
+<partial name="_Sidebar" />
+<div id="page-content">
+<div class="main-content dream-scope">
+
+    <div class="dream-head">
+        <h1 class="dream-title"><sl-icon name="moon-stars"></sl-icon> Dream</h1>
+        <a class="dream-settings-link" href="/Admin/Dream"><sl-icon name="gear"></sl-icon> Settings</a>
+    </div>
+
+    @* ---- 1a. one advice, when the page is opened as /Dream?advice=<id> (the chat links back here) ---- *@
+    <section class="dream-section dream-focus" id="dream-focus" aria-labelledby="dream-focus-title" hidden>
+        <div class="dream-section-head">
+            <h2 id="dream-focus-title">The advice you came for</h2>
+            <sl-button id="dream-focus-all" size="small"><sl-icon slot="prefix" name="list-ul"></sl-icon> Show all advice</sl-button>
+        </div>
+        <div id="dream-focus-body" class="dream-cards"></div>
+    </section>
+
+    <p class="dream-intro">
+        Dream looks through your notes and leaves advice on keeping them in order: duplicates, notes in the wrong folder, tag variants, leftovers.
+        It never changes anything by itself. A change happens only when you press a button on a card.
+    </p>
+
+    <sl-details class="dream-more" summary="What Dream reads, what leaves this node, what the buttons do">
+        <h3>What it reads</h3>
+        <p>
+            Titles, folders, tags and the text of the notes on this node. Notes locked with a second password are never read. Folders you excluded in the
+            settings, and notes subscribed from other nodes, are skipped. How each rule decides, with its numbers: <a href="#" data-dream-open-rules>view all rules</a>.
+        </p>
+        <h3>What leaves this node</h3>
+        <p>
+            A run has two parts you choose on the start form. <strong>The built-in rules</strong> work here on this node and send nothing anywhere.
+            <strong>The AI model</strong> sends the text of your notes (all except those locked with a second password and those in excluded folders) to OpenRouter,
+            to the model chosen in the settings. With only the rules ticked, nothing leaves this node. The night run always uses the rules, and the model too when
+            it is turned on in the settings.
+        </p>
+        <h3>The buttons on a card</h3>
+        <ul>
+            <li><strong>Apply</strong> makes the change right away, with your own rights, through the ordinary services for notes, tags and folders: versions, the trash (30 days) and the activity log work as always. It asks first and says exactly what it is going to do.</li>
+            <li><strong>Open in AI chat</strong> opens the built-in chat in a new tab with this task as a draft. Nothing is sent until you press Run there, and the chat then asks you to confirm every change.</li>
+            <li><strong>Show prompt</strong> gives a ready text to give to your own agent. On advice that was already applied or dismissed it is still there, for reference.</li>
+            <li><strong>Dismiss</strong> hides the advice and remembers that you do not want it: this advice only, anything of this kind about the same note, in the same folder, or anywhere.</li>
+            <li><strong>Mark done</strong> is for something you did yourself.</li>
+        </ul>
+        <h3>The score and the limits</h3>
+        <p>
+            The score, 0 to 100, says how much the advice is worth doing: 80 and above is high, 60 to 79 is medium, lower is a weak signal. A run stops at the first of its
+            limits: the number of advice, the minutes, the model calls and the tokens. Only one run goes at a time, and it stops by itself if the vault is locked or a heavy
+            operation (a key change, a restore) begins. Advice that no longer fits what is in the notes is marked expired.
+        </p>
+        <p>
+            A <strong>trial run</strong> does not count: its advice stays out of the open list and the notes it looked at are not remembered as looked at. It is for comparing models:
+            under <em>Compare trial runs</em> two or three of them are laid side by side, with the models hidden until you ask to see them.
+        </p>
+        <p>
+            Runs, advice and dismissals are kept on this node only. They are not synchronised, not in snapshots and not in backups.
+            The schedule, the limits, the model, the excluded folders and the dismissals are in <a href="/Admin/Dream">the Dream settings</a>.
+        </p>
+    </sl-details>
+
+    @* ---- 2. the state of Dream ---- *@
+    <section class="card dream-state" id="dream-state" aria-label="State of Dream">
+        <div class="dream-state-main">
+            <div class="dream-state-text">
+                <div class="dream-state-title">
+                    <span id="dream-dot" class="dream-dot dream-dot-idle" aria-hidden="true"></span>
+                    <span id="dream-state-title">Loading...</span>
+                    <span id="dream-elapsed" class="dream-elapsed"></span>
+                </div>
+                <div id="dream-state-lines" class="dream-state-lines" role="status" aria-live="polite"></div>
+            </div>
+            <div class="dream-state-actions">
+                <sl-button id="dream-rules-open" size="medium" title="What every built-in rule and AI step looks for, how it decides, and its numbers">
+                    <sl-icon slot="prefix" name="book"></sl-icon> View all rules
+                </sl-button>
+                <sl-button id="dream-start" variant="primary" size="medium" disabled>
+                    <sl-icon slot="prefix" name="play-fill"></sl-icon> Start
+                </sl-button>
+                <sl-button id="dream-stop" variant="danger" outline size="medium" hidden>
+                    <sl-icon slot="prefix" name="stop-fill"></sl-icon> Stop
+                </sl-button>
+            </div>
+        </div>
+
+        <div id="dream-start-form" class="dream-start-form" hidden>
+            <fieldset class="dream-start-what">
+                <legend>What runs</legend>
+                <sl-checkbox id="dream-use-rules" size="small" checked>Built-in rules <span class="dream-start-hint">(here on this node)</span></sl-checkbox>
+                <div class="dream-start-model">
+                    <sl-checkbox id="dream-use-model" size="small">AI model: <span id="dream-model-label"></span></sl-checkbox>
+                    <div id="dream-model-why" class="dream-model-why" hidden></div>
+                </div>
+            </fieldset>
+            <sl-checkbox id="dream-trial" size="small">Trial run</sl-checkbox>
+            <sl-input id="dream-max-advice" type="number" min="0" max="1000" step="1" size="small" label="Advice, at most" inputmode="numeric"></sl-input>
+            <sl-input id="dream-max-minutes" type="number" min="0" max="1440" step="1" size="small" label="Minutes, at most" inputmode="numeric"></sl-input>
+            <p id="dream-start-reason" class="dream-start-reason" role="status" aria-live="polite" hidden></p>
+            <p id="dream-start-help" class="dream-start-help"></p>
+        </div>
+
+        <div id="dream-warnings" class="dream-warnings"></div>
+    </section>
+
+    @* ---- 3. the live feed of the run ---- *@
+    <section class="dream-section" id="dream-feed" aria-labelledby="dream-feed-title" hidden>
+        <div class="dream-section-head">
+            <h2 id="dream-feed-title">This run</h2>
+            <span id="dream-feed-meta" class="dream-meta"></span>
+        </div>
+        <div id="dream-activity" class="dream-activity" role="status" aria-live="polite">
+            <sl-spinner id="dream-activity-spinner"></sl-spinner>
+            <span id="dream-activity-text">Starting...</span>
+        </div>
+        <div id="dream-feed-list" class="dream-cards"></div>
+        <p id="dream-feed-empty" class="dream-empty">No advice yet. The cards appear here one by one as they are found.</p>
+    </section>
+
+    @* ---- 4. the open advice ---- *@
+    <section class="dream-section" id="dream-open" aria-labelledby="dream-open-title">
+        <div class="dream-section-head">
+            <h2 id="dream-open-title">Open advice <sl-badge id="dream-open-count" pill variant="neutral" hidden></sl-badge></h2>
+            <div class="dream-filters">
+                <sl-select id="dream-f-kind" size="small" value="all" aria-label="Kind of advice"></sl-select>
+                <sl-select id="dream-f-score" size="small" value="0" aria-label="Score">
+                    <sl-option value="0">Any score</sl-option>
+                    <sl-option value="80">High, 80 and above</sl-option>
+                    <sl-option value="60">Medium and above, 60+</sl-option>
+                </sl-select>
+                <sl-select id="dream-f-sort" size="small" value="score" aria-label="Order">
+                    <sl-option value="score">Best first</sl-option>
+                    <sl-option value="date">Newest first</sl-option>
+                </sl-select>
+                <sl-icon-button id="dream-open-refresh" name="arrow-clockwise" label="Reload the list"></sl-icon-button>
+            </div>
+        </div>
+        <div id="dream-open-list" class="dream-cards"></div>
+        <div id="dream-open-empty" class="dream-empty" hidden></div>
+        <div id="dream-open-pager" class="dream-pager" hidden>
+            <span id="dream-open-pager-info" class="dream-meta"></span>
+            <div class="dream-pager-buttons">
+                <sl-button id="dream-open-prev" size="small">Prev</sl-button>
+                <sl-button id="dream-open-next" size="small">Next</sl-button>
+            </div>
+        </div>
+    </section>
+
+    @* ---- 5. the history of the runs ---- *@
+    <section class="dream-section" id="dream-history-section" aria-labelledby="dream-history-title">
+        <div class="dream-section-head">
+            <h2 id="dream-history-title">History</h2>
+            <div class="dream-filters">
+                <sl-select id="dream-h-mode" size="small" value="all" aria-label="Which runs">
+                    <sl-option value="all">All runs</sl-option>
+                    <sl-option value="normal">Night and manual</sl-option>
+                    <sl-option value="trial">Trial runs</sl-option>
+                </sl-select>
+                <sl-icon-button id="dream-history-refresh" name="arrow-clockwise" label="Reload the history"></sl-icon-button>
+            </div>
+        </div>
+        <div id="dream-history" class="dream-history"></div>
+        <div id="dream-history-empty" class="dream-empty" hidden></div>
+        <div id="dream-history-pager" class="dream-pager" hidden>
+            <span id="dream-history-pager-info" class="dream-meta"></span>
+            <div class="dream-pager-buttons">
+                <sl-button id="dream-history-prev" size="small">Prev</sl-button>
+                <sl-button id="dream-history-next" size="small">Next</sl-button>
+            </div>
+        </div>
+    </section>
+
+    @* ---- 6. comparing trial runs ---- *@
+    <section class="dream-section" id="dream-compare-section" aria-labelledby="dream-compare-title">
+        <div class="dream-section-head">
+            <h2 id="dream-compare-title">Compare trial runs</h2>
+            <div class="dream-filters">
+                <sl-switch id="dream-cmp-reveal" size="small">Show model names</sl-switch>
+                <sl-icon-button id="dream-cmp-refresh" name="arrow-clockwise" label="Reload the trial runs and the table"></sl-icon-button>
+            </div>
+        </div>
+        <p class="dream-cmp-intro">
+            Tick two or three trial runs and press Compare: one table says, for every note or folder the runs looked at, what each run made of it. The runs are lettered
+            A, B, C in a random order and the names of their models stay hidden until you turn on <em>Show model names</em>, so you can judge what they found without knowing who found it.
+            Where the runs disagree the row is marked. The table is built from the log of each run, which is kept for seven days.
+        </p>
+        <div id="dream-cmp-picker" class="dream-cmp-picker"></div>
+        <div class="dream-cmp-actions">
+            <sl-button id="dream-cmp-go" variant="primary" size="small" disabled>
+                <sl-icon slot="prefix" name="columns-gap"></sl-icon> Compare
+            </sl-button>
+            <sl-button id="dream-cmp-latest" size="small" hidden>Tick the latest runs</sl-button>
+            <span id="dream-cmp-hint" class="dream-cmp-hint" role="status" aria-live="polite"></span>
+        </div>
+        <div id="dream-cmp-tools" class="dream-cmp-tools" hidden>
+            <sl-select id="dream-cmp-filter" size="small" value="all" aria-label="Which candidates to show"></sl-select>
+            <sl-select id="dream-cmp-sort" size="small" value="order" aria-label="Order of the candidates"></sl-select>
+            <sl-button id="dream-cmp-shuffle" size="small" title="Put the runs in a different order under the letters">
+                <sl-icon slot="prefix" name="shuffle"></sl-icon> Shuffle the columns
+            </sl-button>
+        </div>
+        <div id="dream-cmp-result" class="dream-cmp-result">
+            <div id="dream-cmp-summary"></div>
+            <div id="dream-cmp-rows"></div>
+        </div>
+    </section>
+
+</div>
+</div>
+
+@* Apply: says exactly what is going to change, and asks. *@
+<sl-dialog id="dlg-dream-apply" label="Apply this advice?">
+    <div id="dream-apply-body"></div>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-dream-apply">Cancel</sl-button>
+    <sl-button id="dream-apply-confirm" slot="footer" variant="primary">Apply</sl-button>
+</sl-dialog>
+
+@* Dismiss: why (optional), and how far "do not suggest this again" reaches. The choices are built by the script from the card. *@
+<sl-dialog id="dlg-dream-dismiss" label="Dismiss this advice">
+    <div id="dream-dismiss-title" class="dream-dialog-title"></div>
+    <sl-radio-group id="dream-dismiss-scope" label="Do not suggest again" value="advice"></sl-radio-group>
+    <sl-select id="dream-dismiss-expiry" label="For how long" size="small" value="180" style="margin-top:12px;">
+        <sl-option value="180">For 180 days</sl-option>
+        <sl-option value="never">For good</sl-option>
+    </sl-select>
+    <sl-textarea id="dream-dismiss-reason" label="Why (optional)" rows="2" resize="auto" maxlength="500" style="margin-top:12px;"></sl-textarea>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-dream-dismiss">Cancel</sl-button>
+    <sl-button id="dream-dismiss-confirm" slot="footer" variant="primary">Dismiss</sl-button>
+</sl-dialog>
+
+@* Show prompt: the text for the person's own AI agent, with a Copy button. pages/dream-handoff.js fills it (the text is put in as the value of the field, never as markup). *@
+<sl-dialog id="dlg-dream-prompt" label="Prompt for your own AI" class="dream-prompt-dialog">
+    <div id="dream-prompt-title" class="dream-dialog-title"></div>
+    <div id="dream-prompt-closed" class="dream-prompt-closed" role="note" hidden></div>
+    <p class="dream-prompt-intro">
+        Give this text to the AI agent that works with this memory bank (over MCP). It names what to do, and when to stop if a note has changed since the advice was made.
+        It holds no text that a model wrote, and nothing changes until your agent acts. Your agent's own permissions apply.
+    </p>
+    <sl-textarea id="dream-prompt-text" class="dream-prompt-text" readonly rows="14" resize="vertical" spellcheck="false" aria-label="The prompt"></sl-textarea>
+    <div id="dream-prompt-note" class="dream-meta" role="status" aria-live="polite"></div>
+    <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-dream-prompt">Close</sl-button>
+    <sl-button id="dream-prompt-copy" slot="footer" variant="primary"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy</sl-button>
+</sl-dialog>
+
+@* View all rules: every built-in rule and AI step, described with the numbers the node really uses (GET /rulebook). Large, scrolls inside. *@
+<sl-dialog id="dlg-dream-rules" label="How Dream finds advice" class="dream-rules-dialog">
+    <div id="dream-rules-body" class="dream-rules-body"></div>
+    <sl-button slot="footer" variant="primary" data-dlg-cancel="dlg-dream-rules">Close</sl-button>
+</sl-dialog>
+
+@section Scripts {
+    <script src="/js/pages/dream-model.js" asp-append-version="true"></script>
+    <script src="/js/pages/dream.js" asp-append-version="true"></script>
+    <script src="/js/pages/dream-handoff.js" asp-append-version="true"></script>
+    <script src="/js/pages/dream-compare-model.js" asp-append-version="true"></script>
+    <script src="/js/pages/dream-compare.js" asp-append-version="true"></script>
+}

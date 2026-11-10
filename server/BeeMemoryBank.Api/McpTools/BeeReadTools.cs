@@ -126,8 +126,10 @@ public class BeeReadTools(
         "Get an article (full body by default). Pass content=false for metadata only.\n" +
         "Returns JSON: { id, title, treePath, tags, relatedCount, relatedStrength, createdAt, updatedAt" +
         "[, content][, files] }. 'tags' is a string array of tag names on the article. 'relatedCount' = how many " +
-        "other articles share at least one tag with this one; 'relatedStrength' = total sum of shared-tag " +
-        "counts across all related articles. 'files' is present only when the article has attached files " +
+        "other articles share at least one RARE tag with this one (a tag carried by many articles links nothing " +
+        "and is not counted); 'relatedStrength' = total number of rare shared tags across those articles. Both are " +
+        "a cheap tags-only summary; bee_get_related gives the ranked list, which also uses meaning. " +
+        "'files' is present only when the article has attached files " +
         "(images and attachments), also with content=false: [{ mediaId, fileName, contentType, sizeBytes, " +
         "kind ('image' or 'attachment'), createdAt }] — metadata only, never the file bytes; fetch one with bee_get_file.\n" +
         "Soft-deleted articles return \"Error: article {id} was deleted\" (distinct from " +
@@ -165,9 +167,7 @@ public class BeeReadTools(
 
         var article = gate.Article!;
         var tags = await conceptTagRepo.GetByArticleIdAsync(id);
-        var related = await conceptTagRepo.GetRelatedArticlesAsync(id);
-        var relatedCount = related.Count;
-        var relatedStrength = related.Sum(r => r.Strength);
+        var (relatedCount, relatedStrength) = await conceptTagRepo.GetRelatedTagSummaryAsync(id);
 
         switch (gate.Status)
         {

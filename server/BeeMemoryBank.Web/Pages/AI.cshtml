@@ -6,6 +6,7 @@
 
 @section HeadStyles {
     <link rel="stylesheet" href="/css/chat.css" asp-append-version="true" />
+    <link rel="stylesheet" href="/css/ai-dream-draft.css" asp-append-version="true" />
     <style>
         /* The AI page uses its own conversation-history sidebar (#chat-sidebar) instead of the
            folder tree (#app-sidebar). We still RENDER <partial name="_Sidebar" /> below (just
@@ -203,5 +204,7 @@
 </div>
 
 <script src="/js/pages/ai.js" asp-append-version="true"></script>
+@* The draft that "Open in AI chat" on the Dream page brings (/AI?dreamAdvice=<id>); chat.js starts it, so it comes first. Not on the homepage chat. *@
+<script src="/js/pages/ai-dream-draft.js" asp-append-version="true"></script>
 <script src="/js/chat.js" asp-append-version="true"></script>
 </div>

@@ -56,7 +56,7 @@ public class PendingEmbeddingProcessorTests : SyncTestFixture
         var article = await ArticleService.CreateAsync("Test Article", "/Path", [], "Content");
 
         var conceptTagRepo = new BeeMemoryBank.Storage.Sqlite.ConceptTagRepository(Factory, new CallerScopeHolder());
-        await conceptTagRepo.AddToArticleAsync(article.Id, new List<string> { "TestTag" });
+        await conceptTagRepo.SetForArticleAsync(article.Id, new List<string> { "TestTag" });
 
         var scopeFactory = _serviceProvider.GetRequiredService<IServiceScopeFactory>();
         var processor = new PendingEmbeddingProcessor(scopeFactory, NullLogger<PendingEmbeddingProcessor>.Instance);

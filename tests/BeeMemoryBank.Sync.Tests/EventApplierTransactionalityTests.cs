@@ -434,14 +434,13 @@ internal sealed class FailingConceptTagRepository(IConceptTagRepository inner) :
     public Task<List<ConceptTagInfo>> GetAllAsync() => inner.GetAllAsync();
     public Task<List<string>> GetByArticleIdAsync(Guid articleId, IDbTransaction? transaction = null) => inner.GetByArticleIdAsync(articleId, transaction);
     public Task<Dictionary<Guid, List<string>>> GetByArticleIdsAsync(IEnumerable<Guid> articleIds) => inner.GetByArticleIdsAsync(articleIds);
-    public Task<List<RelatedArticle>> GetRelatedArticlesAsync(Guid articleId) => inner.GetRelatedArticlesAsync(articleId);
+    public Task<List<RelatedArticle>> GetRelatedArticlesAsync(Guid articleId, int limit = RelatedArticle.DefaultLimit, bool includeMeaning = true) => inner.GetRelatedArticlesAsync(articleId, limit, includeMeaning);
+    public Task<(int Count, int SharedTagTotal)> GetRelatedTagSummaryAsync(Guid articleId) => inner.GetRelatedTagSummaryAsync(articleId);
     public Task<List<(Guid Id, string Title, string TreePath)>> SearchByConceptAsync(string concept) => inner.SearchByConceptAsync(concept);
     public Task<List<ConceptTagInfo>> ListAsync(string? filter, int limit, int offset = 0) => inner.ListAsync(filter, limit, offset);
     public Task<List<ConceptTagWithEmbedding>> GetWithEmbeddingsAsync() => inner.GetWithEmbeddingsAsync();
     public Task<List<ConceptGraphEdge>> GetGraphDataAsync() => inner.GetGraphDataAsync();
     public Task<List<ConceptGraphEdge>> GetNeighborGraphAsync(string tag) => inner.GetNeighborGraphAsync(tag);
-    public Task AddToArticleAsync(Guid articleId, List<string> conceptNames) => inner.AddToArticleAsync(articleId, conceptNames);
-    public Task RemoveFromArticleAsync(Guid articleId, string conceptName) => inner.RemoveFromArticleAsync(articleId, conceptName);
     public Task RenameAsync(string name, string newName) => inner.RenameAsync(name, newName);
     public Task MergeAsync(string source, string target) => inner.MergeAsync(source, target);
     public Task DeleteAsync(string name) => inner.DeleteAsync(name);

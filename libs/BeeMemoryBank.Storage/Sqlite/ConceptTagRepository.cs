@@ -7,10 +7,15 @@ using Dapper;
 
 namespace BeeMemoryBank.Storage.Sqlite;
 
-public partial class ConceptTagRepository(DbConnectionFactory factory, CallerScopeHolder scopeHolder)
-    : BaseRepository(factory), IConceptTagRepository
+public partial class ConceptTagRepository(
+    DbConnectionFactory factory,
+    CallerScopeHolder scopeHolder,
+    EmbeddingVectorCache? vectorCache = null) : BaseRepository(factory), IConceptTagRepository
 {
     private readonly CallerScopeHolder _holder = scopeHolder;
+
+    // Only the related-articles lookup reads vectors; see ConceptTagRepository.Related.cs.
+    private EmbeddingVectorCache? _vectorCache = vectorCache;
 
     public async Task<List<ConceptTagInfo>> GetAllAsync()
     {
@@ -108,45 +113,6 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
         }
     }
 
-    public async Task<List<RelatedArticle>> GetRelatedArticlesAsync(Guid articleId)
-    {
-        using var conn = OpenConnection();
-
-        var rows = (await conn.QueryAsync<RelatedArticleRow>(
-            @"SELECT DISTINCT a.id AS ArticleId, a.title AS Title, COALESCE(f.path, '/') AS TreePath, ct.name AS ConceptName
-              FROM tbl_article_concept_tag act1
-              JOIN tbl_article_concept_tag act2 ON act1.concept_tag_id = act2.concept_tag_id
-              JOIN tbl_article a ON a.id = act2.article_id
-              LEFT JOIN tbl_folder f ON f.id = a.folder_id
-              JOIN tbl_concept_tag ct ON ct.id = act1.concept_tag_id
-              WHERE act1.article_id = @articleId
-                AND act2.article_id != @articleId
-                AND a.status = 'A'",
-            new { articleId })).ToList();
-
-        if (rows.Count == 0) return [];
-
-        var scope = _holder.Scope;
-        return rows
-            .Where(r => scope.IsSuperadmin || !scope.IsAccessDenied(r.TreePath))
-            .GroupBy(r => r.ArticleId)
-            .Select(g =>
-            {
-                var first = g.First();
-                var concepts = g.Select(r => r.ConceptName).Distinct().ToList();
-                return new RelatedArticle
-                {
-                    Id = Guid.Parse(first.ArticleId),
-                    Title = first.Title,
-                    TreePath = first.TreePath,
-                    SharedConcepts = concepts,
-                    Strength = concepts.Count
-                };
-            })
-            .OrderByDescending(r => r.Strength)
-            .ToList();
-    }
-
     public async Task<List<(Guid Id, string Title, string TreePath)>> SearchByConceptAsync(string concept)
     {
         using var conn = OpenConnection();
@@ -196,7 +162,17 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
                 new { pattern })).ToList();
         }
 
-        return AggregateByScope(rows).Skip(offset).Take(limit).ToList();
+        var tags = AggregateByScope(rows);
+
+        // Without a filter the list is "the top tags", as bee_list_tags promises: busiest first, the name only
+        // breaks ties. A filtered list keeps the alphabetical order of the query.
+        if (string.IsNullOrWhiteSpace(filter))
+            tags = tags
+                .OrderByDescending(t => t.ArticleCount)
+                .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+        return tags.Skip(offset).Take(limit).ToList();
     }
 
     public async Task<List<ConceptTagWithEmbedding>> GetWithEmbeddingsAsync()
@@ -214,43 +190,6 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
             });
         }
         return results;
-    }
-
-    public async Task AddToArticleAsync(Guid articleId, List<string> conceptNames)
-    {
-        using var conn = OpenConnection();
-        using var tx = conn.BeginTransaction();
-
-        foreach (var name in conceptNames.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            await conn.ExecuteAsync(
-                "INSERT OR IGNORE INTO tbl_concept_tag (name) VALUES (@name)",
-                new { name }, tx);
-
-            var id = await conn.QuerySingleAsync<int>(
-                "SELECT id FROM tbl_concept_tag WHERE name = @name COLLATE NOCASE",
-                new { name }, tx);
-
-            await conn.ExecuteAsync(
-                "INSERT OR IGNORE INTO tbl_article_concept_tag (article_id, concept_tag_id) VALUES (@articleId, @id)",
-                new { articleId, id }, tx);
-        }
-
-        tx.Commit();
-    }
-
-    public async Task RemoveFromArticleAsync(Guid articleId, string conceptName)
-    {
-        using var conn = OpenConnection();
-        using var tx = conn.BeginTransaction();
-
-        await conn.ExecuteAsync(
-            @"DELETE FROM tbl_article_concept_tag
-              WHERE article_id = @articleId
-                AND concept_tag_id = (SELECT id FROM tbl_concept_tag WHERE name = @conceptName COLLATE NOCASE)",
-            new { articleId, conceptName }, tx);
-
-        tx.Commit();
     }
 
     public async Task RenameAsync(string name, string newName)
@@ -389,14 +328,6 @@ public partial class ConceptTagRepository(DbConnectionFactory factory, CallerSco
         public string Name { get; set; } = "";
         public string? ArticleId { get; set; }
         public string? TreePath { get; set; }
-    }
-
-    private sealed class RelatedArticleRow
-    {
-        public string ArticleId { get; set; } = "";
-        public string Title { get; set; } = "";
-        public string TreePath { get; set; } = "";
-        public string ConceptName { get; set; } = "";
     }
 
     private sealed class ArticleSearchRow

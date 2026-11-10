@@ -1,0 +1,133 @@
+/* The draft that "Open in AI chat" on the Dream page brings to /AI (wwwroot/js/pages/ai-dream-draft.js), the notice that takes its place when the advice
+   is closed, and the line above the composer after Edit. Only the theme's own colours are used, so every theme, light or dark, fits. */
+
+/* On the side of the person's own messages, like the message it will become; dashed, because it has not been sent. */
+body.ai-chat-page .chat-dream-wrap {
+    display: flex;
+    flex-direction: row-reverse;
+    margin-bottom: 12px;
+}
+body.ai-chat-page .chat-dream-card {
+    max-width: 80%;
+    min-width: 0;
+    margin: 0 8px 0 0;
+    padding: 10px 14px 12px;
+    border: 1px dashed var(--accent);
+    overflow-wrap: anywhere;
+}
+body.ai-chat-page .chat-dream-notice {
+    border-style: solid;
+    border-color: var(--border);
+    border-left: 4px solid var(--sl-color-warning-500, #d97706);
+}
+body.ai-chat-page .chat-dream-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+}
+body.ai-chat-page .chat-dream-notice .chat-dream-head {
+    color: var(--text-secondary);
+}
+body.ai-chat-page .chat-dream-about {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 12px;
+    margin-bottom: 8px;
+    font-size: 0.85rem;
+}
+body.ai-chat-page .chat-dream-about-label {
+    color: var(--text-secondary);
+}
+body.ai-chat-page .chat-dream-title {
+    font-weight: 600;
+}
+body.ai-chat-page .chat-dream-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.82rem;
+    white-space: nowrap;
+}
+/* The task as it will be sent: every line and space of it, readable like any message (the conversation scrolls, not the draft). */
+body.ai-chat-page .chat-dream-text {
+    white-space: pre-wrap;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+body.ai-chat-page .chat-dream-message {
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+body.ai-chat-page .chat-dream-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+body.ai-chat-page .chat-dream-hint {
+    margin-top: 8px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+}
+body.ai-chat-page .chat-dream-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+}
+
+/* Above the composer while it holds the task after Edit: which advice it is for, the way back, and the x that makes it an ordinary message. */
+body.ai-chat-page .chat-dream-link {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin: 0 8px 6px;
+    padding: 4px 6px 4px 12px;
+    border: 1px dashed var(--accent);
+    border-radius: 14px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+body.ai-chat-page .chat-dream-link > sl-icon {
+    color: var(--accent);
+}
+body.ai-chat-page .chat-dream-link-text {
+    flex: 1 1 14rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+body.ai-chat-page .chat-dream-link .bmb-busy-result-host {
+    flex-basis: 100%;
+}
+
+/* While the composer holds the task from Dream (Edit puts the whole of it there; ai-dream-draft.js sets the class then and takes it away with the task),
+   it grows only up to a part of the window and the rest scrolls inside it. An ordinary message grows the composer as it always did. */
+body.ai-chat-page #chat-input.chat-dream-task::part(textarea) {
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
+/* A phone: the draft takes the whole width of the conversation. */
+@media (max-width: 719px) {
+    body.ai-chat-page .chat-dream-card {
+        max-width: 100%;
+        margin-right: 0;
+    }
+    body.ai-chat-page .chat-dream-link {
+        margin: 0 0 6px;
+    }
+}

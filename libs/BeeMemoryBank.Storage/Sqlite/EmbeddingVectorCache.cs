@@ -482,6 +482,106 @@ public sealed class EmbeddingVectorCache
         }
 
         /// <summary>
+        /// The articles whose vectors are unusually close to <paramref name="articleId"/>'s, best
+        /// first: cosine similarity to every OTHER article that has a real vector, standardised
+        /// against that article's own similarity distribution (<c>Z = (sim - mean) / std</c>), keeping
+        /// the <paramref name="topK"/> most similar ones with <c>Z &gt;= minZ</c>.
+        /// </summary>
+        /// <remarks>
+        /// The standardisation is the point: the multilingual e5 vectors are compressed into the top
+        /// of the cosine scale (unrelated notes already score 0.75+), so a raw similarity cut-off
+        /// means a different thing for every article and every vault; "how far above this article's
+        /// own typical neighbour" does not. The distribution excludes the article itself and every
+        /// zero-norm slot (a protected article stores an empty projection, an article still waiting
+        /// for its embedding has none), so neither skews the mean.
+        /// Empty when the article has no vector in this snapshot (no projection yet, protected, not
+        /// active), when fewer than two other vectors exist, or when every similarity is identical
+        /// (std = 0: nothing stands out). Pure function over the immutable snapshot.
+        /// </remarks>
+        public List<(Guid Id, float Similarity, float Z)> GetNeighbours(Guid articleId, int topK, float minZ)
+        {
+            var result = new List<(Guid Id, float Similarity, float Z)>();
+            if (topK <= 0 || _dimension == 0)
+            {
+                return result;
+            }
+
+            int self = Array.IndexOf(_ids, articleId);
+            if (self < 0 || _norms[self] == 0f)
+            {
+                return result;
+            }
+
+            int count = _ids.Length;
+            ReadOnlySpan<float> query = _vectors.AsSpan(self * _dimension, _dimension);
+            float queryNorm = _norms[self];
+
+            var sims = new float[count];
+            var valid = new bool[count];
+            int n = 0;
+            double sum = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (i == self || _norms[i] == 0f)
+                {
+                    continue;
+                }
+
+                float sim = TensorPrimitives.Dot(query, _vectors.AsSpan(i * _dimension, _dimension)) / (queryNorm * _norms[i]);
+                sims[i] = sim;
+                valid[i] = true;
+                sum += sim;
+                n++;
+            }
+
+            if (n < 2)
+            {
+                return result;
+            }
+
+            double mean = sum / n;
+            double squares = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (valid[i])
+                {
+                    double d = sims[i] - mean;
+                    squares += d * d;
+                }
+            }
+
+            double std = Math.Sqrt(squares / n);
+            if (std < 1e-6)
+            {
+                return result;
+            }
+
+            var picked = new List<int>();
+            for (int i = 0; i < count; i++)
+            {
+                if (valid[i] && (sims[i] - mean) / std >= minZ)
+                {
+                    picked.Add(i);
+                }
+            }
+
+            // Most similar first; the unique index breaks ties, so the order is total and stable.
+            picked.Sort((a, b) =>
+            {
+                int c = sims[b].CompareTo(sims[a]);
+                return c != 0 ? c : a.CompareTo(b);
+            });
+
+            for (int k = 0; k < picked.Count && k < topK; k++)
+            {
+                int i = picked[k];
+                result.Add((_ids[i], sims[i], (float)((sims[i] - mean) / std)));
+            }
+
+            return result;
+        }
+
+        /// <summary>
         /// Cosine score for every candidate in this snapshot, not just the top-K —
         /// <see cref="Storage.Sqlite.ArticleChunkEmbeddingRepository"/>-backed chunk scoring needs
         /// the full-document score for every article that has no chunk rows yet (the "old vectors

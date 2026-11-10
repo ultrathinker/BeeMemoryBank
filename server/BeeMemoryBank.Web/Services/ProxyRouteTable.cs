@@ -184,6 +184,12 @@ public static class ProxyRouteTable
         // Chat attachments are user-supplied bytes like media: same sandbox when opened directly.
         ["chat/attachments"] = new("/api/chat/attachments", [new("GET", null)], ProxyRouteFlags.UserContent),
 
+        // ── Dream (plan 3.8): the Dream page and Admin -> Dream. The API group is superadmin and never an agent; every
+        //    call that changes something carries the page's anti-forgery token (the flag skips GET). ──
+        ["dream"] = new("/api/dream",
+            [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin), new("PUT", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)],
+            ProxyRouteFlags.RequireAntiforgery),
+
         // ── User & role administration (superadmin; /me/* password change is per-user) ──
         ["users/me/change-password"] = new("/api/users/me/change-password", [new("POST", null)]),
         // The Profile page's soft "Add a password hint": the caller's own row only.

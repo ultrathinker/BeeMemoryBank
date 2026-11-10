@@ -479,6 +479,71 @@ public partial class ArticleService(
         return count;
     }
 
+    /// <summary>
+    /// Adds tags to the article's CURRENT tag set, reading and writing under one lock — the MCP tool
+    /// <c>bee_add_tags</c>. See <see cref="AppendAsync"/> for why a caller cannot do this itself.
+    ///
+    /// <para>
+    /// A real change is an ordinary <see cref="UpdateCoreAsync"/>: the new tag set, the row's new version and
+    /// the <c>article_update</c> event (carrying the FULL set) land in one transaction, and the repository's
+    /// read-only-folder guard runs. Tags are part of the state a peer rebuilds from events, so a tag written
+    /// any other way exists on one node only and is wiped by the next <c>article_update</c> from another.
+    /// Two callers adding to one article at once both end up in the set: the second reads what the first wrote.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// How many of <paramref name="names"/> were new to the article. Blank names, repeats within the input
+    /// (case-insensitive) and tags the article already has do not count. Zero means the article was left
+    /// completely untouched — no event, no version, no <c>updatedAt</c> change.
+    /// </returns>
+    /// <exception cref="KeyNotFoundException">The article does not exist or is not visible to the caller.</exception>
+    public async Task<int> AddTagsAsync(Guid id, IEnumerable<string> names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+
+        // First, so that nothing about an article the caller may not see is read: the tag tables are not scope-filtered.
+        if (await articleRepo.GetByIdAsync(id) == null) throw new KeyNotFoundException($"Article {id} not found.");
+
+        var current = await conceptTagService.GetByArticleIdAsync(id);
+        var present = new HashSet<string>(current, StringComparer.OrdinalIgnoreCase);
+        // HashSet.Add is false for a name already there, so this also drops repeats within the input.
+        var added = names.Where(n => !string.IsNullOrWhiteSpace(n)).Where(present.Add).ToList();
+        if (added.Count == 0) return 0;
+
+        await UpdateCoreAsync(id, null, null, [.. current, .. added], null, null, false, false);
+        return added.Count;
+    }
+
+    /// <summary>
+    /// Removes one tag (case-insensitive) from the article's current tag set, under one lock — the MCP tool
+    /// <c>bee_remove_tag</c>. A real removal is an ordinary <see cref="UpdateCoreAsync"/> carrying the remaining
+    /// set; see <see cref="AddTagsAsync"/> for why. The tag stays in the vocabulary.
+    /// </summary>
+    /// <returns>
+    /// Whether the article had the tag. False means it was left completely untouched — no event, no version,
+    /// no <c>updatedAt</c> change.
+    /// </returns>
+    /// <exception cref="KeyNotFoundException">The article does not exist or is not visible to the caller.</exception>
+    public async Task<bool> RemoveTagAsync(Guid id, string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        // Before the article lock, always: a rotation waits for the scopes in flight and holds new ones back (spec 4.4).
+        using var authoring = await eventLogger.BeginAuthoringAsync();
+        using var _ = await ArticleWriteLock.AcquireAsync(id);
+
+        if (await articleRepo.GetByIdAsync(id) == null) throw new KeyNotFoundException($"Article {id} not found.");
+
+        var current = await conceptTagService.GetByArticleIdAsync(id);
+        var remaining = current.Where(t => !string.Equals(t, name, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (remaining.Count == current.Count) return false;
+
+        await UpdateCoreAsync(id, null, null, remaining, null, null, false, false);
+        return true;
+    }
+
     /// <summary>Soft-deletes an article.</summary>
     public async Task DeleteAsync(Guid id)
     {

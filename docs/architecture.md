@@ -58,9 +58,10 @@ BMB_API_URL=http://localhost:5300 ASPNETCORE_URLS=http://localhost:5301 ./BeeMem
 
 ```
 server/
-├── BeeMemoryBank.Api/       — REST API (32 endpoint groups) + MCP server
-│   ├── Endpoints/           — 38 files, 32 groups: Activity, Admin, Agent, Article, AutoUnlock, BeeImport, Chat (split across 7 files), Comment, Compaction, ConceptTag, Copy, DekRotation, Download, Folder, HardDelete, Init, Join, Key, Media, ObsidianImport, RemoteAccount, RemoteAuth, Restriction, Search, Session, Snapshot, Sync, Tree, Update, User, Version, Whitelist
+├── BeeMemoryBank.Api/       — REST API (33 endpoint groups) + MCP server
+│   ├── Endpoints/           — 44 files, 33 groups: Activity, Admin, Agent, Article, AutoUnlock, BeeImport, Chat (split across 7 files), Comment, Compaction, ConceptTag, Copy, DekRotation, Dream (split across 6 files), Download, Folder, HardDelete, Init, Join, Key, Media, ObsidianImport, RemoteAccount, RemoteAuth, Restriction, Search, Session, Snapshot, Sync, Tree, Update, User, Version, Whitelist
 │   ├── McpTools/            — 7 tool groups: Search (2 tools), Read (8), Write (10), Session (2), Upload (2), Audit (1), Concept (8) — 33 tools total
+│   ├── Dream/               — sleep-time advice (docs/dream.md): Contracts, Storage (six tables in chat.db), Engine (runner, scheduler, corpus), Detectors (rules without a model), Model (OpenRouter client + pair/folder/tree tasks, versioned prompts in Dream/Prompts), Apply
 │   ├── Middleware/           — AgentAuthMiddleware (bearer → auto-unlock)
 │   ├── Services/            — SyncTokenStore, SnapshotService, HttpActorProvider, DekRotationService, LazySlotRewrapService
 │   └── Models/              — DTOs for endpoints
@@ -217,6 +218,7 @@ This is a deliberate design choice. It rules out partial-sync topologies (a work
 | Content-addressed blob store | Article/media ciphertext lives in `tbl_blob`, addressed by the SHA-256 of its own bytes; sync events carry `ciphertext_sha256` instead of embedding the ciphertext itself (the hash sits inside the Ed25519-signed payload, so the signature still transitively covers the body). Whichever side opened the sync connection pushes/pulls the blobs it's missing over dedicated endpoints; an hourly GC sweeps unreferenced blobs after a grace window |
 | Content authority ≠ cluster-state authority on join | `POST /api/join` grants a new peer `is_superadmin = 0` by default — it can read/write/sync content like any node, but cannot revoke peers, hard-delete content network-wide, or trigger a network restore until explicitly promoted (`PUT /api/whitelist/{nodeId}/superadmin`). `tbl_whitelist` itself is version-stamped like other replicated tables, so a stale `whitelist_add` from an out-of-date peer can't resurrect a node that was since revoked |
 | One node-side public surface | `PublicSurface` is the single, code-level list of what a caller without `BMB_INTERNAL_KEY` may reach; a reverse proxy (Apache, the desktop node's YARP front) is an outer layer on top of it, not the only gate. A single `RequireSuperadmin()` endpoint filter replaces what used to be four different ad-hoc ways of writing the same role check |
+| Dream is node-local and inert until a person clicks | The sleep-time advice pass (docs/dream.md) writes only its own six `dream_*` tables in `chat.db` — sealed columns under the chat key, never in a snapshot, never in a sync event, absent on a blind node — so its records survive a DEK rotation and never reach another node. It changes content only through the ordinary article/tag/folder services, in the HTTP session of the superadmin who pressed Apply, under that person's access scope; the model, when switched on, has a fixed input, a schema-checked JSON answer, a per-run budget, and no tools |
 
 ## New Models & Services
 

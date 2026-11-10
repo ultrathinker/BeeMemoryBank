@@ -17,6 +17,10 @@ api:Endpoints/Chat*
 api:Models/ChatModels.cs
 api:Helpers/ChatAccessEndpointFilter.cs
 
+# Dream (the sleep-time advice over the notes): a full node's feature over plaintext, sealed under the chat key
+api:Dream
+api:Endpoints/Dream*
+
 # the full node's own flows
 api:Services/RestoreInitiatorService.cs
 api:Services/DekRotationService*

@@ -49,6 +49,7 @@ public static class AdminRoutes
 
     public const string Agents = "/Admin/Agents";
     public const string AiChat = "/Admin/AiChat";
+    public const string Dream = "/Admin/Dream";
     public const string SearchDiagnostics = "/Admin/SearchDiagnostics";
     public const string TagGraph = "/Admin/TagGraph";
 
@@ -120,6 +121,8 @@ public static class AdminPageCatalog
             "The keys AI agents use to reach this vault: see when each was last used and revoke the ones you no longer trust."),
         new(AdminRoutes.AiChat, SearchAndAi, "chat-left-text", "AI / Chat",
             "The OpenRouter keys and models behind the built-in AI chat, and whether users may use it at all."),
+        new(AdminRoutes.Dream, SearchAndAi, "moon-stars", "Dream",
+            "When Dream looks through the notes, how much advice it may leave, whether it may use a model, and which folders it never reads."),
         new(AdminRoutes.SearchDiagnostics, SearchAndAi, "search", "Search diagnostics",
             "How fast searches are, how healthy the search index is, and the switch for meaning-based (semantic) search."),
         new(AdminRoutes.TagGraph, SearchAndAi, "share", "Tag graph",

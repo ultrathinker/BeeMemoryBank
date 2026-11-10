@@ -97,9 +97,7 @@ public sealed partial class ChatToolDispatcher
 
         var article = gate.Article!;
         var tags = await conceptTagService.GetByArticleIdAsync(id);
-        var related = await conceptTagService.GetRelatedArticlesAsync(id);
-        var relatedCount = related.Count;
-        var relatedStrength = related.Sum(r => r.Strength);
+        var (relatedCount, relatedStrength) = await conceptTagService.GetRelatedTagSummaryAsync(id);
 
         return gate.Status switch
         {

@@ -1,6 +1,9 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -85,6 +88,44 @@ public class ConceptTagSyncTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// The MCP tools were the last writer that left the tags behind: <c>bee_add_tags</c> wrote the tag tables of the
+    /// node the agent talked to and logged nothing (BMB-343), so the tag never left that node.
+    /// </summary>
+    [Fact]
+    public async Task TagsAddedThroughTheMcpTool_ReachThePeer_AndSurviveAnEditThere()
+    {
+        var id = await CreateAsync(_clientA, "Tagged by an agent", "/T", "body", ["base"]);
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA);
+
+        var result = await OnNodeAAsync(tools => tools.AddTags(id, ["agent-tag"]));
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA);
+
+        result.Should().Be("Added 1 tag(s) to article 'Tagged by an agent'.");
+        (await TagsOnAsync(_clientB, id)).Should().BeEquivalentTo("base", "agent-tag");
+
+        // The peer edits the title; its update carries its own view of the tags, which must now include the agent's.
+        (await _clientB.PutAsJsonAsync($"/api/articles/{id}", new { title = "Tagged by an agent, edited on B" }))
+            .EnsureSuccessStatusCode();
+        await SyncNodeWithAsync(_nodeA, _clientB, _nodeB);
+
+        (await TagsOnAsync(_clientA, id)).Should().BeEquivalentTo("base", "agent-tag");
+    }
+
+    [Fact]
+    public async Task ATagRemovedThroughTheMcpTool_IsGoneOnThePeerToo()
+    {
+        var id = await CreateAsync(_clientA, "Untagged by an agent", "/T", "body", ["keep", "drop"]);
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA);
+        (await TagsOnAsync(_clientB, id)).Should().BeEquivalentTo("keep", "drop");
+
+        var result = await OnNodeAAsync(tools => tools.RemoveTag(id, "drop"));
+        await SyncNodeWithAsync(_nodeB, _clientA, _nodeA);
+
+        result.Should().Be("Removed tag 'drop' from article 'Untagged by an agent'.");
+        (await TagsOnAsync(_clientB, id)).Should().BeEquivalentTo("keep");
+    }
+
+    /// <summary>
     /// The half that turned "tags don't propagate" into "tags disappear": once the peer holds a
     /// tag-less copy, its own update of that article pushes that empty set back and erases the
     /// tags where they were set.
@@ -103,6 +144,18 @@ public class ConceptTagSyncTests : IAsyncLifetime
     }
 
     // ─── helpers ─────────────────────────────────────────────────────────────
+
+    /// <summary>Runs an MCP tag tool the way the MCP endpoint would on node A, as a caller with no folder restrictions.</summary>
+    private async Task<string> OnNodeAAsync(Func<BeeConceptTools, Task<string>> call)
+    {
+        using var scope = _nodeA.Services.CreateScope();
+        var sp = scope.ServiceProvider;
+        sp.GetRequiredService<CallerScopeHolder>().Scope = SystemCallerScope.Instance;
+        var tools = new BeeConceptTools(
+            sp.GetRequiredService<ConceptTagService>(), sp.GetRequiredService<ArticleService>(),
+            new HttpContextAccessor(), sp.GetRequiredService<McpResponseManager>(), sp.GetRequiredService<SessionService>());
+        return await call(tools);
+    }
 
     private static async Task<Guid> CreateAsync(
         HttpClient client, string title, string treePath, string content, string[] conceptTags)

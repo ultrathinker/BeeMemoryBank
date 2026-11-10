@@ -1,0 +1,120 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.DreamModel
+
+@* Dream settings (plan 3.9) - superadmin-only (the whole area is). The form is read and saved by dream-admin.js through /api-proxy/dream (plan 3.8). *@
+@section About {
+    <p>
+        <strong>Dream</strong> (in the header, after Search) looks through the notes of this node and leaves advice on keeping them in order:
+        duplicates, notes in the wrong folder, tags spelled several ways, empty folders. It changes nothing by itself; every change is made by a
+        person pressing a button on the Dream page. This page decides what a run may do: when the nightly run is allowed, how much advice it may
+        leave, whether a model may take part, which folders Dream never reads, and what has been dismissed for good.
+    </p>
+    <p class="admin-warning">
+        <strong>With a model switched on, note content leaves this node.</strong> Dream sends the text of every note it looks at - all notes of the
+        node except those under a second password and those in the excluded folders below - through OpenRouter to the model chosen in the Model
+        section. With the model off, Dream works from local rules alone and nothing leaves the node.
+    </p>
+    <p>
+        The nightly schedule and these limits belong to <strong>this node alone</strong>: with several full nodes, turn the schedule on on one of
+        them, or each node will spend its own budget and keep its own list of advice. Dream runs only while the vault is unlocked; it never unlocks
+        anything itself.
+    </p>
+}
+
+<div id="dream-settings">
+    @* The script fills this when the node does not serve the Dream settings yet (it answers "not implemented"): the form then
+       shows the planned defaults and Save stays off until the node's Dream service arrives (package P0b of the plan). *@
+    <div id="dream-endpoint-note" hidden aria-live="polite"></div>
+
+    <h3 style="margin-bottom:12px;"><sl-icon name="moon-stars"></sl-icon> Schedule</h3>
+    <div class="card" style="padding:16px;max-width:720px;margin-bottom:24px;">
+        <sl-switch id="dream-schedule-enabled" size="small">Run nightly</sl-switch>
+        <p class="text-muted text-sm" style="margin:8px 0 16px 0;">
+            When it is on, Dream starts once a night inside the window below, if the vault is unlocked, nothing heavy is going on and the list of
+            open advice is not full.
+        </p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;">
+            <sl-input id="dream-schedule-start" size="small" label="Window opens at (node-local HH:mm)" placeholder="03:00"></sl-input>
+            <sl-input id="dream-schedule-window" type="number" min="15" max="720" size="small" label="Window length (minutes)"></sl-input>
+        </div>
+    </div>
+
+    <h3 style="margin-bottom:12px;"><sl-icon name="sliders"></sl-icon> Limits</h3>
+    <div class="card" style="padding:16px;max-width:720px;margin-bottom:24px;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;">
+            <sl-input id="dream-max-advice-scheduled" type="number" min="1" max="500" size="small"
+                      label="New advice per nightly run" help-text="10 by default; 50 and more is fine."></sl-input>
+            <sl-input id="dream-max-advice-manual" type="number" min="0" max="1000" size="small"
+                      label="New advice per manual run" help-text="0 = no limit."></sl-input>
+            <sl-input id="dream-max-open-advice" type="number" min="1" max="10000" size="small"
+                      label="Open advice before a nightly run is skipped" help-text="At this many undecided advice the night skips."></sl-input>
+            <sl-input id="dream-min-score" type="number" min="0" max="100" size="small"
+                      label="Lowest score kept (0-100)" help-text="Advice scoring below this is not kept."></sl-input>
+            <sl-input id="dream-manual-max-minutes" type="number" min="0" max="1440" size="small"
+                      label="Manual run time limit (minutes)" help-text="0 = no limit."></sl-input>
+            <sl-input id="dream-max-model-calls" type="number" min="1" max="10000" size="small"
+                      label="Model calls per run"></sl-input>
+            <sl-input id="dream-max-tokens" type="number" min="1000" max="100000000" size="small"
+                      label="Tokens per run (input + output)"></sl-input>
+        </div>
+        <p class="text-muted text-sm" style="margin:12px 0 0 0;">
+            The limits of a run are fixed when it starts: changing them here does not change a run that is going on.
+        </p>
+    </div>
+
+    <h3 style="margin-bottom:12px;"><sl-icon name="cpu"></sl-icon> Model</h3>
+    <div class="card" style="padding:16px;max-width:720px;margin-bottom:24px;">
+        <sl-switch id="dream-use-model" size="small">Use a model</sl-switch>
+        <p class="text-muted text-sm" style="margin:8px 0 16px 0;">
+            With it off, Dream runs on local rules alone and <strong>nothing leaves this node</strong>. With it on, every run also asks the model:
+            the text of every note it looks at - except the protected ones and the excluded folders below - goes through OpenRouter to the model
+            chosen here, and what the model advises is kept on this node like every other advice. OpenRouter keys and models are managed on the
+            <a href="/Admin/AiChat">AI / Chat</a> page.
+        </p>
+        <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Model for Dream</label>
+        <sl-select id="dream-analysis-model" size="small" style="max-width:360px;" hoist></sl-select>
+        <p id="dream-models-hint" class="text-muted text-sm" style="margin:8px 0 0 0;"></p>
+    </div>
+
+    <h3 style="margin-bottom:12px;"><sl-icon name="folder-x"></sl-icon> Excluded folders</h3>
+    <div class="card" style="padding:16px;max-width:720px;margin-bottom:24px;">
+        <p class="text-muted text-sm" style="margin:0 0 12px 0;">
+            Dream never reads these folders, sends their notes nowhere and never mentions them. One path per line, e.g. <code>/Imported</code>. The
+            node turns the paths into folders when you save; a path it does not know refuses the save.
+        </p>
+        <sl-textarea id="dream-excluded-folders" rows="4" placeholder="/Imported" style="max-width:480px;"></sl-textarea>
+    </div>
+
+    <div style="margin:0 0 32px 0;">
+        <sl-button id="btn-save-dream-settings" variant="primary" size="small">
+            <sl-icon slot="prefix" name="save"></sl-icon> Save settings
+        </sl-button>
+        <span id="dream-settings-updated" class="text-muted text-sm" style="margin-left:8px;"></span>
+    </div>
+
+    <h3 style="margin-bottom:8px;"><sl-icon name="x-circle"></sl-icon> Dismiss rules</h3>
+    <p class="text-muted text-sm" style="margin:0 0 8px 0;">
+        Dismissing advice can leave a rule that keeps it - or every advice of its kind - from coming back on later runs. Delete a rule here to let
+        Dream suggest it again.
+    </p>
+    <div class="card" style="padding:0;overflow:hidden;">
+        @* The rows are built by dream-admin.js; they carry the classes and the data-label of the stacked layout (site.css, Admin): below a card
+           of 560px a row stacks, nothing is hidden. *@
+        <table class="version-table admin-stack-sm" id="dream-rules">
+            <thead>
+                <tr>
+                    <th class="col-name">Created</th>
+                    <th>Scope</th>
+                    <th>Kind</th>
+                    <th>Applies to</th>
+                    <th>Reason</th>
+                    <th>Expires</th>
+                    <th class="col-actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="dream-rules-body">
+                <tr><td colspan="7" class="col-empty text-muted text-sm">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>

@@ -31,6 +31,12 @@
     <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
   </ItemGroup>
 
+  <!-- Dream's model prompts (plan 3.1): one Markdown file per prompt version under Dream/Prompts (pair-1.md, folder-1.md, tree-1.md), embedded under a fixed
+       name (DreamNames.PromptResourceName). A wildcard, so a new version needs no edit here. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Dream\Prompts\*.md" LogicalName="BeeMemoryBank.Api.Dream.Prompts.%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- Test-only seam: lets BeeMemoryBank.Integration.Tests call
        RestoreInitiatorService.DownloadFromWhitelistedSeederAsync directly, so it can drive the
        real V2 challenge/authenticate handshake against a real peer server without exercising the

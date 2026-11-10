@@ -170,35 +170,22 @@
 
     @if (Model.RelatedArticles.Count > 0)
     {
-        var totalRelated = Model.RelatedArticles.Count;
-        var relatedPageSize = 5;
-        var totalRelatedPages = (int)Math.Ceiling(totalRelated / (double)relatedPageSize);
         <div class="card mt-md">
             <h4 style="font-size:0.95rem;margin-bottom:14px;">
-                <sl-icon name="diagram-3"></sl-icon> Related Articles (<span id="related-total">@totalRelated</span>)
+                <sl-icon name="diagram-3"></sl-icon> Related Articles
             </h4>
             <div id="related-list">
-                @foreach (var rel in Model.RelatedArticles.OrderByDescending(r => r.Strength).Take(relatedPageSize))
+                @foreach (var rel in Model.RelatedArticles.OrderByDescending(r => r.Strength))
                 {
                     <div class="related-item" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--sl-color-neutral-200);">
                         <div>
                             <a href="/Article/View?id=@rel.Id" style="font-weight:500;">@rel.Title</a>
-                            <div style="font-size:0.78rem;color:var(--sl-color-neutral-500);">@string.Join(", ", rel.SharedConcepts)</div>
+                            <div style="font-size:0.78rem;color:var(--sl-color-neutral-500);">@string.Join(" · ", rel.Reasons ?? rel.SharedConcepts)</div>
                         </div>
-                        <sl-badge variant="neutral" pill>@rel.Strength</sl-badge>
+                        <sl-badge variant="@(rel.PossibleDuplicate ? "warning" : "neutral")" pill>@rel.Strength%</sl-badge>
                     </div>
                 }
             </div>
-            @if (totalRelatedPages > 1)
-            {
-                <div id="related-pager" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;">
-                    <span id="related-pager-info" style="font-size:0.85rem;color:var(--sl-color-neutral-500);">Page 1 of @totalRelatedPages · @totalRelated items</span>
-                    <div style="display:flex;gap:8px;">
-                        <sl-button id="related-prev" size="small" variant="default" disabled>Prev</sl-button>
-                        <sl-button id="related-next" size="small" variant="default">Next</sl-button>
-                    </div>
-                </div>
-            }
         </div>
     }
 
