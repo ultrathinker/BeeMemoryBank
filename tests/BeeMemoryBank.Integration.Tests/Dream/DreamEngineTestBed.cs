@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>What a test wants the training detector and the training model task to do. One per node.</summary>
 public sealed class DreamEngineScript

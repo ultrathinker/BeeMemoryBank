@@ -12,7 +12,7 @@ using Dapper;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// Package A1 on a node: Apply through the ordinary services as the person who pressed (the sync event and the /Activity

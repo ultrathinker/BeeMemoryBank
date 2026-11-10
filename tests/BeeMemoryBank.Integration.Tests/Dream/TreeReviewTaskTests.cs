@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
 using BeeMemoryBank.Api.Dream;
-using static BeeMemoryBank.Integration.Tests.Dream.TreeTestContext;
+using static BeeMemoryBank.Integration.Tests.TreeTestContext;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// tree_review (plan 3.7, package M2): the map of the tree the model is shown, the one candidate and when it is offered
@@ -414,22 +414,22 @@ public class TreeReviewTaskTests
     // ── What does not fit the map is dropped, alone ─────────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("folder not in the tree that was listed", """{"type":"merge_folders","from":"/Nowhere","into":"/Work/Alpha","score":50,"summary":"x"}""")]
-    [InlineData("folder not in the tree that was listed", """{"type":"merge_folders","from":"/Work/Beta","into":"/Work/../Secret","score":50,"summary":"x"}""")]
-    [InlineData("the top level cannot be merged", """{"type":"merge_folders","from":"/","into":"/Work/Alpha","score":50,"summary":"x"}""")]
-    [InlineData("the top level cannot be merged", """{"type":"merge_folders","from":"/Work/Beta","into":"/","score":50,"summary":"x"}""")]
-    [InlineData("same folder", """{"type":"merge_folders","from":"/Work/Beta","into":"/Work/Beta","score":50,"summary":"x"}""")]
-    [InlineData("target inside the source", """{"type":"merge_folders","from":"/Work","into":"/Work/Alpha","score":50,"summary":"x"}""")]
-    [InlineData("folder not in the tree that was listed", """{"type":"rename","path":"/Nowhere","newName":"X","score":50,"summary":"x"}""")]
-    [InlineData("the top level cannot be renamed", """{"type":"rename","path":"/","newName":"X","score":50,"summary":"x"}""")]
-    [InlineData("same name", """{"type":"rename","path":"/Work/Alpha","newName":"Alpha","score":50,"summary":"x"}""")]
-    [InlineData("name already taken", """{"type":"rename","path":"/Work/Alpha","newName":"Beta","score":50,"summary":"x"}""")]
-    [InlineData("name already taken", """{"type":"rename","path":"/Work/Alpha","newName":"beta","score":50,"summary":"x"}""")]
-    [InlineData("bad folder name", """{"type":"rename","path":"/Work/Alpha","newName":"A/B","score":50,"summary":"x"}""")]
-    [InlineData("bad folder name", """{"type":"rename","path":"/Work/Alpha","newName":"..","score":50,"summary":"x"}""")]
-    [InlineData("no folder in the tree that was listed", """{"type":"note","title":"T","paths":[],"score":50,"summary":"x"}""")]
-    [InlineData("no folder in the tree that was listed", """{"type":"note","title":"T","paths":["/Nowhere","/Work/../x"],"score":50,"summary":"x"}""")]
-    public async Task ASuggestionThatDoesNotFitTheMap_IsDroppedByReason_WithoutARetryOrAnyOfTheModelsWords(string reason, string suggestion)
+    [InlineData(1, "folder not in the tree that was listed", """{"type":"merge_folders","from":"/Nowhere","into":"/Work/Alpha","score":50,"summary":"x"}""")]
+    [InlineData(2, "folder not in the tree that was listed", """{"type":"merge_folders","from":"/Work/Beta","into":"/Work/../Secret","score":50,"summary":"x"}""")]
+    [InlineData(3, "the top level cannot be merged", """{"type":"merge_folders","from":"/","into":"/Work/Alpha","score":50,"summary":"x"}""")]
+    [InlineData(4, "the top level cannot be merged", """{"type":"merge_folders","from":"/Work/Beta","into":"/","score":50,"summary":"x"}""")]
+    [InlineData(5, "same folder", """{"type":"merge_folders","from":"/Work/Beta","into":"/Work/Beta","score":50,"summary":"x"}""")]
+    [InlineData(6, "target inside the source", """{"type":"merge_folders","from":"/Work","into":"/Work/Alpha","score":50,"summary":"x"}""")]
+    [InlineData(7, "folder not in the tree that was listed", """{"type":"rename","path":"/Nowhere","newName":"X","score":50,"summary":"x"}""")]
+    [InlineData(8, "the top level cannot be renamed", """{"type":"rename","path":"/","newName":"X","score":50,"summary":"x"}""")]
+    [InlineData(9, "same name", """{"type":"rename","path":"/Work/Alpha","newName":"Alpha","score":50,"summary":"x"}""")]
+    [InlineData(10, "name already taken", """{"type":"rename","path":"/Work/Alpha","newName":"Beta","score":50,"summary":"x"}""")]
+    [InlineData(11, "name already taken", """{"type":"rename","path":"/Work/Alpha","newName":"beta","score":50,"summary":"x"}""")]
+    [InlineData(12, "bad folder name", """{"type":"rename","path":"/Work/Alpha","newName":"A/B","score":50,"summary":"x"}""")]
+    [InlineData(13, "bad folder name", """{"type":"rename","path":"/Work/Alpha","newName":"..","score":50,"summary":"x"}""")]
+    [InlineData(14, "no folder in the tree that was listed", """{"type":"note","title":"T","paths":[],"score":50,"summary":"x"}""")]
+    [InlineData(15, "no folder in the tree that was listed", """{"type":"note","title":"T","paths":["/Nowhere","/Work/../x"],"score":50,"summary":"x"}""")]
+    public async Task ASuggestionThatDoesNotFitTheMap_IsDroppedByReason_WithoutARetryOrAnyOfTheModelsWords(int row, string reason, string suggestion)
     {
         var corpus = Tree();
         var model = new FakeDreamModelClient().Enqueue($$"""{"suggestions":[{{suggestion}}]}""");
@@ -506,25 +506,25 @@ public class TreeReviewTaskTests
     // ── A reply that cannot be trusted ──────────────────────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("I'm sorry, I cannot do that.")]
-    [InlineData("[]")]
-    [InlineData("{}")]
-    [InlineData("""{"suggestions":"none"}""")]
-    [InlineData("""{"suggestions":[1]}""")]
-    [InlineData("""{"suggestions":[{"score":50,"summary":"x"}]}""")]                                                                      // no type
-    [InlineData("""{"suggestions":[{"type":"delete","path":"/Work","score":50,"summary":"x"}]}""")]                                        // not a type
-    [InlineData("""{"suggestions":[{"type":"merge","from":"/Work/Beta","into":"/Work/Alpha","score":50,"summary":"x"}]}""")]              // not the spelling
-    [InlineData("""{"suggestions":[{"type":"merge_folders","from":"/Work/Beta","score":50,"summary":"x"}]}""")]                            // no target
-    [InlineData("""{"suggestions":[{"type":"merge_folders","into":"/Work/Beta","score":50,"summary":"x"}]}""")]                           // no source
-    [InlineData("""{"suggestions":[{"type":"rename","path":"/Work/Beta","score":50,"summary":"x"}]}""")]                                  // no new name
-    [InlineData("""{"suggestions":[{"type":"note","paths":["/Archive"],"score":50,"summary":"x"}]}""")]                                    // no title
-    [InlineData("""{"suggestions":[{"type":"note","title":"T","score":50,"summary":"x"}]}""")]                                             // no paths
-    [InlineData("""{"suggestions":[{"type":"note","title":"T","paths":"/Archive","score":50,"summary":"x"}]}""")]                          // paths not a list
-    [InlineData("""{"suggestions":[{"type":"note","title":"T","paths":[1],"score":50,"summary":"x"}]}""")]                                // paths not strings
-    [InlineData("""{"suggestions":[{"type":"note","title":"T","paths":["/Archive"],"score":101,"summary":"x"}]}""")]                      // score out of range
-    [InlineData("""{"suggestions":[{"type":"note","title":"T","paths":["/Archive"],"score":"high","summary":"x"}]}""")]                   // score not a number
-    [InlineData("""{"suggestions":[{"type":"note","title":"T","paths":["/Archive"],"score":50}]}""")]                                      // no summary
-    public async Task AnUnusableReply_GetsOneRetryWithTheError_AndThenIsAnError(string bad)
+    [InlineData(1, "I'm sorry, I cannot do that.")]
+    [InlineData(2, "[]")]
+    [InlineData(3, "{}")]
+    [InlineData(4, """{"suggestions":"none"}""")]
+    [InlineData(5, """{"suggestions":[1]}""")]
+    [InlineData(6, """{"suggestions":[{"score":50,"summary":"x"}]}""")]                                                                      // no type
+    [InlineData(7, """{"suggestions":[{"type":"delete","path":"/Work","score":50,"summary":"x"}]}""")]                                        // not a type
+    [InlineData(8, """{"suggestions":[{"type":"merge","from":"/Work/Beta","into":"/Work/Alpha","score":50,"summary":"x"}]}""")]              // not the spelling
+    [InlineData(9, """{"suggestions":[{"type":"merge_folders","from":"/Work/Beta","score":50,"summary":"x"}]}""")]                            // no target
+    [InlineData(10, """{"suggestions":[{"type":"merge_folders","into":"/Work/Beta","score":50,"summary":"x"}]}""")]                           // no source
+    [InlineData(11, """{"suggestions":[{"type":"rename","path":"/Work/Beta","score":50,"summary":"x"}]}""")]                                  // no new name
+    [InlineData(12, """{"suggestions":[{"type":"note","paths":["/Archive"],"score":50,"summary":"x"}]}""")]                                    // no title
+    [InlineData(13, """{"suggestions":[{"type":"note","title":"T","score":50,"summary":"x"}]}""")]                                             // no paths
+    [InlineData(14, """{"suggestions":[{"type":"note","title":"T","paths":"/Archive","score":50,"summary":"x"}]}""")]                          // paths not a list
+    [InlineData(15, """{"suggestions":[{"type":"note","title":"T","paths":[1],"score":50,"summary":"x"}]}""")]                                // paths not strings
+    [InlineData(16, """{"suggestions":[{"type":"note","title":"T","paths":["/Archive"],"score":101,"summary":"x"}]}""")]                      // score out of range
+    [InlineData(17, """{"suggestions":[{"type":"note","title":"T","paths":["/Archive"],"score":"high","summary":"x"}]}""")]                   // score not a number
+    [InlineData(18, """{"suggestions":[{"type":"note","title":"T","paths":["/Archive"],"score":50}]}""")]                                      // no summary
+    public async Task AnUnusableReply_GetsOneRetryWithTheError_AndThenIsAnError(int row, string bad)
     {
         var corpus = Tree();
         var model = new FakeDreamModelClient().Enqueue(bad).Enqueue(bad);

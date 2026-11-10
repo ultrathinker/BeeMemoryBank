@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// The sample of a trial run (plan 3.8, package C1): the same seed gives every run the same candidates in the same order, whatever order

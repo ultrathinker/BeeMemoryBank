@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// A hand-written <see cref="IDreamCorpus"/> for the rule and similarity detector tests: no node, no database and

@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// A hand-made corpus with a folder tree, for the folder and tree review tests: folders (system ones too), notes with

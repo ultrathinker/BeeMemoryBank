@@ -1,6 +1,6 @@
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// The compare table's rules (plan 3.8, package C1) on hand-made candidate events: which candidates are common, what agreement means, how

@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// pair_verdict (plan 3.7, package M1): the candidates it offers, the advice a verdict becomes, and everything that
@@ -386,19 +386,19 @@ public class PairVerdictTaskTests
     // ── A reply that cannot be trusted ──────────────────────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("I'm sorry, I cannot do that.")]
-    [InlineData("[]")]
-    [InlineData("""{"score":90,"summary":"x"}""")]                                                         // no verdict
-    [InlineData("""{"verdict":"delete_everything","score":90,"summary":"x"}""")]                          // not a verdict
-    [InlineData("""{"verdict":"duplicate","score":90,"summary":"x"}""")]                                  // duplicate without keep
-    [InlineData("""{"verdict":"duplicate","keep":"C","score":90,"summary":"x"}""")]                       // keep is not A or B
-    [InlineData("""{"verdict":"superseded","keep":null,"score":90,"summary":"x"}""")]                     // superseded without keep
-    [InlineData("""{"verdict":"overlap","score":150,"summary":"x"}""")]                                   // score out of range
-    [InlineData("""{"verdict":"overlap","score":"high","summary":"x"}""")]                                // score not a number
-    [InlineData("""{"verdict":"overlap","score":70}""")]                                                  // no summary
-    [InlineData("""{"verdict":"overlap","score":70,"summary":"   "}""")]                                  // empty summary
-    [InlineData("""{"verdict":"overlap","score":70,"summary":{"text":"x"}}""")]                           // summary not a string
-    public async Task AnUnusableReply_GetsOneRetryWithTheErrorAndThenIsAnError(string bad)
+    [InlineData(1, "I'm sorry, I cannot do that.")]
+    [InlineData(2, "[]")]
+    [InlineData(3, """{"score":90,"summary":"x"}""")]                                                         // no verdict
+    [InlineData(4, """{"verdict":"delete_everything","score":90,"summary":"x"}""")]                          // not a verdict
+    [InlineData(5, """{"verdict":"duplicate","score":90,"summary":"x"}""")]                                  // duplicate without keep
+    [InlineData(6, """{"verdict":"duplicate","keep":"C","score":90,"summary":"x"}""")]                       // keep is not A or B
+    [InlineData(7, """{"verdict":"superseded","keep":null,"score":90,"summary":"x"}""")]                     // superseded without keep
+    [InlineData(8, """{"verdict":"overlap","score":150,"summary":"x"}""")]                                   // score out of range
+    [InlineData(9, """{"verdict":"overlap","score":"high","summary":"x"}""")]                                // score not a number
+    [InlineData(10, """{"verdict":"overlap","score":70}""")]                                                  // no summary
+    [InlineData(11, """{"verdict":"overlap","score":70,"summary":"   "}""")]                                  // empty summary
+    [InlineData(12, """{"verdict":"overlap","score":70,"summary":{"text":"x"}}""")]                           // summary not a string
+    public async Task AnUnusableReply_GetsOneRetryWithTheErrorAndThenIsAnError(int row, string bad)
     {
         var corpus = new PairCorpus();
         var a = corpus.Add("Alpha", "text a");

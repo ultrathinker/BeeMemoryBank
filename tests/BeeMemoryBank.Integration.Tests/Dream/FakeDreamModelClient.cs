@@ -1,6 +1,6 @@
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// The model client of every Dream test (plan 3.7): no network, no key. It hands out the replies a test queued, in

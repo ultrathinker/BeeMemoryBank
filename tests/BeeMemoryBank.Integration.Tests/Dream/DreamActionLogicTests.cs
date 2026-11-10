@@ -1,7 +1,7 @@
 using System.Text.Json;
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// Package A1 without a node: the prompt templates, what makes two advice the same, the precondition decision and the

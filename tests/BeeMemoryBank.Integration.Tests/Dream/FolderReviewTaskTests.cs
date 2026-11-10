@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
 using BeeMemoryBank.Api.Dream;
-using static BeeMemoryBank.Integration.Tests.Dream.TreeTestContext;
+using static BeeMemoryBank.Integration.Tests.TreeTestContext;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// folder_review (plan 3.7, package M2): which folders are offered, what the model is shown, what a suggestion becomes,
@@ -613,24 +613,24 @@ public class FolderReviewTaskTests
     // ── What does not fit the input is dropped, alone ───────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("unknown note", """{"type":"move","note":"n99","toPath":"/Projects","score":80,"summary":"x"}""")]
-    [InlineData("unknown note", """{"type":"move","note":"Inbox note 3","toPath":"/Projects","score":80,"summary":"x"}""")]
-    [InlineData("destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/Elsewhere","score":80,"summary":"x"}""")]
-    [InlineData("destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/_Drafts","score":80,"summary":"x"}""")]
-    [InlineData("destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/_Drafts/local","score":80,"summary":"x"}""")]
-    [InlineData("destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/Inbox","score":80,"summary":"x"}""")]
-    [InlineData("destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/Projects/../Secret","score":80,"summary":"x"}""")]
-    [InlineData("bad folder name", """{"type":"subfolder","name":"a/b","notes":["n1","n2","n3"],"score":70,"summary":"x"}""")]
-    [InlineData("bad folder name", """{"type":"subfolder","name":"..","notes":["n1","n2","n3"],"score":70,"summary":"x"}""")]
-    [InlineData("bad folder name", """{"type":"subfolder","name":"a\\b","notes":["n1","n2","n3"],"score":70,"summary":"x"}""")]
-    [InlineData("too few notes for a subfolder", """{"type":"subfolder","name":"Group","notes":["n1","n2"],"score":70,"summary":"x"}""")]
-    [InlineData("too few notes for a subfolder", """{"type":"subfolder","name":"Group","notes":["n1","n1","n1","n99"],"score":70,"summary":"x"}""")]
-    [InlineData("every note of the folder", """{"type":"subfolder","name":"All","notes":["n1","n2","n3","n4","n5","n6","n7","n8","n9","n10","n11","n12","n13","n14"],"score":70,"summary":"x"}""")]
-    [InlineData("same name", """{"type":"rename","newName":"Inbox","score":60,"summary":"x"}""")]
-    [InlineData("name already taken", """{"type":"rename","newName":"Projects","score":60,"summary":"x"}""")]
-    [InlineData("name already taken", """{"type":"rename","newName":"archive","score":60,"summary":"x"}""")]
-    [InlineData("bad folder name", """{"type":"rename","newName":"A/B","score":60,"summary":"x"}""")]
-    public async Task ASuggestionThatDoesNotFitTheInput_IsDroppedByReason_WithoutARetryOrAnyOfTheModelsWords(string reason, string suggestion)
+    [InlineData(1, "unknown note", """{"type":"move","note":"n99","toPath":"/Projects","score":80,"summary":"x"}""")]
+    [InlineData(2, "unknown note", """{"type":"move","note":"Inbox note 3","toPath":"/Projects","score":80,"summary":"x"}""")]
+    [InlineData(3, "destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/Elsewhere","score":80,"summary":"x"}""")]
+    [InlineData(4, "destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/_Drafts","score":80,"summary":"x"}""")]
+    [InlineData(5, "destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/_Drafts/local","score":80,"summary":"x"}""")]
+    [InlineData(6, "destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/Inbox","score":80,"summary":"x"}""")]
+    [InlineData(7, "destination not in the tree that was listed", """{"type":"move","note":"n1","toPath":"/Projects/../Secret","score":80,"summary":"x"}""")]
+    [InlineData(8, "bad folder name", """{"type":"subfolder","name":"a/b","notes":["n1","n2","n3"],"score":70,"summary":"x"}""")]
+    [InlineData(9, "bad folder name", """{"type":"subfolder","name":"..","notes":["n1","n2","n3"],"score":70,"summary":"x"}""")]
+    [InlineData(10, "bad folder name", """{"type":"subfolder","name":"a\\b","notes":["n1","n2","n3"],"score":70,"summary":"x"}""")]
+    [InlineData(11, "too few notes for a subfolder", """{"type":"subfolder","name":"Group","notes":["n1","n2"],"score":70,"summary":"x"}""")]
+    [InlineData(12, "too few notes for a subfolder", """{"type":"subfolder","name":"Group","notes":["n1","n1","n1","n99"],"score":70,"summary":"x"}""")]
+    [InlineData(13, "every note of the folder", """{"type":"subfolder","name":"All","notes":["n1","n2","n3","n4","n5","n6","n7","n8","n9","n10","n11","n12","n13","n14"],"score":70,"summary":"x"}""")]
+    [InlineData(14, "same name", """{"type":"rename","newName":"Inbox","score":60,"summary":"x"}""")]
+    [InlineData(15, "name already taken", """{"type":"rename","newName":"Projects","score":60,"summary":"x"}""")]
+    [InlineData(16, "name already taken", """{"type":"rename","newName":"archive","score":60,"summary":"x"}""")]
+    [InlineData(17, "bad folder name", """{"type":"rename","newName":"A/B","score":60,"summary":"x"}""")]
+    public async Task ASuggestionThatDoesNotFitTheInput_IsDroppedByReason_WithoutARetryOrAnyOfTheModelsWords(int row, string reason, string suggestion)
     {
         var (corpus, _) = Build();
         var model = new FakeDreamModelClient().Enqueue($$"""{"suggestions":[{{suggestion}}]}""");
@@ -726,25 +726,25 @@ public class FolderReviewTaskTests
     // ── A reply that cannot be trusted ──────────────────────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("I'm sorry, I cannot do that.")]
-    [InlineData("[]")]
-    [InlineData("{}")]
-    [InlineData("""{"suggestions":"none"}""")]
-    [InlineData("""{"suggestions":{"type":"move"}}""")]
-    [InlineData("""{"suggestions":[1]}""")]
-    [InlineData("""{"suggestions":[{"score":50,"summary":"x"}]}""")]                                                                       // no type
-    [InlineData("""{"suggestions":[{"type":"delete","note":"n1","score":50,"summary":"x"}]}""")]                                           // not a type
-    [InlineData("""{"suggestions":[{"type":"move","toPath":"/Projects","score":50,"summary":"x"}]}""")]                                    // move without note
-    [InlineData("""{"suggestions":[{"type":"move","note":"n1","score":50,"summary":"x"}]}""")]                                             // move without path
-    [InlineData("""{"suggestions":[{"type":"move","note":"n1","toPath":"/Projects","score":105,"summary":"x"}]}""")]                       // score out of range
-    [InlineData("""{"suggestions":[{"type":"move","note":"n1","toPath":"/Projects","score":"high","summary":"x"}]}""")]                    // score not a number
-    [InlineData("""{"suggestions":[{"type":"move","note":"n1","toPath":"/Projects","score":50}]}""")]                                      // no summary
-    [InlineData("""{"suggestions":[{"type":"move","note":"n1","toPath":"/Projects","score":50,"summary":"  "}]}""")]                       // empty summary
-    [InlineData("""{"suggestions":[{"type":"subfolder","name":"X","notes":"n1","score":50,"summary":"x"}]}""")]                            // notes not a list
-    [InlineData("""{"suggestions":[{"type":"subfolder","name":"X","notes":[1,2,3],"score":50,"summary":"x"}]}""")]                         // notes not strings
-    [InlineData("""{"suggestions":[{"type":"subfolder","notes":["n1","n2","n3"],"score":50,"summary":"x"}]}""")]                          // no name
-    [InlineData("""{"suggestions":[{"type":"rename","score":50,"summary":"x"}]}""")]                                                       // no new name
-    public async Task AnUnusableReply_GetsOneRetryWithTheError_AndThenIsAnError(string bad)
+    [InlineData(1, "I'm sorry, I cannot do that.")]
+    [InlineData(2, "[]")]
+    [InlineData(3, "{}")]
+    [InlineData(4, """{"suggestions":"none"}""")]
+    [InlineData(5, """{"suggestions":{"type":"move"}}""")]
+    [InlineData(6, """{"suggestions":[1]}""")]
+    [InlineData(7, """{"suggestions":[{"score":50,"summary":"x"}]}""")]                                                                       // no type
+    [InlineData(8, """{"suggestions":[{"type":"delete","note":"n1","score":50,"summary":"x"}]}""")]                                           // not a type
+    [InlineData(9, """{"suggestions":[{"type":"move","toPath":"/Projects","score":50,"summary":"x"}]}""")]                                    // move without note
+    [InlineData(10, """{"suggestions":[{"type":"move","note":"n1","score":50,"summary":"x"}]}""")]                                             // move without path
+    [InlineData(11, """{"suggestions":[{"type":"move","note":"n1","toPath":"/Projects","score":105,"summary":"x"}]}""")]                       // score out of range
+    [InlineData(12, """{"suggestions":[{"type":"move","note":"n1","toPath":"/Projects","score":"high","summary":"x"}]}""")]                    // score not a number
+    [InlineData(13, """{"suggestions":[{"type":"move","note":"n1","toPath":"/Projects","score":50}]}""")]                                      // no summary
+    [InlineData(14, """{"suggestions":[{"type":"move","note":"n1","toPath":"/Projects","score":50,"summary":"  "}]}""")]                       // empty summary
+    [InlineData(15, """{"suggestions":[{"type":"subfolder","name":"X","notes":"n1","score":50,"summary":"x"}]}""")]                            // notes not a list
+    [InlineData(16, """{"suggestions":[{"type":"subfolder","name":"X","notes":[1,2,3],"score":50,"summary":"x"}]}""")]                         // notes not strings
+    [InlineData(17, """{"suggestions":[{"type":"subfolder","notes":["n1","n2","n3"],"score":50,"summary":"x"}]}""")]                          // no name
+    [InlineData(18, """{"suggestions":[{"type":"rename","score":50,"summary":"x"}]}""")]                                                       // no new name
+    public async Task AnUnusableReply_GetsOneRetryWithTheError_AndThenIsAnError(int row, string bad)
     {
         var (corpus, _) = Build();
         var model = new FakeDreamModelClient().Enqueue(bad).Enqueue(bad);

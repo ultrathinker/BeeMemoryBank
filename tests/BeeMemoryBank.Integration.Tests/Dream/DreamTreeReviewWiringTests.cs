@@ -1,9 +1,9 @@
 using BeeMemoryBank.Api.Dream;
 using BeeMemoryBank.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
-using static BeeMemoryBank.Integration.Tests.Dream.TreeTestContext;
+using static BeeMemoryBank.Integration.Tests.TreeTestContext;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// tree_review on a real node (package M2, fix round): the task the container makes is bound to the node's examined store,

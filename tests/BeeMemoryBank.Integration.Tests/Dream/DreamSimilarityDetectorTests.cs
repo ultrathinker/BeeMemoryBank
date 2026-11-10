@@ -1,6 +1,6 @@
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// Package D2 (plan 3.5, 3.6): the neighbour index, exact and near duplicates, the misplaced article and the pair

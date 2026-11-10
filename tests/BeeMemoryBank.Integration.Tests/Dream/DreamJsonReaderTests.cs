@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>The tolerant reading of a model reply and its schema check (plan 3.7): what is accepted, what is refused,
 /// and that no refusal repeats the model's own words.</summary>

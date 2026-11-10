@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// The ask-read-retry loop of folder_review and tree_review (and its texts, which pair_verdict shares) when the output limit

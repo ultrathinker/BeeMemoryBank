@@ -1,6 +1,6 @@
 using BeeMemoryBank.Api.Dream;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// Package D1 (plan 3.6): tag variants, unused tags, empty folders and test leftovers. Pure detector logic over a

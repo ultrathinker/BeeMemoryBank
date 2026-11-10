@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// The real Dream model client (plan 3.7, package M1) on a real node's chat key table, with only the HTTP call to
@@ -373,19 +373,19 @@ public class OpenRouterDreamModelClientTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("""{"model":"m","choices":[{"finish_reason":"length","message":{"content":null,"reasoning":"Let me think about the two notes ..."}}],"usage":{"prompt_tokens":900,"completion_tokens":700}}""", true)]
-    [InlineData("""{"model":"m","choices":[{"finish_reason":"stop","message":{"content":"","reasoning":"thinking"}}],"usage":{"prompt_tokens":900,"completion_tokens":700}}""", true)]
-    [InlineData("""{"model":"m","choices":[{"message":{"content":"","reasoning_details":[{"type":"reasoning.text","text":"thinking"}]}}],"usage":{"prompt_tokens":900,"completion_tokens":700}}""", true)]
-    [InlineData("""{"model":"m","choices":[{"message":{"content":null}}],"usage":{"prompt_tokens":900,"completion_tokens":700,"completion_tokens_details":{"reasoning_tokens":690}}}""", true)]
-    [InlineData("""{"model":"m","choices":[{"finish_reason":"stop","message":{"content":""}}],"usage":{"prompt_tokens":900,"completion_tokens":0}}""", false)]
-    [InlineData("""{"model":"m","choices":[{"finish_reason":"stop","message":{"content":"{}","reasoning":"short thought"}}],"usage":{"prompt_tokens":900,"completion_tokens":50}}""", false)]
-    [InlineData("""{"model":"m","choices":[{"finish_reason":"stop","message":{"content":"{}"}}],"usage":{"prompt_tokens":900,"completion_tokens":50}}""", false)]
-    [InlineData("""{"model":"m","choices":[{"message":{"content":"{}"}}]}""", false)]
-    [InlineData("""{"model":"m","choices":[{"message":{"content":"","reasoning":{"summary":"an object"}}}]}""", true)]
-    [InlineData("""{"model":"m","choices":[{"message":{"content":"","reasoning":42}}]}""", false)]
-    [InlineData("""{"model":"m","choices":[{"message":{"content":"","reasoning_details":"odd"}}],"usage":{"prompt_tokens":5,"completion_tokens":5,"completion_tokens_details":"odd"}}""", false)]
-    [InlineData("""{"model":"m","choices":[{"message":{"content":""}}],"usage":{"prompt_tokens":5,"completion_tokens":5,"completion_tokens_details":{"reasoning_tokens":"many"}}}""", false)]
-    public async Task CutOff_IsFinishReasonLength_OrReasoningWithoutContent_NothingElse(string json, bool expected)
+    [InlineData(1, """{"model":"m","choices":[{"finish_reason":"length","message":{"content":null,"reasoning":"Let me think about the two notes ..."}}],"usage":{"prompt_tokens":900,"completion_tokens":700}}""", true)]
+    [InlineData(2, """{"model":"m","choices":[{"finish_reason":"stop","message":{"content":"","reasoning":"thinking"}}],"usage":{"prompt_tokens":900,"completion_tokens":700}}""", true)]
+    [InlineData(3, """{"model":"m","choices":[{"message":{"content":"","reasoning_details":[{"type":"reasoning.text","text":"thinking"}]}}],"usage":{"prompt_tokens":900,"completion_tokens":700}}""", true)]
+    [InlineData(4, """{"model":"m","choices":[{"message":{"content":null}}],"usage":{"prompt_tokens":900,"completion_tokens":700,"completion_tokens_details":{"reasoning_tokens":690}}}""", true)]
+    [InlineData(5, """{"model":"m","choices":[{"finish_reason":"stop","message":{"content":""}}],"usage":{"prompt_tokens":900,"completion_tokens":0}}""", false)]
+    [InlineData(6, """{"model":"m","choices":[{"finish_reason":"stop","message":{"content":"{}","reasoning":"short thought"}}],"usage":{"prompt_tokens":900,"completion_tokens":50}}""", false)]
+    [InlineData(7, """{"model":"m","choices":[{"finish_reason":"stop","message":{"content":"{}"}}],"usage":{"prompt_tokens":900,"completion_tokens":50}}""", false)]
+    [InlineData(8, """{"model":"m","choices":[{"message":{"content":"{}"}}]}""", false)]
+    [InlineData(9, """{"model":"m","choices":[{"message":{"content":"","reasoning":{"summary":"an object"}}}]}""", true)]
+    [InlineData(10, """{"model":"m","choices":[{"message":{"content":"","reasoning":42}}]}""", false)]
+    [InlineData(11, """{"model":"m","choices":[{"message":{"content":"","reasoning_details":"odd"}}],"usage":{"prompt_tokens":5,"completion_tokens":5,"completion_tokens_details":"odd"}}""", false)]
+    [InlineData(12, """{"model":"m","choices":[{"message":{"content":""}}],"usage":{"prompt_tokens":5,"completion_tokens":5,"completion_tokens_details":{"reasoning_tokens":"many"}}}""", false)]
+    public async Task CutOff_IsFinishReasonLength_OrReasoningWithoutContent_NothingElse(int row, string json, bool expected)
     {
         (await AskAsync(Raw(json))).CutOff.Should().Be(expected);
     }

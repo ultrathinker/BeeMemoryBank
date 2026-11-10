@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 using Xunit.Abstractions;
 
-namespace BeeMemoryBank.Integration.Tests.Dream;
+namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
 /// Package X1's own tests: the Dream corpus definition must be internally consistent with the
