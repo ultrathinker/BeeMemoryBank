@@ -170,6 +170,13 @@ public static class ProxyRouteTable
             [new("GET", null), new("POST", UserRoles.Superadmin), new("PATCH", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
         ["chat/keys"] = new("/api/chat/keys",
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin), new("PATCH", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
+        // Model providers (Admin -> AI / Chat): add, re-address, approve (which lets content leave for a host) and fetch a provider's
+        // model list (which makes this node call out), so every change carries the page's anti-forgery token (the flag skips GET).
+        ["chat/providers"] = new("/api/chat/providers",
+            [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin), new("PATCH", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)],
+            ProxyRouteFlags.RequireAntiforgery),
+        ["chat/settings/fallbacks"] = new("/api/chat/settings/fallbacks",
+            [new("GET", UserRoles.Superadmin), new("PATCH", UserRoles.Superadmin)]),
         ["chat/settings/chat-enabled"] = new("/api/chat/settings/chat-enabled",
             [new("GET", UserRoles.Superadmin), new("PATCH", UserRoles.Superadmin)]),
         ["chat/settings/defaults"] = new("/api/chat/settings/defaults",

@@ -1261,7 +1261,7 @@ public class DreamEngineTests : IAsyncLifetime
 
         status = await _client.GetFromJsonAsync<JsonElement>("/api/dream/status");
         status.GetProperty("modelReady").GetBoolean().Should().BeTrue();
-        status.GetProperty("modelLabel").GetString().Should().Be("Fake");
+        status.GetProperty("modelLabel").GetString().Should().Be("Fake - OpenRouter", "a model is named with its provider");
         status.GetProperty("chatAvailable").GetBoolean().Should().BeTrue();
         status.GetProperty("embeddings").GetProperty("total").GetInt32().Should().Be(1);
         status.GetProperty("embeddings").GetProperty("pending").GetInt32().Should().Be(0);

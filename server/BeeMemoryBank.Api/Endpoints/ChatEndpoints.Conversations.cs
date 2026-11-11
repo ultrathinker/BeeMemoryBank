@@ -118,7 +118,7 @@ public static partial class ChatEndpoints
                 if (!string.IsNullOrEmpty(m.Model) && contextWindowByModelId.TryGetValue(m.Model, out var cw))
                     msgContextWindow = cw;
                 return new ChatMessageRowResponse(
-                    m.Id, m.Role, m.ContentText, m.ToolCallsJson, m.ToolCallId, m.Model,
+                    m.Id, m.Role, m.ContentText, m.ToolCallsJson, m.ToolCallId, m.Model, m.Provider,
                     // SQLite round-trips DateTime as Kind=Unspecified, which System.Text.Json
                     // serializes WITHOUT a "Z" suffix — the client's `new Date(...)` then parses
                     // it as LOCAL time instead of UTC, showing a wrong tooltip timestamp on

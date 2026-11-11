@@ -1,28 +1,28 @@
 @page
 @model BeeMemoryBank.Web.Pages.Admin.AiChatModel
 
-@* AI / Chat (OpenRouter) - node-global keys + model catalogue. Superadmin-only (the whole area is). *@
+@* AI / Chat - the model providers (each with its keys and models), the default models and their fallback chain, and the chat switch.
+   Superadmin-only (the whole area is). Everything is read and saved by ai-providers.js through /api-proxy/chat/*. *@
 @section About {
     <p>
-        The built-in AI chat talks to a model through <strong>OpenRouter</strong>. This page holds what that needs for the whole node: the <strong>API keys</strong> (an account at OpenRouter
-        gives you one), the <strong>models</strong> people may pick from, and which model is used when nobody picks one. With no key and no text model, the chat has nothing to talk to.
+        The built-in AI chat and Dream talk to a model through a <strong>provider</strong>: OpenRouter, Z.ai, Anthropic, Google, OpenAI, DeepSeek, a server on your
+        own network such as Ollama, or any service that speaks the OpenAI chat format at an address you type in. Each provider has its own <strong>API keys</strong>
+        and its own <strong>models</strong>; pick the provider from the list or add a custom one.
     </p>
     <p class="admin-warning">
-        <strong>Everything the AI reads is sent to the model and the provider you configure.</strong> That includes the articles it is asked about. Keys are encrypted at rest under the master
-        key and usable only while the vault is unlocked; the full key is shown <strong>once</strong>, when you add it, and afterwards only its first characters.
+        <strong>Everything the AI reads is sent to the provider of the model that answers.</strong> That includes the articles it is asked about. Nothing is sent to a
+        provider until a superadmin <strong>approves</strong> it, and the approval names the exact host; changing a provider's address withdraws it. Keys are encrypted at
+        rest and usable only while the vault is unlocked; after a key is saved only its first characters are ever shown.
     </p>
     <p>
-        <strong>Allow AI chat for users</strong> is a node-wide switch: when it is off, only superadmins can chat, whatever each user's own setting says (see <a href="/Users">Users</a>). Turning it
-        back on restores each user's own setting; nothing is lost meanwhile. With several keys, the one with the <em>lowest priority number</em> is used first, and a key the provider refuses is paused for a while (or switched
-        off) while the next one is tried; the Status column says which. A model can have more than one capability (text, vision, image generation); a role left on &ldquo;Default&rdquo; uses the oldest model that has it.
+        With several keys, the one with the <em>lowest priority number</em> is used first, and a key the provider refuses is paused for a while (or switched off) while
+        the next one is tried. When every key of the default text model's provider fails, the <strong>fallback models</strong> are tried in order, possibly at other
+        providers; the chat shows which model and provider answered. A role left on &ldquo;Default&rdquo; uses the oldest model that has the capability.
+        <strong>Allow AI chat for users</strong> is a node-wide switch: when it is off, only superadmins can chat (see <a href="/Users">Users</a>).
     </p>
 }
 
-<!-- Allow AI chat: node-wide kill switch. When off, no one except superadmins can use the
-     AI chat feature (web UI), regardless of each user's individual "Can use AI chat" setting
-     on the Users page. Per-user settings are preserved while this is off — turning it back on
-     restores whatever each user had configured. -->
-<div class="card" style="max-width:640px;margin-bottom:24px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+<div class="card" style="max-width:640px;margin-bottom:24px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px;" data-busy-scope>
     <div>
         <strong>Allow AI chat for users</strong>
         <p class="text-muted text-sm" style="margin:4px 0 0 0;">
@@ -32,68 +32,28 @@
     <sl-switch id="chat-globally-enabled-toggle" style="flex-shrink:0;"></sl-switch>
 </div>
 
-<!-- Keys -->
-<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
-    <strong>OpenRouter API keys</strong>
-    <sl-button size="small" variant="primary" id="btn-add-chat-key">
-        <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add key
-    </sl-button>
-</div>
-<div class="card" style="padding:0;overflow:hidden;margin-bottom:24px;">
-    @* The rows are built by admin.js; they carry the classes and the data-label of the stacked layout (site.css, Admin): below a card of 560px a row stacks, nothing is hidden. *@
-    <table class="version-table admin-stack-sm">
-        <thead>
-            <tr>
-                <th class="col-name">Label</th>
-                <th>Prefix</th>
-                <th>Priority</th>
-                <th>Enabled</th>
-                <th>Status</th>
-                <th>Last used</th>
-                <th class="col-actions">Actions</th>
-            </tr>
-        </thead>
-        <tbody id="chat-keys-body">
-            <tr><td colspan="7" class="col-empty text-muted text-sm">Loading…</td></tr>
-        </tbody>
-    </table>
+<!-- Providers: one card each, built by ai-providers.js (status, approval, keys, models). -->
+<div id="ai-providers" data-busy-scope style="margin-bottom:24px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+        <strong>Model providers</strong>
+        <sl-button size="small" variant="primary" id="btn-add-provider">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add provider
+        </sl-button>
+    </div>
+    <div id="providers-list">
+        <div class="card text-muted text-sm" style="padding:14px 16px;">Loading…</div>
+    </div>
 </div>
 
-<!-- Models -->
-<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
-    <strong>Model catalogue</strong>
-    <sl-button size="small" variant="primary" id="btn-add-chat-model">
-        <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add model
-    </sl-button>
-</div>
-<div class="card" style="padding:0;overflow:hidden;margin-bottom:24px;">
-    <table class="version-table admin-stack-sm">
-        <thead>
-            <tr>
-                <th class="col-name">Label</th>
-                <th>Model ID</th>
-                <th class="col-center">Text</th>
-                <th class="col-center">Vision</th>
-                <th class="col-center">Image gen</th>
-                <th class="col-actions">Actions</th>
-            </tr>
-        </thead>
-        <tbody id="chat-models-body">
-            <tr><td colspan="6" class="col-empty text-muted text-sm">Loading…</td></tr>
-        </tbody>
-    </table>
-</div>
-
-<!-- Default models: three pinned-default dropdowns. "Default" = oldest model with the matching
-     property; picking a specific model pins it. -->
-<div style="margin-bottom:8px;">
+<!-- Default models: three pinned defaults, labelled "model - provider", and the ordered fallback chain of the text model. -->
+<div id="card-defaults" style="margin-bottom:8px;">
     <strong>Default models</strong>
     <p class="text-muted text-sm" style="margin:4px 0 0 0;">
-        Pin a specific model for each role, or leave on "Default" to use the oldest model with
-        that capability. The text model is the entry point for every chat turn.
+        Pin a model for each role, or leave on "Default" to use the oldest model with that capability. The text model is the entry point for every
+        chat turn; Dream uses it too unless Dream has its own model. Image generation is offered by OpenRouter only in this version.
     </p>
 </div>
-<div class="card" style="padding:16px;">
+<div class="card" style="padding:16px;margin-bottom:24px;" data-busy-scope>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;">
         <div>
             <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Default text model</label>
@@ -114,29 +74,120 @@
             </sl-select>
         </div>
     </div>
-    <p id="chat-defaults-hint" class="text-muted" style="font-size:0.74rem;margin:8px 0 0 0;"></p>
 </div>
 
-<sl-dialog id="dlg-add-chat-key" label="Add OpenRouter key" style="--width:480px;">
+<div id="card-fallbacks" class="card" style="padding:16px;margin-bottom:24px;" data-busy-scope>
+    <strong>Fallback chain of the text model</strong>
+    <p class="text-muted text-sm" style="margin:4px 0 10px 0;">
+        Tried in this order when every key of the default text model's provider is exhausted or the provider fails (for a streamed answer only before its first
+        word). Dream's model falls back to the same list.
+    </p>
+    <ol id="fallback-list" class="text-sm" style="margin:0 0 10px 0;padding-left:20px;"></ol>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <sl-select id="fallback-add" size="small" placeholder="Add a fallback model…" style="min-width:260px;"></sl-select>
+        <sl-button size="small" id="btn-fallback-add"><sl-icon slot="prefix" name="plus-lg"></sl-icon> Add</sl-button>
+        <sl-button size="small" variant="primary" id="btn-fallback-save"><sl-icon slot="prefix" name="save"></sl-icon> Save chain</sl-button>
+    </div>
+</div>
+
+<sl-dialog id="dlg-add-provider" label="Add provider" style="--width:560px;">
+    <sl-input id="provider-search" size="small" placeholder="Search the list (OpenRouter, Z.ai, Ollama …)" clearable style="margin-bottom:10px;">
+        <sl-icon slot="prefix" name="search"></sl-icon>
+    </sl-input>
+    <div id="provider-presets" role="listbox" aria-label="Providers" style="max-height:260px;overflow:auto;border:1px solid var(--sl-color-neutral-200);border-radius:6px;margin-bottom:12px;"></div>
+    <div id="provider-preset-note" class="admin-warning text-sm" hidden style="margin-bottom:12px;"></div>
+    <div style="margin-bottom:12px;">
+        <sl-input id="provider-name" label="Name" placeholder="e.g. Z.ai Coding Plan" required></sl-input>
+    </div>
+    <div style="margin-bottom:12px;">
+        <sl-select id="provider-protocol" label="Format" value="openai-chat" help-text="A provider from the list brings its own format.">
+            <sl-option value="openai-chat">OpenAI chat format (chat/completions)</sl-option>
+            <sl-option value="anthropic-messages">Anthropic Messages (messages)</sl-option>
+            <sl-option value="gemini">Google Gemini (generateContent)</sl-option>
+        </sl-select>
+    </div>
+    <div style="margin-bottom:12px;">
+        <sl-input id="provider-base-url" label="Base URL" placeholder="https://api.example.com/v1" required></sl-input>
+    </div>
+    <div style="margin-bottom:12px;">
+        <sl-checkbox id="provider-local">Local: on this computer or my own network (plain http and private addresses allowed)</sl-checkbox>
+    </div>
+    <p class="text-muted text-sm">The provider is added <strong>not approved</strong>: nothing is sent to it until you confirm its host.</p>
+    <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-add-provider">Cancel</sl-button>
+    <sl-button slot="footer" type="button" variant="primary" id="btn-save-provider">
+        <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add provider
+    </sl-button>
+</sl-dialog>
+
+<sl-dialog id="dlg-approve-provider" label="Approve provider">
+    <p id="approve-provider-text" style="margin-top:0;"></p>
+    <p class="text-muted text-sm">Approve only a host you trust with your notes. Changing the provider's address later withdraws this approval.</p>
+    <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-approve-provider">Not now</sl-button>
+    <sl-button slot="footer" type="button" variant="primary" id="btn-confirm-approve">
+        <sl-icon slot="prefix" name="shield-check"></sl-icon> Approve
+    </sl-button>
+</sl-dialog>
+
+<sl-dialog id="dlg-edit-provider" label="Edit provider" style="--width:520px;">
+    <div style="margin-bottom:12px;"><sl-input id="edit-provider-name" label="Name" required></sl-input></div>
+    <div style="margin-bottom:12px;"><sl-input id="edit-provider-base-url" label="Base URL"></sl-input></div>
+    <div style="margin-bottom:12px;"><sl-checkbox id="edit-provider-local">Local: on this computer or my own network</sl-checkbox></div>
+    <details style="margin-bottom:12px;">
+        <summary class="text-sm">Wire options</summary>
+        <div style="display:grid;gap:10px;margin-top:10px;">
+            <sl-select id="edit-provider-reasoning" label="How the reasoning effort is sent (Dream)" size="small">
+                <sl-option value="none">Not sent</sl-option>
+                <sl-option value="openrouter" data-protocol="openai-chat">reasoning.effort (OpenRouter)</sl-option>
+                <sl-option value="openai" data-protocol="openai-chat">reasoning_effort (OpenAI, Gemini)</sl-option>
+                <sl-option value="zai" data-protocol="openai-chat">thinking on/off (Z.ai)</sl-option>
+                <sl-option value="anthropic" data-protocol="anthropic-messages">output_config.effort (Anthropic)</sl-option>
+                <sl-option value="gemini" data-protocol="gemini">thinkingConfig.thinkingLevel (Gemini 3 and later)</sl-option>
+            </sl-select>
+            <sl-select id="edit-provider-maxtokens" label="Output limit field" size="small" data-protocol="openai-chat">
+                <sl-option value="max_tokens">max_tokens</sl-option>
+                <sl-option value="max_completion_tokens">max_completion_tokens (OpenAI)</sl-option>
+            </sl-select>
+            <sl-checkbox id="edit-provider-streamusage" data-protocol="openai-chat">Ask for a usage chunk when streaming (stream_options)</sl-checkbox>
+            <sl-checkbox id="edit-provider-imagegen" data-protocol="openai-chat">Image generation through chat/completions (OpenRouter)</sl-checkbox>
+            <sl-checkbox id="edit-provider-promptcaching" data-protocol="anthropic-messages">Prompt caching: the system prompt and the tool list are read from Anthropic's cache on every round (cache_control)</sl-checkbox>
+        </div>
+    </details>
+    <p class="text-muted text-sm">A new base URL or local flag withdraws the approval until you confirm the host again.</p>
+    <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-edit-provider">Cancel</sl-button>
+    <sl-button slot="footer" type="button" variant="primary" id="btn-save-edit-provider">
+        <sl-icon slot="prefix" name="save"></sl-icon> Save
+    </sl-button>
+</sl-dialog>
+
+<sl-dialog id="dlg-add-chat-key" label="Add key" style="--width:480px;">
+    <p id="chat-key-provider" class="text-muted text-sm" style="margin-top:0;"></p>
     <div style="margin-bottom:16px;">
         <sl-input id="chat-key-label" label="Label" placeholder="e.g. personal" required></sl-input>
     </div>
     <div style="margin-bottom:16px;">
-        <sl-input id="chat-key-value" label="API key" type="password" password-toggle placeholder="sk-or-…" required autocomplete="off"></sl-input>
+        <sl-input id="chat-key-value" label="API key" type="password" password-toggle required autocomplete="off"></sl-input>
     </div>
     <div style="margin-bottom:16px;">
         <sl-input id="chat-key-priority" label="Priority (lower = used first)" type="number" value="0"></sl-input>
     </div>
-    <p class="text-muted text-sm">The key needs an unlocked vault to be encrypted. Copy the full key now — it won't be shown again.</p>
+    <p class="text-muted text-sm">The key needs an unlocked vault to be encrypted. After it is saved only its first characters are shown.</p>
     <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-add-chat-key">Cancel</sl-button>
     <sl-button slot="footer" type="button" variant="primary" id="btn-save-chat-key">
         <sl-icon slot="prefix" name="save"></sl-icon> Save key
     </sl-button>
 </sl-dialog>
 
-<sl-dialog id="dlg-add-chat-model" label="Add model" style="--width:480px;">
+<sl-dialog id="dlg-add-chat-model" label="Add model" style="--width:520px;">
+    <p id="chat-model-provider" class="text-muted text-sm" style="margin-top:0;"></p>
+    <div id="chat-model-known" hidden style="margin-bottom:12px;">
+        <div class="text-sm" style="margin-bottom:6px;">Known models of this provider — tick to add:</div>
+        <div id="chat-model-known-list" style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;"></div>
+        <sl-button size="small" id="btn-add-known-models" style="margin-top:8px;"><sl-icon slot="prefix" name="check2-square"></sl-icon> Add ticked models</sl-button>
+        <hr style="margin:12px 0;">
+        <div class="text-sm">Or add one by its id:</div>
+    </div>
     <div style="margin-bottom:16px;">
-        <sl-input id="chat-model-id" label="Model ID" placeholder="e.g. openai/gpt-4o-mini" required></sl-input>
+        <sl-input id="chat-model-id" label="Model ID" placeholder="e.g. openai/gpt-4o-mini or glm-4.6" required></sl-input>
     </div>
     <div style="margin-bottom:16px;">
         <sl-input id="chat-model-label" label="Label" placeholder="e.g. GPT-4o mini" required></sl-input>
@@ -147,10 +198,8 @@
         <sl-checkbox id="chat-model-imagegen">Image generation</sl-checkbox>
     </div>
     <div style="margin-bottom:16px;">
-        <sl-input id="chat-model-context" label="Context window (tokens)" type="number" min="1"
-                  placeholder="e.g. 128000 (optional)"></sl-input>
+        <sl-input id="chat-model-context" label="Context window (tokens)" type="number" min="1" placeholder="e.g. 128000 (optional)"></sl-input>
     </div>
-    <p class="text-muted text-sm">A model can have multiple capabilities (e.g. both text AND vision).</p>
     <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-add-chat-model">Cancel</sl-button>
     <sl-button slot="footer" type="button" variant="primary" id="btn-save-chat-model">
         <sl-icon slot="prefix" name="save"></sl-icon> Save model
@@ -173,7 +222,6 @@
         <sl-input id="edit-chat-model-context" label="Context window (tokens)" type="number" min="1"
                   placeholder="e.g. 128000 (optional)"></sl-input>
     </div>
-    <p class="text-muted text-sm">Toggle which capabilities this model provides.</p>
     <sl-button slot="footer" type="button" variant="default" data-dlg-cancel="dlg-edit-chat-model">Cancel</sl-button>
     <sl-button slot="footer" type="button" variant="primary" id="btn-save-edit-chat-model">
         <sl-icon slot="prefix" name="save"></sl-icon> Save

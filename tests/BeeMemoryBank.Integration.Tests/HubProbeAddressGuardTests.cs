@@ -262,6 +262,11 @@ public sealed class HubProbeAddressGuardTests : IAsyncLifetime
     [InlineData("192.169.0.1")]
     [InlineData("223.255.255.255")]
     [InlineData("2606:4700:4700::1111")]
+    // the stricter public-only rule of the probe relay and the providers does not reach the hub rule: a hub may sit on a Tailscale network
+    [InlineData("100.64.0.1")]
+    [InlineData("100.101.102.103")]
+    [InlineData("192.0.2.1")]
+    [InlineData("2001:db8::1")]
     public void TheseAddresses_MayBeAHub(string address) =>
         HostAddressPolicy.IsPossibleHub(IPAddress.Parse(address)).Should().BeTrue();
 
@@ -279,6 +284,23 @@ public sealed class HubProbeAddressGuardTests : IAsyncLifetime
     [InlineData("::ffff:10.0.0.5", false)]
     [InlineData("224.0.0.1", false)]
     [InlineData("0.0.0.0", false)]
+    // the special-purpose ranges that are not globally reachable (IANA registries) are not "the open internet" either
+    [InlineData("100.64.0.1", false)]
+    [InlineData("100.127.255.254", false)]
+    [InlineData("192.0.0.8", false)]
+    [InlineData("192.0.2.1", false)]
+    [InlineData("198.18.0.1", false)]
+    [InlineData("198.51.100.1", false)]
+    [InlineData("203.0.113.1", false)]
+    [InlineData("2001:db8::1", false)]
+    [InlineData("2001::1", false)]
+    [InlineData("::", false)]
+    [InlineData("64:ff9b::6440:1", false)]
+    [InlineData("64:ff9b:1::6440:1", false)]
+    [InlineData("2002:6440:1::1", false)]
+    [InlineData("100.63.255.255", true)]
+    [InlineData("100.128.0.1", true)]
+    [InlineData("2002:808:808::1", true)]
     public void TheProbeRelayRule_StaysPublicOnly(string address, bool isPublic) =>
         HostAddressPolicy.IsPublic(IPAddress.Parse(address)).Should().Be(isPublic);
 

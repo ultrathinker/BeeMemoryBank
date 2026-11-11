@@ -36,10 +36,10 @@ independent: either one alone, or both. With the rules off the detectors make no
 embeddings phase still runs (the model steps need the vectors); no model step depends on what the
 detectors found. At least one switch must be on: the page greys out Start and says why, and the
 node refuses `{ "useRules": false, "useModel": false }` (or `useRules: false` while the model is not
-ready) with `400`. When no text model is set up, or no usable OpenRouter key, the model switch is
-shown off and disabled, with the reason (`modelProblem` in `GET /api/dream/status`: `no_model` or
-`no_key`) and links to **Admin → AI / Chat** (models and keys) and **Admin → Dream** (the model Dream
-uses). The run records `useRules` next to `useModel`; the history row shows "Rules + AI", "AI only"
+ready) with `400`. When no text model is set up, its provider (and every fallback's) is not approved,
+or no provider of the chain has a usable key, the model switch is shown off and disabled, with the reason
+(`modelProblem` in `GET /api/dream/status`: `no_model`, `provider_not_approved` or `no_key`) and links to
+**Admin → AI / Chat** (providers, models and keys) and **Admin → Dream** (the model Dream uses). The run records `useRules` next to `useModel`; the history row shows "Rules + AI", "AI only"
 or "Rules only", and the comparison of trial runs shows it beside the model's name. **The nightly run
 always runs the rules** (and the model when the settings switch it on); the start form's switches
 are for manual runs only.
@@ -91,9 +91,12 @@ enables a server's auto-unlock for its own sake.
 **With the model off (the default), nothing leaves the node.** The detectors are local rules; no
 model is called.
 
-**With "Use a model" switched on** in the settings, the model steps send fixed inputs through
-OpenRouter to the model chosen there (any text model of the chat's model catalogue; empty = the
-chat's default text model), using the chat's own stored OpenRouter keys:
+**With "Use a model" switched on** in the settings, the model steps send fixed inputs to the
+**provider of the model chosen there** (any text model of the chat's catalogue, of any provider a
+superadmin approved; empty = the chat's default text model), using that provider's own stored keys,
+and when every key of it fails, to the next model of the chat's fallback chain (possibly at another
+approved provider) - see [ai-providers.md](ai-providers.md). Nothing is ever sent to a provider that is
+not approved. The journal says which model of which provider answered each call.
 
 - **a pair** of notes: for each, the title, path, tags, dates and up to 8000 characters of text (the
   first 6000 and the last 2000);
@@ -110,14 +113,18 @@ the input, paths must be canonical, and long fields are cut (summary to 400 char
 failed. Note text inside the input is wrapped in markers and the prompts say in so many words that
 what is inside is data, not instructions — a note that contains "ignore the above" is just a note.
 
-Calls are strictly sequential, at temperature 0, with the answer length capped. The run's budget
+Calls are strictly sequential, at temperature 0, with the answer length capped (and, where the
+provider takes it, a low reasoning effort). The run's budget
 counts **every outgoing request**: a request is sent only if its estimated size (characters / 3 plus
 the output cap) still fits the token budget, and is then charged what the provider reports (a
 refused request costs a call slot but no tokens; a request with an unknown outcome is charged the
 full estimate, because the provider may have run it). The token limit is therefore an estimate, not
-an exact bill — the last request of a run can take it slightly past the number. If every key fails,
-the client waits 30, 60 and 120 seconds (Stop works during the waits) and then ends the run
-`provider_error`. A key refused with 401 is disabled, a key paused by 402 or 429 rests for five
+an exact bill — the last request of a run can take it slightly past the number. Each key tried and
+each model of the fallback chain tried is a request of its own, charged the same way. If every model
+of the chain fails, the client waits 30, 60 and 120 seconds (Stop works during the waits) and then ends
+the run `provider_error` (at once, without the waits, when nothing a wait could cure is left: no key, a
+key this node cannot read, a provider that is not approved, a request refused for good). A request the provider refuses as such (400,
+404, 413, 422) goes to no other key of that provider, marks no key, and is not sent to that model again in a later round. A key refused with 401 is disabled, a key paused by 402 or 429 rests for five
 minutes — the same key handling the chat has. No key, request text or reply text is ever written to
 a log line or an exception message.
 

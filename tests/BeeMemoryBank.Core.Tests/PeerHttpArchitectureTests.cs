@@ -24,8 +24,6 @@ public class PeerHttpArchitectureTests
             "the chat's image fetch: it has its own guard against internal addresses (the ImageFetchClient of the chat) and is no peer"),
         new("server/BeeMemoryBank.Api/Services/BlindBackup/S3RecoverySetWriter.cs",
             "an S3 endpoint the owner configured for the backup of this node; it is no peer and no join"),
-        new("server/BeeMemoryBank.Api/Startup/ApiServices.cs",
-            "the OpenRouter client: pinned to https://openrouter.ai and refusing redirects; it is no peer"),
         new("server/BeeMemoryBank.BlindConsole/ApiProxy.cs",
             "the blind console talks to its own node, on loopback; the address is the node's own front"),
         new("server/BeeMemoryBank.Cli/Commands/BlindApi.cs",

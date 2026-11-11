@@ -25,7 +25,7 @@ internal static class DreamModelExchange
         for (var attempt = 0; attempt < MaxTries; attempt++)
         {
             var text = attempt == 0 ? user : RetryUserText(user, error);
-            var answer = await model.CompleteAsync(new DreamModelRequest(ctx.ModelId!, system, text, maxOutputTokens, ctx.Budget), ct);
+            var answer = await model.CompleteAsync(new DreamModelRequest(ctx.ModelId!, system, text, maxOutputTokens, ctx.Budget, ctx.ModelRowId), ct);
             promptTokens += answer.PromptTokens;
             completionTokens += answer.CompletionTokens;
             await ctx.Log.WriteAsync(DreamEventKind.ModelCall, $"{logLabel} model call", articleIds, new JsonObject
@@ -34,6 +34,9 @@ internal static class DreamModelExchange
                 ["attempt"] = attempt + 1,
                 ["promptTokens"] = answer.PromptTokens,
                 ["completionTokens"] = answer.CompletionTokens,
+                // Which model of which provider answered (a fallback's when the analysis model's provider failed); names, never text.
+                ["model"] = answer.Model,
+                ["provider"] = answer.Provider,
             }, ct);
 
             var (value, problem) = read(answer.Content);

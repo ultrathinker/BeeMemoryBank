@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.Providers;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -18,7 +19,7 @@ namespace BeeMemoryBank.Api.Endpoints;
 public static partial class ChatEndpoints
 {
     // /stream needs both a size cap and a rate limit — chat is on by
-    // default for every user, and each turn can trigger several OpenRouter calls internally
+    // default for every user, and each turn can trigger several provider calls internally
     // (vision delegation, the tool loop's own iterations, generate_image), all billed to the
     // admin's configured key(s). This budget is generous for a real interactive conversation
     // (a message roughly every 10s, sustained) while still bounding a scripted/bulk sender.
@@ -39,7 +40,7 @@ public static partial class ChatEndpoints
         // stream: text deltas (so the assistant bubble fills in incrementally), tool-call lifecycle
         // events ("tool_call_start"/"tool_call_result" so the UI can show "searching…"), and a final
         // "done" event. The browser's disconnect (HttpContext.RequestAborted) is forwarded into the
-        // OpenRouter streaming call so navigating away cancels the upstream request (no wasted billing).
+        // provider's streaming call so navigating away cancels the upstream request (no wasted billing).
         //
         // Persistence: on the first message with no conversationId it creates a chat_conversation
         // (title = first ~40 chars of the message); it appends each user/assistant/tool turn to
@@ -51,7 +52,7 @@ public static partial class ChatEndpoints
         // the SSE response commits, so the Web proxy can route them as ordinary errors. Once the first
         // SSE frame is flushed, any failure is reported as an `event: error` frame.
         group.MapPost("/stream", async (HttpContext ctx, ChatSettingsRepository repo,
-            OpenRouterClient openRouter, ChatToolDispatcher dispatcher, SessionService session,
+            ModelRouter router, ChatToolDispatcher dispatcher, SessionService session,
             ChatConversationRepository convoRepo, ChatMessageRepository msgRepo,
             ChatAttachmentRepository attachRepo, ChatDestructiveOpCounter destructiveCounter,
             IImageTranscoder transcoder, ILogger<Program> logger) =>
@@ -81,7 +82,7 @@ public static partial class ChatEndpoints
             }
             // Bound a single call's worst-case egress size. Generous for legitimate long
             // pastes, but every extra character is more prompt tokens billed to the admin's
-            // OpenRouter key(s) on a feature that's on by default for every user.
+            // provider key(s) on a feature that's on by default for every user.
             if (req.Message.Length > MaxMessageLength)
             {
                 await JsonError(400, $"Message is too long ({req.Message.Length} chars; the limit is {MaxMessageLength}).");
@@ -100,31 +101,23 @@ public static partial class ChatEndpoints
 
             // Chat must be rate-limited per user: it's on by default for every user
             // (RequireChatAccess only checks the two access flags, not volume) — so any user with
-            // access could burn the admin's configured OpenRouter credits without bound. Keyed by
+            // access could burn the admin's configured provider credits without bound. Keyed by
             // the caller's OWN user id (not IP): the Web proxy calls this from one loopback
             // address for every browser user, so an IP-keyed limit would either throttle everyone
             // together or nobody. An agent shares its owner's identity (CallerIdentity.UserId
             // already resolves to the owner — see AgentAuthMiddleware), so an owner's budget is
             // shared between their own chats and their agents' chats, which is the intended unit
-            // of "whose OpenRouter spend is this".
+            // of "whose provider spend is this".
             if (!StreamRateLimiter.TryAcquire($"user:{userId}"))
             {
                 await JsonError(429, "You're sending chat messages too quickly. Please wait a few minutes and try again.");
                 return;
             }
 
-            // Decrypting the OpenRouter key needs the master DEK → vault must be unlocked.
+            // Decrypting a provider key (and checking a provider's approval) needs the master DEK → vault must be unlocked.
             if (!session.IsUnlocked)
             {
                 await JsonError(409, "Vault is locked");
-                return;
-            }
-
-            var keys = await DecryptAvailableKeysAsync(repo, session);
-            if (keys.Count == 0)
-            {
-                await JsonError(409,
-                    "No chat API key is available (none configured, or all are disabled/cooling down). Have a superadmin add one under /api/chat/keys.");
                 return;
             }
 
@@ -143,6 +136,17 @@ public static partial class ChatEndpoints
             }
             var effectiveVision = await repo.ResolveEffectiveModelAsync("is_vision", defaults.VisionId);
             var effectiveImageGen = await repo.ResolveEffectiveModelAsync("is_image_gen", defaults.ImageGenId);
+
+            // The text model's chain: the default text model, then its fallbacks (other providers allowed). The turn is refused
+            // before it commits to a stream when no model of it can be called now (no approved provider with a usable key).
+            var routes = new ChatRoutes(router, await router.TextChainAsync(effectiveText));
+            var (firstRoute, notReady) = await routes.FirstReadyAsync();
+            if (firstRoute is null)
+            {
+                await JsonError(409,
+                    "No model can be called right now: " + notReady + " Have a superadmin check the providers and keys under Admin → AI / Chat.");
+                return;
+            }
 
             // ── Image-attachment validation ──
             // The server decides how to route attached images based on the effective vision model
@@ -175,7 +179,7 @@ public static partial class ChatEndpoints
 
             // ── Vision delegation ──
             // If images are attached AND the effective vision model is a DIFFERENT model than the
-            // effective text model, make a separate non-streaming, tools-less OpenRouter call to the
+            // effective text model, make a separate non-streaming, tools-less provider call to the
             // vision model (all the images + the user's message text). The resulting description is
             // injected into the text model's context so it can answer as a normal text-only turn.
             // If the vision model IS the text model, the images are attached inline instead (current
@@ -186,15 +190,15 @@ public static partial class ChatEndpoints
             {
                 try
                 {
-                    visionDescription = await RunVisionDelegationAsync(repo, openRouter, transcoder, logger, keys,
-                        effectiveVision!.ModelId, req.Message, attachments, ct);
+                    visionDescription = await RunVisionDelegationAsync(router, transcoder, logger,
+                        effectiveVision!, req.Message, attachments, ct);
                 }
                 catch (AllKeysExhaustedException ex)
                 {
                     await JsonError(502, ex.Message);
                     return;
                 }
-                catch (OpenRouterHttpException ex)
+                catch (ProviderHttpException ex)
                 {
                     await JsonError(502, ex.Message);
                     return;
@@ -281,6 +285,7 @@ public static partial class ChatEndpoints
                         m.ToolCalls = JsonSerializer.Deserialize<List<ChatToolCall>>(row.ToolCallsJson, SseJsonOpts);
                     if (!string.IsNullOrEmpty(row.ToolCallId))
                         m.ToolCallId = row.ToolCallId;
+                    m.ProviderState = ProviderTurnState.TryParse(row.ProviderStateJson);
                     // Re-attach prior user-uploaded image(s) as vision content parts so the model
                     // keeps them in context across turns — but ONLY when the effective text model
                     // IS the vision model (single-model vision). In the delegation case (text
@@ -403,17 +408,17 @@ public static partial class ChatEndpoints
             try
             {
                 await RunToolLoopAsync(new ChatLoopContext(
-                    Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Session: session, Repo: repo,
+                    Ctx: ctx, Dispatcher: dispatcher, Session: session, Repo: repo,
                     MsgRepo: msgRepo, ConvoRepo: convoRepo, AttachRepo: attachRepo, Logger: logger,
-                    Keys: keys, Model: effectiveText.ModelId,
-                    EffectiveImageGenModelId: effectiveImageGen?.ModelId ?? "",
+                    Routes: routes, Model: effectiveText.ModelId,
+                    EffectiveImageGen: effectiveImageGen,
                     ConversationId: conversationId,
                     ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter,
                     ContextWindow: effectiveText.ContextWindow, UserId: userId));
             }
             finally
             {
-                keys = null!;
+                routes.Forget();
             }
         });
     }

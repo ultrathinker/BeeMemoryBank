@@ -89,18 +89,23 @@ public sealed class AdminLayoutMarkupTests
     }
 
     [Fact]
-    public void TheTwoAiChatTables_StackBelowASmallCard_AndTheirRowsAndEmptyStatesCarryTheLabels()
+    public void TheKeysAndModelsTablesOfEachProvider_StackBelowASmallCard_AndTheirRowsAndEmptyStatesCarryTheLabels()
     {
-        var page = Page("AiChat");
-        Regex.Matches(page, "<table class=\"version-table admin-stack-sm\">").Should().HaveCount(2, "the keys and the models");
-        page.Should().NotContain("<table class=\"version-table\">");
-        page.Should().Contain("<tbody id=\"chat-keys-body\">").And.Contain("<tbody id=\"chat-models-body\">");
+        // Since the model providers, each provider is a card of its own with its keys table and its models table, drawn by
+        // ai-providers.js (the page itself has no table any more); the rules for the two tables are the same as before.
+        Page("AiChat").Should().NotContain("<table").And.Contain("id=\"providers-list\"");
+        var script = File.ReadAllText(Path.Combine(Web, "wwwroot", "js", "pages", "ai-providers.js"));
+        Regex.Matches(script, "<table class=\"version-table admin-stack-sm\">").Should().HaveCount(2, "the keys and the models");
+        script.Should().NotContain("<table class=\"version-table\">");
+        // the tables are direct children of the provider's card (`.card:has(> table)` is the size container): no element is opened
+        // between the card's own div and the tables that is not closed before them
+        var card = Regex.Match(script, @"'<div class=""card provider-card"".*?'</div>';", RegexOptions.Singleline).Value;
+        card.Should().NotBeEmpty();
+        var beforeFirstTable = card[..card.IndexOf("<table", StringComparison.Ordinal)];
+        Regex.Matches(beforeFirstTable, "<div").Count.Should().Be(Regex.Matches(beforeFirstTable, "</div>").Count + 1, "only the card's own div is open where a table starts");
         // the sentences in place of the rows are cells of their own class (the padding and the centring are in the stylesheet, so a stacked table can undo them)
-        Regex.Matches(page, @"<td colspan=""\d"" class=""col-empty text-muted text-sm"">Loading…</td>").Should().HaveCount(2);
-        page.Should().Contain("<th class=\"col-center\">Text</th>").And.Contain("<th class=\"col-actions\">Actions</th>");
-
-        // the rows are strings built by admin.js: the harness scenarios of SiteSpaNavigationTests run the real script and look at them; the source says the same
-        var script = File.ReadAllText(Path.Combine(Web, "wwwroot", "js", "pages", "admin.js"));
+        Regex.Matches(script, @"<td colspan=""\d"" class=""col-empty text-muted text-sm"">").Should().HaveCount(2);
+        script.Should().Contain("<th class=\"col-center\">Text</th>").And.Contain("<th class=\"col-actions\">Actions</th>");
         foreach (var label in new[] { "Prefix", "Priority", "Enabled", "Status", "Last used", "Model ID", "Text", "Vision", "Image gen" })
             script.Should().Contain($"data-label=\"{label}\"");
         script.Should().Contain("class=\"col-actions\"><div class=\"row-actions\">");
@@ -130,7 +135,6 @@ public sealed class AdminLayoutMarkupTests
 
     [Theory]
     [InlineData("Agents", 1)]
-    [InlineData("AiChat", 2)]
     [InlineData("SearchDiagnostics", 1)]
     public void EveryStackedTable_IsTheDirectChildOfItsCard_SoTheCardIsTheSizeContainer(string name, int tables)
     {

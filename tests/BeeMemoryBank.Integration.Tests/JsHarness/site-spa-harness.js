@@ -4,7 +4,7 @@
 // what it cleans up when the page is left. The pages are named by path in `PAGES`; a "fetch" answers with a token and the "DOMParser" turns the token back into the
 // page, so no HTML parser is needed. The real admin.js is run when a swapped page asks for it, to see that its timers and listeners die with the page; the real
 // hard-delete.js is run on /Admin/HardDelete, against fake elements and requests the scenario answers by hand, to see that a request that ends after the page was left
-// writes nothing to the page that replaced it; admin.js is run on /Admin/AiChat the same way, to see the rows it builds for the two tables of that page.
+// writes nothing to the page that replaced it; ai-providers.js is run on /Admin/AiChat the same way, to see the rows it builds for the two tables of each provider's card.
 // Prints one JSON line: { ok, detail }.
 
 const fs = require('fs');
@@ -15,6 +15,7 @@ const [, , spaPath, scenario] = process.argv;
 const spaSource = fs.readFileSync(spaPath, 'utf8');
 const adminPath = path.join(path.dirname(spaPath), 'pages', 'admin.js');
 const hardDeletePath = path.join(path.dirname(spaPath), 'pages', 'hard-delete.js');
+const aiProvidersPath = path.join(path.dirname(spaPath), 'pages', 'ai-providers.js');
 
 const ORIGIN = 'http://localhost';
 
@@ -26,7 +27,7 @@ const PAGES = {
     '/Admin/DekRotation': { title: 'DEK Rotation - Bee', scripts: ['/js/pages/admin.js?v=A'], selectors: { '[data-dek-active="true"]': {} } },
     '/Admin/Agents': { title: 'Agents - Bee', scripts: ['/js/pages/admin.js?v=A'], selectors: {} },
     '/Admin/HardDelete': { title: 'Hard Delete - Bee', scripts: ['/js/pages/hard-delete.js?v=H'], selectors: {} },
-    '/Admin/AiChat': { title: 'AI / Chat - Bee', scripts: ['/js/pages/admin.js?v=A'], selectors: {} },
+    '/Admin/AiChat': { title: 'AI / Chat - Bee', scripts: ['/js/pages/admin.js?v=A', '/js/pages/ai-providers.js?v=P'], selectors: {} },
     '/Search': { title: 'Search - Bee', scripts: [], selectors: {} },
     '/Tree': { title: 'Tree - Bee', scripts: [], selectors: {} },
 };
@@ -90,6 +91,7 @@ function build(startPath) {
             // the real script, when the layout of the stand loads it
             if (src && /\/admin\.js\b/.test(src.split('?')[0])) vm.runInContext(fs.readFileSync(adminPath, 'utf8'), sandbox, { filename: adminPath });
             if (src && /\/hard-delete\.js\b/.test(src.split('?')[0])) vm.runInContext(fs.readFileSync(hardDeletePath, 'utf8'), sandbox, { filename: hardDeletePath });
+            if (src && /\/ai-providers\.js\b/.test(src.split('?')[0])) vm.runInContext(fs.readFileSync(aiProvidersPath, 'utf8'), sandbox, { filename: aiProvidersPath });
             setImmediate(() => script.onload && script.onload());
         },
     };
@@ -114,7 +116,7 @@ function build(startPath) {
         title: '',
         body: { classList: { remove() {} }, append(el) { log.appended.push(el); } },
         getElementById: id => (id === 'page-content' ? content : currentPath === '/Admin/HardDelete' ? pageEl(id)
-            : currentPath === '/Admin/AiChat' && /^chat-(keys|models)-body$/.test(id) ? pageEl(id) : null),
+            : currentPath === '/Admin/AiChat' && id === 'providers-list' ? pageEl(id) : null),
         querySelector: sel => {
             if (sel === '.main-content' || sel === '#page-content .main-content') return main;
             return PAGES[currentPath] && PAGES[currentPath].selectors[sel] || null;
@@ -227,6 +229,19 @@ function build(startPath) {
 
 const ok = detail => ({ ok: true, detail });
 const fail = detail => ({ ok: false, detail });
+
+// A provider as GET /api/chat/providers lists it (AI / Chat), and the answers of the page's other requests, which the scenarios do not look at.
+const PID = '0b0e7a1c-6f70-4e72-8000-000000000001';
+const LOCAL = '5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a';
+const provider = (id, name, isLocal) => ({
+    id, name, protocol: 'openai-chat', baseUrl: isLocal ? 'http://localhost:11434/v1' : 'https://openrouter.ai/api/v1', host: isLocal ? 'localhost:11434' : 'openrouter.ai',
+    isLocal, builtIn: !isLocal, approved: true, approvalChecked: true, approvedHost: null, approvedAt: null, keyCount: 0, availableKeyCount: 0, modelCount: 0,
+    lastError: null, note: null, clientAvailable: true, options: { reasoning: 'none', streamUsage: true, maxTokensField: 'max_tokens', imageGeneration: !isLocal },
+});
+function answerTheRest(w) {
+    w.log.api.filter(a => !a.settled && /\/chat\/(providers\/presets|keys|models\/all|settings\/defaults|settings\/fallbacks|settings\/chat-enabled)$/.test(a.url))
+        .forEach(a => a.answer(/fallbacks$/.test(a.url) ? { fallbackModelIds: [] } : /(presets|keys|all)$/.test(a.url) ? [] : {}));
+}
 
 const scenarios = {
     // the list to a page, and Back
@@ -489,51 +504,67 @@ const scenarios = {
         return ok('the toast while the page is there; once, as a notice, and never on the other page, when it was left; never aborted');
     },
 
-    // the rows admin.js builds as strings (AI / Chat): the classes and the data-label of the stacked layout, and the sentences that stand in place of the rows
+    // the rows ai-providers.js builds as strings (AI / Chat, one card per provider with a keys table and a models table): the classes and the
+    // data-label of the stacked layout, and the sentences that stand in place of the rows
     async the_rows_of_the_ai_chat_tables_carry_the_classes_and_labels_of_the_stacked_layout() {
         const w = build('/Admin');
         w.click('/Admin/AiChat');
         await w.settle();
-        const keys = w.log.api.find(a => /\/api-proxy\/chat\/keys$/.test(a.url));
-        const models = w.log.api.find(a => /\/api-proxy\/chat\/models\/all$/.test(a.url));
-        if (!keys || !models) return fail('the page did not ask for its keys and its models: ' + JSON.stringify(w.log.api.map(a => a.url)));
-        keys.answer([{ id: 7, label: 'Main key', keyPrefix: 'sk-or-v1-abc', priority: 2, enabled: true, lastUsedAt: null }]);
-        models.answer([{ id: 3, label: 'Fast', modelId: 'vendor/some-very-long-model-id:beta', isText: true, isVision: false, isImageGen: true }]);
+        const ask = re => w.log.api.find(a => re.test(a.url));
+        const providers = ask(/\/api-proxy\/chat\/providers$/), keys = ask(/\/api-proxy\/chat\/keys$/), models = ask(/\/api-proxy\/chat\/models\/all$/);
+        if (!providers || !keys || !models) return fail('the page did not ask for its providers, keys and models: ' + JSON.stringify(w.log.api.map(a => a.url)));
+        providers.answer([provider(PID, 'OpenRouter', false)]);
+        keys.answer([{ id: 'k7', providerId: PID, label: 'Main key', keyPrefix: 'sk-or-v1-abc', priority: 2, enabled: true, lastUsedAt: null }]);
+        models.answer([{ id: 'm3', providerId: PID, providerName: 'OpenRouter', label: 'Fast', modelId: 'vendor/some-very-long-model-id:beta', isText: true, isVision: false, isImageGen: true }]);
+        answerTheRest(w);
         await w.settle();
-        const k = w.el('chat-keys-body').innerHTML;
-        const mo = w.el('chat-models-body').innerHTML;
-        const need = (html, parts, what) => parts.filter(p => !html.includes(p)).map(p => what + ' lacks ' + p);
+        const html = w.el('providers-list').innerHTML;
+        const need = (parts, what) => parts.filter(p => !html.includes(p)).map(p => what + ' lacks ' + p);
         const missing = [
-            ...need(k, ['<td class="col-name"><strong>Main key</strong></td>', 'data-label="Prefix"', 'data-label="Priority"', 'data-label="Enabled"', 'data-label="Status"', 'data-label="Last used"',
-                '<td class="col-actions"><div class="row-actions"><sl-icon-button name="trash" label="Delete"'], 'a key row'),
-            ...need(mo, ['<td class="col-name"><strong>Fast</strong></td>', '<td class="wrap-anywhere" data-label="Model ID">', 'class="col-center" data-label="Text"', 'class="col-center" data-label="Vision"',
-                'class="col-center" data-label="Image gen"', '<td class="col-actions"><div class="row-actions">', 'label="Edit"', 'label="Delete"'], 'a model row'),
+            ...need(['<div class="card provider-card" id="provider-' + PID + '"'], 'the provider'),
+            ...need(['<td class="col-name"><strong>Main key</strong></td>', 'data-label="Prefix"', 'data-label="Priority"', 'data-label="Enabled"', 'data-label="Status"', 'data-label="Last used"',
+                '<td class="col-actions"><div class="row-actions"><sl-icon-button name="trash" label="Delete key"'], 'a key row'),
+            ...need(['<td class="col-name"><strong>Fast</strong></td>', '<td class="wrap-anywhere" data-label="Model ID">', 'class="col-center" data-label="Text"', 'class="col-center" data-label="Vision"',
+                'class="col-center" data-label="Image gen"', '<td class="col-actions"><div class="row-actions">', 'label="Edit model"', 'label="Delete model"'], 'a model row'),
         ];
-        if (/style="text-align:(center|right);"/.test(k + mo)) missing.push('a row still aligns its cells by an inline style, which the stacked layout cannot undo');
+        if ((html.match(/<table class="version-table admin-stack-sm">/g) || []).length !== 2) missing.push('the card has not exactly its two stacked tables');
+        if (/style="text-align:(center|right);"/.test(html)) missing.push('a row still aligns its cells by an inline style, which the stacked layout cannot undo');
         return missing.length ? fail(missing.join('; ')) : ok('the rows of both tables carry the classes and the labels');
     },
     async the_empty_and_the_failed_states_of_the_ai_chat_tables_are_sentences_that_wrap() {
         const w = build('/Admin');
         w.click('/Admin/AiChat');
         await w.settle();
-        const keys = w.log.api.find(a => /\/api-proxy\/chat\/keys$/.test(a.url));
-        const models = w.log.api.find(a => /\/api-proxy\/chat\/models\/all$/.test(a.url));
-        keys.answer([]);
-        models.answer([]);
+        w.log.api.find(a => /\/chat\/providers$/.test(a.url)).answer([provider(PID, 'OpenRouter', false), provider(LOCAL, 'Ollama', true)]);
+        w.log.api.find(a => /\/chat\/keys$/.test(a.url)).answer([]);
+        w.log.api.find(a => /\/chat\/models\/all$/.test(a.url)).answer([]);
+        answerTheRest(w);
         await w.settle();
-        const k = w.el('chat-keys-body').innerHTML;
-        const mo = w.el('chat-models-body').innerHTML;
-        if (!/<td colspan="7" class="col-empty[^"]*">No keys\. Add one to enable AI chat\.<\/td>/.test(k)) return fail('the empty keys row is ' + k);
-        if (!/<td colspan="6" class="col-empty[^"]*">No models\./.test(mo)) return fail('the empty models row is ' + mo);
-        if (/style=/.test(k + mo)) return fail('an empty row has an inline style (the padding and the alignment are the class\'s): ' + k + mo);
+        const html = w.el('providers-list').innerHTML;
+        const empty = html.match(/<tr><td colspan="\d" class="col-empty[^"]*">[^<]*<\/td><\/tr>/g) || [];
+        if (!empty.some(r => /colspan="7"[^>]*>No key yet\.</.test(r))) return fail('the empty keys row is not a col-empty sentence: ' + html);
+        if (!empty.some(r => /colspan="7"[^>]*>No key: a local server is called without one\.</.test(r))) return fail('the empty keys row of a local provider does not say it needs none: ' + html);
+        if (!empty.some(r => /colspan="6"[^>]*>No model yet\./.test(r))) return fail('the empty models row is not a col-empty sentence: ' + html);
+        if (empty.length !== 4) return fail('expected four empty rows (keys and models of two providers), found ' + empty.length);
+        if (empty.some(r => /style=/.test(r))) return fail('an empty row has an inline style (the padding and the alignment are the class\'s): ' + empty.join(''));
+
+        const none = build('/Admin');
+        none.click('/Admin/AiChat');
+        await none.settle();
+        none.log.api.find(a => /\/chat\/providers$/.test(a.url)).answer([]);
+        answerTheRest(none);
+        await none.settle();
+        if (!/No provider yet\./.test(none.el('providers-list').innerHTML)) return fail('a node with no provider does not say so: ' + none.el('providers-list').innerHTML);
+
         const v = build('/Admin');
         v.click('/Admin/AiChat');
         await v.settle();
-        v.log.api.find(a => /\/chat\/keys$/.test(a.url)).fail();
-        v.log.api.find(a => /\/chat\/models\/all$/.test(a.url)).fail();
+        v.log.api.find(a => /\/chat\/providers$/.test(a.url)).fail();
+        answerTheRest(v);
         await v.settle();
-        if (!/class="col-empty[^"]*">Failed to load keys\./.test(v.el('chat-keys-body').innerHTML) || !/class="col-empty[^"]*">Failed to load models\./.test(v.el('chat-models-body').innerHTML)) return fail('a failed load is not a col-empty sentence');
-        return ok('empty and failed rows are col-empty sentences with no inline style');
+        const failed = v.el('providers-list').innerHTML;
+        if (!/Failed to load the providers\./.test(failed) || /No provider yet/.test(failed)) return fail('a failed load is not said as such: ' + failed);
+        return ok('empty rows are col-empty sentences with no inline style; no provider and a failed load each say what they are');
     },
 };
 

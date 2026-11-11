@@ -94,6 +94,11 @@ public static class RekeyTables
             ["chat_model"] = TableFate.Plaintext,
             ["chat_settings"] = TableFate.Plaintext,
             ["chat_user_settings"] = TableFate.Plaintext,
+            // Model providers: the approval stamp and the keys of every provider but the built-in one are sealed under the chat key
+            // (ChatColumns.All); the provider's name, address and options and its models are plaintext settings like chat_model.
+            ["chat_provider"] = TableFate.Resealed,
+            ["chat_provider_key"] = TableFate.Resealed,
+            ["chat_provider_model"] = TableFate.Plaintext,
             // Dream (server/BeeMemoryBank.Api/Dream/Storage/DreamSchema.cs): advice, rules and the journal keep their
             // JSON sealed under the chat key (ChatColumns.All); runs, settings and the examined registry hold only
             // numbers, enumerations and ids.

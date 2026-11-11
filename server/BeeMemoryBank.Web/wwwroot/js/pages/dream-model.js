@@ -273,10 +273,11 @@
     // ---- the start form: two switches, the built-in rules and the AI model --------------------------------------------------------------
     var MODEL_PROBLEMS = {
         no_model: 'No text model is set up for Dream.',
-        no_key: 'No usable OpenRouter key.'
+        no_key: 'No usable key for the model\'s provider.',
+        provider_not_approved: 'The model\'s provider is not approved yet.'
     };
     var NOTHING_CHOSEN = 'Choose at least one: the built-in rules or the AI model.';
-    var LEAVES = 'the text of your notes (all except notes locked with a second password and notes in excluded folders) is sent to OpenRouter';
+    var LEAVES = 'the text of your notes (all except notes locked with a second password and notes in excluded folders) is sent to the model\'s provider';
 
     // What the start form shows for the state and the two checkboxes: whether the model can be chosen (and if not, why and where to set it up),
     // whether Start can be pressed (and if not, why), and the line under the form that says what will run and what leaves this node.

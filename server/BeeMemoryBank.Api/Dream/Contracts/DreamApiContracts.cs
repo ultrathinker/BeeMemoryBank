@@ -20,8 +20,9 @@ public sealed record DreamStatusResponse
     /// <summary>A model is configured and a key is usable: a run with the model may start.</summary>
     public bool ModelReady { get; init; }
     public string? ModelLabel { get; init; }
-    /// <summary>Why the model is not ready: <c>no_model</c> (no text model in the catalog, or the chosen one is gone) or
-    /// <c>no_key</c> (no usable OpenRouter key); null when it is ready.</summary>
+    /// <summary>Why the model is not ready: <c>no_model</c> (no text model in the catalog, or the chosen one is gone),
+    /// <c>provider_not_approved</c> (its provider is not approved) or <c>no_key</c> (no usable key of its provider, nor of a fallback's);
+    /// null when it is ready.</summary>
     public string? ModelProblem { get; init; }
     /// <summary>The built-in chat is usable (Do it with AI).</summary>
     public bool ChatAvailable { get; init; }

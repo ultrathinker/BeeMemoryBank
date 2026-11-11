@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.Providers;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -20,14 +21,13 @@ namespace BeeMemoryBank.Api.Endpoints;
 ///
 /// Group is gated by <see cref="RequireInternalKeyExtensions.RequireInternalKey(RouteGroupBuilder)"/>
 /// (internal-key check) the same as every other protected group. Within it:
-///  - Key CRUD, the admin model-catalogue views and the node-wide settings additionally carry
+///  - Provider CRUD and approval (ChatEndpoints.Providers.cs), key CRUD, the admin model-catalogue views and the node-wide settings additionally carry
 ///    <c>.RequireSuperadmin()</c> (the shared <see cref="SuperadminEndpointFilter"/>, visible at
 ///    the registration site rather than restated at the top of each handler).
 ///  - Any endpoint that encrypts/decrypts a key checks <c>session.IsUnlocked</c> first and
 ///    returns <c>409 {"error":"Vault is locked"}</c> when locked (the chat key that seals it is
 ///    itself wrapped under the master DEK — see <c>ChatDataProtector</c>).
-///  - A key's plaintext is returned ONLY at creation; every other response exposes
-///    <c>key_prefix</c> only.
+///  - A key's plaintext is never returned: every response exposes <c>key_prefix</c> only.
 ///
 /// Key encryption is <c>ArticleEncryptor.Encrypt(secret, chatKey, aad)</c> inside
 /// <c>ChatSettingsRepository.SealSecretAsync</c> / <c>OpenSecretsAsync</c>, under the node chat key
@@ -79,6 +79,7 @@ public static partial class ChatEndpoints
         var group = app.MapGroup("/api/chat").WithTags("Chat").RequireInternalKey().RequireChatAccess();
 
         MapSettingsEndpoints(group);
+        MapProviderEndpoints(group);
         MapStreamEndpoint(group);
         MapConfirmEndpoint(group);
         MapConversationEndpoints(group);
@@ -88,7 +89,9 @@ public static partial class ChatEndpoints
     {
         // ── API keys (superadmin-only; create decrypts the DEK path → also needs unlocked) ──
 
-        group.MapPost("/keys", async (CreateChatKeyRequest req, ChatSettingsRepository repo,
+        // A key belongs to one provider (providerId; none = the built-in OpenRouter provider, the request shape of 2.9.0). A key of
+        // the built-in provider goes to chat_api_key as 2.9.0 wrote it; any other to chat_provider_key, which 2.9.0 never reads.
+        group.MapPost("/keys", async (CreateChatKeyRequest req, ChatSettingsRepository repo, ChatProviderRepository providers,
             SessionService session) =>
         {
             // Encrypts under the node chat key (itself wrapped under the master DEK) → needs an unlocked vault.
@@ -101,10 +104,17 @@ public static partial class ChatEndpoints
                 return Results.Json(new ErrorResponse("ApiKey is required"), statusCode: 400);
 
             var plaintextKey = req.ApiKey.Trim();
+            if (plaintextKey.Length > 4096 || plaintextKey.Any(char.IsControl))
+                return Results.Json(new ErrorResponse("The key must be at most 4096 characters, with no line breaks or control characters."), statusCode: 400);
+
+            var providerId = req.ProviderId ?? BuiltInOpenRouter.Id;
+            if (providerId != BuiltInOpenRouter.Id && await providers.GetAsync(providerId) is null)
+                return Results.Json(new ErrorResponse($"Provider {providerId} not found"), statusCode: 404);
 
             var key = new ChatApiKey
             {
                 Id = Guid.NewGuid(),
+                ProviderId = providerId,
                 Label = req.Label.Trim(),
                 KeyPrefix = ComputeKeyPrefix(plaintextKey),
                 Enabled = true,
@@ -114,9 +124,9 @@ public static partial class ChatEndpoints
             await repo.SealSecretAsync(key, plaintextKey);
             await repo.CreateAsync(key);
 
-            // Returned exactly once; thereafter only key_prefix is exposed.
+            // The secret is not echoed back: only key_prefix is ever exposed once the key is saved.
             return Results.Created($"/api/chat/keys/{key.Id}",
-                new ChatKeyCreatedResponse(key.Id, key.Label, key.KeyPrefix, plaintextKey));
+                new ChatKeyCreatedResponse(key.Id, key.Label, key.KeyPrefix, key.ProviderId));
         }).RequireSuperadmin().RequireNonAgent();
 
         group.MapGet("/keys", async (ChatSettingsRepository repo) =>
@@ -126,7 +136,7 @@ public static partial class ChatEndpoints
             await repo.OpenPrefixesAsync(keys);
             return Results.Ok(keys.Select(k => new ChatKeyResponse(
                 k.Id, k.Label, k.KeyPrefix, k.Enabled, k.Priority,
-                k.LastUsedAt, k.LastError, k.DisabledUntil, k.CreatedAt)));
+                k.LastUsedAt, k.LastError, k.DisabledUntil, k.CreatedAt, k.ProviderId)));
         }).RequireSuperadmin().RequireNonAgent();
 
         group.MapPatch("/keys/{id:guid}", async (Guid id, UpdateChatKeyRequest req,
@@ -141,6 +151,7 @@ public static partial class ChatEndpoints
             return Results.Ok();
         }).RequireSuperadmin().RequireNonAgent();
 
+        // Removes the key from whichever table holds it (chat_api_key included: a node rolled back to 2.9.0 must not find it).
         group.MapDelete("/keys/{id:guid}", async (Guid id, ChatSettingsRepository repo) =>
         {
             await repo.DeleteKeyAsync(id);
@@ -149,25 +160,37 @@ public static partial class ChatEndpoints
 
         // ── Model catalogue (writes superadmin; listing enabled models open to authenticated users) ──
 
-        group.MapPost("/models", async (CreateChatModelRequest req, ChatSettingsRepository repo) =>
+        // A model belongs to one provider (providerId; none = the built-in OpenRouter provider, the request shape of 2.9.0).
+        group.MapPost("/models", async (CreateChatModelRequest req, ChatSettingsRepository repo, ChatProviderRepository providers,
+            ModelClientRegistry clients) =>
         {
             if (string.IsNullOrWhiteSpace(req.ModelId))
                 return Results.Json(new ErrorResponse("ModelId is required"), statusCode: 400);
-            // An OpenRouter model slug is always a clean "provider/model-name" string and never
+            // A provider's model id ("provider/model-name" at OpenRouter, "glm-4.6" at Z.ai) never
             // contains whitespace. A whitespace-containing ModelId is broken data (e.g. someone
-            // pasted a label like "For Generate: ..." into the slug field): it corrupts the chat
+            // pasted a label like "For Generate: ..." into the id field): it corrupts the chat
             // model picker downstream. Reject it defensively so the API can never persist bad data,
             // regardless of caller (the Admin UI validates too, but never trust the client alone).
             if (req.ModelId.Trim().Any(char.IsWhiteSpace))
-                return Results.Json(new ErrorResponse("ModelId must not contain whitespace — use the exact OpenRouter slug (e.g. provider/model-name)."), statusCode: 400);
+                return Results.Json(new ErrorResponse("ModelId must not contain whitespace — use the exact model id of the provider (e.g. provider/model-name)."), statusCode: 400);
+            if (req.ModelId.Trim().Length > 200)
+                return Results.Json(new ErrorResponse("ModelId must be at most 200 characters."), statusCode: 400);
             if (string.IsNullOrWhiteSpace(req.Label))
                 return Results.Json(new ErrorResponse("Label is required"), statusCode: 400);
             if (req.ContextWindow is not null and <= 0)
                 return Results.Json(new ErrorResponse("Context window must be a positive number of tokens."), statusCode: 400);
 
+            var providerId = req.ProviderId ?? BuiltInOpenRouter.Id;
+            var provider = providerId == BuiltInOpenRouter.Id ? null : await providers.GetAsync(providerId);
+            if (providerId != BuiltInOpenRouter.Id && provider is null)
+                return Results.Json(new ErrorResponse($"Provider {providerId} not found"), statusCode: 404);
+            if (req.IsImageGen && provider is not null && !clients.OffersImageGeneration(provider))
+                return Results.Json(new ErrorResponse($"Image generation is not available through provider '{provider.Name}' in this version."), statusCode: 400);
+
             var model = new ChatModelRow
             {
                 Id = Guid.NewGuid(),
+                ProviderId = providerId,
                 ModelId = req.ModelId.Trim(),
                 Label = req.Label.Trim(),
                 IsText = req.IsText,
@@ -177,15 +200,16 @@ public static partial class ChatEndpoints
                 CreatedAt = DateTime.UtcNow
             };
             await repo.CreateAsync(model);
-            return Results.Created($"/api/chat/models/{model.Id}", ToModelResponse(model));
+            return Results.Created($"/api/chat/models/{model.Id}", ToModelResponse(model, await ProviderNamesAsync(providers)));
         }).RequireSuperadmin().RequireNonAgent();
 
         // Plan §1: "listing enabled models for the per-conversation picker is available to any
         // authenticated user." Authenticated = internal-key check (group filter). No role gate.
-        group.MapGet("/models", async (ChatSettingsRepository repo) =>
+        group.MapGet("/models", async (ChatSettingsRepository repo, ChatProviderRepository providers) =>
         {
             var models = await repo.ListEnabledAsync();
-            return Results.Ok(models.Select(ToModelResponse));
+            var names = await ProviderNamesAsync(providers);
+            return Results.Ok(models.Select(m => ToModelResponse(m, names)));
         });
 
         group.MapDelete("/models/{id:guid}", async (Guid id, ChatSettingsRepository repo) =>
@@ -197,19 +221,23 @@ public static partial class ChatEndpoints
         // Admin catalogue view: ALL models (enabled + disabled) so the AI settings UI can list and
         // re-enable disabled entries. Superadmin-only. (GET /models above returns enabled-only and
         // is open to any authenticated user, for the per-conversation picker.)
-        group.MapGet("/models/all", async (ChatSettingsRepository repo) =>
+        group.MapGet("/models/all", async (ChatSettingsRepository repo, ChatProviderRepository providers) =>
         {
             var models = await repo.ListAllModelsAsync();
-            return Results.Ok(models.Select(ToModelResponse));
+            var names = await ProviderNamesAsync(providers);
+            return Results.Ok(models.Select(m => ToModelResponse(m, names)));
         }).RequireSuperadmin().RequireNonAgent();
 
         // Updates a model's three capability booleans (admin catalogue edit dialog). Superadmin-only.
         // No crypto → no IsUnlocked gate.
         group.MapPatch("/models/{id:guid}", async (Guid id, UpdateChatModelRequest req,
-            ChatSettingsRepository repo) =>
+            ChatSettingsRepository repo, ChatProviderRepository providers, ModelClientRegistry clients) =>
         {
             if (req.ContextWindow is not null and <= 0)
                 return Results.Json(new ErrorResponse("Context window must be a positive number of tokens."), statusCode: 400);
+            if (req.IsImageGen == true && await repo.GetModelByIdAsync(id) is { } model && model.ProviderId != BuiltInOpenRouter.Id
+                && await providers.GetAsync(model.ProviderId) is { } provider && !clients.OffersImageGeneration(provider))
+                return Results.Json(new ErrorResponse($"Image generation is not available through provider '{provider.Name}' in this version."), statusCode: 400);
 
             await repo.UpdateModelMetadataAsync(id, req.IsText, req.IsVision, req.IsImageGen, req.ContextWindow);
             return Results.Ok();
@@ -225,8 +253,14 @@ public static partial class ChatEndpoints
         }).RequireSuperadmin().RequireNonAgent();
 
         group.MapPatch("/settings/defaults", async (UpdateChatDefaultsRequest req,
-            ChatSettingsRepository repo) =>
+            ChatSettingsRepository repo, ChatProviderRepository providers, ModelClientRegistry clients) =>
         {
+            // The image-generation default must be a model whose provider offers image generation (only OpenRouter's chat/completions
+            // does in this version); a pinned id that does not parse or exists no more stays allowed, as before (it reads as "Default").
+            if (Guid.TryParse(req.DefaultImageGenModelId, out var imageGenId) && await repo.GetModelByIdAsync(imageGenId) is { } imageGen
+                && imageGen.ProviderId != BuiltInOpenRouter.Id
+                && await providers.GetAsync(imageGen.ProviderId) is { } imageGenProvider && !clients.OffersImageGeneration(imageGenProvider))
+                return Results.Json(new ErrorResponse($"Image generation is not available through provider '{imageGenProvider.Name}' in this version."), statusCode: 400);
             await repo.SetDefaultModelIdsAsync(req.DefaultTextModelId, req.DefaultVisionModelId, req.DefaultImageGenModelId);
             return Results.Ok(new { defaultTextModelId = req.DefaultTextModelId, defaultVisionModelId = req.DefaultVisionModelId, defaultImageGenModelId = req.DefaultImageGenModelId });
         }).RequireSuperadmin().RequireNonAgent();
@@ -284,20 +318,26 @@ public static partial class ChatEndpoints
         // composer for regular users too. Exposes ONLY {modelId,label} — no key/settings data.
         // Resolution reuses ResolveEffectiveModelAsync (pinned-if-set-else-oldest-with-capability),
         // identical to how /stream picks the model, so the label always matches what a send uses.
-        group.MapGet("/settings/effective-text-model", async (ChatSettingsRepository repo) =>
+        group.MapGet("/settings/effective-text-model", async (ChatSettingsRepository repo, ChatProviderRepository providers) =>
         {
             var defaults = await repo.GetDefaultModelIdsAsync();
             var effective = await repo.ResolveEffectiveModelAsync("is_text", defaults.TextId);
             // No text model configured → 200 with nulls (the UI just hides the label; the
             // send path already produces its own clear error in that case).
-            return Results.Ok(new { modelId = effective?.ModelId, label = effective?.Label });
+            var provider = effective is null ? null : (await ProviderNamesAsync(providers)).GetValueOrDefault(effective.ProviderId);
+            return Results.Ok(new { modelId = effective?.ModelId, label = effective?.Label, provider });
         });
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────
 
-    private static ChatModelResponse ToModelResponse(ChatModelRow m) => new(
-        m.Id, m.ModelId, m.Label, m.IsText, m.IsVision, m.IsImageGen, m.ContextWindow, m.CreatedAt);
+    private static ChatModelResponse ToModelResponse(ChatModelRow m, IReadOnlyDictionary<Guid, string> providerNames) => new(
+        m.Id, m.ModelId, m.Label, m.IsText, m.IsVision, m.IsImageGen, m.ContextWindow, m.CreatedAt,
+        m.ProviderId, providerNames.GetValueOrDefault(m.ProviderId) ?? (m.ProviderId == BuiltInOpenRouter.Id ? BuiltInOpenRouter.Name : "?"));
+
+    /// <summary>Provider id → name, for "model - provider" labels.</summary>
+    private static async Task<Dictionary<Guid, string>> ProviderNamesAsync(ChatProviderRepository providers) =>
+        (await providers.ListAsync()).ToDictionary(p => p.Id, p => p.Name);
 
     // Raw upload size cap (~8MB — sized for photo attachments). Enforced
     // server-side regardless of any client-side resize.

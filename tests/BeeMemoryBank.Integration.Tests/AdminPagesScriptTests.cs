@@ -51,12 +51,23 @@ public class AdminPagesScriptTests
     [InlineData("the_branding_page_asks_for_the_branding_and_nothing_else")]
     [InlineData("the_web_session_page_asks_for_the_session_settings_and_nothing_else")]
     [InlineData("the_search_page_asks_for_the_embeddings_switch_and_nothing_else")]
-    [InlineData("the_ai_page_asks_for_its_keys_models_defaults_and_switch")]
+    [InlineData("the_ai_page_is_left_to_its_own_script")]
     [InlineData("the_snapshots_page_posts_to_its_own_handlers")]
     [InlineData("the_upload_goes_to_the_snapshots_page")]
     public void TheScriptOfThePagesDoesOnlyThePartOfThePageItIsOn(string scenario)
     {
         var (ok, detail) = RunScenario(Path.Combine(Pages, "admin.js"), scenario);
+
+        Assert.True(ok, detail);
+    }
+
+    [BusyHelperBehaviorTests.NodeTheory]
+    [InlineData("the_providers_page_asks_for_providers_keys_models_defaults_fallbacks_and_switch")]
+    [InlineData("the_edit_dialog_shows_the_wire_options_of_the_providers_protocol")]
+    [InlineData("the_providers_script_does_nothing_on_another_page")]
+    public void TheScriptOfTheAiPageDoesItsPartAndNothingElsewhere(string scenario)
+    {
+        var (ok, detail) = RunScenario(Path.Combine(Pages, "ai-providers.js"), scenario);
 
         Assert.True(ok, detail);
     }

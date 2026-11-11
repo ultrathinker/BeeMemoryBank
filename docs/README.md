@@ -11,6 +11,7 @@ This folder contains technical documentation for the BeeMemoryBank project.
 | [encryption.md](encryption.md) | Encryption system: 3-level key hierarchy, per-article/media DEKs, session management, media encryption; the metadata key (MEK) and what metadata encryption changes; the node database key (DBK) of an encrypted node |
 | [sealed-database.md](sealed-database.md) | Encryption at rest ("Encrypt this node", 2.6.0): what a sealed node protects and what it does not, the migration (no copy of the unencrypted node is kept), locked versus unlocked restarts, the server's off-by-default auto-unlock checkbox, backups, key rotation, and what to do when something goes wrong |
 | [account-recovery.md](account-recovery.md) | "Forgot your password? Use a recovery key": the Sign In page flow, `bmb user reset-password`, what it will not do, throttling, audit records |
+| [ai-providers.md](ai-providers.md) | Model providers for the AI chat and Dream: the built-in list, the approval of a host, the egress guard, wire options, the fallback chain, storage, upgrade from 2.9.0 and the rollback rule |
 | [dream.md](dream.md) | Dream, the sleep-time advice pass (superadmin only): what a run reads, what leaves the node when a model is used, what it may change and only on whose click, where its records are kept, the limits, and what a key change, node reset, snapshot or restore does to them; the improved related-articles list |
 | [mcp.md](mcp.md) | MCP server for AI agent integration: 34 tools in 7 groups, transport, truncation, configuration examples |
 | [compaction.md](compaction.md) | Event log compaction and snapshot lifecycle |
@@ -51,6 +52,7 @@ For someone new to the project:
 - "Someone forgot the administrator password" → [account-recovery.md](account-recovery.md)
 - "Add an MCP tool" → [mcp.md](mcp.md)
 - "Decide what Dream may do" → [dream.md](dream.md)
+- "Connect the AI chat to a provider (Z.ai, Anthropic, Google, Ollama ...)" → [ai-providers.md](ai-providers.md)
 - "Deploy to a new server" → [deployment.md](deployment.md)
 - "Reach my node from outside my network" → [internet-access.md](internet-access.md)
 - "Restore a snapshot" → [snapshot-restore.md](snapshot-restore.md)

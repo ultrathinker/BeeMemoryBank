@@ -71,6 +71,7 @@ public sealed class DreamRunner(
             UseRules = plan.UseRules,
             ModelId = plan.ModelId,
             ModelLabel = plan.ModelLabel,
+            ModelRowId = plan.ModelRowId,
             MaxAdvice = plan.MaxAdvice,
             MaxMinutes = plan.MaxMinutes,
             Phases = plan.Phases,

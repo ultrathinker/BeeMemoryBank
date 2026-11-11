@@ -41,7 +41,7 @@ public static class ChatProxyEndpoints
             try
             {
                 // Forward the client's abort token: closing the tab / navigating away cancels this
-                // send, which cancels the Api-side OpenRouter stream (no wasted tokens/billing).
+                // send, which cancels the Api-side provider stream (no wasted tokens/billing).
                 upstream = await api.SendForwardAsync(upstreamReq, ctx.RequestAborted);
             }
             catch (OperationCanceledException) { return; } // client gone

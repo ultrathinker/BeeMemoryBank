@@ -224,7 +224,7 @@ const scenarios = {
     the_start_form_has_two_switches_and_says_what_leaves_the_node() {
         const both = M.startForm(status(), { useRules: true, useModel: true });
         eq([both.rules, both.useModel, both.canStart, both.model.disabled, both.model.label], [true, true, true, false, 'Some model'], 'rules and the model');
-        has(both.help, 'sent to OpenRouter', 'what leaves the node');
+        has(both.help, 'sent to the model\'s provider', 'what leaves the node');
         has(both.help, 'Some model', 'to which model');
         has(both.help, 'built-in rules run here', 'and that the rules stay here');
         const rules = M.startForm(status(), { useRules: true, useModel: false });
@@ -232,7 +232,7 @@ const scenarios = {
         const model = M.startForm(status(), { useRules: false, useModel: true });
         eq(model.canStart, true, 'the model alone can run');
         has(model.help, 'Only the AI model runs', 'the model alone');
-        has(model.help, 'sent to OpenRouter', 'and what it sends');
+        has(model.help, 'sent to the model\'s provider', 'and what it sends');
         const none = M.startForm(status(), { useRules: false, useModel: false });
         eq([none.canStart, none.startReason], [false, 'Choose at least one: the built-in rules or the AI model.'], 'neither: Start is off, with the reason');
         has(M.startForm(status(), { useRules: true, trial: true }).help, 'trial run does not count', 'a trial says so');
@@ -243,7 +243,8 @@ const scenarios = {
         eq([noModel.model.disabled, noModel.useModel, noModel.model.label], [true, false, 'not set up'], 'off, and not used even when it was ticked');
         has(noModel.model.reason, 'No text model', 'why');
         eq(noModel.model.links.map((l) => l.href), ['/Admin/AiChat', '/Admin/Dream'], 'where models and keys are, and where Dream chooses one');
-        has(M.startForm(status({ modelReady: false, modelProblem: 'no_key' }), {}).model.reason, 'No usable OpenRouter key', 'no key');
+        has(M.startForm(status({ modelReady: false, modelProblem: 'no_key' }), {}).model.reason, 'No usable key', 'no key');
+        has(M.startForm(status({ modelReady: false, modelProblem: 'provider_not_approved' }), {}).model.reason, 'not approved', 'a provider nobody approved');
         has(M.startForm(status({ modelReady: false }), {}).model.reason, 'not ready', 'an older node that does not say why');
         const nothing = M.startForm(status({ modelReady: false, modelProblem: 'no_model' }), { useRules: false, useModel: true });
         eq(nothing.canStart, false, 'the rules off and no model: nothing to run');

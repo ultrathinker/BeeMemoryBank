@@ -1,0 +1,337 @@
+{
+  "_comment": "Curated by hand: which providers the product offers, in this order, at the base URL of their own documentation. generate_presets.py adds the chat models the models.dev catalogue knows for each \"source\" (newest first, up to maxModels, without what excludeModels names; for OpenRouter the newest perVendor models of each of its vendors). Where the catalogue has the provider it decides the model facts, and pinnedModels only forces a model in. Local servers have no source: what is installed there is listed by Fetch models.",
+  "presets": [
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "source": "openrouter",
+      "protocol": "openai-chat",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "local": false,
+      "docs": "https://openrouter.ai/docs",
+      "note": null,
+      "options": {
+        "reasoning": "openrouter",
+        "streamUsage": true,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": true
+      },
+      "maxModels": 18,
+      "vendors": [
+        "anthropic",
+        "openai",
+        "google",
+        "z-ai",
+        "deepseek",
+        "x-ai",
+        "moonshotai",
+        "mistralai",
+        "qwen"
+      ],
+      "perVendor": 2,
+      "excludeModels": [
+        ":free$",
+        "-legal$",
+        "guard",
+        "omni",
+        "-exp$",
+        "^openai/.*-pro$",
+        "-\\d{4}$"
+      ],
+      "pinnedModels": []
+    },
+    {
+      "id": "zai",
+      "name": "Z.ai (pay as you go)",
+      "source": "zai",
+      "protocol": "openai-chat",
+      "baseUrl": "https://api.z.ai/api/paas/v4",
+      "local": false,
+      "docs": "https://docs.z.ai",
+      "note": null,
+      "options": {
+        "reasoning": "zai",
+        "streamUsage": false,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 8,
+      "excludeModels": [],
+      "pinnedModels": []
+    },
+    {
+      "id": "zai-coding",
+      "name": "Z.ai Coding Plan",
+      "source": "zai-coding-plan",
+      "protocol": "openai-chat",
+      "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+      "local": false,
+      "docs": "https://docs.z.ai",
+      "note": "Z.ai's terms allow the Coding Plan quota only in supported coding tools; using it elsewhere may get the account throttled or frozen.",
+      "options": {
+        "reasoning": "zai",
+        "streamUsage": false,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 8,
+      "excludeModels": [],
+      "pinnedModels": []
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "source": "anthropic",
+      "protocol": "anthropic-messages",
+      "baseUrl": "https://api.anthropic.com/v1",
+      "local": false,
+      "docs": "https://docs.anthropic.com",
+      "note": null,
+      "options": {
+        "reasoning": "anthropic",
+        "streamUsage": true,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false,
+        "promptCaching": true
+      },
+      "maxModels": 6,
+      "excludeModels": [
+        "-\\d{8}$"
+      ],
+      "pinnedModels": []
+    },
+    {
+      "id": "google",
+      "name": "Google Gemini",
+      "source": "google",
+      "protocol": "gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "local": false,
+      "docs": "https://ai.google.dev/gemini-api/docs",
+      "note": null,
+      "options": {
+        "reasoning": "gemini",
+        "streamUsage": true,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 8,
+      "excludeModels": [
+        "preview",
+        "embedding",
+        "tts",
+        "live",
+        "lyria",
+        "deep-research",
+        "computer-use",
+        "image",
+        "omni",
+        "customtools",
+        "^gemma"
+      ],
+      "pinnedModels": []
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "source": "openai",
+      "protocol": "openai-chat",
+      "baseUrl": "https://api.openai.com/v1",
+      "local": false,
+      "docs": "https://platform.openai.com/docs",
+      "note": null,
+      "options": {
+        "reasoning": "none",
+        "streamUsage": true,
+        "maxTokensField": "max_completion_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 8,
+      "excludeModels": [
+        "realtime",
+        "audio",
+        "search",
+        "transcribe",
+        "tts",
+        "image",
+        "daybreak",
+        "codex",
+        "-pro$",
+        "-\\d{4}-\\d{2}-\\d{2}$"
+      ],
+      "pinnedModels": []
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "source": "deepseek",
+      "protocol": "openai-chat",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "local": false,
+      "docs": "https://api-docs.deepseek.com",
+      "note": null,
+      "options": {
+        "reasoning": "none",
+        "streamUsage": true,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 6,
+      "excludeModels": [
+        "-exp$"
+      ],
+      "pinnedModels": []
+    },
+    {
+      "id": "moonshot",
+      "name": "Moonshot (Kimi)",
+      "source": "moonshotai",
+      "protocol": "openai-chat",
+      "baseUrl": "https://api.moonshot.ai/v1",
+      "local": false,
+      "docs": "https://platform.moonshot.ai/docs",
+      "note": null,
+      "options": {
+        "reasoning": "none",
+        "streamUsage": false,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 6,
+      "excludeModels": [],
+      "pinnedModels": []
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral",
+      "source": "mistral",
+      "protocol": "openai-chat",
+      "baseUrl": "https://api.mistral.ai/v1",
+      "local": false,
+      "docs": "https://docs.mistral.ai",
+      "note": null,
+      "options": {
+        "reasoning": "none",
+        "streamUsage": false,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 6,
+      "excludeModels": [
+        "^deepseek",
+        "^zai-",
+        "^glm-",
+        "^labs-",
+        "voxtral",
+        "codestral",
+        "devstral",
+        "embed",
+        "ocr",
+        "moderation",
+        "-\\d{4}$",
+        "-\\d+-\\d+-\\d+$"
+      ],
+      "pinnedModels": []
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "source": "groq",
+      "protocol": "openai-chat",
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "local": false,
+      "docs": "https://console.groq.com/docs",
+      "note": null,
+      "options": {
+        "reasoning": "none",
+        "streamUsage": true,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 6,
+      "excludeModels": [
+        "guard",
+        "orpheus",
+        "whisper",
+        "allam"
+      ],
+      "pinnedModels": []
+    },
+    {
+      "id": "xai",
+      "name": "xAI (Grok)",
+      "source": "xai",
+      "protocol": "openai-chat",
+      "baseUrl": "https://api.x.ai/v1",
+      "local": false,
+      "docs": "https://docs.x.ai",
+      "note": null,
+      "options": {
+        "reasoning": "none",
+        "streamUsage": true,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 6,
+      "excludeModels": [
+        "imagine",
+        "multi-agent"
+      ],
+      "pinnedModels": []
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama (local)",
+      "source": null,
+      "protocol": "openai-chat",
+      "baseUrl": "http://localhost:11434/v1",
+      "local": true,
+      "docs": "https://github.com/ollama/ollama/blob/main/docs/openai.md",
+      "note": "Runs on this computer or your own network. No key is needed; use Fetch models to list what is installed.",
+      "options": {
+        "reasoning": "none",
+        "streamUsage": false,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 0,
+      "pinnedModels": []
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio (local)",
+      "source": null,
+      "protocol": "openai-chat",
+      "baseUrl": "http://localhost:1234/v1",
+      "local": true,
+      "docs": "https://lmstudio.ai/docs/app/api/endpoints/openai",
+      "note": "Runs on this computer or your own network. No key is needed; use Fetch models to list what is loaded.",
+      "options": {
+        "reasoning": "none",
+        "streamUsage": false,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 0,
+      "pinnedModels": []
+    },
+    {
+      "id": "llamacpp",
+      "name": "llama.cpp server (local)",
+      "source": null,
+      "protocol": "openai-chat",
+      "baseUrl": "http://localhost:8080/v1",
+      "local": true,
+      "docs": "https://github.com/ggml-org/llama.cpp/tree/master/tools/server",
+      "note": "Runs on this computer or your own network. No key is needed unless the server was started with one.",
+      "options": {
+        "reasoning": "none",
+        "streamUsage": false,
+        "maxTokensField": "max_tokens",
+        "imageGeneration": false
+      },
+      "maxModels": 0,
+      "pinnedModels": []
+    }
+  ]
+}

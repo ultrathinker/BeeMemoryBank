@@ -941,7 +941,7 @@
                 part('What it skips', bullets(r.skips)) + '</section>';
         }).join('');
 
-        h += '<h3>The AI model <small>(only when a run uses it: the notes it looks at go to OpenRouter)</small></h3>';
+        h += '<h3>The AI model <small>(only when a run uses it: the notes it looks at go to the model\'s provider)</small></h3>';
         h += book.tasks.map(function (t) {
             var title = esc(t.name) + (t.promptVersion ? ' <small>prompt ' + esc(t.promptVersion) + '</small>' : '');
             if (!t.described) return '<section class="dream-rule" id="dream-task-' + esc(t.id) + '"><h4>' + title + '</h4><p class="dream-meta">This step has no description yet.</p>' + kindChips(t.kinds) + '</section>';

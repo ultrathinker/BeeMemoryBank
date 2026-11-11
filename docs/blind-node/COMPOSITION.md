@@ -34,7 +34,7 @@ node registers its own `BlindDekRotationApplier`), the full node's `AddRecovery`
 Android-only: `BlindPhonePullClient` lives in `Blind.PhoneClient`. All of these are in `BeeMemoryBank.Vault` (or `Blind.PhoneClient`), assemblies the blind host does not reference.
 
 Host (`ApiServices.cs`) registrations with no counterpart: MCP, agent bearer auth, caller-scope middleware and its HttpContext store,
-the HTTP actor provider, OpenRouter and the chat stack, the embedding model and image transcoder, mDNS, update, DEK rotation, zip export,
+the HTTP actor provider, the model providers and the chat stack, the embedding model and image transcoder, mDNS, update, DEK rotation, zip export,
 compaction, download tokens, the unlock cache, OS auto-unlock, the remote-account scheduler, the node reset hook.
 
 ## How it is checked

@@ -124,7 +124,7 @@ public sealed class PairVerdictTask : IDreamModelTask
         for (var attempt = 0; attempt < DreamModelExchange.MaxTries && reply == null; attempt++)
         {
             var text = attempt == 0 ? user : DreamModelExchange.RetryUserText(user, error);
-            var answer = await model.CompleteAsync(new DreamModelRequest(ctx.ModelId, system, text, MaxOutputTokens, ctx.Budget), ct);
+            var answer = await model.CompleteAsync(new DreamModelRequest(ctx.ModelId, system, text, MaxOutputTokens, ctx.Budget, ctx.ModelRowId), ct);
             promptTokens += answer.PromptTokens;
             completionTokens += answer.CompletionTokens;
             await ctx.Log.WriteAsync(DreamEventKind.ModelCall, "pair_verdict model call", [a.Id, b.Id], new JsonObject
@@ -133,6 +133,9 @@ public sealed class PairVerdictTask : IDreamModelTask
                 ["attempt"] = attempt + 1,
                 ["promptTokens"] = answer.PromptTokens,
                 ["completionTokens"] = answer.CompletionTokens,
+                // Which model of which provider answered (a fallback's when the analysis model's provider failed); names, never text.
+                ["model"] = answer.Model,
+                ["provider"] = answer.Provider,
             }, ct);
 
             reply = ReadReply(answer.Content, sentA, sentB, t, out error);

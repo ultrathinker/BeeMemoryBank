@@ -24,7 +24,7 @@ Everything else listens on your own computer (`127.0.0.1`) only, until you open 
 | Sync between your nodes | The peer nodes you add | Signed sync events. Article and media bodies are end-to-end encrypted; titles, folder paths, tags, names and timestamps are not (see [ADR-0005](docs/adr/0005-plaintext-metadata.md)) |
 | Joining an existing network | The node address you enter | Your master password, the new node's id, name and public key |
 | Remote accounts | The remote node you add | Username and password once, then a token |
-| AI chat | [OpenRouter](https://openrouter.ai), with your own API key | The conversation, including article text the chat tools read for it, and attached images |
+| AI chat, and Dream's optional model step | The model provider a superadmin approved for the model that answers (OpenRouter, Z.ai, Anthropic, Google, OpenAI, a server on your own network ...), with your own API key; a fallback model's provider when the first one fails. Nothing goes to a provider before its host is approved | The conversation, including article text the chat tools read for it, and attached images; for Dream, the note text described in [docs/dream.md](docs/dream.md) |
 | Server update feed | The feed URL an operator configures | A plain download request |
 | The ready-made Docker images | GitHub's container registry, `ghcr.io` | A plain download request (`docker pull`), like any image. The search model is inside the full-node image, so a running node never downloads it; the image is built on GitHub's servers, which fetch the model from huggingface.co. Building the image from source fetches it from huggingface.co on your machine instead |
 | "Scan my network" when joining | Your local network (mDNS) | A standard discovery query |

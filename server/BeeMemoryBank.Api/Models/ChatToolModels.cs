@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace BeeMemoryBank.Api.Models;
 
-// ── OpenAI / OpenRouter tool-calling wire models ─────────────────────────────
+// ── OpenAI-format tool-calling wire models ─────────────────────────────
 // These extend the flat ChatRoleMessage (role+content) with the structured
 // fields needed for a non-streaming tool-call loop: assistant `tool_calls`,
 // tool-role `tool_call_id`, and the `tools` array + tool definitions. They are
@@ -20,13 +20,60 @@ public sealed class ChatToolMessage
     [JsonPropertyName("tool_call_id")] public string? ToolCallId { get; set; }
 
     /// <summary>Vision: an in-memory-only carrier for the image(s) attached to this
-    /// message. When set, <see cref="BeeMemoryBank.Api.Services.OpenRouterClient"/> builds a
+    /// message. When set, a protocol client (<see cref="BeeMemoryBank.Api.Services.Providers.OpenAiChatClient"/>) builds a
     /// multimodal egress content array <c>[{type:text},{type:image_url},...]</c> instead of a plain
     /// string. It is deliberately <c>[JsonIgnore]</c> so it NEVER persists (the bytes live in
     /// chat_attachment keyed by message_id) and never leaks onto the wire as a top-level field —
     /// the egress client reads it explicitly via its wire-message mapping. Only used transiently for
     /// the turn it belongs to.</summary>
     [JsonIgnore] public List<string>? ImageDataUrls { get; set; }
+
+    /// <summary>Provider-opaque content of an assistant turn that asked for tools (Anthropic's thinking blocks with their signatures,
+    /// Gemini's thought signatures): what the protocol client returned in <see cref="ToolCompletionResult.ProviderState"/>, handed back to
+    /// the same client on the next round of the tool loop (and after <c>/confirm</c>, from <c>chat_message</c>, where it is sealed like the
+    /// tool calls). <c>[JsonIgnore]</c>: never on any wire as a field of its own; only the client of the protocol, provider and model that
+    /// made it puts it back into a request, every other client ignores it.</summary>
+    [JsonIgnore] public ProviderTurnState? ProviderState { get; set; }
+}
+
+/// <summary>
+/// What a protocol client needs to send an assistant turn back exactly as its model produced it, beyond the text and the tool calls every
+/// protocol shares: Anthropic's <c>thinking</c> / <c>redacted_thinking</c> blocks (with their signatures), Gemini's parts with their
+/// <c>thoughtSignature</c>. <see cref="Content"/> is the provider's own JSON for the turn's content (Anthropic: the <c>content</c> block array;
+/// Gemini: the <c>parts</c> array). It is valid only for the model that wrote it: a client uses it only when <see cref="Protocol"/>,
+/// <see cref="ProviderId"/> and <see cref="Model"/> are the call's own, so a fallback to another model (or provider) drops it and the turn
+/// is rebuilt from its text and tool calls. Never shown to the user.
+/// </summary>
+public sealed record ProviderTurnState(
+    [property: JsonPropertyName("protocol")] string Protocol,
+    [property: JsonPropertyName("providerId")] Guid ProviderId,
+    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("content")] System.Text.Json.JsonElement Content)
+{
+    /// <summary>Whether this state was written by <paramref name="protocol"/> for the same provider and model as <paramref name="providerId"/>
+    /// and <paramref name="model"/>.</summary>
+    public bool IsFor(string protocol, Guid providerId, string model) =>
+        Protocol == protocol && ProviderId == providerId && string.Equals(Model, model, StringComparison.Ordinal);
+
+    public string ToJson() => System.Text.Json.JsonSerializer.Serialize(this);
+
+    /// <summary>The state stored with a message, or null when there is none or it does not read (an unreadable state is dropped: the turn
+    /// is then rebuilt from its text and tool calls, as for another model).</summary>
+    public static ProviderTurnState? TryParse(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var state = System.Text.Json.JsonSerializer.Deserialize<ProviderTurnState>(json);
+            return state is { Protocol.Length: > 0, Model.Length: > 0 } && state.Content.ValueKind == System.Text.Json.JsonValueKind.Array
+                ? state with { Content = state.Content.Clone() }
+                : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary>An assistant-issued tool call (OpenAI "function" call shape).</summary>
@@ -63,13 +110,16 @@ public sealed class ChatToolFunction
 /// when the model produced a plain text answer (loop terminator). PromptTokens /
 /// CompletionTokens are nullable: the streaming path requests usage via
 /// stream_options.include_usage, but a provider/route can still omit it (fields stay null,
-/// never crash). Trailing optional params keep existing construction sites compiling.</summary>
+/// never crash). Trailing optional params keep existing construction sites compiling.
+/// <see cref="ProviderState"/> is the provider-opaque content of the turn the next round must send back (see
+/// <see cref="ProviderTurnState"/>); null for the OpenAI format and whenever there is none.</summary>
 public sealed record ToolCompletionResult(
     string? Content,
     List<ResolvedToolCall>? ToolCalls,
     string Model,
     int? PromptTokens = null,
-    int? CompletionTokens = null);
+    int? CompletionTokens = null,
+    ProviderTurnState? ProviderState = null);
 
 /// <summary>A tool call resolved from the model response (arguments kept as the raw
 /// JSON string the model emitted, plus a parsed view for dispatch).</summary>

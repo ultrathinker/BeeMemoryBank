@@ -1,6 +1,7 @@
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.Providers;
 using BeeMemoryBank.Core.Services;
 
 namespace BeeMemoryBank.Api.Dream;
@@ -32,6 +33,8 @@ public sealed record DreamRunPlan
     public bool UseRules { get; init; } = true;
     public string? ModelId { get; init; }
     public string? ModelLabel { get; init; }
+    /// <summary>The catalogue row of the analysis model (its provider).</summary>
+    public Guid? ModelRowId { get; init; }
     public int MaxAdvice { get; init; }
     public int MaxMinutes { get; init; }
     public IReadOnlySet<DreamPhase>? Phases { get; init; }
@@ -149,9 +152,19 @@ public static class DreamModelResolver
         return await chat.ResolveEffectiveModelAsync("is_text", defaults.TextId);
     }
 
-    /// <summary>True when at least one key can be used right now.</summary>
-    public static async Task<bool> HasUsableKeyAsync(ChatSettingsRepository chat) =>
-        (await chat.ListAvailableOrderedAsync()).Count > 0;
+    /// <summary>Why the model cannot be used now, as a <see cref="DreamErrorCodes"/> value (<c>provider_not_approved</c> or <c>no_key</c>), or
+    /// null when it, or a model of the chat's fallback chain after it, can be called.</summary>
+    public static async Task<string?> ProblemAsync(ModelRouter router, ChatModelRow model) =>
+        await router.ReadinessAsync(await router.TextChainAsync(model)) switch
+        {
+            ModelReadiness.Ready => null,
+            ModelReadiness.NotApproved => DreamErrorCodes.ProviderNotApproved,
+            _ => DreamErrorCodes.NoKey,
+        };
+
+    /// <summary>"label - provider", the way the admin pages name a model.</summary>
+    public static async Task<string> LabelAsync(ChatProviderRepository providers, ChatModelRow model) =>
+        (await providers.GetAsync(model.ProviderId))?.Name is { } provider ? $"{model.Label} - {provider}" : model.Label;
 }
 
 /// <summary>A window of the nightly schedule, in UTC (plan 3.5: the settings hold node-local time).</summary>

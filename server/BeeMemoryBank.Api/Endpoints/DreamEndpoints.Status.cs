@@ -38,10 +38,13 @@ public static partial class DreamEndpoints
             active = await SummaryAsync(activeRun, names);
         var lastRun = await store.GetLastFinishedRunAsync() is { } last ? await SummaryAsync(last, names) : null;
 
-        var hasKey = await DreamModelResolver.HasUsableKeyAsync(chat);
+        var router = services.GetRequiredService<BeeMemoryBank.Api.Services.Providers.ModelRouter>();
+        var providers = services.GetRequiredService<BeeMemoryBank.Api.Services.Providers.ChatProviderRepository>();
         var model = await DreamModelResolver.ResolveAsync(chat, settings.AnalysisModelId);
+        var modelProblem = model is null ? DreamErrorCodes.NoModel : await DreamModelResolver.ProblemAsync(router, model);
         var chatDefaults = await chat.GetDefaultModelIdsAsync();
         var chatModel = await chat.ResolveEffectiveModelAsync("is_text", chatDefaults.TextId);
+        var chatReady = chatModel is not null && await DreamModelResolver.ProblemAsync(router, chatModel) is null;
         var coverage = await corpus.GetEmbeddingCoverageAsync(settings);
 
         var busy = coordinator.IsHeavyOperationRunning;
@@ -53,10 +56,10 @@ public static partial class DreamEndpoints
             LastRun = lastRun,
             OpenAdvice = await store.CountOpenAdviceAsync(),
             Settings = new DreamStatusSettings(settings.ScheduleEnabled, settings.UseModel, settings.MaxAdviceScheduled, settings.MaxAdviceManual),
-            ModelReady = model is not null && hasKey,
-            ModelLabel = model?.Label,
-            ModelProblem = model is null ? DreamErrorCodes.NoModel : !hasKey ? DreamErrorCodes.NoKey : null,
-            ChatAvailable = chatModel is not null && hasKey,
+            ModelReady = modelProblem is null,
+            ModelLabel = model is null ? null : await DreamModelResolver.LabelAsync(providers, model),
+            ModelProblem = modelProblem,
+            ChatAvailable = chatReady,
             Embeddings = new DreamEmbeddingsStatus(coverage.Total, coverage.Pending),
             NextScheduledAt = await NextScheduledAtAsync(store, settings),
         });

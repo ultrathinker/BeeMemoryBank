@@ -104,18 +104,92 @@ const scenarios = {
         await flush();
         return same(p.log.fetched, ['/api-proxy/admin/search/embeddings-enabled']);
     },
-    async the_ai_page_asks_for_its_keys_models_defaults_and_switch() {
+    async the_ai_page_is_left_to_its_own_script() {
         const p = page({
-            'chat-keys-body': element(), 'chat-models-body': element(), 'chat-globally-enabled-toggle': element(),
+            'chat-keys-body': element(), 'chat-models-body': element(), 'chat-globally-enabled-toggle': element(), 'providers-list': element(),
             'default-text-model': element(), 'default-vision-model': element(), 'default-imagegen-model': element(),
         });
         run(p);
         await flush();
-        const want = ['/api-proxy/chat/keys', '/api-proxy/chat/models/all', '/api-proxy/chat/settings/chat-enabled'];
+        const chat = p.log.fetched.filter(u => u.indexOf('/api-proxy/chat/') === 0);
+        return chat.length ? fail('admin.js asked for ' + chat.join(', ') + '; that is the part of ai-providers.js') : ok('nothing of the AI page');
+    },
+
+    // ai-providers.js (the page script of Admin -> AI / Chat)
+    async the_providers_page_asks_for_providers_keys_models_defaults_fallbacks_and_switch() {
+        const p = page({
+            'providers-list': element(), 'chat-globally-enabled-toggle': element(), 'fallback-list': element(), 'fallback-add': element(),
+            'default-text-model': element(), 'default-vision-model': element(), 'default-imagegen-model': element(),
+        });
+        run(p);
+        await flush();
+        const want = ['/api-proxy/chat/providers', '/api-proxy/chat/providers/presets', '/api-proxy/chat/keys', '/api-proxy/chat/models/all',
+            '/api-proxy/chat/settings/defaults', '/api-proxy/chat/settings/fallbacks', '/api-proxy/chat/settings/chat-enabled'];
         const missing = want.filter(u => !p.log.fetched.includes(u));
         if (missing.length) return fail('it did not ask for ' + missing.join(', ') + '; it asked for ' + p.log.fetched.join(', '));
+        if (p.log.requests.length) return fail('it sent ' + p.log.requests.join(', ') + ' without a click');
         const foreign = p.log.fetched.filter(u => /branding|session\/settings|embeddings/.test(u));
-        return foreign.length ? fail('it asked for ' + foreign.join(', ')) : ok('keys, models, defaults and the switch');
+        return foreign.length ? fail('it asked for ' + foreign.join(', ')) : ok('providers, presets, keys, models, defaults, fallbacks and the switch');
+    },
+    async the_edit_dialog_shows_the_wire_options_of_the_providers_protocol() {
+        // The elements of the Edit dialog that belong to one protocol (data-protocol), the reasoning styles among them.
+        const tagged = {
+            'openai-chat': ['edit-provider-maxtokens', 'edit-provider-streamusage', 'edit-provider-imagegen', 'style-openrouter', 'style-openai', 'style-zai'],
+            'anthropic-messages': ['edit-provider-promptcaching', 'style-anthropic'],
+            'gemini': ['style-gemini'],
+        };
+        const own = {};
+        for (const [protocol, names] of Object.entries(tagged)) for (const n of names) own[n] = element({ attrs: { 'data-protocol': protocol } });
+        const dialog = element({ querySelectorAll: () => Object.values(own) });
+        const save = element();
+        const els = {
+            'providers-list': element({ contains: () => true }), 'dlg-edit-provider': dialog, 'btn-save-edit-provider': save, 'edit-provider-name': element(),
+            'edit-provider-base-url': element(), 'edit-provider-local': element(), 'edit-provider-reasoning': element(),
+        };
+        for (const n of ['edit-provider-maxtokens', 'edit-provider-streamusage', 'edit-provider-imagegen', 'edit-provider-promptcaching']) els[n] = own[n];
+        const providers = [
+            { id: 'a', name: 'Anthropic', protocol: 'anthropic-messages', baseUrl: 'https://api.anthropic.com/v1', host: 'api.anthropic.com', options: { reasoning: 'anthropic', promptCaching: false } },
+            { id: 'g', name: 'Gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', host: 'generativelanguage.googleapis.com', options: { reasoning: 'gemini' } },
+            { id: 'o', name: 'OpenRouter', protocol: 'openai-chat', baseUrl: 'https://openrouter.ai/api/v1', host: 'openrouter.ai', options: { reasoning: 'openrouter', imageGeneration: true, streamUsage: true } },
+        ];
+        const p = page(els);
+        p.sandbox.fetch = url => {
+            p.log.fetched.push(String(url));
+            return Promise.resolve({ ok: true, json: () => Promise.resolve(String(url) === '/api-proxy/chat/providers' ? providers : []) });
+        };
+        const sent = [];
+        p.sandbox.bmbBusy.request = (url, opts) => { sent.push({ url, body: JSON.parse(opts.body) }); return Promise.resolve({ body: {} }); };
+        run(p);
+        await flush();
+        const edit = id => p.log.listeners.filter(l => l.type === 'click').forEach(l => l.fn({
+            target: { closest: sel => (sel === '.btn-edit-provider' ? { dataset: { id } } : null), nodeType: 1 }, preventDefault() {}, stopPropagation() {},
+        }));
+        const shown = () => Object.keys(own).filter(n => own[n].style.display !== 'none').sort();
+        const saveClick = save.listeners.find(l => l.type === 'click');
+        if (!saveClick) return fail('the Save button of the Edit dialog has no click handler');
+
+        for (const pr of providers) {
+            edit(pr.id);
+            const want = tagged[pr.protocol].slice().sort();
+            if (JSON.stringify(shown()) !== JSON.stringify(want)) return fail(pr.protocol + ' showed ' + JSON.stringify(shown()) + ', expected ' + JSON.stringify(want));
+            if (els['edit-provider-reasoning'].value !== pr.options.reasoning) return fail(pr.protocol + ': the reasoning select shows ' + els['edit-provider-reasoning'].value);
+            saveClick.fn(stray());
+            await flush();
+        }
+        if (sent.length !== 3) return fail('saved ' + sent.length + ' times');
+        const [a, g, o] = sent.map(s => s.body.options);
+        if (a.promptCaching !== false || a.reasoning !== 'anthropic' || a.imageGeneration !== false) return fail('Anthropic saved ' + JSON.stringify(a));
+        if (g.reasoning !== 'gemini' || g.imageGeneration !== false || g.promptCaching !== true) return fail('Gemini saved ' + JSON.stringify(g));
+        if (o.imageGeneration !== true || o.reasoning !== 'openrouter') return fail('OpenRouter saved ' + JSON.stringify(o));
+        return same(sent.map(s => 'PATCH ' + s.url), ['PATCH /api-proxy/chat/providers/a', 'PATCH /api-proxy/chat/providers/g', 'PATCH /api-proxy/chat/providers/o']);
+    },
+    async the_providers_script_does_nothing_on_another_page() {
+        const p = page({ 'brand-name-input': element(), 'chat-globally-enabled-toggle': element() });
+        run(p);
+        for (const l of p.log.listeners) l.fn(stray());
+        await flush();
+        if (p.log.fetched.length) return fail('it asked the server for ' + p.log.fetched.join(', '));
+        return p.log.requests.length ? fail('it sent ' + p.log.requests.join(', ')) : ok('no call without its list of providers');
     },
     async the_snapshots_page_posts_to_its_own_handlers() {
         const mode = element({ value: 'standalone' });

@@ -23,6 +23,16 @@ public class PublicHostValidatorTests
     [InlineData("::1")]             // IPv6 loopback
     [InlineData("fe80::1")]         // IPv6 link-local
     [InlineData("fd00::1")]         // IPv6 unique local
+    [InlineData("100.64.0.1")]      // shared address space (carrier NAT, Tailscale)
+    [InlineData("192.0.0.8")]       // IETF protocol assignments
+    [InlineData("192.0.2.1")]       // TEST-NET-1
+    [InlineData("198.18.0.1")]      // benchmarking
+    [InlineData("198.51.100.1")]    // TEST-NET-2
+    [InlineData("203.0.113.1")]     // TEST-NET-3
+    [InlineData("2001:db8::1")]     // IPv6 documentation
+    [InlineData("2001::1")]         // Teredo
+    [InlineData("64:ff9b::6440:1")] // NAT64 of 100.64.0.1
+    [InlineData("2002:6440:1::1")]  // 6to4 of 100.64.0.1
     public async Task IsPublicHostAsync_RejectsNonPublicAddresses(string ip)
     {
         (await _validator.IsPublicHostAsync(ip, CancellationToken.None)).Should().BeFalse();

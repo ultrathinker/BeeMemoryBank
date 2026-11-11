@@ -120,7 +120,7 @@ public static class AdminPageCatalog
         new(AdminRoutes.Agents, SearchAndAi, "robot", "Agents",
             "The keys AI agents use to reach this vault: see when each was last used and revoke the ones you no longer trust."),
         new(AdminRoutes.AiChat, SearchAndAi, "chat-left-text", "AI / Chat",
-            "The OpenRouter keys and models behind the built-in AI chat, and whether users may use it at all."),
+            "The model providers (OpenRouter, Z.ai, Anthropic, Google, local servers ...), their keys and models, and whether users may use the chat at all."),
         new(AdminRoutes.Dream, SearchAndAi, "moon-stars", "Dream",
             "When Dream looks through the notes, how much advice it may leave, whether it may use a model, and which folders it never reads."),
         new(AdminRoutes.SearchDiagnostics, SearchAndAi, "search", "Search diagnostics",

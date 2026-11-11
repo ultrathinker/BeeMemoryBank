@@ -11,8 +11,8 @@
     </p>
     <p class="admin-warning">
         <strong>With a model switched on, note content leaves this node.</strong> Dream sends the text of every note it looks at - all notes of the
-        node except those under a second password and those in the excluded folders below - through OpenRouter to the model chosen in the Model
-        section. With the model off, Dream works from local rules alone and nothing leaves the node.
+        node except those under a second password and those in the excluded folders below - to the provider of the model chosen in the Model
+        section (a provider a superadmin approved on the AI / Chat page, or a fallback model's provider when that one fails). With the model off, Dream works from local rules alone and nothing leaves the node.
     </p>
     <p>
         The nightly schedule and these limits belong to <strong>this node alone</strong>: with several full nodes, turn the schedule on on one of
@@ -67,9 +67,9 @@
         <sl-switch id="dream-use-model" size="small">Use a model</sl-switch>
         <p class="text-muted text-sm" style="margin:8px 0 16px 0;">
             With it off, Dream runs on local rules alone and <strong>nothing leaves this node</strong>. With it on, every run also asks the model:
-            the text of every note it looks at - except the protected ones and the excluded folders below - goes through OpenRouter to the model
-            chosen here, and what the model advises is kept on this node like every other advice. OpenRouter keys and models are managed on the
-            <a href="/Admin/AiChat">AI / Chat</a> page.
+            the text of every note it looks at - except the protected ones and the excluded folders below - goes to the provider of the model
+            chosen here (or of a fallback model), and what the model advises is kept on this node like every other advice. Providers, their keys
+            and models, and the fallback chain are managed on the <a href="/Admin/AiChat">AI / Chat</a> page.
         </p>
         <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Model for Dream</label>
         <sl-select id="dream-analysis-model" size="small" style="max-width:360px;" hoist></sl-select>

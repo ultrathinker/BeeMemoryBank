@@ -895,7 +895,7 @@ itself, refuses if **any** answer is an address a node may not call (unspecified
 it has just checked, and checks the address it ended up connected to, so a name that resolves differently the second time cannot move a connection. No system proxy is
 used (a proxy would resolve and connect for this node, and the check would judge the proxy). Loopback and private LAN addresses are allowed. The hub probe uses the
 same connector with its stricter rule (it also refuses loopback). `PeerHttpArchitectureTests` fails for a handler that is built without the connector unless the place is
-listed with the reason it never dials a peer (the chat's image fetch, an S3 backup target, the OpenRouter client, the node's own front on loopback).
+listed with the reason it never dials a peer (the chat's image fetch, an S3 backup target, the node's own front on loopback). The model providers' clients (`ProviderEgress`) open their sockets through the same connector, with the rule of public addresses only for a provider not marked local (docs/ai-providers.md).
 
 **What a failure says.** A screen, an API answer, a status or a Warning says what *kind* of failure it was and never the words of the other side or of the stack:
 `PeerContactLog.Describe` for a failed call (no answer, refused, timed out, a certificate that was not accepted, a closed door, an answer that cannot be read) and

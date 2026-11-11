@@ -153,6 +153,36 @@ public sealed class ChatDbInitializer
             await indexCmd.ExecuteNonQueryAsync();
         }
 
+        // Model providers (docs/ai-providers.md): the fallback chain of the default text model, and which provider answered a message.
+        await EnsureColumnAsync(conn, "chat_settings", "fallback_text_model_ids",
+            "ALTER TABLE chat_settings ADD COLUMN fallback_text_model_ids TEXT");
+        await EnsureColumnAsync(conn, "chat_message", "provider",
+            "ALTER TABLE chat_message ADD COLUMN provider TEXT");
+        // The provider-opaque content of an assistant tool-call turn (Anthropic's thinking blocks, Gemini's thought signatures), sealed
+        // under the chat key from its first write (ChatMessageRepository; the offline re-key's ChatColumns re-seals it).
+        await EnsureColumnAsync(conn, "chat_message", "provider_state_ciphertext",
+            "ALTER TABLE chat_message ADD COLUMN provider_state_ciphertext BLOB");
+        await EnsureColumnAsync(conn, "chat_message", "provider_state_iv",
+            "ALTER TABLE chat_message ADD COLUMN provider_state_iv BLOB");
+        await EnsureColumnAsync(conn, "chat_message", "provider_state_key_v",
+            "ALTER TABLE chat_message ADD COLUMN provider_state_key_v INTEGER");
+
+        // A node upgraded from 2.9.0 has keys in chat_api_key or models in chat_model: those are the built-in OpenRouter provider's, and
+        // its row is made here, with nobody doing anything (and made again after a rollback to 2.9.0 and back, if that version added
+        // rows meanwhile). A node that never used the chat gets no provider. Nothing is copied: the legacy tables stay the built-in
+        // provider's own (see ChatSettingsRepository).
+        // The id is bound the way the repositories bind it (Dapper, a Guid), so the check and the insert see the same text.
+        var needsBuiltIn = await Dapper.SqlMapper.ExecuteScalarAsync<long>(conn,
+            "SELECT (EXISTS (SELECT 1 FROM chat_api_key) OR EXISTS (SELECT 1 FROM chat_model)) " +
+            "AND NOT EXISTS (SELECT 1 FROM chat_provider WHERE id = @id)",
+            new { id = Providers.BuiltInOpenRouter.Id });
+        if (needsBuiltIn == 1)
+        {
+            await Dapper.SqlMapper.ExecuteAsync(conn, Providers.ChatProviderRepository.EnsureBuiltInSql,
+                Providers.ChatProviderRepository.BuiltInParameters());
+            _logger.LogInformation("chat.db: the keys and models of 2.9.0 belong to the built-in OpenRouter provider");
+        }
+
         // The Dream tables (plan 3.2) live in chat.db for the same reasons the chat does: local to the node, never in a
         // snapshot or a sync event, sealed under the chat key. Their DDL is the feature's own (DreamSchema).
         await BeeMemoryBank.Api.Dream.DreamSchema.EnsureAsync(conn);
@@ -222,6 +252,7 @@ public sealed class ChatDbInitializer
             tool_calls_key_v      INTEGER,
             tool_call_id          TEXT,
             model                 TEXT,
+            provider              TEXT,
             tokens_in             INTEGER,
             tokens_out            INTEGER,
             tool_calls_count      INTEGER,
@@ -275,6 +306,62 @@ public sealed class ChatDbInitializer
             created_at            TEXT
         );
         """,
+        // Model providers (docs/ai-providers.md). A provider is a name, a protocol, a base URL, a local flag, wire options and an
+        // approval: approval_* is the stamp sealed under the chat key that says which protocol, base URL and local flag a superadmin
+        // approved (ChatProviderRepository); approved_host/by/at are for display only. The built-in OpenRouter provider of 2.9.0 keeps
+        // its keys in chat_api_key and its models in chat_model; every other provider's are in the two tables below, which 2.9.0
+        // never reads. A chat_provider_key secret is sealed with its id in the AAD and its provider's id inside the sealed text.
+        """
+        CREATE TABLE IF NOT EXISTS chat_provider (
+            id                   TEXT PRIMARY KEY,
+            name                 TEXT NOT NULL,
+            preset_id            TEXT,
+            protocol             TEXT NOT NULL,
+            base_url             TEXT NOT NULL,
+            is_local             INTEGER NOT NULL DEFAULT 0,
+            options_json         TEXT,
+            approval_ciphertext  BLOB,
+            approval_iv          BLOB,
+            approval_key_v       INTEGER,
+            approved_host        TEXT,
+            approved_by          INTEGER,
+            approved_at          TEXT,
+            created_at           TEXT NOT NULL,
+            updated_at           TEXT NOT NULL
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS chat_provider_key (
+            id                     TEXT PRIMARY KEY,
+            provider_id            TEXT NOT NULL,
+            label                  TEXT NOT NULL,
+            key_prefix_ciphertext  BLOB,
+            key_prefix_iv          BLOB,
+            key_prefix_key_v       INTEGER,
+            ciphertext             BLOB NOT NULL,
+            iv                     BLOB NOT NULL,
+            key_v                  INTEGER,
+            enabled                INTEGER NOT NULL DEFAULT 1,
+            priority               INTEGER NOT NULL DEFAULT 0,
+            disabled_until         TEXT,
+            last_error             TEXT,
+            last_used_at           TEXT,
+            created_at             TEXT NOT NULL
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS chat_provider_model (
+            id              TEXT PRIMARY KEY,
+            provider_id     TEXT NOT NULL,
+            model_id        TEXT NOT NULL,
+            label           TEXT NOT NULL,
+            is_text         INTEGER NOT NULL DEFAULT 0,
+            is_vision       INTEGER NOT NULL DEFAULT 0,
+            is_image_gen    INTEGER NOT NULL DEFAULT 0,
+            context_window  INTEGER,
+            created_at      TEXT
+        );
+        """,
         // Single-row settings table (id is always 1). Holds the three pinned default-model ids
         // (nullable GUIDs referencing chat_model.id; null = "use the oldest model with the
         // matching property") and the node-wide chat_globally_enabled kill switch. Node-local like
@@ -292,7 +379,8 @@ public sealed class ChatDbInitializer
             chat_globally_enabled      INTEGER NOT NULL DEFAULT 1,
             default_text_model_id      TEXT,
             default_vision_model_id    TEXT,
-            default_image_gen_model_id TEXT
+            default_image_gen_model_id TEXT,
+            fallback_text_model_ids    TEXT
         );
         """,
         // Auto-approve-writes is per-user, not a single node-global toggle — each user

@@ -109,7 +109,7 @@ mobile/BeeMemoryBank.Mobile/Platforms/Android/SyncWorkScheduler.cs 1
 mobile/BeeMemoryBank.Mobile/Services/BusyAction.cs 1
 mobile/BeeMemoryBank.Mobile/Services/SyncStatusService.cs 2
 server/BeeMemoryBank.Api/Dream/Apply/DreamApplyService.cs 10
-server/BeeMemoryBank.Api/Dream/Model/OpenRouterDreamModelClient.cs 4
+server/BeeMemoryBank.Api/Dream/Model/ProviderDreamModelClient.cs 6
 server/BeeMemoryBank.Api/Endpoints/ArticleEndpoints.cs 3
 server/BeeMemoryBank.Api/Endpoints/AutoUnlockEndpoints.cs 1
 server/BeeMemoryBank.Api/Endpoints/BeeImportEndpoints.cs 2
@@ -121,9 +121,9 @@ server/BeeMemoryBank.Api/Endpoints/BlindJoinEndpoints.cs 1
 server/BeeMemoryBank.Api/Endpoints/BlindNodeManagementEndpoints.cs 6
 server/BeeMemoryBank.Api/Endpoints/BlindPhoneEndpoints.cs 3
 server/BeeMemoryBank.Api/Endpoints/ChatEndpoints.Attachments.cs 6
-server/BeeMemoryBank.Api/Endpoints/ChatEndpoints.KeyManagement.cs 3
+server/BeeMemoryBank.Api/Endpoints/ChatEndpoints.Providers.cs 1
 server/BeeMemoryBank.Api/Endpoints/ChatEndpoints.Stream.cs 3
-server/BeeMemoryBank.Api/Endpoints/ChatEndpoints.ToolLoop.cs 6
+server/BeeMemoryBank.Api/Endpoints/ChatEndpoints.ToolLoop.cs 11
 server/BeeMemoryBank.Api/Endpoints/CommentEndpoints.cs 1
 server/BeeMemoryBank.Api/Endpoints/ConceptTagEndpoints.cs 3
 server/BeeMemoryBank.Api/Endpoints/CopyEndpoints.cs 4
@@ -167,7 +167,8 @@ server/BeeMemoryBank.Api/Services/ChatToolDispatcher.WriteTools.cs 8
 server/BeeMemoryBank.Api/Services/ChatToolDispatcher.cs 2
 server/BeeMemoryBank.Api/Services/DekRotationService.Accept.cs 6
 server/BeeMemoryBank.Api/Services/DekRotationService.AutoAccept.cs 3
-server/BeeMemoryBank.Api/Services/OpenRouterClient.cs 3
+server/BeeMemoryBank.Api/Services/Providers/ModelRouter.cs 7
+server/BeeMemoryBank.Api/Services/Providers/OpenAiChatClient.cs 3
 server/BeeMemoryBank.Api/Services/Recovery/BlindRestoreClient.cs 1
 server/BeeMemoryBank.Api/Services/RestoreInitiatorService.cs 3
 server/BeeMemoryBank.Api/Services/SnapshotService.NetworkRestore.cs 1

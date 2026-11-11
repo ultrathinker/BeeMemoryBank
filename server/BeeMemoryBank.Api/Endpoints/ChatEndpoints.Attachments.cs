@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.Providers;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -70,7 +71,7 @@ public static partial class ChatEndpoints
 
     /// <summary>Builds the egress vision data URL for an image, downscaling to
     /// <see cref="VisionMaxDimension"/> on the longest side and re-encoding as JPEG q85 to keep the
-    /// OpenRouter payload reasonable (a simple max-dimension resize is enough).
+    /// provider payload reasonable (a simple max-dimension resize is enough).
     /// Goes through the image transcoder (the product's one image library). Falls back to the original
     /// bytes (as a data URL) if the transcoder cannot load/encode them.</summary>
     internal static string BuildVisionDataUrl(IImageTranscoder transcoder, byte[] blob, string mime)
@@ -85,15 +86,15 @@ public static partial class ChatEndpoints
         }
     }
 
-    /// <summary>Vision delegation: makes a SEPARATE, non-streaming, tools-less OpenRouter call to
-    /// the effective vision model with all the attached images + the user's message text. Returns
-    /// the text description the vision model produced, which the caller injects into the text
-    /// model's context. Uses multi-key failover (same helper as the main loop). Never returns null —
-    /// on a no-content response, returns a placeholder so the text model has something to work
-    /// with.</summary>
+    /// <summary>Vision delegation: makes a SEPARATE, non-streaming, tools-less call to the effective
+    /// vision model (through its own provider, with that provider's keys) with all the attached images +
+    /// the user's message text. Returns the text description the vision model produced, which the caller
+    /// injects into the text model's context. Uses multi-key failover (same router as the main loop).
+    /// Never returns null — on a no-content response, returns a placeholder so the text model has
+    /// something to work with.</summary>
     private static async Task<string> RunVisionDelegationAsync(
-        ChatSettingsRepository repo, OpenRouterClient openRouter, IImageTranscoder transcoder, ILogger logger,
-        IReadOnlyList<KeyMaterial> keys, string visionModelId, string userMessage,
+        ModelRouter router, IImageTranscoder transcoder, ILogger logger,
+        ChatModelRow visionModel, string userMessage,
         List<(byte[] Bytes, string Mime)> images, CancellationToken ct)
     {
         var dataUrls = images.Select(i => BuildVisionDataUrl(transcoder, i.Bytes, i.Mime)).ToList();
@@ -108,11 +109,10 @@ public static partial class ChatEndpoints
             }
         };
 
-        // CompleteWithToolsAsync with tools=null goes through ToWire() which serializes the image as
-        // a multimodal content array — exactly what a vision model needs. With no tools, ToolCalls is
-        // null and we just read Content.
-        var result = await RunWithFailoverAsync(repo, keys,
-            (pk, token) => openRouter.CompleteWithToolsAsync(pk, visionModelId, visionMessages, null, token),
+        // CompleteWithToolsAsync with tools=null serializes the image as a multimodal content array —
+        // exactly what a vision model needs. With no tools, ToolCalls is null and we just read Content.
+        var (result, _) = await router.RunAsync([visionModel],
+            (route, call, token) => route.Client.CompleteWithToolsAsync(call, visionMessages, null, token),
             ct);
 
         return string.IsNullOrEmpty(result.Content)
@@ -121,7 +121,8 @@ public static partial class ChatEndpoints
     }
 
     /// <summary>Handles a <c>generate_image</c> tool call from the text model's tool loop. Makes a
-    /// non-streaming OpenRouter call to the effective image-gen model with the given prompt, stores
+    /// non-streaming call to the effective image-gen model (through its own provider, which must offer
+    /// image generation — today OpenRouter's chat/completions does) with the given prompt, stores
     /// the resulting image(s) as chat_attachment (kind=generated-image) linked to the assistant
     /// message that requested it, emits <c>event: image</c> SSE frames so the UI renders them
     /// inline, and feeds a tool result back so the text model can continue. If no image-gen model is
@@ -137,7 +138,7 @@ public static partial class ChatEndpoints
         string Err(string msg) => JsonSerializer.Serialize(new { error = msg }, SseJsonOpts);
 
         // No image-gen model configured → graceful error tool result.
-        if (string.IsNullOrEmpty(lc.EffectiveImageGenModelId))
+        if (lc.EffectiveImageGen is null)
         {
             sw.Stop();
             var noModelJson = Err("No image generation model is configured. Tell the user that image generation is not available on this node.");
@@ -167,8 +168,10 @@ public static partial class ChatEndpoints
 
         try
         {
-            var result = await RunWithFailoverAsync(lc.Repo, lc.Keys,
-                (pk, token) => lc.OpenRouter.GenerateImageAsync(pk, lc.EffectiveImageGenModelId, imgMessages, token),
+            var (result, _) = await lc.Routes.Router.RunAsync([lc.EffectiveImageGen],
+                (route, call, token) => route.Client.SupportsImageGeneration(route.Target.Options)
+                    ? route.Client.GenerateImageAsync(call, imgMessages, token)
+                    : throw new ProviderUnavailableException($"Image generation is not available through provider '{route.ProviderName}'."),
                 lc.Ct);
 
             // Materialize each image source → bytes, store as attachment, emit inline SSE event.
@@ -235,12 +238,12 @@ public static partial class ChatEndpoints
         catch (AllKeysExhaustedException ex)
         {
             sw.Stop();
-            var errJson = Err("Image generation failed (all API keys exhausted): " + ex.Message);
+            var errJson = Err("Image generation failed: " + ex.Message);
             lc.ConvoMessages.Add(new ChatToolMessage { Role = "tool", ToolCallId = tc.Id, Content = errJson });
             await SafePersistToolMessage(lc.MsgRepo, lc.Logger, lc.ConversationId, tc.Id, errJson, lc.Session);
             await lc.Sse("tool_call_result", new { tool = tc.Name, callId = tc.Id, ok = false, durationMs = (int)sw.ElapsedMilliseconds, error = ex.Message });
         }
-        catch (OpenRouterHttpException ex)
+        catch (ProviderHttpException ex)
         {
             sw.Stop();
             var errJson = Err("Image generation failed: " + ex.Message);
@@ -372,8 +375,8 @@ public static partial class ChatEndpoints
     }
 
     // Dedicated HttpClient for fetching model-returned image URLs (image-gen). Reused across calls
-    // (recommended HttpClient usage). NOT the pinned OpenRouter egress client — these are image CDN
-    // URLs returned by OpenRouter/providers for a user-requested generation, fetched server-side so
+    // (recommended HttpClient usage). NOT the provider egress client — these are image CDN
+    // URLs returned by a provider for a user-requested generation, fetched server-side so
     // they render inline under the strict img-src CSP. See ResolveImageSourceToBytesAsync.
     //
     // SSRF HARDENING (the handler does BOTH jobs):

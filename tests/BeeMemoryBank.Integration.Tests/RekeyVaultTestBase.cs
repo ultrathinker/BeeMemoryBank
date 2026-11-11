@@ -112,7 +112,8 @@ public abstract class RekeyVaultTestBase : IAsyncLifetime
         var message = new ChatMessage
         {
             Id = Guid.NewGuid(), ConversationId = conversation, Role = "assistant", ContentText = "CHAT-SENTINEL-content",
-            ToolCallsJson = "[{\"note\":\"CHAT-SENTINEL-tool\"}]", CreatedAt = DateTime.UtcNow,
+            ToolCallsJson = "[{\"note\":\"CHAT-SENTINEL-tool\"}]", ProviderStateJson = "{\"note\":\"CHAT-SENTINEL-provider-state\"}",
+            CreatedAt = DateTime.UtcNow,
         };
         await sp.GetRequiredService<ChatMessageRepository>().CreateAsync(message, Session);
         await sp.GetRequiredService<ChatAttachmentRepository>().CreateAsync(new ChatAttachment
@@ -121,6 +122,17 @@ public abstract class RekeyVaultTestBase : IAsyncLifetime
         var apiKey = new ChatApiKey { Id = Guid.NewGuid(), Label = "k", KeyPrefix = "sk-or-v1-abc", CreatedAt = DateTime.UtcNow };
         await settings.SealSecretAsync(apiKey, "sk-or-v1-CHAT-SENTINEL-provider-key");
         await settings.CreateAsync(apiKey);
+        // A model provider of this version (not the built-in OpenRouter one): its approval stamp and its key are sealed columns of their own.
+        var providers = sp.GetRequiredService<BeeMemoryBank.Api.Services.Providers.ChatProviderRepository>();
+        var provider = new BeeMemoryBank.Api.Services.Providers.ChatProvider
+        {
+            Id = Guid.NewGuid(), Name = "p", Protocol = "openai-chat", BaseUrl = "https://api.example.com/v1", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        await providers.CreateAsync(provider);
+        await providers.ApproveAsync(provider, 1);
+        var providerKey = new ChatApiKey { Id = Guid.NewGuid(), ProviderId = provider.Id, Label = "p", KeyPrefix = "sk-provider", CreatedAt = DateTime.UtcNow };
+        await settings.SealSecretAsync(providerKey, "sk-CHAT-SENTINEL-other-provider-key");
+        await settings.CreateAsync(providerKey);
 
         // Legacy chat rows: plaintext from before chat encryption, and a message sealed under the master DEK.
         var legacyDekMessage = Guid.NewGuid();
@@ -185,11 +197,14 @@ public abstract class RekeyVaultTestBase : IAsyncLifetime
             ["chat key"] = Count(main, "SELECT COUNT(*) FROM tbl_node_data_key WHERE key_name = 'chat'"),
             ["chat content"] = Count(chat, "SELECT COUNT(*) FROM chat_message WHERE content_key_v = 1"),
             ["chat tool calls"] = Count(chat, "SELECT COUNT(*) FROM chat_message WHERE tool_calls_key_v = 1"),
+            ["chat provider states"] = Count(chat, "SELECT COUNT(*) FROM chat_message WHERE provider_state_key_v = 1"),
             ["chat legacy dek"] = Count(chat, "SELECT COUNT(*) FROM chat_message WHERE content_ciphertext IS NOT NULL AND content_key_v IS NULL"),
             ["chat attachments"] = Count(chat, "SELECT COUNT(*) FROM chat_attachment WHERE iv IS NOT NULL"),
             ["chat legacy attachments"] = Count(chat, "SELECT COUNT(*) FROM chat_attachment WHERE iv IS NULL"),
             ["chat legacy plaintext"] = Count(chat, "SELECT COUNT(*) FROM chat_message WHERE content_text != ''"),
             ["chat api keys"] = Count(chat, "SELECT COUNT(*) FROM chat_api_key WHERE ciphertext IS NOT NULL"),
+            ["provider approvals"] = Count(chat, "SELECT COUNT(*) FROM chat_provider WHERE approval_key_v = 1"),
+            ["provider keys"] = Count(chat, "SELECT COUNT(*) FROM chat_provider_key WHERE key_v = 1 AND key_prefix_key_v = 1"),
         };
     }
 

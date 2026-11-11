@@ -4,7 +4,8 @@ Third-party notices: the image library and the database engine
 Bee Memory Bank is licensed under the GNU Affero General Public License v3.0 (see LICENSE). This file carries the
 notices of the two native libraries every build contains: the one that reads, scales and writes the pictures a user
 uploads (SkiaSharp: the full node's Api and the mobile app) and the SQLite database engine (SQLite3 Multiple Ciphers:
-every node, desktop app and phone app). The other packages the product uses carry their own licences inside their
+every node, desktop app and phone app), and of the data the built-in list of AI model providers is generated from (the
+models.dev catalogue: the full node's Api). The other packages the product uses carry their own licences inside their
 NuGet packages.
 
 SkiaSharp 3.119.4 (MIT)
@@ -139,3 +140,32 @@ miniz, MIT:
 
 (Embedded components as listed in the SQLite3 Multiple Ciphers 2.5.1 amalgamation source, checked 2026-10-09; the NuGet package
 2.4.0 is built from the same source tree one release earlier.)
+
+
+models.dev catalogue (MIT)
+--------------------------
+https://github.com/anomalyco/models.dev
+
+The model lists of the provider presets (server/BeeMemoryBank.Api/Services/Providers/provider-presets.json) are generated
+from this catalogue by tools/provider-presets/generate_presets.py. The product does not download it.
+
+MIT License
+
+Copyright (c) 2025 models.dev
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

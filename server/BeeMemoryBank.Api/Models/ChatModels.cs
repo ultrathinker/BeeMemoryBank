@@ -5,7 +5,8 @@ namespace BeeMemoryBank.Api.Models;
 // ── chat_api_key row + DTOs ──────────────────────────────────────────────────
 
 /// <summary>
-/// Persisted OpenRouter API key. <c>Ciphertext</c>/<c>Iv</c> are the output of
+/// Persisted provider API key: a row of <c>chat_api_key</c> (the built-in OpenRouter provider's keys, the table 2.9.0 reads) or of
+/// <c>chat_provider_key</c> (every other provider's). <c>Ciphertext</c>/<c>Iv</c> are the output of
 /// <c>ArticleEncryptor.Encrypt(plaintext, key, aad)</c> (AES-256-GCM) — under the node chat key when
 /// <see cref="KeyVersion"/> is 1, under the master DEK for a legacy row (see ChatDataProtector).
 /// The plaintext key is held in memory only at creation/decryption time and is NEVER persisted,
@@ -14,6 +15,8 @@ namespace BeeMemoryBank.Api.Models;
 public class ChatApiKey
 {
     public Guid Id { get; set; }
+    /// <summary>The provider the key belongs to; <see cref="Services.Providers.BuiltInOpenRouter.Id"/> for a row of chat_api_key.</summary>
+    public Guid ProviderId { get; set; }
     public string Label { get; set; } = "";
     /// <summary>The display fragment (first characters of the secret). Plaintext only on a legacy
     /// row; otherwise sealed in the three columns below and filled in by
@@ -34,8 +37,9 @@ public class ChatApiKey
     public DateTime CreatedAt { get; set; }
 }
 
-/// <summary>Returned ONCE at key creation — the only time the full key leaves the encrypt path.</summary>
-public record ChatKeyCreatedResponse(Guid Id, string Label, string KeyPrefix, string ApiKey);
+/// <summary>Returned at key creation. The secret itself never comes back to the browser once it is saved: the person typed it, and
+/// only its first characters are shown from then on.</summary>
+public record ChatKeyCreatedResponse(Guid Id, string Label, string KeyPrefix, Guid ProviderId);
 
 /// <summary>Listing shape — exposes only <c>KeyPrefix</c>, never the secret.</summary>
 public record ChatKeyResponse(
@@ -47,9 +51,11 @@ public record ChatKeyResponse(
     DateTime? LastUsedAt,
     string? LastError,
     DateTime? DisabledUntil,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    Guid ProviderId);
 
-public record CreateChatKeyRequest(string Label, string ApiKey, int Priority = 0);
+/// <summary>A new key. <paramref name="ProviderId"/> null means the built-in OpenRouter provider (the request shape of 2.9.0).</summary>
+public record CreateChatKeyRequest(string Label, string ApiKey, int Priority = 0, Guid? ProviderId = null);
 
 /// <summary>Mutable metadata for a stored key. All fields optional; omitted fields are unchanged.</summary>
 public record UpdateChatKeyRequest(
@@ -67,6 +73,8 @@ public record UpdateChatKeyRequest(
 public class ChatModelRow
 {
     public Guid Id { get; set; }
+    /// <summary>The provider the model belongs to; <see cref="Services.Providers.BuiltInOpenRouter.Id"/> for a row of chat_model.</summary>
+    public Guid ProviderId { get; set; }
     public string ModelId { get; set; } = "";
     public string Label { get; set; } = "";
     public bool IsText { get; set; }
@@ -86,15 +94,19 @@ public record ChatModelResponse(
     bool IsVision,
     bool IsImageGen,
     int? ContextWindow,
-    DateTime? CreatedAt);
+    DateTime? CreatedAt,
+    Guid ProviderId,
+    string ProviderName);
 
+/// <summary>A new model. <paramref name="ProviderId"/> null means the built-in OpenRouter provider (the request shape of 2.9.0).</summary>
 public record CreateChatModelRequest(
     string ModelId,
     string Label,
     bool IsText = true,
     bool IsVision = false,
     bool IsImageGen = false,
-    int? ContextWindow = null);
+    int? ContextWindow = null,
+    Guid? ProviderId = null);
 
 /// <summary>Updates a model's three capability booleans + context window (admin catalogue).</summary>
 public record UpdateChatModelRequest(
@@ -165,6 +177,19 @@ public class ChatMessage
     public int? ToolCallsKeyVersion { get; set; }
     public string? ToolCallId { get; set; }
     public string? Model { get; set; }
+    /// <summary>The name of the provider that answered (chat_message.provider); null on rows from before providers.</summary>
+    public string? Provider { get; set; }
+    /// <summary>The provider-opaque content of an assistant tool-call turn (<see cref="ProviderTurnState"/> as JSON: Anthropic's thinking
+    /// blocks, Gemini's thought signatures), so <c>/confirm</c> can send the turn back as the model wrote it. Same in/out contract as
+    /// <see cref="ContentText"/>: plaintext into ChatMessageRepository.CreateAsync, already opened out of ListByConversationAsync (null when
+    /// it does not open: the turn is then rebuilt without it). Sealed on disk under the chat key, bound to the row's id. Never sent to the
+    /// browser.</summary>
+    public string? ProviderStateJson { get; set; }
+    /// <summary>On-disk ciphertext of <see cref="ProviderStateJson"/>. Populated by Dapper on read; never set by application code.</summary>
+    public byte[]? ProviderStateCiphertext { get; set; }
+    public byte[]? ProviderStateIv { get; set; }
+    /// <summary>chat_message.provider_state_key_v (1 = the chat key). Read-side only, cleared after decrypt.</summary>
+    public int? ProviderStateKeyVersion { get; set; }
     public int? TokensIn { get; set; }
     public int? TokensOut { get; set; }
     // Per-turn metrics, set ONLY on the final assistant message of a turn (never on intermediate
@@ -285,6 +310,7 @@ public record ChatMessageRowResponse(
     [property: JsonPropertyName("toolCallsJson")] string? ToolCallsJson,
     [property: JsonPropertyName("toolCallId")] string? ToolCallId,
     [property: JsonPropertyName("model")] string? Model,
+    [property: JsonPropertyName("provider")] string? Provider,
     [property: JsonPropertyName("createdAt")] DateTime CreatedAt,
     [property: JsonPropertyName("tokensIn")] int? TokensIn,
     [property: JsonPropertyName("tokensOut")] int? TokensOut,

@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.Providers;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -35,7 +36,7 @@ public static partial class ChatEndpoints
         // Open to any authenticated user; ownership is enforced by the user-scoped conversation
         // lookup (a foreign id → 404). The vault must be unlocked (writes need the master DEK).
         group.MapPost("/stream/{conversationId:guid}/confirm", async (Guid conversationId, HttpContext ctx,
-            ChatSettingsRepository repo, OpenRouterClient openRouter, ChatToolDispatcher dispatcher,
+            ChatSettingsRepository repo, ModelRouter router, ChatToolDispatcher dispatcher,
             SessionService session, ChatConversationRepository convoRepo, ChatMessageRepository msgRepo,
             ChatAttachmentRepository attachRepo, ChatDestructiveOpCounter destructiveCounter,
             ILogger<Program> logger) =>
@@ -56,7 +57,7 @@ public static partial class ChatEndpoints
                 await JsonError(400, "toolCallId is required");
                 return;
             }
-            // Executing a write needs the master DEK; resuming the completion needs the OpenRouter key.
+            // Executing a write needs the master DEK; resuming the completion needs a provider key.
             if (!session.IsUnlocked)
             {
                 await JsonError(409, "Vault is locked");
@@ -164,10 +165,11 @@ public static partial class ChatEndpoints
             }
             try
             {
-                var keys = await DecryptAvailableKeysAsync(repo, session);
-                if (keys.Count == 0)
+                var routes = new ChatRoutes(router, await router.TextChainAsync(effectiveText));
+                var (firstRoute, notReady) = await routes.FirstReadyAsync();
+                if (firstRoute is null)
                 {
-                    await JsonError(409, "No chat API key is available (none configured, or all are disabled/cooling down).");
+                    await JsonError(409, "No model can be called right now: " + notReady);
                     return;
                 }
                 var ct = ctx.RequestAborted;
@@ -201,6 +203,9 @@ public static partial class ChatEndpoints
                         mm.ToolCalls = JsonSerializer.Deserialize<List<ChatToolCall>>(row.ToolCallsJson, SseJsonOpts);
                     if (!string.IsNullOrEmpty(row.ToolCallId))
                         mm.ToolCallId = row.ToolCallId;
+                    // The paused turn's thinking blocks / thought signatures, sealed with it: the resumed round sends the turn back as
+                    // the model wrote it (only to the same provider and model).
+                    mm.ProviderState = ProviderTurnState.TryParse(row.ProviderStateJson);
                     convoMessages.Add(mm);
                     // Attachment manifest (in-memory only): surface image ids so the model can address
                     // them with bee_insert_image_into_article during the resumed continuation.
@@ -245,10 +250,10 @@ public static partial class ChatEndpoints
                 try
                 {
                     await RunToolLoopAsync(new ChatLoopContext(
-                        Ctx: ctx, OpenRouter: openRouter, Dispatcher: dispatcher, Session: session, Repo: repo,
+                        Ctx: ctx, Dispatcher: dispatcher, Session: session, Repo: repo,
                         MsgRepo: msgRepo, ConvoRepo: convoRepo, AttachRepo: attachRepo, Logger: logger,
-                        Keys: keys, Model: resumeModel,
-                        EffectiveImageGenModelId: effectiveImageGen?.ModelId ?? "",
+                        Routes: routes, Model: resumeModel,
+                        EffectiveImageGen: effectiveImageGen,
                         ConversationId: conversationId,
                         ConvoMessages: convoMessages, Ct: ct, Sse: Sse, DestructiveCounter: destructiveCounter,
                         ContextWindow: effectiveText.ContextWindow, UserId: userId));
@@ -256,7 +261,7 @@ public static partial class ChatEndpoints
                 catch (OperationCanceledException) { /* client gone */ }
                 finally
                 {
-                    keys = null!;
+                    routes.Forget();
                 }
             }
             finally

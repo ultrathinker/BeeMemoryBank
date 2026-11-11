@@ -4,6 +4,7 @@ using System.Text.Json;
 using BeeMemoryBank.Api.Dream;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.Providers;
 using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Services;
 using Dapper;
@@ -14,12 +15,13 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The real Dream model client (plan 3.7, package M1) on a real node's chat key table, with only the HTTP call to
-/// OpenRouter replaced: the chat's key rotation is used (401 disables, 429 pauses, 5xx tries the next key), the run's
-/// budget is checked before and counted after, a failed round waits 30, 60 and 120 seconds and then gives up, and no key
-/// or note text escapes into an exception message.
+/// The real Dream model client (plan 3.7, package M1) on a real node's chat key table, through the real provider pipeline (router,
+/// OpenAI-format client, egress guard), with only the HTTP call to the provider replaced: the chat's key rotation is used (401 disables,
+/// 429 pauses, 5xx tries the next key), the run's budget is checked before and counted after, a failed round waits 30, 60 and 120
+/// seconds and then gives up, and no key or note text escapes into an exception message. These tests use the built-in OpenRouter
+/// provider (the keys of 2.9.0); <c>ProviderDreamChainTests</c> covers another provider and the fallback chain.
 /// </summary>
-public class OpenRouterDreamModelClientTests : IAsyncLifetime
+public class ProviderDreamModelClientTests : IAsyncLifetime
 {
     private const string Password = "dreamModelClientPassword";
     private readonly BmbWebApplicationFactory _factory = new();
@@ -111,16 +113,22 @@ public class OpenRouterDreamModelClientTests : IAsyncLifetime
         return (await scope.ServiceProvider.GetRequiredService<ChatSettingsRepository>().GetByIdAsync(id))!;
     }
 
-    private async Task<T> WithClientAsync<T>(ScriptedHandler handler, TimeProvider? time, Func<OpenRouterDreamModelClient, Task<T>> body,
-        DreamThresholds? thresholds = null, ILogger<OpenRouterClient>? openRouterLog = null)
+    private async Task<T> WithClientAsync<T>(ScriptedHandler handler, TimeProvider? time, Func<ProviderDreamModelClient, Task<T>> body,
+        DreamThresholds? thresholds = null, ILogger<OpenAiChatClient>? openRouterLog = null)
     {
         using var scope = _factory.Services.CreateScope();
         var sp = scope.ServiceProvider;
-        var openRouter = new OpenRouterClient(new HttpClient(handler), openRouterLog ?? NullLogger<OpenRouterClient>.Instance);
-        var client = new OpenRouterDreamModelClient(sp.GetRequiredService<ChatSettingsRepository>(), Session, openRouter,
-            NullLogger<OpenRouterDreamModelClient>.Instance, thresholds, time);
+        var client = new ProviderDreamModelClient(ProviderTestKit.Router(sp, handler, openRouterLog),
+            NullLogger<ProviderDreamModelClient>.Instance, thresholds, time);
         return await body(client);
     }
+
+    /// <summary>The chat's own plain completion to the built-in OpenRouter provider (no Dream around it).</summary>
+    private static Task<ChatCompleteResponse> ChatCompleteAsync(HttpMessageHandler handler, ILogger<OpenAiChatClient>? log = null) =>
+        ProviderTestKit.Client(handler, log).CompleteAsync(
+            new ModelCall(ProviderEgressTarget.ForTest(BuiltInOpenRouter.BaseUrl, options: ProviderWireOptions.OpenRouter, name: "OpenRouter"),
+                "sk-or-chat-key", "vendor/model"),
+            [new ChatRoleMessage("user", "hello")], CompletionOptions.Chat, CancellationToken.None);
 
     private static DreamModelRequest Request(DreamRunBudget? budget = null, string user = "the user text", int maxOutput = 700) =>
         new("vendor/some-model", "the system text", user, maxOutput, budget ?? new DreamRunBudget(200, 1_500_000));
@@ -145,7 +153,7 @@ public class OpenRouterDreamModelClientTests : IAsyncLifetime
         budget.TokensUsed.Should().Be(1620);
 
         var seen = handler.Seen.Should().ContainSingle().Subject;
-        seen.Url.Should().Be("https://openrouter.ai/api/v1/chat/completions", "the egress host is pinned by the chat client");
+        seen.Url.Should().Be("https://openrouter.ai/api/v1/chat/completions", "the built-in provider's address is the one 2.9.0 had");
         seen.Key.Should().Be(secret);
         using var doc = JsonDocument.Parse(seen.Body);
         var root = doc.RootElement;
@@ -168,9 +176,8 @@ public class OpenRouterDreamModelClientTests : IAsyncLifetime
     public async Task TheChatsOwnCall_StillSendsNoOutputLimitAndNoTemperature()
     {
         var handler = new ScriptedHandler((_, _) => Ok("hi"));
-        var client = new OpenRouterClient(new HttpClient(handler), NullLogger<OpenRouterClient>.Instance);
 
-        await client.CompleteAsync("sk-or-any-key", "vendor/model", [new ChatRoleMessage("user", "hello")]);
+        await ChatCompleteAsync(handler);
 
         handler.Seen.Single().Body.Should().NotContain("max_tokens").And.NotContain("temperature").And.NotContain("reasoning");
     }
@@ -246,8 +253,35 @@ public class OpenRouterDreamModelClientTests : IAsyncLifetime
         (await KeyRowAsync(secondId)).DisabledUntil.Should().BeNull();
     }
 
+    /// <summary>The HTTP client's timeout (the provider stalled; Stop was not pressed) is a transport failure of that key: the next key is
+    /// tried in the same round, and the attempt whose outcome is unknown is charged the whole upper estimate.</summary>
     [Fact]
-    public async Task AnUpstreamErrorBody_IsNeverLoggedByTheDreamCall_ButTheChatsOwnCallStillLogsIt()
+    public async Task ATimeoutOnTheFirstKey_IsChargedTheUpperEstimate_AndTheSecondKeyAnswers()
+    {
+        const string first = "sk-or-dream-stall-0040", second = "sk-or-dream-after-0041";
+        var firstId = await AddKeyAsync(first, 1);
+        await AddKeyAsync(second, 2);
+        var handler = new ScriptedHandler((req, _) => req.Headers.Authorization!.Parameter == first
+            ? throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 100 seconds elapsing.", new TimeoutException())
+            : Ok("{\"ok\":true}", prompt: 900, completion: 40));
+        var time = new RecordingTime();
+        var request = Request(new DreamRunBudget(maxModelCalls: 10, maxTokens: 100_000));
+        var estimate = DreamRunBudget.EstimateTokens(request.System, request.User, request.MaxOutputTokens);
+
+        var reply = await WithClientAsync(handler, time, c => c.CompleteAsync(request, CancellationToken.None));
+
+        reply.Content.Should().Be("{\"ok\":true}");
+        handler.Seen.Select(s => s.Key).Should().Equal(first, second);
+        time.Waits.Should().BeEmpty("the second key answered in the same round");
+        request.Budget.ModelCalls.Should().Be(2, "each key tried is a call used");
+        request.Budget.TokensUsed.Should().Be(estimate + 900 + 40, "the stalled attempt is charged its upper estimate, the answer its real usage");
+        var stalled = await KeyRowAsync(firstId);
+        stalled.LastError.Should().Be(ModelRouter.NoAnswerInTime);
+        stalled.DisabledUntil.Should().BeNull("a stall does not pause the key");
+    }
+
+    [Fact]
+    public async Task AnUpstreamErrorBody_IsNeverLogged_NeitherByTheDreamCallNorByTheChatsOwnCall()
     {
         const string excerpt = "FLAGGED-INPUT-EXCERPT-OF-A-NOTE-8812";
         await AddKeyAsync("sk-or-dream-flagged-0021", 1);
@@ -255,7 +289,7 @@ public class OpenRouterDreamModelClientTests : IAsyncLifetime
         {
             Content = new StringContent($"{{\"error\":{{\"message\":\"flagged\",\"metadata\":{{\"flagged_input\":\"{excerpt}\"}}}}}}", Encoding.UTF8, "application/json"),
         });
-        var log = new CapturingLogger<OpenRouterClient>();
+        var log = new CapturingLogger<OpenAiChatClient>();
 
         var call = () => WithClientAsync(handler, new RecordingTime(), c => c.CompleteAsync(Request(), CancellationToken.None), openRouterLog: log);
 
@@ -263,11 +297,11 @@ public class OpenRouterDreamModelClientTests : IAsyncLifetime
         log.Lines.Should().NotBeEmpty().And.OnlyContain(l => l.Contains("HTTP 403") && !l.Contains(excerpt));
         ex.ToString().Should().NotContain(excerpt);
 
-        var chatLog = new CapturingLogger<OpenRouterClient>();
-        var chat = new OpenRouterClient(new HttpClient(handler), chatLog);
-        var chatCall = () => chat.CompleteAsync("sk-or-chat-key", "vendor/model", [new ChatRoleMessage("user", "hello")]);
-        await chatCall.Should().ThrowAsync<OpenRouterHttpException>();
-        chatLog.Lines.Should().Contain(l => l.Contains(excerpt), "the chat's own behaviour is unchanged");
+        var chatLog = new CapturingLogger<OpenAiChatClient>();
+        var chatCall = () => ChatCompleteAsync(handler, chatLog);
+        await chatCall.Should().ThrowAsync<ProviderHttpException>();
+        chatLog.Lines.Should().NotBeEmpty().And.OnlyContain(l => l.Contains("HTTP 403") && !l.Contains(excerpt),
+            "no call logs a provider's body any more (review prov-r2): it can quote the decrypted notes the chat sent");
     }
 
     [Fact]
@@ -404,8 +438,8 @@ public class OpenRouterDreamModelClientTests : IAsyncLifetime
         });
 
         var sent = handler.Seen.Select(s => JsonDocument.Parse(s.Body).RootElement.GetProperty("max_tokens").GetInt32()).ToList();
-        sent.Should().Equal(6000, OpenRouterDreamModelClient.MaxOutputTokensCeiling);
-        OpenRouterDreamModelClient.MaxOutputTokensCeiling.Should().BeGreaterThanOrEqualTo(6000, "the tree review's cap must fit");
+        sent.Should().Equal(6000, ProviderDreamModelClient.MaxOutputTokensCeiling);
+        ProviderDreamModelClient.MaxOutputTokensCeiling.Should().BeGreaterThanOrEqualTo(6000, "the tree review's cap must fit");
     }
 
     [Fact]

@@ -146,6 +146,8 @@ public static class DreamErrorCodes
     // Why the model of the status is not ready (DreamStatusResponse.ModelProblem).
     public const string NoModel = "no_model";
     public const string NoKey = "no_key";
+    /// <summary>The model's provider (and every fallback's) is not approved by a superadmin: nothing is sent to it.</summary>
+    public const string ProviderNotApproved = "provider_not_approved";
 }
 
 /// <summary>Fixed texts of dream_advice.status_note.</summary>

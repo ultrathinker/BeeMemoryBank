@@ -937,7 +937,7 @@ const scenarios = {
         els['dream-use-model'].fire('sl-change');
         eq([els['dream-start'].disabled, els['dream-start-reason'].hidden], [false, true], 'the model alone can run');
         has(els['dream-start-help'].textContent, 'Only the AI model runs', 'the help says what runs');
-        has(els['dream-start-help'].textContent, 'sent to OpenRouter', 'and what leaves the node');
+        has(els['dream-start-help'].textContent, 'sent to the model\'s provider', 'and what leaves the node');
 
         els['dream-start'].fire('click');
         await flush();
@@ -951,7 +951,7 @@ const scenarios = {
         await boot();
         eq([els['dream-use-model'].disabled, els['dream-use-model'].checked], [true, false], 'shown, off and not usable, even though the settings want the model');
         eq(els['dream-model-why'].hidden, false, 'the reason is shown');
-        has(els['dream-model-why'].innerHTML, 'No usable OpenRouter key', 'why');
+        has(els['dream-model-why'].innerHTML, 'No usable key', 'why');
         has(els['dream-model-why'].innerHTML, 'href="/Admin/AiChat"', 'where models and keys are');
         has(els['dream-model-why'].innerHTML, 'href="/Admin/Dream"', 'where Dream chooses its model');
         has(els['dream-model-label'].textContent, 'not set up', 'the label says so');

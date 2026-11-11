@@ -15,11 +15,11 @@
 // History lives server-side in chat.db (per-user); the sidebar lists conversations, and clicking
 // loads the transcript. Rename (PATCH) and delete (DELETE) are confirmed. Navigating away aborts the
 // in-flight fetch (AbortController on beforeunload), which propagates through the Web passthrough to
-// cancel the OpenRouter stream (no wasted tokens/billing).
+// cancel the provider's stream (no wasted tokens/billing).
 //
 // Markdown is rendered with the global marked + DOMPurify (same pattern as Article/View). During
 // streaming the bubble shows plain (escaped) text; markdown is rendered once on `done`. CSP allows
-// 'unsafe-inline' scripts and self for connect-src, so no OpenRouter host is ever contacted here.
+// 'unsafe-inline' scripts and self for connect-src, so no model provider's host is ever contacted here.
 (function () {
     'use strict';
 
@@ -112,6 +112,8 @@
         var lines = [];
         if (meta.createdAt) lines.push(new Date(meta.createdAt).toLocaleString());
         if (role !== 'user') {
+            // Which model of which provider answered (a fallback's when the default model's provider failed).
+            if (meta.model) lines.push('model: ' + meta.model + (meta.provider ? ' - ' + meta.provider : ''));
             if (meta.durationMs != null) lines.push('duration: ' + formatDuration(meta.durationMs));
             if (meta.toolCallsCount != null && meta.toolCallsCount > 0)
                 lines.push(meta.toolCallsCount + ' tool call' + (meta.toolCallsCount === 1 ? '' : 's'));
@@ -178,7 +180,7 @@
     // ── Phase 5: image attachment (vision) ────────────────────────────────────
     // Client-side MIME + size validation mirrors the server; a canvas downscale (max 1568px, JPEG
     // q0.85) keeps the upload payload small. The server re-validates (allow-list, size, magic bytes)
-    // and re-resizes for the OpenRouter egress — never trust the client alone.
+    // and re-resizes for the provider egress — never trust the client alone.
 
     function flashAttachHint(message, danger) {
         if (!attachHint) return;
@@ -405,7 +407,8 @@
             models.filter(filterFn).forEach(function (m) {
                 var opt = document.createElement('sl-option');
                 opt.value = m.id;
-                opt.textContent = m.label || m.modelId;
+                // "model - provider": the same model id can be offered by several providers.
+                opt.textContent = (m.label || m.modelId) + (m.providerName ? ' - ' + m.providerName : '');
                 sel.appendChild(opt);
             });
             // Shoelace timing gotcha (same workaround as Admin.cshtml populateDefaultSelect):
@@ -1044,6 +1047,8 @@
             // DTO names (tokensIn/tokensOut) so buildMetaTooltip works uniformly for live + stored.
             turn.meta = {
                 createdAt: obj.createdAt,
+                model: obj.model,
+                provider: obj.provider,
                 tokensIn: obj.promptTokens,
                 tokensOut: obj.completionTokens,
                 toolCallsCount: obj.toolCallsCount,
@@ -1463,7 +1468,7 @@
     }
 
     // Abort the in-flight stream if the user navigates away / closes the tab — propagates through
-    // the Web passthrough to cancel the Api-side OpenRouter stream.
+    // the Web passthrough to cancel the Api-side provider stream.
     window.addEventListener('beforeunload', function () {
         if (abortCtrl) { try { abortCtrl.abort(); } catch (e) {} }
     });

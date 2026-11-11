@@ -61,9 +61,9 @@ server/
 ├── BeeMemoryBank.Api/       — REST API (33 endpoint groups) + MCP server
 │   ├── Endpoints/           — 44 files, 33 groups: Activity, Admin, Agent, Article, AutoUnlock, BeeImport, Chat (split across 7 files), Comment, Compaction, ConceptTag, Copy, DekRotation, Dream (split across 6 files), Download, Folder, HardDelete, Init, Join, Key, Media, ObsidianImport, RemoteAccount, RemoteAuth, Restriction, Search, Session, Snapshot, Sync, Tree, Update, User, Version, Whitelist
 │   ├── McpTools/            — 7 tool groups: Search (2 tools), Read (8), Write (10), Session (2), Upload (2), Audit (1), Concept (8) — 33 tools total
-│   ├── Dream/               — sleep-time advice (docs/dream.md): Contracts, Storage (six tables in chat.db), Engine (runner, scheduler, corpus), Detectors (rules without a model), Model (OpenRouter client + pair/folder/tree tasks, versioned prompts in Dream/Prompts), Apply
+│   ├── Dream/               — sleep-time advice (docs/dream.md): Contracts, Storage (six tables in chat.db), Engine (runner, scheduler, corpus), Detectors (rules without a model), Model (the provider client over ModelRouter + pair/folder/tree tasks, versioned prompts in Dream/Prompts), Apply
 │   ├── Middleware/           — AgentAuthMiddleware (bearer → auto-unlock)
-│   ├── Services/            — SyncTokenStore, SnapshotService, HttpActorProvider, DekRotationService, LazySlotRewrapService
+│   ├── Services/            — SyncTokenStore, SnapshotService, HttpActorProvider, DekRotationService, LazySlotRewrapService; Providers/ (model providers: registry, approval, egress guard, protocol clients, router; docs/ai-providers.md)
 │   └── Models/              — DTOs for endpoints
 │
 ├── BeeMemoryBank.Web/       — Razor Pages Web UI (stateless proxy to API)

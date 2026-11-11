@@ -180,7 +180,7 @@ builder.Services.AddTransient<HttpClient>(sp =>
 // between us and an internal address is a check on the host we were given. The default handler
 // follows redirects, so a host that passes that check can 302 the request onto loopback or a
 // metadata endpoint and the check is bypassed. Used by /api/sync/probe-relay and by a join by a typed address; mirrors the same
-// hardening on OpenRouterClient (below) and ChatEndpoints' ImageFetchClient. It also opens its sockets through the checked connect (a NAME that
+// hardening on the model providers' clients (ProviderEgress, below) and ChatEndpoints' ImageFetchClient. It also opens its sockets through the checked connect (a NAME that
 // resolves to a link-local or cloud-metadata address is never dialled) and uses no proxy: PeerHttp.NoRedirectHandler.
 builder.Services.AddHttpClient(BeeMemoryBank.Api.Endpoints.SyncEndpoints.NoRedirectClientName)
     .ConfigurePrimaryHttpMessageHandler(() => BeeMemoryBank.Crypto.PeerHttp.NoRedirectHandler());
@@ -295,17 +295,25 @@ builder.Services.AddScoped<ChatMessageRepository>();
 builder.Services.AddScoped<ChatSettingsRepository>();
 // chat_attachment CRUD (vision uploads + generated images) — chat.db only, never synced.
 builder.Services.AddScoped<ChatAttachmentRepository>();
-// OpenRouterClient's egress is documented as "pinned to https://openrouter.ai ... prevents
-// an SSRF-style redirect of vault content to an attacker host" (see OpenRouterClient.cs) —
-// the URL pin is not enough by itself: the HttpClient must also refuse redirects, because
-// a 307/308 from openrouter.ai would silently re-POST the entire conversation (decrypted
-// article bodies included) to wherever the redirect pointed, with only the Authorization
-// header stripped cross-origin — the payload travels regardless. AddHttpClient<T>() gives
-// OpenRouterClient its OWN typed client instead of sharing the default one, so this handler
-// config can't leak onto (or be overridden by) any other HttpClient consumer. Mirrors
-// ImageFetchClient's SSRF hardening in ChatEndpoints.Stream.cs.
-builder.Services.AddHttpClient<OpenRouterClient>()
-    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+// Model providers (docs/ai-providers.md). Every request to a provider leaves through ProviderEgress, whatever protocol its client
+// speaks: only to an approved provider's host, HTTPS (plain HTTP only for a provider marked local), no redirect followed (a 307/308
+// would re-POST the whole conversation, decrypted article bodies included, wherever it pointed), no system proxy, and - for a
+// provider on the open internet - sockets opened only to public addresses, judged on what the name resolved to (DNS rebinding).
+// Two named clients, so a local provider's permission to use loopback and LAN addresses never applies to a public one's connection.
+// The handlers are built in ProviderEgress.cs, with the checked connect (PeerSocketConnector).
+builder.Services.AddHttpClient(BeeMemoryBank.Api.Services.Providers.ProviderEgress.PublicClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => BeeMemoryBank.Api.Services.Providers.ProviderEgress.PublicHandler());
+builder.Services.AddHttpClient(BeeMemoryBank.Api.Services.Providers.ProviderEgress.LocalClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => BeeMemoryBank.Api.Services.Providers.ProviderEgress.LocalHandler());
+builder.Services.AddSingleton<BeeMemoryBank.Api.Services.Providers.ProviderEgress>();
+// One client per wire format (OpenAI chat format, Anthropic Messages, Gemini); the registry picks a provider's client by its protocol,
+// and a protocol nobody registered stays refused. Each builds its requests by hand and sends only through ProviderEgress.
+builder.Services.AddSingleton<BeeMemoryBank.Api.Services.Providers.IModelProtocolClient, BeeMemoryBank.Api.Services.Providers.OpenAiChatClient>();
+builder.Services.AddSingleton<BeeMemoryBank.Api.Services.Providers.IModelProtocolClient, BeeMemoryBank.Api.Services.Providers.AnthropicMessagesClient>();
+builder.Services.AddSingleton<BeeMemoryBank.Api.Services.Providers.IModelProtocolClient, BeeMemoryBank.Api.Services.Providers.GeminiClient>();
+builder.Services.AddSingleton<BeeMemoryBank.Api.Services.Providers.ModelClientRegistry>();
+builder.Services.AddScoped<BeeMemoryBank.Api.Services.Providers.ChatProviderRepository>();
+builder.Services.AddScoped<BeeMemoryBank.Api.Services.Providers.ModelRouter>();
 // Per-conversation destructive-op cap (in-memory singleton — see ChatDestructiveOpCounter).
 builder.Services.AddSingleton<ChatDestructiveOpCounter>();
 // Curated read-only tool surface for the native AI chat. Scoped (depends on the
@@ -331,7 +339,7 @@ if (!role.IsBlind)
     builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamDetector, BeeMemoryBank.Api.Dream.NearDuplicateDetector>();
     builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamDetector, BeeMemoryBank.Api.Dream.MisplacedArticleDetector>();
     builder.Services.AddScoped<BeeMemoryBank.Api.Dream.PairCandidateSource>();
-    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamModelClient, BeeMemoryBank.Api.Dream.OpenRouterDreamModelClient>();
+    builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamModelClient, BeeMemoryBank.Api.Dream.ProviderDreamModelClient>();
     builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamModelTask, BeeMemoryBank.Api.Dream.PairVerdictTask>();
     builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamModelTask, BeeMemoryBank.Api.Dream.FolderReviewTask>();
     builder.Services.AddScoped<BeeMemoryBank.Api.Dream.IDreamModelTask, BeeMemoryBank.Api.Dream.TreeReviewTask>();

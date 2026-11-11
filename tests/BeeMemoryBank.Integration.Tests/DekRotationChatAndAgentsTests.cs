@@ -66,6 +66,9 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
 
     /// <summary>Everything a node's chat.db can hold, written the way the app writes it today
     /// (chat key) AND the way it was written before (directly under the master DEK, and plaintext).</summary>
+    private const string CurrentProviderState =
+        """{"protocol":"anthropic-messages","providerId":"00000000-0000-0000-0000-000000000001","model":"m","content":[{"type":"thinking","thinking":"t","signature":"s"}]}""";
+
     private sealed record ChatSeed(
         Guid ConversationId,
         Dictionary<Guid, (string Content, string? ToolCalls)> Messages,
@@ -95,7 +98,8 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
         await sp.GetRequiredService<ChatMessageRepository>().CreateAsync(new ChatMessage
         {
             Id = current, ConversationId = conversationId, Role = "assistant",
-            ContentText = "written with the chat key", ToolCallsJson = currentToolCalls, CreatedAt = DateTime.UtcNow
+            ContentText = "written with the chat key", ToolCallsJson = currentToolCalls, ProviderStateJson = CurrentProviderState,
+            CreatedAt = DateTime.UtcNow
         }, session);
         messages[current] = ("written with the chat key", currentToolCalls);
 
@@ -116,6 +120,20 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
         await settings.SealSecretAsync(currentKey, "sk-or-current-secret");
         await settings.CreateAsync(currentKey);
         providerKeys[currentKey.Id] = "sk-or-current-secret";
+
+        // A model provider other than the built-in one: its approval stamp and its key are sealed under the chat key too.
+        var providers = sp.GetRequiredService<BeeMemoryBank.Api.Services.Providers.ChatProviderRepository>();
+        var provider = new BeeMemoryBank.Api.Services.Providers.ChatProvider
+        {
+            Id = Guid.NewGuid(), Name = "other", Protocol = "openai-chat", BaseUrl = "https://api.example.com/v1",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        await providers.CreateAsync(provider);
+        await providers.ApproveAsync(provider, 1);
+        var otherKey = new ChatApiKey { Id = Guid.NewGuid(), ProviderId = provider.Id, Label = "other", KeyPrefix = "sk-other", CreatedAt = DateTime.UtcNow };
+        await settings.SealSecretAsync(otherKey, "sk-other-provider-secret");
+        await settings.CreateAsync(otherKey);
+        providerKeys[otherKey.Id] = "sk-other-provider-secret";
 
         // 2. Rows as the pre-change code wrote them: sealed directly under the master DEK.
         var masterDek = session.GetMasterDek();
@@ -183,6 +201,8 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
             var (content, toolCalls) = seed.Messages[m.Id];
             m.ContentText.Should().Be(content, because);
             m.ToolCallsJson.Should().Be(toolCalls, because);
+            // The provider state of a tool-call turn (thinking blocks, thought signatures) is sealed under the chat key like the rest.
+            m.ProviderStateJson.Should().Be(content == "written with the chat key" ? CurrentProviderState : null, because);
         }
 
         var attachments = await attachRepo.ListByConversationAsync(seed.ConversationId, session);
@@ -191,9 +211,15 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
             a.Blob.Should().Equal(seed.Attachments[a.Id], because);
 
         var keys = await settingsRepo.ListAsync();
+        keys.Should().HaveCount(seed.ProviderKeys.Count);
         var secrets = await settingsRepo.OpenSecretsAsync(keys);
         for (var i = 0; i < keys.Count; i++)
             secrets[i].Should().Be(seed.ProviderKeys[keys[i].Id], because);
+
+        // The approval of a provider is sealed under the chat key as well: it must stay valid.
+        var providers = new BeeMemoryBank.Api.Services.Providers.ChatProviderRepository(chatDb, protector);
+        var list = await providers.ListAsync();
+        (await providers.CheckApprovalsAsync(list)).Should().OnlyContain(a => a == true, because);
     }
 
     /// <summary>

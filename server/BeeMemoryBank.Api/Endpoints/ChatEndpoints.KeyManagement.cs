@@ -1,138 +1,52 @@
-using System.Net;
-using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
-using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
-using BeeMemoryBank.Api.Services;
-using BeeMemoryBank.Core.Interfaces;
-using BeeMemoryBank.Core.Models;
-using BeeMemoryBank.Core.Services;
-using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Api.Services.Providers;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
 public static partial class ChatEndpoints
 {
-    // ── multi-key failover ────────────────────────────────────────────
+    // ── multi-key failover and the fallback chain ─────────────────────────
     //
-    // The chat egress path no longer pins one "highest-priority enabled key". Instead it decrypts
-    // every AVAILABLE key (enabled AND not currently in a cooldown window) and tries them in priority
-    // order. A key-specific HTTP failure triggers a per-key circuit breaker; a transient failure just
-    // advances to the next key. When every key is exhausted, a clear AllKeysExhaustedException bubbles
-    // up (→ 502 JSON for the non-streaming endpoints, → an `event: error` SSE frame for the streaming
-    // loop). Per-key circuit breaker: 401→session-disable, 402/429→cooldown,
-    // 5xx→retry-next; structured event: error when exhausted.
+    // The failover lives in ModelRouter (Services/Providers), shared with Dream: every available key of a model's provider in priority
+    // order (401 disables a key, 402/429 pause it for five minutes, any other status or a transport error tries the next key), then the
+    // next model of the default text model's fallback chain, which may belong to another provider. Nothing is sent to a provider that is
+    // not approved. When every model of the chain failed, an AllKeysExhaustedException bubbles up (→ 502 JSON for the non-streaming
+    // endpoints, → an `event: error` SSE frame for the streaming loop).
 
-    /// <summary>A decrypted egress key held transiently for one chat turn. The plaintext lives only in
-    /// memory for the duration of the failover attempt(s); the caller nulls the list reference when the
-    /// turn ends (same posture as the prior single-key path — string memory is GC-managed).</summary>
-    internal sealed record KeyMaterial(Guid Id, string PlaintextKey);
-
-    /// <summary>Every available key was tried and failed. Surfaced as a 502 (JSON endpoints) or an
-    /// <c>event: error</c> SSE frame (streaming loop). Deliberately NOT derived from
-    /// <see cref="InvalidOperationException"/> so it is distinguishable from a malformed-but-200
-    /// upstream response (which has nothing to do with a bad key and must not be failovered).</summary>
-    internal sealed class AllKeysExhaustedException : Exception
+    /// <summary>The routes of one chat turn, prepared the first time each model of the chain is reached and kept for the turn (as the
+    /// decrypted keys always were): a key paused during the turn is still tried by a later round of the same turn, never a provider the
+    /// turn found unapproved.</summary>
+    internal sealed class ChatRoutes(ModelRouter router, IReadOnlyList<ChatModelRow> chain)
     {
-        public AllKeysExhaustedException(string message) : base(message) { }
-    }
+        private readonly Dictionary<Guid, (ModelRoute? Route, RouteProblem? Problem)> _prepared = new();
 
-    private enum KeyFailureKind { Disable, Cooldown, Transient }
+        public ModelRouter Router => router;
+        public IReadOnlyList<ChatModelRow> Chain => chain;
 
-    // Cooldown applied on 402 (insufficient credits) / 429 (rate limit): the key is retried
-    // automatically once this elapses (ListAvailableOrderedAsync re-admits it once disabled_until
-    // is past). 401 (unauthorized/revoked) disables the row until an admin re-enables it.
-    private static readonly TimeSpan KeyCooldownWindow = TimeSpan.FromMinutes(5);
-
-    private static KeyFailureKind ClassifyKeyFailure(int statusCode) => statusCode switch
-    {
-        401 => KeyFailureKind.Disable,
-        402 or 429 => KeyFailureKind.Cooldown,
-        _ => KeyFailureKind.Transient
-    };
-
-    private static async Task RecordKeyOutcomeAsync(
-        ChatSettingsRepository repo, Guid keyId, KeyFailureKind kind, string lastError)
-    {
-        switch (kind)
+        public async Task<(ModelRoute? Route, RouteProblem? Problem)> GetAsync(ChatModelRow model)
         {
-            case KeyFailureKind.Disable:
-                await repo.RecordKeyFailureAsync(keyId, disable: true, disabledUntil: null, lastError);
-                break;
-            case KeyFailureKind.Cooldown:
-                await repo.RecordKeyFailureAsync(keyId, disable: false,
-                    disabledUntil: DateTime.UtcNow + KeyCooldownWindow, lastError);
-                break;
-            default:
-                await repo.RecordKeyFailureAsync(keyId, disable: false, disabledUntil: null, lastError);
-                break;
+            if (_prepared.TryGetValue(model.Id, out var known)) return known;
+            var prepared = await router.PrepareAsync(model);
+            _prepared[model.Id] = prepared;
+            return prepared;
         }
-    }
 
-    /// <summary>Decrypts every key eligible for egress right now (enabled, not cooling down), in
-    /// priority order. An undecryptable key (sealed under a key this node no longer has) is skipped
-    /// with a recorded note rather than failing the whole turn — it simply won't be tried. Returns an
-    /// empty list only if nothing is available, which the caller maps to a clear "no key / all
-    /// cooling down" error. Decryption needs an unlocked vault, so callers gate on
-    /// <c>session.IsUnlocked</c> first.</summary>
-    internal static async Task<List<KeyMaterial>> DecryptAvailableKeysAsync(
-        ChatSettingsRepository repo, SessionService session)
-    {
-        var rows = await repo.ListAvailableOrderedAsync();
-        var secrets = await repo.OpenSecretsAsync(rows);
-        var result = new List<KeyMaterial>(rows.Count);
-        for (var i = 0; i < rows.Count; i++)
+        /// <summary>The first model of the chain that can be called now, or null with the reason none can (the turn is refused before it
+        /// commits to a stream).</summary>
+        public async Task<(ModelRoute? Route, string? Problem)> FirstReadyAsync()
         {
-            if (secrets[i] is { } secret)
+            var problems = new List<string>();
+            foreach (var model in chain)
             {
-                result.Add(new KeyMaterial(rows[i].Id, secret));
-                continue;
+                var (route, problem) = await GetAsync(model);
+                if (route is not null) return (route, null);
+                problems.Add(problem!.Message);
             }
-            // Skip — this key can't be used until it is re-entered. Note it for admin.
-            await repo.RecordUsageAsync(rows[i].Id, "decrypt failed");
+            return (null, ModelRouter.Summarize(problems));
         }
-        return result;
-    }
 
-    /// <summary>Runs <paramref name="attempt"/> against the ordered key list, retrying on a
-    /// key-specific HTTP failure (401/402/429 → disable/cooldown) or a transient transport error
-    /// (<see cref="HttpRequestException"/> → retry-next, no cooldown). Records success on the winning
-    /// key. Throws <see cref="AllKeysExhaustedException"/> if every key failed. Used by the
-    /// non-streaming endpoints; the streaming path has its own (<see cref="StreamWithFailoverAsync"/>)
-    /// that additionally enforces "failover only before the first byte".</summary>
-    internal static async Task<T> RunWithFailoverAsync<T>(
-        ChatSettingsRepository repo, IReadOnlyList<KeyMaterial> keys,
-        Func<string, CancellationToken, Task<T>> attempt, CancellationToken ct)
-    {
-        Exception? last = null;
-        foreach (var key in keys)
-        {
-            ct.ThrowIfCancellationRequested();
-            try
-            {
-                var result = await attempt(key.PlaintextKey, ct);
-                await repo.RecordKeySuccessAsync(key.Id);
-                return result;
-            }
-            catch (OpenRouterHttpException ex)
-            {
-                await RecordKeyOutcomeAsync(repo, key.Id, ClassifyKeyFailure(ex.StatusCode), ex.Message);
-                last = ex;
-                continue;
-            }
-            catch (HttpRequestException ex)
-            {
-                // Transport/timeout — not the key's fault: try the next key, leave this one available.
-                await repo.RecordUsageAsync(key.Id, ex.Message);
-                last = ex;
-                continue;
-            }
-        }
-        throw new AllKeysExhaustedException(last?.Message ?? "All configured API keys failed.");
+        /// <summary>Drops the decrypted keys once the turn is over.</summary>
+        public void Forget() => _prepared.Clear();
     }
 
     // Short display fragment (never the full secret). Mirrors AgentKeyHelper.GetKeyPrefix length.

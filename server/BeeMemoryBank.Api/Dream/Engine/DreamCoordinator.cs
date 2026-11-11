@@ -140,11 +140,13 @@ public sealed class DreamCoordinator : IDisposable
         var wantsModel = command.UseModel ?? (command.ModelId is not null || settings.UseModel);
         var named = command.UseModel == true || command.ModelId is not null;
         string? modelId = null, modelLabel = null, notice = null;
+        Guid? modelRowId = null;
         if (wantsModel)
         {
             var chat = services.GetRequiredService<ChatSettingsRepository>();
+            var router = services.GetRequiredService<BeeMemoryBank.Api.Services.Providers.ModelRouter>();
             var model = await DreamModelResolver.ResolveAsync(chat, command.ModelId ?? settings.AnalysisModelId);
-            if (model is null || !await DreamModelResolver.HasUsableKeyAsync(chat))
+            if (model is null || await DreamModelResolver.ProblemAsync(router, model) is not null)
             {
                 if (named) return (null, null, DreamStartError.ModelNotReady);
                 if (!command.UseRules) return (null, null, DreamStartError.NothingToRun);
@@ -154,7 +156,9 @@ public sealed class DreamCoordinator : IDisposable
             else
             {
                 modelId = model.ModelId;
-                modelLabel = model.Label;
+                modelLabel = await DreamModelResolver.LabelAsync(
+                    services.GetRequiredService<BeeMemoryBank.Api.Services.Providers.ChatProviderRepository>(), model);
+                modelRowId = model.Id;
             }
         }
 
@@ -183,6 +187,7 @@ public sealed class DreamCoordinator : IDisposable
             UseRules = useRules,
             ModelId = modelId,
             ModelLabel = modelLabel,
+            ModelRowId = modelRowId,
             MaxAdvice = maxAdvice,
             MaxMinutes = maxMinutes,
             Phases = command.Phases?.ToHashSet(),

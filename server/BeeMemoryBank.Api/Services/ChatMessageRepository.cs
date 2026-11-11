@@ -50,6 +50,11 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
     // share the same key.
     private static readonly byte[] ToolCallsAad = "bmb-chat-message-toolcalls-v1"u8.ToArray();
 
+    // The provider-opaque content of an assistant tool-call turn (ChatMessage.ProviderStateJson): sealed from its first write, bound to
+    // the row's id so a ciphertext cannot be moved onto another message. libs/BeeMemoryBank.Rekey (ChatColumns) spells the same AAD.
+    internal static byte[] ProviderStateAad(Guid messageId) =>
+        System.Text.Encoding.UTF8.GetBytes($"bmb-chat-message-provider-state-v1:{messageId:D}");
+
     private const string ContentDecryptFailurePlaceholder =
         "[unable to decrypt — this message was sealed under a key this node no longer has]";
 
@@ -80,7 +85,9 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
         tool_calls_json AS ToolCallsJson, tool_calls_ciphertext AS ToolCallsCiphertext, tool_calls_iv AS ToolCallsIv,
         tool_calls_key_v AS ToolCallsKeyVersion,
         tool_call_id AS ToolCallId,
-        model AS Model, tokens_in AS TokensIn, tokens_out AS TokensOut,
+        model AS Model, provider AS Provider, tokens_in AS TokensIn, tokens_out AS TokensOut,
+        provider_state_ciphertext AS ProviderStateCiphertext, provider_state_iv AS ProviderStateIv,
+        provider_state_key_v AS ProviderStateKeyVersion,
         tool_calls_count AS ToolCallsCount, duration_ms AS DurationMs, created_at AS CreatedAt";
 
     /// <summary>Loads a conversation's transcript, oldest first, with content_text already
@@ -107,7 +114,8 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
         // either way). Both are encrypted under ONE lease of the chat key.
         byte[]? contentCiphertext = null, contentIv = null;
         byte[]? toolCallsCiphertext = null, toolCallsIv = null;
-        if (message.ContentText is { Length: > 0 } || message.ToolCallsJson is { Length: > 0 })
+        byte[]? stateCiphertext = null, stateIv = null;
+        if (message.ContentText is { Length: > 0 } || message.ToolCallsJson is { Length: > 0 } || message.ProviderStateJson is { Length: > 0 })
         {
             using var key = await protector.AcquireAsync();
             if (message.ContentText is { Length: > 0 })
@@ -115,16 +123,20 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
             // Encrypted uniformly, including pure-read tool calls — see class remarks.
             if (message.ToolCallsJson is { Length: > 0 })
                 (toolCallsCiphertext, toolCallsIv) = key.EncryptText(message.ToolCallsJson, ToolCallsAad);
+            if (message.ProviderStateJson is { Length: > 0 })
+                (stateCiphertext, stateIv) = key.EncryptText(message.ProviderStateJson, ProviderStateAad(message.Id));
         }
 
         using var conn = OpenConnection();
         await conn.ExecuteAsync(
             @"INSERT INTO chat_message
               (id, conversation_id, role, content_text, content_ciphertext, content_iv, content_key_v,
-               tool_calls_json, tool_calls_ciphertext, tool_calls_iv, tool_calls_key_v, tool_call_id, model,
+               tool_calls_json, tool_calls_ciphertext, tool_calls_iv, tool_calls_key_v, tool_call_id, model, provider,
+               provider_state_ciphertext, provider_state_iv, provider_state_key_v,
                tokens_in, tokens_out, tool_calls_count, duration_ms, created_at)
               VALUES (@Id, @ConversationId, @Role, NULL, @ContentCiphertext, @ContentIv, @ContentKeyVersion,
-                      NULL, @ToolCallsCiphertext, @ToolCallsIv, @ToolCallsKeyVersion, @ToolCallId, @Model,
+                      NULL, @ToolCallsCiphertext, @ToolCallsIv, @ToolCallsKeyVersion, @ToolCallId, @Model, @Provider,
+                      @StateCiphertext, @StateIv, @StateKeyVersion,
                       @TokensIn, @TokensOut, @ToolCallsCount, @DurationMs, @CreatedAt)",
             new
             {
@@ -139,6 +151,10 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
                 ToolCallsKeyVersion = toolCallsCiphertext is null ? (int?)null : ChatDataProtector.ChatKeyVersion,
                 message.ToolCallId,
                 message.Model,
+                message.Provider,
+                StateCiphertext = stateCiphertext,
+                StateIv = stateIv,
+                StateKeyVersion = stateCiphertext is null ? (int?)null : ChatDataProtector.ChatKeyVersion,
                 message.TokensIn,
                 message.TokensOut,
                 message.ToolCallsCount,
@@ -157,12 +173,13 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
     /// instead of throwing and failing the whole transcript load.</summary>
     private async Task DecryptInPlaceAsync(List<Models.ChatMessage> rows)
     {
-        if (!rows.Any(r => r.ContentCiphertext is { Length: > 0 } || r.ToolCallsCiphertext is { Length: > 0 }))
+        if (!rows.Any(r => r.ContentCiphertext is { Length: > 0 } || r.ToolCallsCiphertext is { Length: > 0 } || r.ProviderStateCiphertext is { Length: > 0 }))
             return; // nothing encrypted in this batch — avoid touching any key at all
 
         var needsChatKey = rows.Any(r =>
             (r.ContentCiphertext is { Length: > 0 } && r.ContentKeyVersion == ChatDataProtector.ChatKeyVersion) ||
-            (r.ToolCallsCiphertext is { Length: > 0 } && r.ToolCallsKeyVersion == ChatDataProtector.ChatKeyVersion));
+            (r.ToolCallsCiphertext is { Length: > 0 } && r.ToolCallsKeyVersion == ChatDataProtector.ChatKeyVersion) ||
+            (r.ProviderStateCiphertext is { Length: > 0 } && r.ProviderStateKeyVersion == ChatDataProtector.ChatKeyVersion));
         using var key = needsChatKey ? await protector.TryAcquireForReadAsync() : null;
 
         foreach (var row in rows)
@@ -187,6 +204,16 @@ public sealed class ChatMessageRepository(ChatDbConnectionFactory factory, ChatD
             row.ToolCallsCiphertext = null;
             row.ToolCallsIv = null;
             row.ToolCallsKeyVersion = null;
+
+            // Only ever under the chat key. One that does not open is dropped, not replaced: the turn is then sent back rebuilt from its
+            // text and tool calls, as for another model.
+            row.ProviderStateJson = row.ProviderStateCiphertext is { Length: > 0 } && row.ProviderStateIv is { Length: > 0 }
+                                    && row.ProviderStateKeyVersion == ChatDataProtector.ChatKeyVersion
+                ? protector.TryDecryptText(key, row.ProviderStateCiphertext, row.ProviderStateIv, row.ProviderStateKeyVersion, ProviderStateAad(row.Id))
+                : null;
+            row.ProviderStateCiphertext = null;
+            row.ProviderStateIv = null;
+            row.ProviderStateKeyVersion = null;
         }
     }
 

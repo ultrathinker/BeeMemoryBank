@@ -16,9 +16,12 @@ namespace BeeMemoryBank.Api.Services;
 /// <para>
 /// <b>chat.db</b> — sits in the same data directory and holds this node's AI-chat history:
 /// conversation transcripts and tool-result JSON that can include decrypted article bodies the AI
-/// read during a turn (see McpResponseManager / ChatEndpoints). chat_model / chat_settings are left
-/// alone: they are node-local operational config (the configured model catalogue, the global chat
-/// toggle), not vault content.
+/// read during a turn (see McpResponseManager / ChatEndpoints). The provider keys go too, the built-in
+/// OpenRouter provider's (chat_api_key) and every other provider's (chat_provider_key). chat_model,
+/// chat_provider, chat_provider_model and chat_settings are left alone: they are node-local operational
+/// config (the providers, the model catalogue, the global chat toggle), not vault content. A provider's
+/// approval is sealed under the chat key of the old vault, so after a reset no provider but the
+/// built-in OpenRouter one (approved by its fixed address) is approved until a superadmin approves it again.
 /// </para>
 /// <para>
 /// <b>Dream</b> (also chat.db) — its runs, advice, journal, dismiss rules and examined registry name the old vault's
@@ -37,7 +40,7 @@ public sealed class ApiStateResetHook(ChatDbConnectionFactory chatDbConnFactory,
 
         using var chatConn = chatDbConnFactory.CreateConnection();
         using var chatTx = chatConn.BeginTransaction();
-        foreach (var chatTable in new[] { "chat_attachment", "chat_message", "chat_conversation", "chat_api_key" }
+        foreach (var chatTable in new[] { "chat_attachment", "chat_message", "chat_conversation", "chat_api_key", "chat_provider_key" }
                      .Concat(BeeMemoryBank.Api.Dream.DreamSchema.ResetTables))
         {
             using var chatDel = chatConn.CreateCommand();

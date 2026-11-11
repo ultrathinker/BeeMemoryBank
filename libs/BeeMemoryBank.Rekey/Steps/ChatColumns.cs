@@ -32,6 +32,10 @@ internal static class ChatColumns
     [
         new("chat_message", "content_ciphertext", "content_iv", "content_key_v", "content_text", false, _ => "bmb-chat-message-content-v1"u8.ToArray()),
         new("chat_message", "tool_calls_ciphertext", "tool_calls_iv", "tool_calls_key_v", "tool_calls_json", false, _ => "bmb-chat-message-toolcalls-v1"u8.ToArray()),
+        // The provider-opaque content of an assistant tool-call turn (thinking blocks, thought signatures): sealed from the first write, no
+        // legacy plaintext column, bound to the message's id (ChatMessageRepository.ProviderStateAad).
+        new("chat_message", "provider_state_ciphertext", "provider_state_iv", "provider_state_key_v", null, false,
+            id => Encoding.UTF8.GetBytes($"bmb-chat-message-provider-state-v1:{Guid.Parse(id):D}")),
         // A legacy attachment's plaintext lives in the same column as its ciphertext: blob with a NULL iv.
         new("chat_attachment", "blob", "iv", "key_v", "blob", true, _ => "bmb-chat-attachment-blob-v1"u8.ToArray()),
         new("chat_api_key", "ciphertext", "iv", "key_v", null, false, _ => "bmb-openrouter-key-v1"u8.ToArray()),
@@ -41,6 +45,16 @@ internal static class ChatColumns
             id => Encoding.UTF8.GetBytes($"bmb-chat-api-key-prefix-v1:{Guid.Parse(id):D}"), PlainCleared: "''"),
         new("chat_conversation", "title_ciphertext", "title_iv", "title_key_v", "title", false,
             id => Encoding.UTF8.GetBytes($"bmb-chat-conversation-title-v1:{Guid.Parse(id):D}"), PlainCleared: "''"),
+        // Model providers (BeeMemoryBank.Api.Services.Providers): a provider's approval stamp, and the keys of every provider but the
+        // built-in OpenRouter one (whose keys stay in chat_api_key above). Sealed from the first write: no legacy plaintext column. The
+        // provider key's sealed text carries its provider's id; the re-key re-seals it byte for byte. A test keeps the AADs equal to the
+        // product's (ChatProviderRepository.ApprovalAad, ChatSettingsRepository.ProviderKeyAad / ProviderPrefixAad).
+        new("chat_provider", "approval_ciphertext", "approval_iv", "approval_key_v", null, false,
+            id => Encoding.UTF8.GetBytes($"bmb-chat-provider-approval-v1:{Guid.Parse(id):D}")),
+        new("chat_provider_key", "ciphertext", "iv", "key_v", null, false,
+            id => Encoding.UTF8.GetBytes($"bmb-chat-provider-key-v1:{Guid.Parse(id):D}")),
+        new("chat_provider_key", "key_prefix_ciphertext", "key_prefix_iv", "key_prefix_key_v", null, false,
+            id => Encoding.UTF8.GetBytes($"bmb-chat-provider-key-prefix-v1:{Guid.Parse(id):D}")),
         // Dream's JSON payloads (BeeMemoryBank.Api.Dream.DreamAad spells the same AADs; a test keeps them equal). Sealed
         // from the first write: no legacy plaintext column.
         new("dream_advice", "payload_ciphertext", "payload_iv", "payload_key_v", null, false,

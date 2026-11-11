@@ -287,7 +287,7 @@ public class DreamSkeletonTests : IAsyncLifetime
             (DreamNames.FolderReviewTask, DreamNames.FolderPromptVersion),
             (DreamNames.TreeReviewTask, DreamNames.TreePromptVersion),
         ]);
-        sp.GetRequiredService<IDreamModelClient>().Should().BeOfType<OpenRouterDreamModelClient>();
+        sp.GetRequiredService<IDreamModelClient>().Should().BeOfType<ProviderDreamModelClient>();
         foreach (var type in new[]
                  {
                      typeof(DreamStore), typeof(DreamRunner), typeof(DreamCorpusBuilder), typeof(PairCandidateSource), typeof(DreamAdviceValidator),

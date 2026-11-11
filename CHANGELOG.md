@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.10.0 (2026-11-11)
+
+Model providers: the AI chat and Dream can use any model provider, not only OpenRouter. Pick one from a built-in list or
+type in your own, in the OpenAI, Anthropic or Google Gemini format, with its own keys and models, and an ordered list of
+fallback models. Nothing is sent to a provider until a superadmin approves its exact host. An existing node needs to do
+nothing: its OpenRouter keys and models become the approved provider "OpenRouter" with the same defaults. The main
+database has no migration; the providers live in new tables of chat.db, which are never synchronised, so a 2.9.0 node
+and a 2.10.0 node work together as they are.
+
+### Added
+
+- **Model providers for the AI chat and Dream.** Admin > AI / Chat lists providers. Pick one from the built-in list
+  (OpenRouter, Z.ai, Z.ai Coding Plan, Anthropic, Google Gemini, OpenAI, DeepSeek, Moonshot, Mistral, Groq, xAI, and
+  Ollama, LM Studio and llama.cpp on your own computer or network) or add any provider by its address and format. Each
+  provider has its own keys (with the same priority, pause and failover as before) and its own models (tick the known
+  ones, type an id, or fetch the provider's own list). Nothing is sent to a provider until a superadmin approves it: the
+  confirmation names the exact host, and changing the address, the format or the local flag withdraws the approval.
+  The Z.ai Coding Plan preset carries Z.ai's warning that its quota is meant for supported coding tools.
+- **Anthropic and Google Gemini natively.** Besides the OpenAI chat format, the chat and Dream speak Anthropic's
+  Messages format and Google's Gemini format directly. A model's thinking (Anthropic's thinking blocks, Gemini's thought
+  signatures) is kept across the rounds of a tool call, also when you confirm a write, so tool calls work with thinking
+  models; it goes back only to the same model and is never shown. Anthropic reads the chat's system prompt and tool
+  list from its prompt cache on every round.
+- **Fallback models.** The default text model, and Dream's model, can fall back to an ordered list of other models, also
+  at other providers, when every key of a provider is used up or the provider fails; a streamed answer falls back only
+  before its first word. Each Dream attempt still takes a call slot and is charged.
+- Models are shown as "model - provider" on the admin page, in the chat's default-model editor and in Dream; each
+  provider card names its format, and the provider dialog shows the wire options of that format.
+
+### Changed
+
+- A request a provider refuses as such (HTTP 400, 404, 413 or 422: a schema it does not take, a model it does not know,
+  a request too long) no longer walks through every key of that provider and is not held against the key: the next
+  model of the fallback chain gets it, and when there is none the error is shown. Dream does not send such a request to
+  that model again in the same run.
+- Requests to model providers no longer go through a system proxy, so the check that a provider on the internet is
+  never reached at a private or loopback address holds on the address actually connected to. Providers marked local
+  may use loopback and private addresses, never link-local or cloud metadata addresses.
+- Rolling back to 2.9.0 keeps working: 2.9.0 sees only the OpenRouter keys, never another provider's key. 2.9.0's
+  offline re-key refuses the new chat tables; run the re-key with this version.
+
+### Security
+
+- One egress guard for every provider: HTTPS only (plain HTTP only for a provider marked local), only the approved
+  host and port, no redirects, a key only to its own provider, the address checked when the connection is opened. The
+  approval is sealed under the node's chat key, so editing chat.db cannot approve or redirect a provider.
+- Both new formats are written without a vendor SDK and go through the same guard; a test keeps the providers' code
+  from opening its own HTTP client. The Gemini key travels only in a header, never in the address. A model's thinking
+  stored with a paused tool call is sealed under the node's chat key and bound to its message.
+- No model provider's response is written to the node's log: a failed request is logged with its status, a short error
+  word and the provider's request id, never an error body or an answer, since a provider can quote the notes it was
+  sent.
+- Agents (agent keys, MCP) can neither read nor change providers or keys.
+
 #### 2.9.0 (2026-11-10)
 
 Dream: a maintenance pass over your notes that writes down advice and never changes the bank by itself. Related notes

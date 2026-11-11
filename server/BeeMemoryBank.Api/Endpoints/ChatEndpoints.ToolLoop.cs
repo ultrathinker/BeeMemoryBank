@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
+using BeeMemoryBank.Api.Services.Providers;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -111,11 +112,10 @@ public static partial class ChatEndpoints
     /// call <see cref="RunToolLoopAsync"/>. The continuation is streamed through <see cref="Sse"/>.</summary>
     private sealed record ChatLoopContext(
         HttpContext Ctx,
-        OpenRouterClient OpenRouter,
         ChatToolDispatcher Dispatcher,
         // Threaded through to every chat_message/chat_attachment repo call the loop makes — both
         // encrypt/decrypt under the master DEK. The caller has already checked
-        // session.IsUnlocked before entering the loop (decrypting the OpenRouter key itself needs
+        // session.IsUnlocked before entering the loop (decrypting a provider key itself needs
         // the DEK), so this is always unlocked by the time the loop uses it.
         SessionService Session,
         ChatSettingsRepository Repo,
@@ -123,9 +123,11 @@ public static partial class ChatEndpoints
         ChatConversationRepository ConvoRepo,
         ChatAttachmentRepository AttachRepo,
         ILogger Logger,
-        IReadOnlyList<KeyMaterial> Keys,
+        // The text model's chain (the default text model, then its fallbacks) and the routes prepared for it this turn.
+        ChatRoutes Routes,
         string Model,
-        string EffectiveImageGenModelId,
+        // The effective image-generation model (null when none is configured); generate_image goes to its own provider.
+        ChatModelRow? EffectiveImageGen,
         Guid ConversationId,
         List<ChatToolMessage> ConvoMessages,
         CancellationToken Ct,
@@ -175,11 +177,12 @@ public static partial class ChatEndpoints
             {
                 lc.Ct.ThrowIfCancellationRequested();
 
-                // The upstream streaming call goes through multi-key failover. It tries each
-                // available key in priority order; a pre-first-byte HTTP failure (401/402/429/5xx) is
-                // recorded on that key and retried with the next. A failure AFTER a delta has reached
-                // the client propagates here (no splicing) and is surfaced as an event:error below.
-                var turn = await StreamWithFailoverAsync(lc);
+                // The upstream streaming call goes through multi-key failover and the fallback chain. It
+                // tries each available key of the model's provider in priority order, then the next model
+                // of the chain; a pre-first-byte failure is recorded on that key and the next is tried. A
+                // failure AFTER a delta has reached the client propagates here (no splicing) and is
+                // surfaced as an event:error below.
+                var (turn, answeredBy) = await StreamWithFailoverAsync(lc);
 
                 // Accumulate per-iteration token usage. promptTokensLast ends up as the prompt size
                 // of the last iteration that reported usage (the context size at the final answer);
@@ -192,6 +195,8 @@ public static partial class ChatEndpoints
                 {
                     var finalContent = string.IsNullOrEmpty(turn.Content) ? "(no response)" : turn.Content;
                     var finalModel = turn.Model;
+                    var finalProvider = answeredBy.ProviderName;
+                    var contextWindow = answeredBy.Model.ContextWindow ?? lc.ContextWindow;
                     var messageId = Guid.NewGuid();
                     try
                     {
@@ -202,6 +207,7 @@ public static partial class ChatEndpoints
                             Role = "assistant",
                             ContentText = finalContent,
                             Model = finalModel,
+                            Provider = finalProvider,
                             TokensIn = promptTokensLast,
                             TokensOut = completionTokensTotal,
                             ToolCallsCount = toolCallsCount,
@@ -213,13 +219,13 @@ public static partial class ChatEndpoints
                     catch (Exception ex) { lc.Logger.LogWarning(ex, "Failed to persist assistant message"); }
 
                     await lc.Sse("done", new {
-                        content = finalContent, model = finalModel, conversationId = lc.ConversationId, messageId,
+                        content = finalContent, model = finalModel, provider = finalProvider, conversationId = lc.ConversationId, messageId,
                         promptTokens = promptTokensLast,
                         completionTokens = completionTokensTotal,
                         toolCallsCount,
                         durationMs = sw.ElapsedMilliseconds,
-                        contextFillPercent = ComputeContextFill(promptTokensLast, lc.ContextWindow),
-                        contextWindow = lc.ContextWindow,
+                        contextFillPercent = ComputeContextFill(promptTokensLast, contextWindow),
+                        contextWindow,
                         createdAt = DateTime.UtcNow
                     });
                     return;
@@ -234,11 +240,15 @@ public static partial class ChatEndpoints
                 }).ToList();
                 var toolCallsJson = JsonSerializer.Serialize(assistantToolCalls, SseJsonOpts);
 
+                // The provider-opaque content of the turn (Anthropic's thinking blocks, Gemini's thought signatures) goes with it: the
+                // next round, and /confirm from the stored row, send the turn back as the model wrote it; only the protocol client of the
+                // same provider and model uses it (ProviderTurnState).
                 lc.ConvoMessages.Add(new ChatToolMessage
                 {
                     Role = "assistant",
                     Content = turn.Content,
-                    ToolCalls = assistantToolCalls
+                    ToolCalls = assistantToolCalls,
+                    ProviderState = turn.ProviderState
                 });
                 var assistantMessageId = Guid.NewGuid();
                 try
@@ -250,7 +260,9 @@ public static partial class ChatEndpoints
                         Role = "assistant",
                         ContentText = string.IsNullOrEmpty(turn.Content) ? null : turn.Content,
                         ToolCallsJson = toolCallsJson,
+                        ProviderStateJson = turn.ProviderState?.ToJson(),
                         Model = turn.Model,
+                        Provider = answeredBy.ProviderName,
                         CreatedAt = DateTime.UtcNow
                     }, lc.Session);
                 }
@@ -281,9 +293,9 @@ public static partial class ChatEndpoints
                         continue;
                     }
 
-                    // generate_image: needs OpenRouter egress + attachment storage + SSE, so it's
+                    // generate_image: needs provider egress + attachment storage + SSE, so it's
                     // handled here (not in the dispatcher). Intercepted before the write-tool check
-                    // and before InvokeAsync — the dispatcher has no OpenRouter/SSE access.
+                    // and before InvokeAsync — the dispatcher has no provider/SSE access.
                     if (tc.Name == "generate_image")
                     {
                         await RunGenerateImageToolAsync(lc, tc, args, assistantMessageId);
@@ -356,19 +368,32 @@ public static partial class ChatEndpoints
                 createdAt = DateTime.UtcNow
             });
         }
+        catch (OperationCanceledException) when (lc.Ct.IsCancellationRequested)
+        {
+            // Client disconnected mid-stream — the provider call is already cancelled (the token was
+            // forwarded). Nothing to write; the socket is gone. Do NOT rethrow.
+        }
         catch (OperationCanceledException)
         {
-            // Client disconnected mid-stream — the OpenRouter call is already cancelled (the token was
-            // forwarded). Nothing to write; the socket is gone. Do NOT rethrow.
+            // The browser is still there, so this was the provider's side: its answer stalled after content had already reached the
+            // client (before that, StreamWithFailoverAsync moves on to the next key and model). Say so instead of going silent.
+            try { await lc.Sse("error", new { error = "The provider's answer broke off: " + ModelRouter.NoAnswerInTime }); }
+            catch { /* client gone */ }
         }
         catch (AllKeysExhaustedException ex)
         {
-            // Every available key failed before emitting anything → surface as an error frame.
+            // Every model of the chain failed before emitting anything → surface as an error frame.
             // (Per-key cooldown/disable was already recorded by StreamWithFailoverAsync.)
             try { await lc.Sse("error", new { error = ex.Message }); }
             catch { /* client gone */ }
         }
-        catch (OpenRouterHttpException ex)
+        catch (ProviderUnavailableException ex)
+        {
+            // The egress refused a request after content had streamed (it checks before sending, so in practice never).
+            try { await lc.Sse("error", new { error = ex.Message }); }
+            catch { /* client gone */ }
+        }
+        catch (ProviderHttpException ex)
         {
             // Mid-stream failure AFTER content already streamed to the client: the failing key's
             // cooldown/error was recorded by StreamWithFailoverAsync; we cannot splice another key's
@@ -382,70 +407,103 @@ public static partial class ChatEndpoints
             try { await lc.Sse("error", new { error = ex.Message }); }
             catch { /* client gone */ }
         }
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        {
+            // The provider's stream broke off after content had already reached the client: no other key or model can be spliced in.
+            try { await lc.Sse("error", new { error = "The provider's answer broke off: " + ex.Message }); }
+            catch { /* client gone */ }
+        }
     }
 
-    /// <summary>STREAMING multi-key failover for ONE iteration of the tool loop. Tries each available
-    /// key in priority order; if a key fails BEFORE it has streamed any content delta for this attempt,
-    /// the failure is recorded (disable/cooldown/transient) and the SAME request is retried with the
-    /// next key (failover before the first byte; mid-stream splicing is explicitly
-    /// out of scope). If a key fails AFTER a delta has already been forwarded to the client, the
-    /// exception propagates to <see cref="RunToolLoopAsync"/> (→ an <c>event: error</c> frame) — we
-    /// cannot splice another key's stream into text the user has already seen. Throws
-    /// <see cref="AllKeysExhaustedException"/> when no key could even start; returns the assembled turn
-    /// otherwise. Records success on the key that produced the stream.</summary>
-    private static async Task<ToolCompletionResult> StreamWithFailoverAsync(ChatLoopContext lc)
+    /// <summary>STREAMING failover for ONE iteration of the tool loop, over the keys of each model's provider and then the models of the
+    /// fallback chain. If an attempt fails BEFORE it has streamed any content delta, the failure is recorded (disable/cooldown/transient) and
+    /// the SAME request is retried with the next key, then with the next model (failover before the first byte; mid-stream splicing is
+    /// explicitly out of scope). If an attempt fails AFTER a delta has already been forwarded to the client, the exception propagates to
+    /// <see cref="RunToolLoopAsync"/> (→ an <c>event: error</c> frame) — another stream cannot be spliced into text the user has already seen.
+    /// Throws <see cref="AllKeysExhaustedException"/> when no model of the chain could even start; returns the assembled turn and the route
+    /// that produced it (which model of which provider answered) otherwise. Records success on the key that produced the stream.</summary>
+    private static async Task<(ToolCompletionResult Turn, ModelRoute Route)> StreamWithFailoverAsync(ChatLoopContext lc)
     {
         var tools = ChatToolDispatcher.ToolDefinitions;
-        Exception? last = null;
+        var router = lc.Routes.Router;
+        var failures = new List<string>();
 
-        foreach (var key in lc.Keys)
+        foreach (var model in lc.Routes.Chain)
         {
             lc.Ct.ThrowIfCancellationRequested();
+            var (route, problem) = await lc.Routes.GetAsync(model);
+            if (route is null)
+            {
+                failures.Add(problem!.Message);
+                continue;
+            }
 
-            // True once ANY delta for THIS attempt has been forwarded to the client. A failure after
-            // this point can no longer be retried (the user has seen partial output) → rethrow.
-            var emittedThisAttempt = false;
-            try
+            string? last = null;
+            foreach (var key in route.Keys)
             {
-                var turn = await lc.OpenRouter.StreamWithToolsAsync(
-                    key.PlaintextKey, lc.Model, lc.ConvoMessages, tools,
-                    async (delta, token) =>
-                    {
-                        emittedThisAttempt = true;
-                        await lc.Sse("delta", new { text = delta });
-                    },
-                    lc.Ct);
+                lc.Ct.ThrowIfCancellationRequested();
 
-                // Stream completed cleanly on this key → record success and hand the turn back to the loop.
-                await lc.Repo.RecordKeySuccessAsync(key.Id);
-                return turn;
-            }
-            catch (OpenRouterHttpException ex)
-            {
-                // Record the circuit-breaker decision regardless, then: if nothing streamed yet, retry
-                // the next key; otherwise propagate (no splicing into already-shown output).
-                await RecordKeyOutcomeAsync(lc.Repo, key.Id, ClassifyKeyFailure(ex.StatusCode), ex.Message);
-                if (!emittedThisAttempt)
+                // True once ANY delta for THIS attempt has been forwarded to the client. A failure after
+                // this point can no longer be retried (the user has seen partial output) → rethrow.
+                var emittedThisAttempt = false;
+                try
                 {
-                    last = ex;
-                    continue; // failover before first byte
+                    var turn = await route.Client.StreamWithToolsAsync(
+                        route.Call(key), lc.ConvoMessages, tools,
+                        async (delta, token) =>
+                        {
+                            emittedThisAttempt = true;
+                            await lc.Sse("delta", new { text = delta });
+                        },
+                        lc.Ct);
+
+                    // Stream completed cleanly on this key → record success and hand the turn back to the loop.
+                    await router.RecordKeySuccessAsync(key);
+                    return (turn, route);
                 }
-                throw; // mid-stream failure → loop emits event:error
-            }
-            catch (HttpRequestException ex)
-            {
-                // Transport/timeout — not the key's fault: note it, retry next, no cooldown.
-                await lc.Repo.RecordUsageAsync(key.Id, ex.Message);
-                if (!emittedThisAttempt)
+                catch (ProviderHttpException ex) when (ModelRouter.IsRequestError(ex.StatusCode))
                 {
-                    last = ex;
-                    continue;
+                    // The provider refused the request itself (400/404/413/422), not the key: no other key of it is tried and the key
+                    // is not marked; the chain's next model may accept the request. After a delta the loop says so.
+                    if (emittedThisAttempt) throw;
+                    last = ex.Message;
+                    break;
                 }
-                throw;
+                catch (ProviderHttpException ex)
+                {
+                    // Record the circuit-breaker decision regardless, then: if nothing streamed yet, retry
+                    // the next key; otherwise propagate (no splicing into already-shown output).
+                    await router.RecordKeyOutcomeAsync(key, ModelRouter.ClassifyKeyFailure(ex.StatusCode), ex.Message);
+                    if (emittedThisAttempt) throw; // mid-stream failure → loop emits event:error
+                    last = ex.Message;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or IOException)
+                {
+                    // Transport, or the body broke off — not the key's fault: note it, retry next, no cooldown.
+                    await router.RecordTransportErrorAsync(key, ex.Message);
+                    if (emittedThisAttempt) throw;
+                    last = ex.Message;
+                }
+                catch (OperationCanceledException) when (ModelRouter.IsNoAnswerInTime(lc.Ct))
+                {
+                    // The HTTP client's timeout while the browser is still there: the provider stalled. Before the first delta that is a
+                    // transport failure of this key like any other (the next key, then the next model); after it, the loop says so.
+                    await router.RecordTransportErrorAsync(key, ModelRouter.NoAnswerInTime);
+                    if (emittedThisAttempt) throw;
+                    last = ModelRouter.NoAnswerInTime;
+                }
+                catch (ProviderUnavailableException ex)
+                {
+                    // The egress refused this provider (nothing was sent): no other key of it would fare better.
+                    if (emittedThisAttempt) throw;
+                    last = ex.Message;
+                    break;
+                }
             }
+            failures.Add(last ?? "All configured API keys failed.");
         }
 
-        throw new AllKeysExhaustedException(last?.Message ?? "All configured API keys failed.");
+        throw new AllKeysExhaustedException(ModelRouter.Summarize(failures));
     }
 
     /// <summary>Forces <c>confirm=true</c> on a delete tool call's args. bee_delete_article keeps its

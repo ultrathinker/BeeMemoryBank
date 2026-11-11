@@ -252,7 +252,8 @@
                 text.forEach(function (m) {
                     var opt = document.createElement('sl-option');
                     opt.value = m.id;
-                    opt.textContent = m.label || m.modelId;
+                    // "model - provider": the same model id can be offered by several providers.
+                    opt.textContent = (m.label || m.modelId) + (m.providerName ? ' - ' + m.providerName : '');
                     sel.appendChild(opt);
                 });
                 var hint = byId('dream-models-hint');

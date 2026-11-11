@@ -131,9 +131,13 @@ public sealed class DreamRunContext
     public bool UseModel { get; init; }
     /// <summary>The built-in rules run in this run (the detectors phase). Off only when a manual start asked so.</summary>
     public bool UseRules { get; init; } = true;
-    /// <summary>The OpenRouter model id string of the analysis model; null when the run uses no model.</summary>
+    /// <summary>The model id string of the analysis model, as its provider knows it; null when the run uses no model.</summary>
     public string? ModelId { get; init; }
+    /// <summary>"label - provider" of the analysis model.</summary>
     public string? ModelLabel { get; init; }
+    /// <summary>The catalogue row (chat_model / chat_provider_model id) of the analysis model: which provider it belongs to. The model
+    /// client tries it first, then the chat's fallback chain.</summary>
+    public Guid? ModelRowId { get; init; }
 
     /// <summary>New advice the run may create; 0 = no limit (manual runs only).</summary>
     public int MaxAdvice { get; init; }
@@ -270,15 +274,20 @@ public interface IDreamModelClient
     Task<DreamModelReply> CompleteAsync(DreamModelRequest request, CancellationToken ct);
 }
 
-/// <param name="ModelId">The OpenRouter model id string.</param>
+/// <param name="ModelId">The model id string, as its provider knows it.</param>
 /// <param name="Budget">The run's budget the call is checked against and counted in.</param>
-public sealed record DreamModelRequest(string ModelId, string System, string User, int MaxOutputTokens, DreamRunBudget Budget);
+/// <param name="ModelRowId">The catalogue row of the model (which provider it belongs to); null: the model id at the built-in OpenRouter
+/// provider, as before providers.</param>
+public sealed record DreamModelRequest(string ModelId, string System, string User, int MaxOutputTokens, DreamRunBudget Budget,
+    Guid? ModelRowId = null);
 
 /// <param name="Model">The model the provider says answered.</param>
+/// <param name="Provider">The name of the provider that answered (a fallback's, when the analysis model's provider failed).</param>
 /// <param name="CutOff">The answer was stopped by the output limit: the provider said <c>finish_reason</c> length, or a
 /// model that reasons sent its reasoning and no content, so the cap was spent before any answer was written. A reply that
 /// is cut off is usually not valid JSON; the tasks name it as such in the journal instead of "reply is empty".</param>
-public sealed record DreamModelReply(string Content, long PromptTokens, long CompletionTokens, string? Model, bool CutOff = false);
+public sealed record DreamModelReply(string Content, long PromptTokens, long CompletionTokens, string? Model, bool CutOff = false,
+    string? Provider = null);
 
 /// <summary>The run's model budget (calls or tokens) does not admit the next call: the run ends with budget_limit.</summary>
 public sealed class DreamBudgetExceededException(string message) : Exception(message);

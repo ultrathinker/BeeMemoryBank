@@ -23,18 +23,24 @@ public class ChatRekeyStepTests : RekeyVaultTestBase
     private byte[] _dek = null!;
     private byte[] _oldChatKey = null!;
 
-    /// <summary>The sealed columns, spelled independently of the step's own list.</summary>
-    private static readonly (string Table, string Cipher, string Iv, string Version, string? Plain, bool Bytes, byte[] Aad)[] Columns =
+    /// <summary>The sealed columns, spelled independently of the step's own list (the AAD from the row's id).</summary>
+    private static readonly (string Table, string Cipher, string Iv, string Version, string? Plain, bool Bytes, Func<string, byte[]> Aad)[] Columns =
     [
-        ("chat_message", "content_ciphertext", "content_iv", "content_key_v", "content_text", false, "bmb-chat-message-content-v1"u8.ToArray()),
-        ("chat_message", "tool_calls_ciphertext", "tool_calls_iv", "tool_calls_key_v", "tool_calls_json", false, "bmb-chat-message-toolcalls-v1"u8.ToArray()),
-        ("chat_attachment", "blob", "iv", "key_v", null, true, "bmb-chat-attachment-blob-v1"u8.ToArray()),
-        ("chat_api_key", "ciphertext", "iv", "key_v", null, false, "bmb-openrouter-key-v1"u8.ToArray()),
+        ("chat_message", "content_ciphertext", "content_iv", "content_key_v", "content_text", false, _ => "bmb-chat-message-content-v1"u8.ToArray()),
+        ("chat_message", "tool_calls_ciphertext", "tool_calls_iv", "tool_calls_key_v", "tool_calls_json", false, _ => "bmb-chat-message-toolcalls-v1"u8.ToArray()),
+        // The provider-opaque content of a tool-call turn (thinking blocks, thought signatures), bound to its message.
+        ("chat_message", "provider_state_ciphertext", "provider_state_iv", "provider_state_key_v", null, false, id => Encoding.UTF8.GetBytes($"bmb-chat-message-provider-state-v1:{Guid.Parse(id):D}")),
+        ("chat_attachment", "blob", "iv", "key_v", null, true, _ => "bmb-chat-attachment-blob-v1"u8.ToArray()),
+        ("chat_api_key", "ciphertext", "iv", "key_v", null, false, _ => "bmb-openrouter-key-v1"u8.ToArray()),
+        // Model providers: the approval stamp and the key of a provider other than the built-in one, each bound to its row.
+        ("chat_provider", "approval_ciphertext", "approval_iv", "approval_key_v", null, false, id => Encoding.UTF8.GetBytes($"bmb-chat-provider-approval-v1:{Guid.Parse(id):D}")),
+        ("chat_provider_key", "ciphertext", "iv", "key_v", null, false, id => Encoding.UTF8.GetBytes($"bmb-chat-provider-key-v1:{Guid.Parse(id):D}")),
+        ("chat_provider_key", "key_prefix_ciphertext", "key_prefix_iv", "key_prefix_key_v", null, false, id => Encoding.UTF8.GetBytes($"bmb-chat-provider-key-prefix-v1:{Guid.Parse(id):D}")),
     ];
 
     private static readonly string[] Sentinels =
     [
-        "CHAT-SENTINEL-content", "CHAT-SENTINEL-tool", "CHAT-SENTINEL-attachment", "CHAT-SENTINEL-provider-key",
+        "CHAT-SENTINEL-content", "CHAT-SENTINEL-tool", "CHAT-SENTINEL-provider-state", "CHAT-SENTINEL-attachment", "CHAT-SENTINEL-provider-key", "CHAT-SENTINEL-other-provider-key",
         "CHAT-SENTINEL-legacy-dek", "CHAT-SENTINEL-legacy-plain", "CHAT-SENTINEL-legacy-attachment",
     ];
 
@@ -333,7 +339,7 @@ public class ChatRekeyStepTests : RekeyVaultTestBase
             var plain = c.Plain ?? "NULL";
             foreach (var r in chat.Query<(string Id, byte[]? Cipher, byte[]? Iv, long? Version, string? Plain)>(
                          $"SELECT id, {c.Cipher}, {c.Iv}, {c.Version}, {plain} FROM {c.Table}"))
-                rows.Add(new Row(c.Table, c.Cipher, r.Id, r.Cipher, r.Iv, r.Version, r.Plain, c.Bytes, c.Aad));
+                rows.Add(new Row(c.Table, c.Cipher, r.Id, r.Cipher, r.Iv, r.Version, r.Plain, c.Bytes, c.Aad(r.Id)));
         }
         return rows;
     }
