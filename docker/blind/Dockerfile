@@ -34,7 +34,7 @@ RUN set -eux; \
     dotnet publish server/BeeMemoryBank.BlindCli/BeeMemoryBank.BlindCli.csproj \
         -c Release -r "${rid}" --no-self-contained -p:UseAppHost=false -o /app/cli
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:11.0 AS runtime
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
