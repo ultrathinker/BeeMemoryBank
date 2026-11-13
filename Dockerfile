@@ -8,7 +8,7 @@
 # linux/arm64. Multi-arch like docker/blind/Dockerfile: BuildKit's TARGETARCH picks the runtime identifier, and the build stage
 # runs on the BUILD platform (the .NET SDK cross-publishes), so an arm64 image is not compiled under emulation.
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 ARG TARGETARCH
 WORKDIR /src
 
