@@ -183,7 +183,7 @@ public sealed class MdnsAnnouncer : BackgroundService
     {
         try
         {
-            _discovery = new ServiceDiscovery();
+            _discovery = MdnsServiceLifetime.Open();
             var profile = announcement is null
                 ? BuildProfile(nodeId, name, version, _options.Https, _options.Port)
                 : BuildProfile(nodeId, announcement.Web ? name : null, version, https: true, announcement.Port, surface: announcement.Surface);
@@ -243,8 +243,8 @@ public sealed class MdnsAnnouncer : BackgroundService
     private void TryDisposeDiscovery()
     {
         if (_discovery is null) return;
-        try { _discovery.Dispose(); }
-        catch { /* swallow: best-effort cleanup */ }
+        // Not a plain Dispose: that leaves the library's service subscribed to network changes and alive for ever (BMB-373).
+        MdnsServiceLifetime.Close(_discovery);
         _discovery = null;
     }
 

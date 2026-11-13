@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.10.1 (2026-11-13)
+
+A fix for Windows: a node no longer piles up network sockets when a network adapter comes or goes. No migration; a
+2.10.0 node and a 2.10.1 node work together as they are.
+
+### Fixed
+
+- **A Windows node could choke the computer's network after a network adapter came or went.** A desktop node looks for
+  its paired devices on the local network once a minute. The mDNS library it uses (Makaretu.Dns.Multicast 0.27.0) left
+  every finished search subscribed to the Windows "network addresses changed" event, so finished searches stayed in
+  memory, about 1,440 a day. When an adapter appeared or went (Wi-Fi next to Ethernet, a VPN, WSL, a dock), every one
+  of them opened a new set of sockets on port 5353 that nothing closed: hundreds of sockets within a minute, after which
+  opening any socket on the computer took seconds and name lookups 10 to 20 seconds, until Windows was restarted. Every
+  search and every announcement now closes its mDNS service completely, that subscription and the two unicast sockets
+  the library leaves open included (`MdnsServiceLifetime`). Tests pin that nothing stays subscribed after a close or
+  after a browser's scans, that the library still has the private names the fix relies on, and, as a control, that the
+  library alone still leaks, so an upgrade that fixes it upstream is noticed. Nodes on macOS, Linux, Docker and the
+  Android blind copy were not affected: the library subscribes to that event only on Windows.
+
 #### 2.10.0 (2026-11-11)
 
 Model providers: the AI chat and Dream can use any model provider, not only OpenRouter. Pick one from a built-in list or

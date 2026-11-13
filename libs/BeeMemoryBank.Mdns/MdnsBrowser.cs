@@ -11,7 +11,8 @@ namespace BeeMemoryBank.Mdns;
 /// <remarks>
 /// Each <see cref="DiscoverAsync"/> call performs a self-contained scan (it brings up its own
 /// short-lived <see cref="ServiceDiscovery"/>, sends a PTR query, collects answers for the scan
-/// window, then tears down). Concurrent scans are serialised — Makaretu's multicast sockets are
+/// window, then tears down through <see cref="MdnsServiceLifetime.Close"/>, so no socket and no
+/// subscription outlives the scan). Concurrent scans are serialised — Makaretu's multicast sockets are
 /// process-wide and don't tolerate parallel responders cleanly.
 /// </remarks>
 public sealed class MdnsBrowser
@@ -38,9 +39,12 @@ public sealed class MdnsBrowser
         var found = new Dictionary<string, MdnsNodeRecord>(StringComparer.Ordinal);
 
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        ServiceDiscovery? sd = null;
         try
         {
-            using var sd = new ServiceDiscovery();
+            // Opened and closed through MdnsServiceLifetime: a plain Dispose leaves the library's service subscribed to network
+            // changes for ever, and every closed scan then opens sockets on 5353 when an adapter comes or goes (BMB-373).
+            sd = MdnsServiceLifetime.Open();
             sd.ServiceInstanceDiscovered += (_, e) =>
             {
                 if (TryParse(e.Message, e.ServiceInstanceName, out var rec) && rec is not null)
@@ -71,6 +75,7 @@ public sealed class MdnsBrowser
         }
         finally
         {
+            MdnsServiceLifetime.Close(sd);
             _lock.Release();
         }
     }
