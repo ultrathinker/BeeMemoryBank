@@ -448,6 +448,7 @@ BeeMemoryBank.Crypto BeeMemoryBank.Crypto.TlsTrustAnchors
 BeeMemoryBank.Mdns BeeMemoryBank.Mdns.MdnsBrowser
 BeeMemoryBank.Mdns BeeMemoryBank.Mdns.MdnsConstants
 BeeMemoryBank.Mdns BeeMemoryBank.Mdns.MdnsNodeRecord
+BeeMemoryBank.Mdns BeeMemoryBank.Mdns.MdnsServiceLifetime
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Interop.CF
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Interop.CfScope
 BeeMemoryBank.Platforms.Apple BeeMemoryBank.Platforms.Apple.Interop.NativeLibraries

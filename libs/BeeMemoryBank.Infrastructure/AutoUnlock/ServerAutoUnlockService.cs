@@ -268,7 +268,7 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
 
             if (SealedAndClosed)
             {
-                if (!await _sealedHost!.TryUnlockWithDekAsync(masterDek, slot.Door, ct).ConfigureAwait(false))
+                if (!await OpenSealedWithoutTheLockAsync(masterDek, slot.Door, ct).ConfigureAwait(false))
                 {
                     _logger?.LogWarning("Start unlocked after a restart: the sealed unlock refused; the vault stays locked.");
                     return false;
@@ -294,6 +294,27 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
         {
             CryptographicOperations.ZeroMemory(secret);
             if (masterDek is not null) CryptographicOperations.ZeroMemory(masterDek);
+        }
+    }
+
+    /// <summary>
+    /// Opens the sealed database with <see cref="_lock"/> released, and takes the lock back before returning; called only from
+    /// <see cref="RunAtStartAsync"/>, which holds it. Opening runs the open steps before it returns, and one of them is this service's own
+    /// <see cref="StaleServerSlotOpenStep"/>, which takes the same lock (<see cref="RetireStaleSlotsInOpenDatabaseAsync"/>). A SemaphoreSlim is
+    /// not re-entrant: in 2.10.1 the start waited for itself and the API of a sealed server with the checkbox on never started (BMB-374).
+    /// The slot, the record and the key were read under the lock already; the open step reads them again under the lock and leaves the
+    /// slot the record names alone.
+    /// </summary>
+    private async Task<bool> OpenSealedWithoutTheLockAsync(byte[] masterDek, BootDoor? door, CancellationToken ct)
+    {
+        _lock.Release();
+        try
+        {
+            return await _sealedHost!.TryUnlockWithDekAsync(masterDek, door, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         }
     }
 

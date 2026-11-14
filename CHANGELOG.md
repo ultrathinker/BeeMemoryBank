@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.10.2 (2026-11-14)
+
+A fix for encrypted servers that use "Start unlocked after a restart". No migration; a 2.10.1 node and a 2.10.2 node work
+together as they are.
+
+### Fixed
+
+- **An encrypted server with "Start unlocked after a restart" switched on never finished starting.** At start the
+  server reads its key file and opens the encrypted database with it. The start held the lock of the auto-unlock
+  service while it opened the database, and opening runs the open steps, one of which is the same service's check for
+  stale auto-unlock slots, which takes that same lock. The start waited for itself: the API never began to listen, the
+  web pages could not reach it, and nothing was written to the log. Servers that were not encrypted, servers with the
+  option off, and an unlock with the master password were not affected. The lock is now released while the database
+  opens and taken back after it. A new test runs the open step of the very service whose start opens the vault, as the
+  API registers it (the earlier tests used a second instance, which is why they passed); it fails with a timeout on
+  2.10.1. Checked on a real encrypted server: with the option on, the node opened by itself in three seconds, and again
+  after a second restart.
+- Tests only: the list of types a blind node may contain names `MdnsServiceLifetime`, added in 2.10.1
+  (`VaultBoundaryListTests` failed in the 2.10.1 build).
+
 #### 2.10.1 (2026-11-13)
 
 A fix for Windows: a node no longer piles up network sockets when a network adapter comes or goes. No migration; a

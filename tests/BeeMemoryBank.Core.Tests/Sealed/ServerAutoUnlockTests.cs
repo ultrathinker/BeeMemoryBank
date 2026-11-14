@@ -250,6 +250,53 @@ public class ServerAutoUnlockTests : SealedWriterFixture
         host.Fingerprints.Should().ContainSingle().Which.Fingerprint.Should().Be(DekFingerprint.Of(dek));
     }
 
+    /// <summary>
+    /// A sealed host that opens the database the way the real gate does: the open runs the open steps before the unlock returns. The
+    /// steps are added after construction, so a step can belong to the very service whose start calls this host (as in the API, where
+    /// <see cref="StaleServerSlotOpenStep"/> wraps the singleton <see cref="ServerAutoUnlockService"/>).
+    /// </summary>
+    private sealed class OpeningSealedHost(IBootDoorStore doors) : ISealedAutoUnlockHost
+    {
+        public List<IVaultOpenStep> Steps { get; } = [];
+        public int StepsRun { get; private set; }
+        public bool Usable { get; private set; }
+        public bool IsSealed => true;
+        public bool IsUsable => Usable;
+        public async Task<IReadOnlyList<BootDoor>> ListDoorsAsync(CancellationToken ct = default) => await doors.ListAsync(ct);
+        public async Task<bool> TryUnlockWithDekAsync(byte[] masterDek, BootDoor? door, CancellationToken ct = default)
+        {
+            foreach (var step in Steps.OrderBy(s => s.Order))
+            {
+                await step.RunAsync(true, ct);
+                StepsRun++;
+            }
+            Usable = true;
+            return true;
+        }
+        public Task SetDekFingerprintAsync(long doorId, string dekFingerprint, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task TheStartOfASealedServer_OpensThroughTheOpenSteps_IncludingItsOwnStaleSlotStep_WithoutWaitingForItself()
+    {
+        var svc = Make(sealedNode: true);
+        await svc.EnableAsync();
+        var host = new OpeningSealedHost(Doors);
+        var restarted = Make(session: new SessionService(KeySlots), host: host, sealedNode: true);
+        // The same instance, as the API registers it: one ServerAutoUnlockService behind both the start step and the open step.
+        host.Steps.Add(new StaleServerSlotOpenStep(restarted));
+
+        var start = restarted.RunAtStartAsync(new NodeIdentityRepository(Factory));
+        var finished = await Task.WhenAny(start, Task.Delay(TimeSpan.FromSeconds(15)));
+
+        finished.Should().BeSameAs(start,
+            "2.10.1 held its lock across the open and its own open step waited for that lock: a sealed server with the checkbox on never started (BMB-374)");
+        (await start).Should().Be(ServerAutoUnlockStartOutcome.Unlocked);
+        host.StepsRun.Should().Be(1);
+        (await ServerSlotsAsync()).Should().ContainSingle("the armed slot matches the enable record, so the open step leaves it alone");
+        File.Exists(restarted.RecordPath).Should().BeTrue();
+    }
+
     [Fact]
     public async Task AfterDisableARestartDoesNotOpenIt_AndTheRecordWentFirst()
     {
