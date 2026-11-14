@@ -984,14 +984,14 @@ All inter-node sync is encrypted end-to-end with Ed25519-signed events. Replica 
 Windows release files (`BeeMemoryBank-win-Setup.exe`, `BeeMemoryBank-win-Portable.zip` and the
 update package) are built from this repository by the
 [release workflow](.github/workflows/release-windows.yml) on GitHub Actions, never on a developer
-machine, and a maintainer approves each release by hand before it is signed and published.
+machine, and a maintainer approves each release by hand before it is published.
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/).
+The Windows files are **not code-signed yet** (see above: Windows SmartScreen may warn). This section will name the signing
+service when one is in place.
 
 The Docker images (`ghcr.io/ultrathinker/beememorybank`, `ghcr.io/ultrathinker/beememorybank-blind`) are built by the
 [image workflow](.github/workflows/docker-publish.yml) on GitHub Actions when a maintainer publishes a release, and only
-after each image passed a start-up test. They are not Authenticode-signed (no SignPath certificate applies to an image);
+after each image passed a start-up test. They are not Authenticode-signed (a Windows signing certificate does not apply to an image);
 each carries a GitHub-signed build provenance attestation instead.
 
 - Committers and reviewers: [ultrathinker](https://github.com/ultrathinker)

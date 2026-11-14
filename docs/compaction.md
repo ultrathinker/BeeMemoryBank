@@ -18,16 +18,23 @@ a preview of what would be deleted and confirms in the Web UI (Admin → Event L
          -d '{"reason":"manual"}' \
          http://localhost:5300/api/admin/compact
 
-## Safe compaction point (CP)
+## Compaction point (CP)
 
-The safe CP is the maximum sequence number that can be deleted without cutting off any active
-peer's sync position:
+Compaction is count-based. It keeps the newest `BMB_COMPACTION_KEEP_COUNT` events (default 1500, minimum 100; an
+unparseable or smaller value falls back to the default) and deletes everything older. The compaction point is the
+sequence number of the newest event that is deleted: with `N` events in the log, the CP is the sequence number of the
+`(N - keep_count)`-th oldest one. The keep-count is also how far a peer may fall behind before a compaction would cut it
+off; raise it when devices stay offline for longer.
 
-    safe_cp = min(peer.last_sequence_num for peer in active_whitelist) - SAFETY_MARGIN
+The safety check uses the positions the peers have reported (`POST /api/sync/report-position`). A peer would be cut off
+when it has reported a position and `keep_count` or more events lie after it, or when it is in the whitelist and has never
+reported a position at all. The preview names such peers (`atRiskPeers`) and says it cannot compact; executing without
+`"acceptCuttingOffPeers": true` is refused with HTTP 409. With that flag compaction goes ahead, the stranded peers are
+written to the log, and they must wipe and rejoin. An `explicitCp` goes through the same check, must lie above the lowest
+retained sequence number and not above the head (HTTP 400 otherwise).
 
-`SAFETY_MARGIN = 1000`. If the node has no active peers, `safe_cp = head_seq - SAFETY_MARGIN`.
-
-Compaction refuses to run if `safe_cp ≤ current_min_seq` ("nothing to compact"). It also refuses (409) while the
+When the log holds no more than `keep_count` events, the preview proposes no CP ("nothing to remove") and executing without an
+`explicitCp` is refused (HTTP 400: it would compact to sequence 0). It also refuses (409) while the
 node holds events it received but has not applied yet (metadata encryption: a sealed event that arrived while the vault
 was locked, or before its key; see [sync.md](sync.md#held-events-received-and-applied)): cutting the log below them
 would lose them. Unlock the node and wait until they are applied.
@@ -40,20 +47,23 @@ possible again at the next unlock.
 
 ## What happens on compact
 
-1. Generate a signed snapshot at `safe_cp` (local-backup flavor, full DB; not filtered).
-2. Inside one short transaction: `DELETE FROM tbl_event WHERE sequence_num ≤ safe_cp AND event_type != 'snapshot_checkpoint'` + `INSERT INTO tbl_compaction_log`.
+1. Generate a signed snapshot at the compaction point `CP` (local-backup flavor, full DB; not filtered).
+2. Inside one short transaction: `DELETE FROM tbl_event WHERE sequence_num ≤ CP AND event_type != 'snapshot_checkpoint'` + `INSERT INTO tbl_compaction_log` (the table keeps only its 20 newest rows).
 3. Outside the transaction: emit a new `snapshot_checkpoint` event containing:
    - `cp_seq`, `events_removed`, `snapshot_file_name`
    - `snapshot_sha256` (hash of the generated `.tar.gz`)
    - `prev_checkpoint_sha256` (SHA-256 of the previous checkpoint's payload, or null for the first)
    - `produced_at`
+4. Afterwards the cache of join snapshots is dropped and the snapshots folder is pruned to its **two newest** `*.tar.gz` files
+   (by modification time, together with their `.sig` files), whatever made them: this compaction, an earlier one, a nightly or a
+   manual snapshot. All older ones are deleted.
 
 The checkpoint is Ed25519-signed by the node and stays in `tbl_event` forever — it's never
 compacted away (excluded by event_type). This forms a hash-chain audit trail.
 
 ## Effect on peers
 
-After compaction, a peer whose `last_sequence_num < safe_cp` cannot catch up via event replay
+After compaction, a peer whose position is below the compaction point (`last_sequence_num < CP`) cannot catch up via event replay
 alone. On the next `GET /api/sync/events?afterSequence=X` (with X below CP), the server returns:
 
     HTTP 410 Gone
@@ -83,18 +93,18 @@ previous's payload). Pulling these via `GET /api/admin/compact/checkpoints` (or 
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/admin/compact/preview` | Preview compaction: head seq, min seq, proposed CP, peer positions, warnings |
-| `POST` | `/api/admin/compact` | Execute compaction. Body: `{ "explicitCp": null, "reason": "manual" }` |
-| `GET` | `/api/admin/compact/checkpoints` | List `snapshot_checkpoint` events (audit trail), newest first |
+| `GET` | `/api/admin/compact/preview` | Preview compaction: head seq, min seq, proposed CP, events to delete and to keep, peer positions, warnings, `atRiskPeers`, `canCompact` and why |
+| `POST` | `/api/admin/compact` | Execute compaction. Body: `{ "explicitCp": null, "reason": "manual", "acceptCuttingOffPeers": false }` |
+| `GET` | `/api/admin/compact/checkpoints` | List `snapshot_checkpoint` events (audit trail), newest first, at most 50 |
 
-All endpoints require `X-Internal-Key` header. POST additionally requires an unlocked session.
+All endpoints require the `X-Internal-Key` header and the superadmin role. POST additionally requires an unlocked session (403 otherwise).
 
 ## UI
 
 The "Event Log & Compaction" page of the Admin area (`/Admin/Compaction`) explains what the log is and what compaction does, and shows:
 - **Statistics grid**: total events, head seq, min retained seq, active peers
 - **Peer positions**: each peer's last synced sequence number
-- **Warnings**: e.g. peer position too close to head
+- **Warnings**: a peer that would be cut off (`keep_count` or more events behind, or never reported a position), a peer that last reported more than 14 days ago
 - **Compact button**: with preview info and confirmation dialog
 - **Compaction history**: expandable table of all `snapshot_checkpoint` events showing CP, events removed, snapshot file, timestamp, and chain link
 
