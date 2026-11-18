@@ -45,6 +45,13 @@ public static class BlindNodeServices
         services.AddMemoryCache();
         AddBlindRecovery(services);
         services.AddSingleton<SyncTokenStore>();
+        services.AddSingleton<BeeMemoryBank.Sync.IPeerRevocationCleanup>(sp => sp.GetRequiredService<SyncTokenStore>());
+        services.AddSingleton(sp => new BeeMemoryBank.Sync.NodeStateAnnouncer(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<ILogger<BeeMemoryBank.Sync.NodeStateAnnouncer>>(),
+            sp.GetService<BeeMemoryBank.Core.Interfaces.IVaultGate>(),
+            sp.GetService<IHostEnvironment>()));
+        services.AddHostedService(sp => sp.GetRequiredService<BeeMemoryBank.Sync.NodeStateAnnouncer>());
         // Per-node, not per-process: see SyncChallengeRateLimiter.
         services.AddSingleton<SyncEndpoints.SyncChallengeRateLimiter>();
         services.AddSingleton<IPublicHostValidator, DnsPublicHostValidator>();

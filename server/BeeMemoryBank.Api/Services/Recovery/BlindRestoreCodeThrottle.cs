@@ -3,7 +3,7 @@ using BeeMemoryBank.Hosting.AspNetCore;
 namespace BeeMemoryBank.Api.Services.Recovery;
 
 /// <summary>
-/// What stops somebody from guessing a restore code (srvfix9, RV7-01): a budget of WRONG codes per source address, shared by the three routes that take a code
+/// What stops somebody from guessing a restore code: a budget of WRONG codes per source address, shared by the three routes that take a code
 /// (<c>restore/package</c>, <c>restore/events</c>, <c>claim</c>). <see cref="MaxFailures"/> wrong codes in <see cref="Window"/> from one address and that address is answered
 /// <c>429</c> with a <c>Retry-After</c> - before its next code is looked at, so a blocked address cannot test one more guess, even by accident - until the window has run out.
 ///

@@ -5,7 +5,7 @@ using BeeMemoryBank.Storage.Sqlite;
 namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
-/// Covers the WP that pushes <c>ArticleRepository.ListAsync</c>'s pagination and ACL filtering
+/// Covers the change that pushes <c>ArticleRepository.ListAsync</c>'s pagination and ACL filtering
 /// into SQL instead of a full unbounded load + in-memory <c>Skip/Take</c>/<c>FilterArticles</c>
 /// pass (see AGENTS.md's "Non-obvious invariants" and the ACL-scoping tests already in
 /// <c>CallerScopeTests</c>, which this complements rather than duplicates).
@@ -141,12 +141,12 @@ public class ArticleRepositoryPaginationAndAclSqlTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Rough before/after row-materialization count for a "first page" request (see the task's
-    /// DoD item 5). Counts rows actually READ off the SQLite driver -- not what a C#-side
+    /// Rough before/after row-materialization count for a "first page" request.
+    /// Counts rows actually READ off the SQLite driver -- not what a C#-side
     /// Skip/Take would keep afterwards -- for two SQL shapes:
     /// "before" is the exact SELECT <c>ArticleRepository.ListAsync</c> ran for a null treePath
-    /// before this WP (no LIMIT clause existed at all); "after" is the same query with the
-    /// LIMIT this WP adds. This isolates the SQL-level effect from the ACL-predicate change,
+    /// before this change (no LIMIT clause existed at all); "after" is the same query with the
+    /// LIMIT this change adds. This isolates the SQL-level effect from the ACL-predicate change,
     /// which is covered separately by the tests above.
     /// </summary>
     [Fact]
@@ -163,8 +163,8 @@ public class ArticleRepositoryPaginationAndAclSqlTests : IAsyncLifetime
         var afterRowsRead = CountRowsRead(conn,
             "SELECT a.id FROM tbl_article a LEFT JOIN tbl_folder f ON f.id = a.folder_id WHERE a.status = 'A' LIMIT 20");
 
-        beforeRowsRead.Should().Be(total);   // pre-WP: every active article, regardless of page size requested
-        afterRowsRead.Should().Be(20);        // post-WP: exactly the requested page, database-side
+        beforeRowsRead.Should().Be(total);   // before: every active article, regardless of page size requested
+        afterRowsRead.Should().Be(20);        // after: exactly the requested page, database-side
     }
 
     private static int CountRowsRead(System.Data.IDbConnection conn, string sql)
@@ -260,7 +260,7 @@ public class ArticleRepositoryPaginationAndAclSqlTests : IAsyncLifetime
     // the ACL path, where an unescaped '%'/'_' from the folder's own name would be misread as a
     // SQL wildcard by the "prefix/%" pattern. An article sitting directly AT the ACL path (no
     // descendant involved) would pass this test even with the bug, which is exactly the
-    // "worthless test" trap the task warned about -- see the DoD-4 write-up in the task report for
+    // "worthless test" trap -- see the write-up for
     // the concrete before/after run that proves these two do NOT fall into that trap.
 
     [Fact]

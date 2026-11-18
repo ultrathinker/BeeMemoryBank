@@ -88,7 +88,7 @@ The Web app turns the 409 into a plain sentence for "Add a blind node" and "Rese
 - every change made by the blind console page sits inside its `busy(...)`;
 - the shared helper source is linked into all four MAUI apps.
 
-`LongOperationGateTests.cs` holds the gate's own tests, a 409 test for each of Add a blind node, Reseed, snapshot, the embeddings backfill and every route of the fix round with the lease held, and a test that lists every route carrying `SingleFlightMetadata`, so a route cannot gain or lose the rule unnoticed (`docs/full-node/ROUTES.golden.txt` shows it too).
+`LongOperationGateTests.cs` holds the gate's own tests, a 409 test for each of Add a blind node, Reseed, snapshot, the embeddings backfill and every route of the fix with the lease held, and a test that lists every route carrying `SingleFlightMetadata`, so a route cannot gain or lose the rule unnoticed (`docs/full-node/ROUTES.golden.txt` shows it too).
 
 `SingleFlightConcurrencyTests.cs` proves the gate with REAL concurrent requests and a latch that holds the work: on a small host, exactly one of many concurrent requests runs and the rest are refused at once; the lease comes back after an exception, after the client went away, and after a background operation the handler handed it to; end to end, two network-restore requests (the first answers 202 and keeps running; the second is refused before it appends an event; the third, after the first ended, is a new restore) and two "Add a blind node" requests (one call reaches the blind node).
 

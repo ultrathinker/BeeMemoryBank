@@ -192,6 +192,7 @@ public sealed class PeerContactLog
     public static string Describe(Exception ex) => ex switch
     {
         PeerPausedException p => p.Answer,
+        ThisDeviceRevokedException => "an administrator disconnected this device from the bank: what is already on it stays readable here, it no longer receives changes",
         NoSyncServerException n => $"{NoSyncServerException.Headline}: {n.Reason}",
         HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden } h =>
             $"it answered {(int)h.StatusCode}: its door is closed to this node (a proxy that does not let this address in, or it no longer knows this node)",

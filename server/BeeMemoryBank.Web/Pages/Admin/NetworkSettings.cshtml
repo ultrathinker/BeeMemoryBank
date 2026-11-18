@@ -12,27 +12,33 @@
 }
 
 @section About {
-    <p>
-        What this node does on the networks of this computer. <strong>Sync with your devices on this network</strong> is the narrow, everyday thing, on by default: devices already paired
-        with this one sync with it directly on a network you trust, through the sync connection only. Nobody else gets anything from it: every request but the handshake needs a key only
-        a paired device holds. Trust is per network: Windows decides it by the network category (Private and domain networks are trusted, Public ones are not); on a Mac, and for any other
-        network, you say yes once.
-    </p>
-    <p>
-        <strong>Show this node's web page to devices on my network</strong> is the wide one, off by default: it opens the whole web UI and API to the local network, so use it on a home or office network you trust,
-        never on a public Wi-Fi. To add one device, use <a href="@(AdminRoutes.Devices)#connect-device">Connect a device</a> instead: it opens the door for 15 minutes and closes it again.
-    </p>
+    <p>How this computer talks to your other devices.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            What this node does on the networks of this computer. <strong>Sync with your devices on this network</strong> is the narrow, everyday thing, on by default: devices already paired
+            with this one sync with it directly on a network you trust, through the sync connection only. Nobody else gets anything from it: every request but the handshake needs a key only
+            a paired device holds. Trust is per network: Windows decides it by the network category (Private and domain networks are trusted, Public ones are not); on a Mac, and for any other
+            network, you say yes once.
+        </p>
+        <p>
+            <strong>Show this node's web page to devices on my network</strong> is the wide one, off by default: it opens the whole web UI and API to the local network, so use it on a home or office network you trust,
+            never on a public Wi-Fi. To add one device, use <a href="@(AdminRoutes.Devices)#connect-device">Connect a device</a> instead: it opens the door for 15 minutes and closes it again.
+        </p>
+    </details>
 }
 
 <div class="card mt-md netset-card" id="lan-sync">
     <h3 class="devices-card-title"><sl-icon name="arrow-left-right"></sl-icon> Sync with your devices on this network</h3>
     @if (lan is null)
     {
-        <p class="text-muted text-sm" id="lan-sync-unavailable" style="margin:0;">
-            There is no switch here: this node is not the desktop app, so it has no LAN listener. Which computers can reach it is decided by how it was started. With Docker, the
+        <p class="text-muted text-sm" id="lan-sync-unavailable" style="margin:0;">Devices reach this server through its web address.</p>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>There is no switch here: this node is not the desktop app, so it has no LAN listener. Which computers can reach it is decided by how it was started. With Docker, the
             published ports in <code>docker-compose.yml</code> decide: the web page is published on this computer only (<code>127.0.0.1</code>) unless you set <code>BMB_WEB_BIND</code>,
-            and the API port, which AI assistants and other nodes use, is not published at all unless you add it. See <code>docs/deployment.md</code>.
-        </p>
+            and the API port, which AI assistants and other nodes use, is not published at all unless you add it. See <code>docs/deployment.md</code>.</p>
+        </details>
     }
     else
     {
@@ -45,17 +51,24 @@
             <p style="margin:0 0 8px;"><sl-badge variant="success">On</sl-badge>
                 @if (lan.Serving.Count > 0)
                 {
-                    <span>Listening for your devices on @string.Join(", ", lan.Serving.Select(a => a + ":" + lan.Port)) (only the sync connection, never the web page).</span>
+                    <span>Your devices sync with this computer directly on this network.</span>
                 }
                 else
                 {
-                    <span>No trusted network right now: your devices sync with this node through your server or blind node until you are on one.</span>
+                    <span>No trusted network right now: your devices sync through your server until you are on one.</span>
                 }
             </p>
             <form data-busy="short" method="post" asp-page-handler="SetLanSync">
                 <input type="hidden" name="enabled" value="false" />
                 <sl-button type="submit" variant="default" size="small">Switch off</sl-button>
             </form>
+            @if (lan.Serving.Count > 0)
+            {
+                <details class="admin-more">
+                    <summary>More details</summary>
+                    <p>Listening for your devices on @string.Join(", ", lan.Serving.Select(a => a + ":" + lan.Port)): only the sync connection, never the web page.</p>
+                </details>
+            }
         }
         else
         {
@@ -70,8 +83,12 @@
         {
             <sl-alert variant="danger" open style="margin-top:12px;">
                 <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
-                <strong>Port @lan.Port could not be opened.</strong> Another program (or another profile of Bee Memory Bank) may be using it. Choose another port below.
-                <div class="text-muted text-sm" style="margin-top:4px;">@bindError</div>
+                <strong>Could not start.</strong> Choose another port below.
+                <details class="admin-more">
+                    <summary>More details</summary>
+                    <p>Port @lan.Port could not be opened. Another program (or another profile of Bee Memory Bank) may be using it.</p>
+                    <p>@bindError</p>
+                </details>
             </sl-alert>
         }
 
@@ -132,22 +149,32 @@
             {
                 case DevicesFirewallStep.AddRule:
                     <div id="firewall-step" style="margin-top:16px;border:1px solid var(--sl-color-warning-600);border-radius:10px;padding:12px;">
-                        <p class="text-sm" style="margin:0 0 8px;"><strong>Windows Firewall will block other devices.</strong>
-                            One rule, for this computer's local network on private and domain networks only, on port @port, lets them in. Windows asks for
-                            administrator permission; Bee Memory Bank never changes the firewall without asking.</p>
+                        <p class="text-sm" style="margin:0 0 8px;"><strong>Allow your devices to reach this computer.</strong> Windows asks for permission once.</p>
                         <form data-busy="short" method="post" asp-page-handler="DevicesFirewall">
                             <input type="hidden" name="action" value="add" />
-                            <sl-button type="submit" size="small"><sl-icon slot="prefix" name="shield-check"></sl-icon> Allow in Windows Firewall&hellip;</sl-button>
+                            <sl-button type="submit" size="small"><sl-icon slot="prefix" name="shield-check"></sl-icon> Allow&hellip;</sl-button>
                         </form>
+                        <details class="admin-more">
+                            <summary>More details</summary>
+                            <p>One Windows Firewall rule, for this computer's local network on private and domain networks only, on port @port, lets your devices in.
+                               Windows asks for administrator permission; Bee Memory Bank never changes the firewall without asking.</p>
+                        </details>
                     </div>
                     break;
                 case DevicesFirewallStep.RuleInPlace:
-                    <p class="text-muted text-sm" id="firewall-step" style="margin:16px 0 0;">The Windows Firewall rule for port @port is in place (local network, private and domain networks only).</p>
+                    <p class="text-muted text-sm" id="firewall-step" style="margin:16px 0 0;">Windows Firewall lets your devices in.</p>
+                    <details class="admin-more">
+                        <summary>More details</summary>
+                        <p>The Windows Firewall rule for port @port is in place (local network, private and domain networks only).</p>
+                    </details>
                     break;
                 case DevicesFirewallStep.RemoveRule:
                     <div id="firewall-step" style="margin-top:16px;">
-                        <p class="text-muted text-sm" style="margin:0 0 8px;">The Windows Firewall rule for port @port is still in place. Nothing is listening now,
-                            but you can remove it. This also removes the rule that Connect a device uses; it asks again when needed.</p>
+                        <p class="text-muted text-sm" style="margin:0 0 8px;">Windows Firewall still lets devices in, although nothing listens now. You can remove the rule.</p>
+                        <details class="admin-more">
+                            <summary>More details</summary>
+                            <p>The rule is for port @port. Removing it also removes the rule that Connect a device uses; it asks again when needed.</p>
+                        </details>
                         <form data-busy="short" method="post" asp-page-handler="DevicesFirewall">
                             <input type="hidden" name="action" value="remove" />
                             <sl-button type="submit" size="small"><sl-icon slot="prefix" name="shield-x"></sl-icon> Remove the Windows Firewall rule&hellip;</sl-button>
@@ -156,22 +183,23 @@
                     break;
                 case DevicesFirewallStep.MacAsksOnFirstConnection:
                     <p class="text-muted text-sm" id="firewall-step" style="margin:16px 0 0;">
-                        <strong>On a Mac:</strong> macOS asks, when the first device connects, whether &ldquo;Bee Memory Bank&rdquo; may accept
-                        incoming network connections. Choose Allow. Bee Memory Bank does not change the firewall itself.
+                        When the first device connects, your Mac asks whether Bee Memory Bank may accept connections. Choose <strong>Allow</strong>.
                     </p>
                     break;
                 case DevicesFirewallStep.ServiceInstaller:
                     <p class="text-muted text-sm" id="firewall-step" style="margin:16px 0 0;">
-                        <strong>Windows service:</strong> the firewall is not changed from here. The installer's
-                        &ldquo;Configure Windows Firewall Exception&rdquo; option opens port @port; if you did not choose it, add an
-                        inbound rule for TCP @port yourself.
+                        If your devices cannot connect, Windows Firewall may be blocking them.
                     </p>
+                    <details class="admin-more">
+                        <summary>More details</summary>
+                        <p>This is the Windows service: the firewall is not changed from here. The installer's &ldquo;Configure Windows Firewall Exception&rdquo;
+                           option opens port @port; if you did not choose it, add an inbound rule for TCP @port yourself.</p>
+                    </details>
                     break;
             }
             @if (lan.FirewallLegacyRule)
             {
-                <p class="text-muted text-sm" style="margin:12px 0 0;">The Windows Firewall rule of an older version (every network type) is still there. "Allow in Windows Firewall" above
-                    replaces it with one for private and domain networks only.</p>
+                <p class="text-muted text-sm" style="margin:12px 0 0;">An older firewall rule is still there; &ldquo;Allow&rdquo; above replaces it with a safer one.</p>
             }
 
             <details style="margin-top:16px;" id="lan-port">
@@ -201,9 +229,7 @@
     <h3 class="devices-card-title"><sl-icon name="wifi"></sl-icon> Show this node's web page to devices on my network</h3>
     @if (devices.Kind == DevicesCardKind.NotADesktopNode)
     {
-        <p class="text-muted text-sm" style="margin-bottom:8px;">
-            There is no switch here: this node is not the desktop app. See the note above for what decides which computers can reach it.
-        </p>
+        <p class="text-muted text-sm" style="margin-bottom:8px;">Not available on a server: see the note above.</p>
         @if (devices.Error != null)
         {
             <sl-alert variant="danger" open style="margin-bottom:12px;">
@@ -214,11 +240,13 @@
     }
     else
     {
-        <p class="text-muted text-sm" style="margin:0 0 8px;">
-            By default a node answers <strong>this computer only</strong>: nobody else on your network can open its web page. Switched on, it serves its web page and API over HTTPS on port @port and announces itself
+        <p class="text-muted text-sm" style="margin:0 0 4px;">Lets other devices on your network open this computer's web page in a browser. Off by default.</p>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>By default a node answers <strong>this computer only</strong>: nobody else on your network can open its web page. Switched on, it serves its web page and API over HTTPS on port @port and announces itself
             on the network, so another computer running Bee Memory Bank can find it and a phone can open it in a browser. Anyone on the same network can then reach the sign-in page and try
-            passwords (the node limits attempts).
-        </p>
+            passwords (the node limits attempts).</p>
+        </details>
         @if (devices.Error != null)
         {
             <sl-alert variant="danger" open style="margin-bottom:12px;">
@@ -231,17 +259,23 @@
         {
             <sl-alert variant="warning" open style="margin-bottom:12px;">
                 <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-                <strong>On, set by <code>BMB_HTTPS_ENABLED=1</code>.</strong> This node was started with that environment variable,
-                which keeps the network listener open whatever is chosen here. Remove the variable and restart the node to
-                control it from this page.
+                <strong>On, set when this node was started.</strong>
+                <details class="admin-more">
+                    <summary>More details</summary>
+                    <p>This node was started with <code>BMB_HTTPS_ENABLED=1</code>, which keeps the network listener open whatever is chosen here.
+                       Remove the variable and restart the node to control it from this page.</p>
+                </details>
             </sl-alert>
         }
         else if (devices.ListenerFailed)
         {
             <sl-alert variant="danger" open style="margin-bottom:12px;">
                 <sl-icon slot="icon" name="exclamation-octagon"></sl-icon>
-                <strong>Switched on, but the node could not open port @port.</strong> Another program may be using that port.
-                Close it and try again, or switch this off.
+                <strong>Switched on, but it could not start.</strong>
+                <details class="admin-more">
+                    <summary>More details</summary>
+                    <p>The node could not open port @port: another program may be using it. Close it and try again, or switch this off.</p>
+                </details>
             </sl-alert>
             <div style="display:flex;gap:8px;">
                 <form data-busy="short" method="post" asp-page-handler="SetDevicesOnMyNetwork">
@@ -289,9 +323,7 @@
         <div id="connect-certificate" style="margin-top:20px;">
             <h4 class="devices-sub"><sl-icon name="download"></sl-icon> The certificate for browsers</h4>
             <div class="admin-notes text-muted text-sm" style="line-height:1.5;">
-                <p>Joining with a code needs no certificate. To open this node's web pages from
-                   another device's browser, that device must trust this node's CA certificate: open
-                   the downloaded <code>ca.crt</code> on it and install it. Until it does, the browser warns.</p>
+                <p>Only needed to open this web page in another device's browser. Phones that join with a code do not need it.</p>
             </div>
             <sl-button variant="primary" size="small" href="/connect/ca.crt" download id="btn-download-ca">
                 <sl-icon slot="prefix" name="download"></sl-icon>
@@ -372,13 +404,15 @@
     <h3 class="devices-card-title"><sl-icon name="eye-slash"></sl-icon> Invisible Mode</h3>
     @* BMB-313: Invisible Mode lives here (superadmin only, like the page) - not in the header, where the switch of a node's whole network behaviour sat one
        click from the sync status. While it is on, the sync icon of the header shows a badge. *@
-    <p class="text-muted text-sm" style="margin:0 0 8px;">
-        When Invisible Mode is on, this node <strong>rejects every incoming sync call and makes none of its own</strong>: the other nodes cannot see it, and it does
+    <p class="text-muted text-sm" style="margin:0 0 4px;">When on, this computer stops syncing with your other devices for a while. Nothing is lost.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>When Invisible Mode is on, this node <strong>rejects every incoming sync call and makes none of its own</strong>: the other nodes cannot see it, and it does
         not see them. Nothing is lost. You can go on working on this node, and every change you make is kept and delivered to the others when you turn the mode off.
         Use it when you want a node quiet for a while: on a metered connection, while you copy its data folder, or before you decide what to do about a device you no
         longer trust. It is not a protection against someone who already holds the vault key. The sync icon in the header shows a badge while it is on; the
-        <a href="/Network">network map</a> says so too.
-    </p>
+        <a href="/Network">network map</a> says so too.</p>
+    </details>
     @if (Model.IsInvisible is null)
     {
         <p class="text-muted text-sm">The node did not say whether Invisible Mode is on.</p>

@@ -110,6 +110,24 @@ public class SessionService(
         await _unlockSemaphore.WaitAsync();
         try
         {
+            return (await UnlockCoreAsync(password)).Unlocked;
+        }
+        finally
+        {
+            _unlockSemaphore.Release();
+        }
+    }
+
+    /// <summary>
+    /// Unlocks the vault for <c>/api/session/login</c> and reports which <c>tbl_key_slot.slot_id</c>
+    /// opened it, so a sealed-node login for a replicated user reuses that Argon2 derivation
+    /// without running a second KDF pass.
+    /// </summary>
+    public async Task<(bool Unlocked, int? OpenedSlotId)> OpenSessionForLoginAsync(string password)
+    {
+        await _unlockSemaphore.WaitAsync();
+        try
+        {
             return await UnlockCoreAsync(password);
         }
         finally
@@ -133,9 +151,16 @@ public class SessionService(
         await _unlockSemaphore.WaitAsync();
         try
         {
-            var dek = await TryDeriveAuthorizedMasterDekAsync(password);
-            if (dek == null) return false;
-            Array.Clear(dek);
+            var derived = await TryDeriveCoreAsync(password, recoveryOnly: false, leaveOpen: false);
+            if (derived == null) return false;
+            try
+            {
+                await UpgradeOpenedDoorAsync(derived.Slot, derived.TakeKek(), derived.Dek);
+            }
+            finally
+            {
+                Array.Clear(derived.Dek);
+            }
             return true;
         }
         finally
@@ -155,15 +180,23 @@ public class SessionService(
     /// Same sentinel check and the same "wrong key and no recovery slot are indistinguishable" property
     /// as the real unlock; a key from another node's database unwraps nothing here. Only recovery
     /// slots are tried, so a user's password offered as a "recovery key" is refused. The caller owns the
-    /// returned buffer and must wipe it. Returns null when no recovery slot accepts the key.
+    /// returned DEK buffer and must wipe it. Returns null when no recovery slot accepts the key.
+    /// </para>
+    /// <para>
+    /// The result also names the OWNER of the slot that opened (<c>null</c> for a key issued before 2.12, whose slot has no owner):
+    /// a recovery key is personal, and the password reset it powers may only reset that owner. The owner is read from the database
+    /// row, which is authoritative even when the door itself was read from the boot store of a closed node.
     /// </para>
     /// </summary>
-    public async Task<byte[]?> TryOpenWithRecoveryKeyAsync(string recoveryKey)
+    public async Task<RecoveryKeyOpen?> TryOpenWithRecoveryKeyAsync(string recoveryKey)
     {
         await _recoverySemaphore.WaitAsync();
         try
         {
-            return await TryDeriveAuthorizedMasterDekAsync(recoveryKey, recoveryOnly: true);
+            var derived = await TryDeriveCoreAsync(recoveryKey, recoveryOnly: true, leaveOpen: false);
+            if (derived == null) return null;
+            await UpgradeOpenedDoorAsync(derived.Slot, derived.TakeKek(), derived.Dek);
+            return new RecoveryKeyOpen(derived.Dek, derived.OwnerUserId);
         }
         finally
         {
@@ -171,36 +204,189 @@ public class SessionService(
         }
     }
 
-    private async Task<bool> UnlockCoreAsync(string password)
+    private async Task<(bool Unlocked, int? OpenedSlotId)> UnlockCoreAsync(string password)
     {
         LastMigrationResult = null;
 
         var derived = await TryDeriveCoreAsync(password, recoveryOnly: false, leaveOpen: true);
-        if (derived == null) return false;
+        if (derived == null) return (false, null);
         var dek = derived.Dek;
-
-        lock (_lock)
+        var kek = derived.TakeKek();
+        var openedSlotId = derived.Slot.SlotId;
+        Task? completing;
+        // The KEK is zeroed on every path from here on: also when the bookkeeping of a sealed open below throws.
+        try
         {
-            if (_masterDek != null) Array.Clear(_masterDek);
-            _masterDek = dek;
-            LoadPersistedRetiredDeksLocked();
+            lock (_lock)
+            {
+                if (_masterDek != null) Array.Clear(_masterDek);
+                _masterDek = dek;
+                LoadPersistedRetiredDeksLocked();
+            }
+
+            // A sealed database the door just opened: the state moves to Importing at once (requests are served), the inbox import runs in the
+            // background and is the first step of the post-unlock chain (spec 4.4 step 8).
+            // The door's DEK fingerprint is written before the end of the open starts: the rewrite that ends it must find it.
+            await RecordSealedUnlockAsync(derived);
+            completing = derived.OpenedByGate ? CompleteOpen() : null;
+
+            // A copy of the DEK for the upgrade: the session's own buffer is zeroed by a Lock() that may run meanwhile, and a door must never be
+            // sealed to whatever is left in it.
+            var upgradeDek = (byte[])dek.Clone();
+            try
+            {
+                if (scopeFactory != null)
+                {
+                    using var scope = scopeFactory.CreateScope();
+                    var migration = scope.ServiceProvider.GetRequiredService<LegacyPasswordSlotMigrationService>();
+                    LastMigrationResult = await migration.MigrateIfNeededAsync();
+                }
+                // ADR 0012: the door this password just opened becomes a sealed door (after the legacy migration, which may have made it a user slot).
+                await UpgradeOpenedDoorAsync(derived.Slot, kek, upgradeDek);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(upgradeDek);
+            }
         }
-
-        // A sealed database the door just opened: the state moves to Importing at once (requests are served), the inbox import runs in the
-        // background and is the first step of the post-unlock chain (spec 4.4 step 8).
-        // The door's DEK fingerprint is written before the end of the open starts: the rewrite that ends it must find it.
-        await RecordSealedUnlockAsync(derived);
-        var completing = derived.OpenedByGate ? CompleteOpen() : null;
-
-        if (scopeFactory != null)
+        finally
         {
-            using var scope = scopeFactory.CreateScope();
-            var migration = scope.ServiceProvider.GetRequiredService<LegacyPasswordSlotMigrationService>();
-            LastMigrationResult = await migration.MigrateIfNeededAsync();
+            if (kek != null) CryptographicOperations.ZeroMemory(kek);
         }
         await HealMissingSentinelAsync();
         TriggerPostUnlockCatchUp(completing);
-        return true;
+        return (true, openedSlotId);
+    }
+
+    /// <summary>Result of attempting to open one user's door for authentication.</summary>
+    public readonly record struct UserDoorOpenResult(byte[]? Dek, bool DerivationAttempted);
+
+    /// <summary>
+    /// Proves that <paramref name="password"/> opens one specific <c>user</c> door (<paramref name="slotId"/>)
+    /// and yields a DEK matching this vault's sentinel (or current unlocked session DEK). Runs at most one Argon2
+    /// derivation and does not unlock the session. Caller owns and clears the returned DEK buffer.
+    /// </summary>
+    public async Task<UserDoorOpenResult> TryOpenUserDoorAsync(int slotId, string password)
+    {
+        var slot = (await keySlotRepo.GetAllAsync()).FirstOrDefault(s => s.SlotId == slotId);
+        if (slot is null
+            || !string.Equals(slot.SlotType, KeySlotTypes.User, StringComparison.Ordinal)
+            || slot.Salt is null || slot.Salt.Length == 0
+            || !slot.ArgonMemory.HasValue || !slot.ArgonIterations.HasValue || !slot.ArgonParallelism.HasValue)
+        {
+            return new UserDoorOpenResult(null, false);
+        }
+
+        try
+        {
+            KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory.Value, slot.ArgonIterations.Value, slot.ArgonParallelism.Value);
+        }
+        catch (CryptographicException ex)
+        {
+            throw new SecurityException("Key slot has invalid KDF parameters; refusing authentication.", ex);
+        }
+
+        byte[]? kek = null;
+        byte[]? dek = null;
+        try
+        {
+            kek = KeyDerivation.DeriveKek(
+                password, slot.Salt,
+                slot.ArgonMemory.Value, slot.ArgonIterations.Value, slot.ArgonParallelism.Value);
+            dek = Doors.OpenSlot(slot, kek);
+
+            if (IsUnlocked)
+            {
+                var sessionDek = GetMasterDek();
+                try
+                {
+                    if (CryptographicOperations.FixedTimeEquals(dek, sessionDek))
+                        return new UserDoorOpenResult(dek, true);
+                    Array.Clear(dek);
+                    dek = null;
+                    return new UserDoorOpenResult(null, true);
+                }
+                finally
+                {
+                    Array.Clear(sessionDek);
+                }
+            }
+
+            if (scopeFactory != null)
+            {
+                using var sentinelScope = scopeFactory.CreateScope();
+                var nodeIdentityRepo = sentinelScope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
+                var sentinel = await nodeIdentityRepo.GetSentinelAsync();
+                if (!MasterKeyManager.IsSentinelMissing(sentinel))
+                {
+                    if (MasterKeyManager.VerifySentinel(sentinel!, dek))
+                        return new UserDoorOpenResult(dek, true);
+
+                    var rewrapService = sentinelScope.ServiceProvider.GetService<ILazySlotRewrapService>();
+                    if (rewrapService != null)
+                    {
+                        var result = await rewrapService.TryRewrapAsync(slot, kek, dek, sentinel!);
+                        if (result.Success && result.RewrappedDek != null)
+                        {
+                            Array.Clear(dek);
+                            dek = result.RewrappedDek;
+                            return new UserDoorOpenResult(dek, true);
+                        }
+                    }
+
+                    Array.Clear(dek);
+                    dek = null;
+                    return new UserDoorOpenResult(null, true);
+                }
+            }
+
+            return new UserDoorOpenResult(dek, true);
+        }
+        catch (KdfBusyException)
+        {
+            if (dek != null) Array.Clear(dek);
+            throw;
+        }
+        catch (CryptographicException)
+        {
+            if (dek != null) Array.Clear(dek);
+            return new UserDoorOpenResult(null, true);
+        }
+        finally
+        {
+            if (kek != null) Array.Clear(kek);
+        }
+    }
+
+    /// <summary>
+    /// The upgrade of ADR 0012 at the first successful use of a password or recovery door: a v1 door that just opened is sealed again as a
+    /// v2 door for the same secret (same salt and Argon2 parameters, same slot id), in the door-replacement order (<see cref="SlotDoors.ReplaceSlotDoorAsync"/>),
+    /// and a door whose DEK was unknown gets its fingerprint. Only while the database is open and the session holds the current DEK; the row
+    /// is replaced only while it still holds the door that was opened. Best effort: a failure is logged and the door stays as it was, and
+    /// it is tried again at the next use. <paramref name="currentDek"/> is the DEK the open proved against the sentinel (kept by the caller);
+    /// <paramref name="kek"/> is cleared.
+    /// </summary>
+    private async Task UpgradeOpenedDoorAsync(MasterKeyStore opened, byte[]? kek, byte[] currentDek)
+    {
+        try
+        {
+            // Only with the database open: a check that borrowed a closed sealed database has given it back.
+            if (kek is null || BootDoorSource) return;
+            using var scope = scopeFactory?.CreateScope();
+            var row = (await keySlotRepo.GetAllAsync()).FirstOrDefault(s => s.SlotId == opened.SlotId);
+            if (row is null || !row.EncryptedMasterDek.AsSpan().SequenceEqual(opened.EncryptedMasterDek)) return;   // replaced meanwhile
+            // Without a mirror (a plain node, or a host that registers none) the replacement is the plain row update; the watcher of a sealed
+            // node catches up with it as with any other writer.
+            await SlotDoors.UpgradeOpenedSlotAsync(keySlotRepo, scope?.ServiceProvider.GetService<IUnlockMaterialMirror>(), row, kek, currentDek, logger);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning(ex, "A door could not be upgraded at its use ({Type}); it stays as it was and is tried again next time.", ex.GetType().Name);
+        }
+        finally
+        {
+            if (kek is not null) CryptographicOperations.ZeroMemory(kek);
+        }
     }
 
     /// <summary>
@@ -238,20 +424,22 @@ public class SessionService(
     }
 
     /// <summary>
-    /// Walks every password-bearing key slot and returns the master DEK the first matching,
-    /// permitted slot unwraps — or null when no slot accepts the password. The caller owns the
-    /// returned buffer and must wipe it. Shared by <see cref="UnlockCoreAsync"/> (which installs it
-    /// as the session key) and <see cref="VerifyMasterPasswordAsync"/> (which only wants the yes/no).
-    /// A sealed database that is closed stays closed afterwards (it is opened only for the checks).
+    /// What a door gave: the master DEK, the boot door when the database was closed, whether the gate opened it for this call, the slot row
+    /// that opened and its KEK (for the upgrade of ADR 0012; <see cref="TakeKek"/> hands it over once, the taker clears it).
     /// </summary>
-    private async Task<byte[]?> TryDeriveAuthorizedMasterDekAsync(string password, bool recoveryOnly = false)
+    /// <param name="DoorDekFingerprint">The DEK the door itself yielded (before a lazy rewrap moved the session on to the current one): what its boot copy names.</param>
+    /// <param name="OwnerUserId">The owner of the slot that opened, from the database row (null for a door with no owner, e.g. a pre-2.12 recovery key).</param>
+    private sealed record Derived(byte[] Dek, BootDoor? Door, bool OpenedByGate, MasterKeyStore Slot, byte[]? Kek, string? DoorDekFingerprint = null, int? OwnerUserId = null)
     {
-        var derived = await TryDeriveCoreAsync(password, recoveryOnly, leaveOpen: false);
-        return derived?.Dek;
-    }
+        private byte[]? _kek = Kek;
 
-    /// <summary>What a door gave: the master DEK, the boot door when the database was closed, whether the gate opened it for this call, and a lease.</summary>
-    private sealed record Derived(byte[] Dek, BootDoor? Door, bool OpenedByGate, IAsyncDisposable? Lease = null);
+        public byte[]? TakeKek()
+        {
+            var kek = _kek;
+            _kek = null;
+            return kek;
+        }
+    }
 
     /// <summary>True while a sealed database is closed: the key slots are then read from the boot store (spec 4.4 step 1).</summary>
     private bool BootDoorSource => gate is { IsSealed: true } && bootDoors != null && gate.State is VaultState.Closed or VaultState.Closing;
@@ -273,6 +461,9 @@ public class SessionService(
                     ArgonMemory = d.ArgonMemory,
                     ArgonIterations = d.ArgonIterations,
                     ArgonParallelism = d.ArgonParallelism,
+                    DoorVersion = d.DoorVersion,
+                    DoorPublicKey = d.DoorPublicKey,
+                    DekFingerprint = d.DekFingerprint,
                 }, (BootDoor?)d))
                 .ToList();
         }
@@ -301,6 +492,9 @@ public class SessionService(
 
             byte[]? kek = null;
             byte[]? unwrappedDek = null;
+            // The row as the lazy rewrap left it: the upgrade after the unlock replaces the row only while it holds the door that
+            // was opened, so the slot it is given must be the one written by the rewrap, not the one read before it.
+            MasterKeyStore? rewrappedSlot = null;
             try
             {
                 kek = KeyDerivation.DeriveKek(
@@ -310,7 +504,7 @@ public class SessionService(
                     slot.ArgonIterations!.Value,
                     slot.ArgonParallelism!.Value);
 
-                unwrappedDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, kek);
+                unwrappedDek = Doors.OpenSlot(slot, kek);
             }
             catch (KdfBusyException)
             {
@@ -327,10 +521,13 @@ public class SessionService(
             }
 
             byte[] currentCandidate = unwrappedDek!;
+            var doorDekFingerprint = DekFingerprint.Of(currentCandidate);
             bool sentinelMatch = false;
             bool authorized = true;
             var openedByGate = false;
             IAsyncDisposable? lease = null;
+            // A slot read from the database already names its owner; a boot-store copy does not, and is filled from the row below.
+            int? ownerUserId = slot.OwnerUserId;
 
             try
             {
@@ -373,6 +570,7 @@ public class SessionService(
                                     Array.Clear(currentCandidate, 0, currentCandidate.Length);
                                     currentCandidate = result.RewrappedDek;
                                     sentinelMatch = true;
+                                    rewrappedSlot = (await keySlotRepo.GetAllAsync()).FirstOrDefault(s => s.SlotId == slot.SlotId);
                                 }
                             }
                         }
@@ -419,7 +617,12 @@ public class SessionService(
                     // Spec 4.4 step 6: a door of the boot store is a copy; the slot it names must still be a row of the database (any
                     // content: a replaced slot is accepted once, 4.3). A door the sealed database no longer knows opens nothing.
                     if (fromBoot && sentinelMatch && authorized)
-                        authorized = (await keySlotRepo.GetAllAsync()).Any(s => s.SlotId == slot.SlotId);
+                    {
+                        var row = (await keySlotRepo.GetAllAsync()).FirstOrDefault(s => s.SlotId == slot.SlotId);
+                        authorized = row != null;
+                        // The database is the authority on a door's owner; the boot copy does not carry it.
+                        if (row != null) ownerUserId = row.OwnerUserId;
+                    }
                 }
                 else
                 {
@@ -439,10 +642,11 @@ public class SessionService(
                     continue;
                 }
 
-                Array.Clear(kek, 0, kek.Length);
                 // An unlock keeps the database open (the caller completes it); a check only borrowed it.
                 if (fromBoot && !leaveOpen && lease != null) await lease.DisposeAsync();
-                return new Derived(currentCandidate, door, openedByGate);
+                // hand on the row as the lazy rewrap wrote it (rewrappedSlot ?? slot), so a straggler door upgraded during this unlock is
+                // seen as v2. carry the slot's owner (ownerUserId) so a recovery key opens as RecoveryKeyOpen and resets only its owner.
+                return new Derived(currentCandidate, door, openedByGate, rewrappedSlot ?? slot, kek, doorDekFingerprint, ownerUserId);
             }
             catch
             {
@@ -533,8 +737,10 @@ public class SessionService(
         if (!derived.OpenedByGate) return;
         try
         {
+            // The DEK this door yields, not the session's: after a lazy rewrap they differ, and a boot copy that named the newer DEK would let
+            // the pruning rule drop the wrapper this very copy needs (ADR 0012).
             if (derived.Door is { } door && bootDoors != null)
-                await bootDoors.SetDekFingerprintAsync(door.DoorId, DekFingerprint.Of(derived.Dek));
+                await bootDoors.SetDekFingerprintAsync(door.DoorId, derived.DoorDekFingerprint ?? DekFingerprint.Of(derived.Dek));
             if (diagnostics != null) await diagnostics.RecordRefusalAsync(null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -572,7 +778,7 @@ public class SessionService(
                 {
                     KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory!.Value, slot.ArgonIterations!.Value, slot.ArgonParallelism!.Value);
                     kek = KeyDerivation.DeriveKek(secret, slot.Salt!, slot.ArgonMemory!.Value, slot.ArgonIterations!.Value, slot.ArgonParallelism!.Value);
-                    dek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, kek);
+                    dek = Doors.OpenSlot(slot, kek);
                     return await gate!.OpenTemporarilyAsync(dek);
                 }
                 catch (KdfBusyException)
@@ -649,7 +855,7 @@ public class SessionService(
                 LoadPersistedRetiredDeksLocked();
             }
             if (openedByGate)
-                await RecordSealedUnlockAsync(new Derived(own, door, true));
+                await RecordSealedUnlockAsync(new Derived(own, door, true, new MasterKeyStore(), null));
             var completing = openedByGate ? CompleteOpen() : null;
             TriggerPostUnlockCatchUp(completing);
             return true;
@@ -796,6 +1002,28 @@ public class SessionService(
                     if (dekApplier != null) await dekApplier.FinishPendingCompletionAsync();
                 }
                 catch { /* logged inside the applier; its own timer repeats it */ }
+                // ADR 0012: the OS and server auto-unlock doors seal themselves again as v2 doors now that the node is open and holds
+                // the current DEK (after any pending rotation above).
+                foreach (var upgrade in s.ServiceProvider.GetServices<IUnlockedDoorUpgrade>())
+                {
+                    try { await upgrade.UpgradeAsync(); }
+                    catch (Exception ex) when (ex is not OperationCanceledException) { logger?.LogDebug(ex, "A door upgrade failed; it is tried at the next unlock."); }
+                }
+                try
+                {
+                    var sharedDoorsApplier = s.ServiceProvider.GetService<ISharedDoorsApplier>();
+                    if (sharedDoorsApplier != null) await sharedDoorsApplier.ApplyPendingAsync();
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger?.LogWarning(ex, "Applying pending shared doors at unlock failed; retried on next delivery or unlock.");
+                }
+                try
+                {
+                    var notifier = s.ServiceProvider.GetService<ISuperadminDoorsNotifier>();
+                    if (notifier != null) await notifier.NotifyChangedAsync(immediate: false);
+                }
+                catch { /* best effort on unlock */ }
                 try
                 {
                     switch (s.ServiceProvider.GetService<BeeMemoryBank.Sync.Metadata.IHeldEventDrain>())
@@ -811,6 +1039,23 @@ public class SessionService(
                 catch { /* the drain runs again on its period and at the next unlock */ }
             }
             catch { /* no scope: the host is shutting down */ }
+        }));
+
+        // An identity re-key that crashed (or failed) right after its commit: its audit line, the phone pairing records signed again with the new key
+        // and the announcement of the new fingerprint run now, once (the marker its transaction wrote; P11 O3). Needs the DEK for the new seed.
+        TrackPostUnlockCatchUp(Task.Run(async () =>
+        {
+            await AfterOpenAsync();
+            try
+            {
+                using var s = capturedScopeFactory.CreateScope();
+                if (s.ServiceProvider.GetService<BeeMemoryBank.Sync.NodeIdentityRekeyService>() is { } rekey)
+                    await rekey.FinishInterruptedFollowUpAsync();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger?.LogWarning("Finishing an interrupted identity re-key failed ({Type}); it is tried again at the next unlock.", ex.GetType().Name);
+            }
         }));
 
         // Seal any comment still stored as plaintext and drop plaintext comment events from the log
@@ -1076,3 +1321,12 @@ public class SessionService(
             "Could not unwrap with any candidate DEK.");
     }
 }
+
+/// <summary>
+/// What a recovery key opened (<see cref="SessionService.TryOpenWithRecoveryKeyAsync"/>): the master DEK it yields and the owner of the slot
+/// that opened. The caller owns <paramref name="Dek"/> and must wipe it. <paramref name="OwnerUserId"/> is null for a key issued before 2.12
+/// (its slot names nobody); a key with an owner may only reset that owner's password.
+/// </summary>
+/// <param name="Dek">The master DEK the recovery key unwrapped. Never logged; the caller wipes it.</param>
+/// <param name="OwnerUserId">The superadmin the key belongs to, or null for an ownerless (pre-2.12) key.</param>
+public sealed record RecoveryKeyOpen(byte[] Dek, int? OwnerUserId);

@@ -79,6 +79,11 @@ public static class PeerAuthenticator
     /// The protocol this node declares (<see cref="Metadata.ISyncProtocolPolicy.Declared"/>): 3 until it has applied the
     /// metadata activation, 4 after. A caller without the policy declares 3 (<see cref="SyncProtocolVersion.Current"/>).
     /// </param>
+    /// <param name="expectedServerPublicKey">
+    /// The key this node knows the peer by (its whitelist row). With it, a 401 that carries the peer's signed "this device was revoked" refusal
+    /// (<see cref="DeviceRevokedProof"/>) becomes a <see cref="ThisDeviceRevokedException"/>; without it, or when the proof does not verify under
+    /// it, the 401 stays a plain refusal.
+    /// </param>
     /// <returns>The Bearer token to attach to subsequent peer requests.</returns>
     public static async Task<string> AuthenticateAsync(
         INodeAuthSigner authSigner,
@@ -87,10 +92,12 @@ public static class PeerAuthenticator
         NodeIdentity identity,
         Guid expectedServerNodeId,
         CancellationToken ct = default,
-        int? declaredProtocol = null)
+        int? declaredProtocol = null,
+        IReadOnlyList<NodeKeyLinkDto>? keyChain = null,
+        byte[]? expectedServerPublicKey = null)
     {
         return await AuthenticateOnceAsync(
-            authSigner, http, baseUrl, identity, expectedServerNodeId, ct, declaredProtocol);
+            authSigner, http, baseUrl, identity, expectedServerNodeId, ct, declaredProtocol, keyChain, expectedServerPublicKey);
     }
 
     private static async Task<string> AuthenticateOnceAsync(
@@ -100,7 +107,9 @@ public static class PeerAuthenticator
         NodeIdentity identity,
         Guid expectedServerNodeId,
         CancellationToken ct,
-        int? declaredProtocol)
+        int? declaredProtocol,
+        IReadOnlyList<NodeKeyLinkDto>? keyChain,
+        byte[]? expectedServerPublicKey)
     {
         // TrimEnd('/'): the two requests below are string-concatenated onto baseUrl, so a base
         // ending in a slash yields "//api/sync/challenge" and a 404. Callers that come through
@@ -164,14 +173,38 @@ public static class PeerAuthenticator
             // What this build runs on, for the network map of the node that is called (a peer that does not know the fields ignores them).
             Platform = Metadata.NodePlatform.Current,
             InContainer = Metadata.NodePlatform.InContainer,
+            // This node's key transition chain (release 2.12, plan WS-D D4): a peer that has not learned this node's re-key yet lets it in when
+            // the chain leads from the key it has on record to the key that signed. Null (not sent) for a node that never re-keyed.
+            KeyChain = keyChain is { Count: > 0 } ? keyChain : null,
         }, ct);
 
+        if (authResp.StatusCode == HttpStatusCode.Unauthorized && expectedServerPublicKey is not null
+            && await ReadRevokedProofAsync(authResp, ct) is { } proof
+            && DeviceRevokedProof.Verify(expectedServerPublicKey, expectedServerNodeId, identity.NodeId, challengeBytes, proof))
+            throw new ThisDeviceRevokedException(expectedServerNodeId);
         authResp.EnsureSuccessStatusCode();
         var authData = await authResp.Content.ReadFromJsonAsync<AuthTokenDto>(JsonOpts, ct)
             ?? throw new InvalidDataException("Invalid authenticate response.");
 
         return authData.Token;
     }
+
+    /// <summary>The signature of a "this device was revoked" refusal, or null for any other 401 (no body, another body, a body that cannot be read).</summary>
+    private static async Task<byte[]?> ReadRevokedProofAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            var body = await response.Content.ReadFromJsonAsync<RevokedRefusalDto>(JsonOpts, ct);
+            if (body is null || body.Refusal != DeviceRevokedProof.Refusal || string.IsNullOrEmpty(body.ProofB64)) return null;
+            return Convert.FromBase64String(body.ProofB64);
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException or NotSupportedException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private sealed record RevokedRefusalDto(string? Refusal, string? ProofB64);
 
     // ServerNodeId stays nullable so an omitted field is distinguishable from a declared
     // Guid.Empty — a non-nullable Guid would deserialize both to the same value, and the two get

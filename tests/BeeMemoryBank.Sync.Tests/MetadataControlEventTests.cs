@@ -228,7 +228,7 @@ public class MetadataControlEventTests : IAsyncLifetime
         _node.ProtocolPolicy.SealsMetadata.Should().BeFalse();
     }
 
-    /// <summary>Parity of the package check with the appliers (review round 3): the key and the activation these appliers write pass <see cref="ControlDbValidator"/>.</summary>
+    /// <summary>Parity of the package check with the appliers: the key and the activation these appliers write pass <see cref="ControlDbValidator"/>.</summary>
     [Fact]
     public async Task TheRowsTheMetadataAppliersWrite_AreAcceptedByTheControlDbValidator()
     {

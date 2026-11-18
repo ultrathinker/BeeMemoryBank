@@ -4,7 +4,7 @@ using BeeMemoryBank.Search.Indexing;
 namespace BeeMemoryBank.Search.Tests.Indexing;
 
 /// <summary>
-/// The load-bearing correctness test for WP-10: a differential oracle comparing
+/// The load-bearing correctness test: a differential oracle comparing
 /// <see cref="IndexBuilder.Lookup"/> against an independently-computed ground truth built by
 /// tokenizing+stemming a synthetic corpus's plaintext directly, with the exact same
 /// <see cref="ITokenizer"/>/<see cref="IStemmer"/> instances the <see cref="IndexBuilder"/> under
@@ -27,7 +27,7 @@ namespace BeeMemoryBank.Search.Tests.Indexing;
 /// </summary>
 public class IndexBuilderOracleTests
 {
-    // "A few thousand documents" per the brief; kept at the low end of that range plus modest
+    // "A few thousand documents"; kept at the low end of that range plus modest
     // per-document word counts so the whole test (oracle build + IndexBuilder ingestion, run twice)
     // stays fast enough for routine `dotnet test` runs while still exercising realistic seal/merge
     // volumes.

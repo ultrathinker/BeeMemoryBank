@@ -166,7 +166,8 @@ public sealed class BlindNodeManager(
     /// whitelist_add (with the pin), then seed the blind node with this PC's package and start
     /// pushing to it from the package's checkpoint.
     /// </summary>
-    public async Task<BlindNodeAdded> AddAsync(string codeText, CancellationToken ct)
+    public async Task<BlindNodeAdded> AddAsync(string codeText, CancellationToken ct,
+        string? ownership = null, Guid? ownerPersonId = null, string? ownerLabel = null)
     {
         var code = BlindPairCode.Parse(codeText);
         using var http = CreateClient();
@@ -195,14 +196,19 @@ public sealed class BlindNodeManager(
             // The one writer of a peer's row on a running node: the event and the row carry the same canonical address (an address the policy refuses is neither
             // stored nor announced), and the loop forgets whatever it learned at the old pairing - unreachable, closed, a failure, the contact log - whether or not
             // the place moved, and tries the new pairing at once.
+            var normalizedOwnership = OwnershipKinds.NormalizeOrNull(ownership);
             var repaired = await addresses.ApplyProofAsync(entry,
-                new PeerProof(code.Address, ProvenKey: Convert.FromBase64String(code.PublicKeyB64), TlsSpki: code.TlsSpki, TlsTrust: BlindTrust.Pin, PairingChanged: true),
+                new PeerProof(code.Address, ProvenKey: Convert.FromBase64String(code.PublicKeyB64), TlsSpki: code.TlsSpki, TlsTrust: BlindTrust.Pin, PairingChanged: true,
+                    Ownership: normalizedOwnership,
+                    OwnerPersonId: normalizedOwnership == OwnershipKinds.Personal ? ownerPersonId : null,
+                    OwnerLabel: normalizedOwnership == OwnershipKinds.Personal ? ownerLabel : null),
                 "pair code", "web");
             if (!repaired.Succeeded) throw new BlindNodeUnreachableException(repaired.Message);
         }
         else
         {
             var now = UtcNow();
+            var entryOwnership = OwnershipKinds.NormalizeOrNull(ownership) ?? OwnershipKinds.Shared;
             entry = new WhitelistEntry
             {
                 NodeId = code.NodeId,
@@ -214,6 +220,10 @@ public sealed class BlindNodeManager(
                 // A blind node never authors anything, so the flag would never be read — and
                 // "superadmin" on a node that holds no key would only confuse the Nodes page.
                 IsSuperadmin = false,
+                Ownership = entryOwnership,
+                OwnerPersonId = entryOwnership == OwnershipKinds.Personal ? ownerPersonId : null,
+                OwnerLabel = entryOwnership == OwnershipKinds.Personal ? ownerLabel : null,
+                NeedsReview = !OwnershipKinds.IsKnown(entryOwnership),
                 CreatedAt = now,
                 UpdatedAt = now
             };

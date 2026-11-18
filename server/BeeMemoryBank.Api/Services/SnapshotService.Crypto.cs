@@ -107,7 +107,7 @@ public partial class SnapshotService
         await using (var plain = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
             container = await Bmbdb2Container.EncryptAsync(plain, length, masterDek, ct, freeMemoryBytes);
         // The file that held the plain image is replaced by the container only when the container is whole on the disk: a full volume or a cancelled
-        // write leaves the file as it was, never a half-written one (BMB-304 fix round).
+        // write leaves the file as it was, never a half-written one (BMB-304).
         await OwnerOnlyFile.ReplaceAsync(dbPath, container, ct, wrapWrite: wrapWrite);
     }
 

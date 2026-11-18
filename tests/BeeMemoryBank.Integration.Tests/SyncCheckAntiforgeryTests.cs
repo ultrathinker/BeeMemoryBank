@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-313 fix round, F6: the check of a node makes this node call out, and it is asked by a SCRIPT of a page (a double-click or the "Check now" button), not
+/// BMB-313: the check of a node makes this node call out, and it is asked by a SCRIPT of a page (a double-click or the "Check now" button), not
 /// by a form. So the proxy checks, before anything is forwarded, that the request carries the anti-forgery token of a page of this site in the
 /// <c>RequestVerificationToken</c> header (and the cookie it pairs with): a request without it, with a wrong one, or with a token of another browser
 /// never reaches the Api.
@@ -48,38 +48,38 @@ public sealed class SyncCheckAntiforgeryTests(ProxyForwarderFixture fx)
     public async Task A_check_without_the_token_is_refused_by_the_proxy_and_never_reaches_the_api()
     {
         var (client, cookies, _) = await BrowserAsync();
-        var before = fx.ApiCalls.Count;
+        var before = fx.ApiCalls.ForwardedCount;   // not the stamp lookup the Web layer makes for a superadmin's request, whatever the proxy then decides
 
         using var response = await PostAsync(client, cookies, token: null);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await response.Content.ReadAsStringAsync()).Should().Contain("could not be verified");
-        fx.ApiCalls.Count.Should().Be(before, "nothing was forwarded");
+        fx.ApiCalls.ForwardedCount.Should().Be(before, "nothing was forwarded");
     }
 
     [Fact]
     public async Task A_check_with_a_token_that_is_not_one_is_refused()
     {
         var (client, cookies, _) = await BrowserAsync();
-        var before = fx.ApiCalls.Count;
+        var before = fx.ApiCalls.ForwardedCount;
 
         using var response = await PostAsync(client, cookies, token: "not-a-token");
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        fx.ApiCalls.Count.Should().Be(before);
+        fx.ApiCalls.ForwardedCount.Should().Be(before, "nothing was forwarded");
     }
 
     [Fact]
     public async Task The_token_of_a_page_without_the_cookie_that_pairs_with_it_is_refused()
     {
         var (client, _, token) = await BrowserAsync();
-        var before = fx.ApiCalls.Count;
+        var before = fx.ApiCalls.ForwardedCount;
         var sessionOnly = string.Join("; ", fx.Admin.DefaultRequestHeaders.GetValues("Cookie"));
 
         using var response = await PostAsync(client, sessionOnly, token);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, "a token is only good with the cookie of the browser it was issued to");
-        fx.ApiCalls.Count.Should().Be(before);
+        fx.ApiCalls.ForwardedCount.Should().Be(before, "nothing was forwarded");
     }
 
     [Fact]

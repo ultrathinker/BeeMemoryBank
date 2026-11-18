@@ -46,8 +46,8 @@ public sealed record RekeySwapJournal(
 
     /// <summary>
     /// Temp file, flushed to disk, atomically renamed over the journal, and the rename made durable (the parent
-    /// directory flushed, write-through on Windows): a flushed file whose directory entry is lost is no journal at all
-    /// (review release-b R1-5).
+    /// directory flushed, write-through on Windows): a flushed file whose directory entry is lost is no journal at all.
+    ///
     /// </summary>
     public static void Write(string dataDir, RekeySwapJournal journal)
     {
@@ -119,7 +119,7 @@ public static class RekeySwapResolver
         catch (Exception ex) when (ex is JsonException or InvalidDataException or NotSupportedException)
         {
             // A journal that does not parse tells nothing: it is moved aside (kept, for whoever looks; left in place it
-            // would stop every later re-key) and the siblings decide, as for a lost journal (R1-6).
+            // would stop every later re-key) and the siblings decide, as for a lost journal.
             File.Move(RekeySwapJournal.PathFor(d), RekeySwapJournal.PathFor(d) + ".unreadable-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'"), overwrite: true);
             return ResolveWithoutJournal(d);
         }
@@ -189,7 +189,7 @@ public static class RekeySwapResolver
 
     /// <summary>
     /// No journal. That is the normal case, and nothing is done while D exists. With D missing, the swap may have been
-    /// under way when a power cut lost the journal's directory entry (review release-b R1-5), so the siblings decide.
+    /// under way when a power cut lost the journal's directory entry, so the siblings decide.
     /// A verified new vault (the verb writes its report into it before the swap) goes to D. Failing that, the newest
     /// parked old vault goes back. With neither, this is a first run and D is created as usual.
     /// </summary>
@@ -217,7 +217,7 @@ public static class RekeySwapResolver
     private static bool IsEmpty(string dir) => !Directory.EnumerateFileSystemEntries(dir).Any();
 
     /// <summary>
-    /// The journal is untrusted state (review release-b R1-6): it names the directories, but nothing it names is moved
+    /// The journal is untrusted state: it names the directories, but nothing it names is moved
     /// unless it is exactly what the swap itself would have created next to D.
     /// <list type="bullet">
     /// <item><b>new</b> is always <c>D.rekey-new</c>, derived from D; the journal's value is ignored.</item>

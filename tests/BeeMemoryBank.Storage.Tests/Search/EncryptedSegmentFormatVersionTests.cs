@@ -4,7 +4,7 @@ using BeeMemoryBank.Storage.Search;
 namespace BeeMemoryBank.Storage.Tests.Search;
 
 /// <summary>
-/// WP-13 Task 1: pure, no-I/O unit tests of <see cref="EncryptedSegmentFormat.TryParseHeader"/>'s
+/// Pure, no-I/O unit tests of <see cref="EncryptedSegmentFormat.TryParseHeader"/>'s
 /// own contract around a future container format version -- the OUTER encrypted-container version
 /// (distinct from the INNER "BMBI" segment format checked by
 /// BeeMemoryBank.Search.Tests.Segment.SegmentReaderFormatVersionTests).
@@ -52,7 +52,7 @@ public class EncryptedSegmentFormatVersionTests
     [Fact]
     public void TryParseHeader_CallerMustRejectFutureVersionItself_MatchesEncryptedSegmentStoresOwnCheck()
     {
-        // Documents the division of responsibility this WP verified end-to-end:
+        // Documents the division of responsibility verified end-to-end:
         // EncryptedSegmentStore.LoadAsync is the layer that turns "future version parsed OK" into
         // a rejection (SegmentRebuildReason.FormatVersionMismatch) -- see
         // EncryptedSegmentStoreTests.Load_WrongFormatVersionInFileHeader_ReturnsRebuildNeededWithoutThrowing

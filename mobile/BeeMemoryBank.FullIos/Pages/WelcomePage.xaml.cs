@@ -1,3 +1,5 @@
+using BeeMemoryBank.FullIos.Controls;
+
 namespace BeeMemoryBank.FullIos.Pages;
 
 /// <summary>A phone without a vault: join the owner's existing memory bank, or make a new one here.</summary>
@@ -8,6 +10,7 @@ public partial class WelcomePage : ContentPage
     public WelcomePage(IServiceProvider services)
     {
         InitializeComponent();
+        GateScroll.Attach(GateViewer, GateRoot);
         _services = services;
     }
 

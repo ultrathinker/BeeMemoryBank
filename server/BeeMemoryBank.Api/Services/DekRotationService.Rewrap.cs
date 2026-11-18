@@ -28,7 +28,8 @@ public partial class DekRotationService
         string? chainEncryptedNewDekB64 = null,
         string? chainIvB64 = null,
         bool createNextMetadataKey = false,
-        DekRotationCompletionRecord? completionRecord = null)
+        DekRotationCompletionRecord? completionRecord = null,
+        byte[]? newSlotDoorPublicKey = null)
     {
         // The initiator commits a new DEK and, on an activated network, a new metadata key generation: no write may be sealed under the
         // old generation and appended after that (docs/design/step-a-spec.md 4.4). Writes in flight finish first, new ones wait; after
@@ -52,6 +53,7 @@ public partial class DekRotationService
             chainEncryptedNewDekB64, chainIvB64,
             createNextMetadataKey: createNextMetadataKey,
             completionRecord: completionRecord,
+            newSlotDoorPublicKey: newSlotDoorPublicKey,
             progress: (step, pct, msg) =>
             {
                 if (step == DekRotationFlowStep.Completed)

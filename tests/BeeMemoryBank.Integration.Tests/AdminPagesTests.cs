@@ -344,6 +344,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
         public string? PasswordNotice { get; set; }
         public string? PeerPending { get; set; }
         public string? Restored { get; set; }
+        public string? Bridge { get; set; }
         public List<string> Calls { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -357,6 +358,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
                     "/api/keys/password-notice" => PasswordNotice,
                     "/api/dek-rotation/peer-pending" => PeerPending,
                     "/api/recovery/restored-peers" => Restored,
+                    "/api/dek-rotation/bridge" => Bridge,
                     _ => null,
                 };
                 if (canned is not null)
@@ -445,7 +447,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
             var text = Regex.Replace(Regex.Replace(about, "<[^>]+>", " "), @"\s+", " ").Trim();
             text.Length.Should().BeGreaterThan(page.Summary.Length, $"{page.Route} says more than its line on the list");
             html.Should().Contain("/js/pages/admin.js?v=");
-            // the order the owner asked for: title and icon, then what it is, then the content
+            // the order: title and icon, then what it is, then the content
             var order = new[] { "admin-title", "id=\"admin-page-message\"", "id=\"admin-page-about\"", "id=\"admin-page-body\"" }.Select(m => html.IndexOf(m, StringComparison.Ordinal)).ToList();
             order.Should().BeInAscendingOrder().And.NotContain(-1);
         }
@@ -493,7 +495,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
 
         foreach (var html in new[] { index, page })
         {
-            html.Should().Contain("id=\"master-password-notice\"").And.Contain("This node still uses the old master password.").And.Contain("Office PC");
+            html.Should().Contain("id=\"master-password-notice\"").And.Contain("Your master password was changed on another device. Change it here too.").And.Contain("Office PC");
             Regex.Match(html, "<form[^>]*handler=DismissPasswordNotice[^>]*>").Value.Should().Contain("data-busy");
         }
         index.Should().Contain("href=\"/Admin/MasterPassword\"", "the index sends to the page where it is changed");
@@ -520,6 +522,32 @@ public sealed class AdminPagesTests : IAsyncLifetime
             html.Should().Contain("id=\"reject-dialog-" + id.Replace("-", "") + "\"");
         }
         (await GetAsync("/Admin/Agents")).Should().NotContain("rotated their DEK on");
+    }
+
+    [Fact]
+    public async Task OldFormatDoorsOnANodeThatNeverRotated_AreNotCalledABridge_AndABridgeIsCalledOne()
+    {
+        // the block shows when there are v1 doors even if no rotation ever ran; there is no bridge to talk about then.
+        const string door = """{"slotId":5,"kind":"user","ownerName":"Carol"}""";
+        _scripted.Bridge = $$"""{"bridgePresent":false,"v1DoorCount":1,"doors":[{{door}}],"sinceRotation":null,"sinceAppliedAt":null}""";
+        var never = await GetAsync("/Admin/DekRotation");
+        never.Should().Contain("data-dek-bridge=\"true\"").And.Contain("Carol");
+        never.Should().Contain("No master key rotation has needed a bridge for them yet").And.NotContain("A bridge from the old key is still here");
+        never.Should().Contain("Delete these old doors now");
+        // The question is asked by site.js (form.form-confirm data-confirm), never by an inline handler the CSP refuses (script-src 'self').
+        var neverForm = Regex.Match(never, "<form[^>]*handler=RemoveDekBridge[^>]*>").Value;
+        neverForm.Should().Contain("class=\"form-confirm\"")
+            .And.Contain("data-confirm=\"Delete the old doors now? The people listed must have their passwords set again.\"")
+            .And.NotContain("onsubmit");
+
+        _scripted.Bridge = $$"""{"bridgePresent":true,"v1DoorCount":1,"doors":[{{door}}],"sinceRotation":"r1","sinceAppliedAt":"2026-11-01"}""";
+        var rotated = await GetAsync("/Admin/DekRotation");
+        rotated.Should().Contain("A bridge from the old key is still here").And.Contain("Remove the bridge now").And.NotContain("No master key rotation has needed");
+        var rotatedForm = Regex.Match(rotated, "<form[^>]*handler=RemoveDekBridge[^>]*>").Value;
+        rotatedForm.Should().Contain("class=\"form-confirm\"")
+            .And.Contain("data-confirm=\"Delete the old doors and remove the bridge now? The people listed must have their passwords set again.\"")
+            .And.NotContain("onsubmit");
+        _scripted.Bridge = null;
     }
 
     [Fact]
@@ -590,6 +618,10 @@ public sealed class AdminPagesTests : IAsyncLifetime
         new("/Admin/Devices", "ConfirmRestoredPeer", Expect.Message, F(("nodeId", Nobody))),
         new("/Admin/Devices", "DismissLanNotice", Expect.NoMessage),
         new("/Admin/Devices", "PromotePasswordPeers", Expect.Message, F(("nodeIds", Nobody))),
+        new("/Admin/Devices", "ConfirmOwnership", Expect.Message, F(("nodeId", Nobody), ("choice", "shared"))),
+        new("/Admin/Devices", "ConfirmAllOwnership", Expect.Message),
+        new("/Admin/Devices", "SetAccountsHome", Expect.Message, F(("nodeId", Nobody))),
+        new("/Admin/Devices", "AcknowledgeAccountsHomeChange", Expect.Message),
         new("/Admin/Devices", "Enable", Expect.Page, Shown: "id=\"connect-device-body\""),
         new("/Admin/Devices", "Disable", Expect.Page, Shown: "id=\"connect-device-body\""),
         new("/Admin/Devices", "Firewall", Expect.Page, Shown: "id=\"connect-device-body\""),
@@ -603,6 +635,7 @@ public sealed class AdminPagesTests : IAsyncLifetime
 
         // the page of one device is /Admin/Device/{nodeId}: the test puts a device that is not there in the address
         new("/Admin/Device", "SetPeerSuperadmin", Expect.Message, F(("isSuperadmin", "true"))),
+        new("/Admin/Device", "SetPeerOwnership", Expect.Message, F(("choice", "shared"))),
         new("/Admin/Device", "RevokeNode", Expect.Message),
         new("/Admin/Device", "ChangeNodeAddress", Expect.Message, F(("newApiAddress", "http://127.0.0.1:1"), ("password", "not the password"))),
         new("/Admin/Device", "SetBlindCallable", Expect.Message, F(("trust", "off"), ("password", "not the password"))),
@@ -636,7 +669,6 @@ public sealed class AdminPagesTests : IAsyncLifetime
         new("/Admin/MasterPassword", "ChangeMasterPassword", Expect.Message, F(("oldPassword", "not the password"), ("newPassword", "Another-Pass-9"), ("passwordHint", "the sign-in note"))),
         new("/Admin/MasterPassword", "DismissPasswordNotice", Expect.Message),
 
-        new("/Admin/StorageProtection", "Seal", Expect.Message, F(("password", "not the password"))),
         new("/Admin/StorageProtection", "Erase", Expect.Message, F(("password", "not the password"), ("paths", "no-such-copy.db"))),
         new("/Admin/StorageProtection", "EnableServerAutoUnlock", Expect.Message, F(("password", "not the password"), ("confirmation", "START UNLOCKED"))),
         new("/Admin/StorageProtection", "DisableServerAutoUnlock", Expect.Message, F(("password", "not the password"))),
@@ -652,8 +684,25 @@ public sealed class AdminPagesTests : IAsyncLifetime
         new("/Admin/DekRotation", "CancelDekRotation", Expect.Message, F(("eventId", Nobody))),
         new("/Admin/DekRotation", "PeerAcceptDekRotation", Expect.Message, F(("eventId", Nobody))),
         new("/Admin/DekRotation", "PeerRejectDekRotation", Expect.Message, F(("eventId", Nobody))),
+        new("/Admin/DekRotation", "RemoveDekBridge", Expect.Message),
+        // Without the confirmation box nothing happens (release 2.12, plan WS-D).
+        new("/Admin/IdentityKey", "Rekey", Expect.Message),
+        new("/Admin/IdentityKey", "Confirm", Expect.Message),
+        new("/Admin/IdentityKey", "Acknowledge", Expect.Message),
+        new("/Admin/IdentityKey", "AcknowledgeSignedAsThisNode", Expect.Message),
+
+        // The removal of a superadmin (2.12): a process nobody started; each answer is a refusal shown on the page.
+        new("/Admin/Offboarding", "Continue", Expect.Message, F(("id", Nobody), ("password", "not the password"))),
+        new("/Admin/Offboarding", "Decide", Expect.Message, F(("id", Nobody), ("itemId", "device:" + Nobody), ("decision", "keep"), ("reason", "a reason"))),
+        new("/Admin/Offboarding", "RemoveSuperadmin", Expect.Message, F(("id", Nobody), ("itemId", "superadmin:999"), ("password", "not the password"))),
+        new("/Admin/Offboarding", "AcceptDefaults", Expect.Message, F(("id", Nobody))),
+        new("/Admin/Offboarding", "RevokeNode", Expect.Message, F(("id", Nobody), ("nodeId", Nobody))),
+        new("/Admin/Offboarding", "TakeOver", Expect.Message, F(("id", Nobody), ("password", "not the password"))),
 
         new("/Admin/Agents", "DeleteAgent", Expect.Message, F(("agentId", "999999"))),
+
+        new("/Admin/RecoveryKey", "RevokeKey", Expect.Message, F(("slotId", "999999"))),
+        new("/Admin/RecoveryKey", "RevokeUnknownKeys", Expect.Message),
 
         new("/Admin/TagGraph", "RebuildGraph", Expect.NoMessage),
 

@@ -4,7 +4,7 @@ using BeeMemoryBank.Search.Segment;
 namespace BeeMemoryBank.Search.Tests.Indexing;
 
 /// <summary>
-/// WP-11 Gap 1 coverage: folding a segment reloaded from disk (a fresh <see cref="SegmentReader"/>
+/// Gap 1 coverage: folding a segment reloaded from disk (a fresh <see cref="SegmentReader"/>
 /// over raw bytes, with no in-memory Vocabulary/ArticleToDocId of its own) back into a live
 /// <see cref="IndexBuilder"/> via <see cref="IndexBuilder.AdoptPersistedSegment"/>, and the
 /// tombstone-event plumbing <see cref="IndexBuilder.AddOrUpdateDocument"/>/
@@ -63,7 +63,7 @@ public class IndexBuilderAdoptionTests
     [Fact]
     public void AdoptPersistedSegment_ThenTriggeringMergeByAddingDocuments_IncludesAdoptedSegmentsLiveDocuments()
     {
-        // Self-check #4/#5 from wp-11.md: adoption must be a first-class citizen of the merge
+        // Self-check #4/#5: adoption must be a first-class citizen of the merge
         // logic, not a special case merge silently ignores. Adopt one segment, then push enough
         // new documents through the normal seal path to cross the merge-segment-count threshold,
         // and confirm the adopted segment's still-live documents survive into the merge output.

@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// BMB-306/307 fix rounds 2 and 3 (T1, G2): the address of a peer has ONE rule at every place that writes it (<c>PeerAddressPolicy.ForStorage</c> / <c>Canonicalize</c>), and
+/// BMB-306/307: the address of a peer has ONE rule at every place that writes it (<c>PeerAddressPolicy.ForStorage</c> / <c>Canonicalize</c>), and
 /// this inventory is what keeps it so. <c>docs/design/peer-address-writers.golden.txt</c> lists every source file that assigns a whitelist row's <c>ApiAddress</c> or
 /// writes the <c>api_address</c> column, and the test fails when a site is added that the golden does not name (review it against the policy, then regenerate with
 /// <c>BMB_UPDATE_GOLDEN=1</c>) and when a file that assigns an address does not go through the policy at all.

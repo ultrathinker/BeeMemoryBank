@@ -6,7 +6,7 @@ using BeeMemoryBank.Sync;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// Codex security #4: an apply marks its flow as the write gate's owner, so the reseed's replay —
+/// an apply marks its flow as the write gate's owner, so the reseed's replay —
 /// which runs while the gate is held — can still write. That mark is a static
 /// <see cref="AsyncLocal{T}"/>, and it used to be set and never restored: afterwards every write made
 /// on the <i>same</i> flow — and every task the apply spawned — skipped <see cref="EventWriteGate.EnterAsync"/>

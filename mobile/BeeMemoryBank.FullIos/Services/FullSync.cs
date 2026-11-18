@@ -12,21 +12,23 @@ namespace BeeMemoryBank.FullIos.Services;
 /// <summary>How the last contact with one peer went.</summary>
 /// <param name="Address">The address the next session tries first (or the peer's own address when it has no channel yet).</param>
 /// <param name="Reachability">The peer's state in <see cref="ReachabilityStates"/>, as far as this app run has seen it.</param>
-/// <param name="ReachabilityText">The sentence for it ("Direct, on this network", "Not on this network"); null where the line above says it.</param>
-public sealed record PeerStatus(Guid NodeId, string Name, string Address, bool Pinned, DateTime? LastSuccess, DateTime? LastAttempt, string? Problem,
+/// <param name="ProblemCode">The kind of the last failure (<see cref="FullSync"/> codes), for the screen's own words; null when the last contact was fine.</param>
+public sealed record PeerStatus(Guid NodeId, string Name, string Address, bool Pinned, DateTime? LastSuccess, DateTime? LastAttempt, string? ProblemCode,
     string Reachability = ReachabilityStates.Unknown, string? ReachabilityText = null)
 {
     public bool HasReachabilityText => !string.IsNullOrEmpty(ReachabilityText);
 
-    /// <summary>One line for the screen: the last contact, whether the key is pinned, the last problem.</summary>
+    /// <summary>One line for the screen: the last contact and whether the key is pinned (the problem is said in the app's own words elsewhere).</summary>
     public string Summary =>
         (LastSuccess is { } ok ? $"Last contact {ok.ToLocalTime():HH:mm:ss}" : "No contact yet since the app opened") +
-        (Pinned ? " · key pinned" : "") +
-        (Problem is not null && (LastSuccess is null || LastAttempt > LastSuccess) ? " · " + Problem : "");
+        (Pinned ? " · key pinned" : "");
 }
 
-/// <summary>One sync round: notes and changes applied here, peers reached, the first problem.</summary>
-public sealed record SyncRoundResult(DateTime At, int Applied, int Reached, int Failed, string? Problem)
+/// <summary>One sync round: notes and changes applied here, peers reached, real failures and unreachable peers kept apart.</summary>
+/// <param name="Problem">The first REAL failure's code (a refusal, a wrong key, a broken copy); null when nothing failed for real.</param>
+/// <param name="Unreachable">How many peers simply could not be reached (timeout, refused connection, no route, no answer, DNS): not an error.</param>
+/// <param name="UnreachablePeer">The first unreachable peer's name, for the yellow "not reachable for now" line.</param>
+public sealed record SyncRoundResult(DateTime At, int Applied, int Reached, int Failed, string? Problem, int Unreachable = 0, string? UnreachablePeer = null)
 {
     public static SyncRoundResult Nothing(DateTime at) => new(at, 0, 0, 0, null);
 }
@@ -44,7 +46,38 @@ public sealed record SyncRoundResult(DateTime At, int Applied, int Reached, int 
 public sealed class FullSync(IServiceProvider services, ILogger<FullSync> logger)
 {
     private readonly SemaphoreSlim _round = new(1, 1);
-    private readonly record struct Seen(DateTime? Success, DateTime? Attempt, string? Problem, DateTime? FailingSince);
+    private readonly record struct Seen(DateTime? Success, DateTime? Attempt, string? ProblemCode, DateTime? FailingSince);
+
+    /// <summary>Problem codes the screens turn into their own words. "unreachable" is not an error: the badge stays yellow.</summary>
+    public const string ProblemUnreachable = "unreachable";
+    public const string ProblemWrongKey = "wrongkey";
+    public const string ProblemRefused = "refused";
+    public const string ProblemBusy = "busy";
+    public const string ProblemSnapshot = "snapshot";
+    public const string ProblemOther = "other";
+    /// <summary>A computer proved that an administrator disconnected this phone from the bank (2.12): one calm sentence, not an error.</summary>
+    public const string ProblemDisconnected = "disconnected";
+
+    /// <summary>While this phone is disconnected, the automatic rounds ask the computers again only this often (a round the person asks for always runs).</summary>
+    public static readonly TimeSpan DisconnectedRetry = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Whether a failed contact is "the computer is not reachable for now" (yellow) or a real failure (red). A timeout, a refused
+    /// connection, no route, no answer or a DNS failure only mean the peer is away; a refusal (401/403), a wrong pinned key or a
+    /// broken copy are real failures. Reads only the exception the sync layer already threw; libs is not changed.
+    /// </summary>
+    public static string Classify(Exception ex, bool pinned) => ex switch
+    {
+        ThisDeviceRevokedException => ProblemDisconnected,
+        TaskCanceledException or OperationCanceledException => ProblemUnreachable,
+        System.Net.Sockets.SocketException => ProblemUnreachable,
+        HttpRequestException { HttpRequestError: HttpRequestError.SecureConnectionError } => pinned ? ProblemWrongKey : ProblemUnreachable,
+        HttpRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden } => ProblemRefused,
+        HttpRequestException { StatusCode: System.Net.HttpStatusCode.ServiceUnavailable } => ProblemBusy,
+        HttpRequestException { StatusCode: null } => ProblemUnreachable,
+        SnapshotRequiredException => ProblemSnapshot,
+        _ => ProblemOther,
+    };
 
     private readonly Dictionary<Guid, Seen> _peers = [];
     private readonly object _gate = new();
@@ -60,19 +93,35 @@ public sealed class FullSync(IServiceProvider services, ILogger<FullSync> logger
 
     public SyncRoundResult? LastRound { get; private set; }
 
+    /// <summary>
+    /// Since when a computer has said that an administrator disconnected this phone (it proved it with its signature); null while none has, and
+    /// again after any session goes through (the device was added back). What is on the phone stays readable; it no longer receives changes.
+    /// </summary>
+    public DateTime? DisconnectedSince { get; private set; }
+
+    private DateTime? _disconnectedAskedAt;
+
+    /// <summary>Test seam: the session with one peer (the product's <see cref="PeerSessions.SyncWithPeerAsync"/> when null).</summary>
+    internal Func<IServiceProvider, HttpClient, WhitelistEntry, CancellationToken, Task<int>>? SessionForTests { get; set; }
+
     public bool IsRunning => _round.CurrentCount == 0;
 
     /// <summary>A round started or ended: the screens refresh.</summary>
     public event Action? Changed;
 
-    /// <summary>One round now; waits for a running one to end first. Never throws for a peer's problem: it is in the result.</summary>
-    public async Task<SyncRoundResult> RoundAsync(CancellationToken ct = default)
+    /// <summary>
+    /// One round now; waits for a running one to end first. Never throws for a peer's problem: it is in the result. <paramref name="automatic"/>:
+    /// the loop's own round (and the last one before the background), which a disconnected phone runs only every <see cref="DisconnectedRetry"/>.
+    /// </summary>
+    public async Task<SyncRoundResult> RoundAsync(CancellationToken ct = default, bool automatic = false)
     {
         await _round.WaitAsync(ct);
         Notify();
         try
         {
-            var result = await RunRoundAsync(ct);
+            var result = automatic && DisconnectedSince is not null && _disconnectedAskedAt is { } asked && DateTime.UtcNow - asked < DisconnectedRetry
+                ? new SyncRoundResult(DateTime.UtcNow, 0, 0, 0, ProblemDisconnected)
+                : await RunRoundAsync(ct);
             LastRound = result;
             return result;
         }
@@ -188,7 +237,7 @@ public sealed class FullSync(IServiceProvider services, ILogger<FullSync> logger
                 new PeerReachability.Inputs(TimeSpan.FromTicks(Interval.Ticks * 5 / 2), directAt, directScope, null, seen.FailingSince,
                     reachability.RelayOf(row.NodeId), null, reachability.PlanOf(row.NodeId), null), now);
         }
-        return new PeerStatus(row.NodeId, row.DisplayName, address, row.EffectivePin is not null, seen.Success, seen.Attempt, seen.Problem,
+        return new PeerStatus(row.NodeId, row.DisplayName, address, row.EffectivePin is not null, seen.Success, seen.Attempt, seen.ProblemCode,
             state, LanStatusText.Of(state, row.DisplayName));
     }
 
@@ -200,7 +249,7 @@ public sealed class FullSync(IServiceProvider services, ILogger<FullSync> logger
             var started = DateTime.UtcNow;
             try
             {
-                await RoundAsync(ct);
+                await RoundAsync(ct, automatic: true);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -255,8 +304,10 @@ public sealed class FullSync(IServiceProvider services, ILogger<FullSync> logger
         using var http = services.GetRequiredService<IHttpClientFactory>().CreateClient();
         http.Timeout = TimeSpan.FromSeconds(30);
 
-        int applied = 0, reached = 0, failed = 0;
+        int applied = 0, reached = 0, failed = 0, unreachable = 0;
         string? firstProblem = null;
+        var disconnected = false;
+        string? firstUnreachable = null;
         foreach (var (row, plan, peer) in peers)
         {
             ct.ThrowIfCancellationRequested();
@@ -265,9 +316,16 @@ public sealed class FullSync(IServiceProvider services, ILogger<FullSync> logger
             var attempt = DateTime.UtcNow;
             try
             {
-                applied += await PeerSessions.SyncWithPeerAsync(scope.ServiceProvider, http, row, ct, logger);
+                applied += SessionForTests is { } session
+                    ? await session(scope.ServiceProvider, http, row, ct)
+                    : await PeerSessions.SyncWithPeerAsync(scope.ServiceProvider, http, row, ct, logger);
                 reached++;
                 Remember(peer.NodeId, attempt, null);
+                if (DisconnectedSince is not null)
+                {
+                    DisconnectedSince = null;
+                    logger.LogInformation("{Peer} accepts this phone again", peer.NodeId);
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -275,24 +333,48 @@ public sealed class FullSync(IServiceProvider services, ILogger<FullSync> logger
             }
             catch (Exception ex)
             {
-                failed++;
-                var problem = Describe(ex, peer);
-                firstProblem ??= $"{peer.Name}: {problem}";
-                Remember(peer.NodeId, attempt, problem);
-                logger.LogWarning("Sync with {Peer} failed: {Problem}", peer.NodeId, problem);
+                var code = Classify(ex, peer.Pinned);
+                if (code == ProblemDisconnected)
+                {
+                    // Said once, calmly (2.12): the sentence is on the sync screen, and the loop asks again only every DisconnectedRetry.
+                    failed++;
+                    firstProblem = code;
+                    Remember(peer.NodeId, attempt, code);
+                    if (!disconnected && DisconnectedSince is null) logger.LogInformation("{Peer} says an administrator disconnected this phone from the bank", peer.NodeId);
+                    disconnected = true;
+                    continue;
+                }
+                if (code == ProblemUnreachable)
+                {
+                    // A computer that is simply away is not an error: yellow, never red.
+                    unreachable++;
+                    firstUnreachable ??= peer.Name;
+                }
+                else
+                {
+                    failed++;
+                    firstProblem ??= code;
+                }
+                Remember(peer.NodeId, attempt, code);
+                logger.LogWarning("Sync with {Peer} failed ({Code}): {Problem}", peer.NodeId, code, Describe(ex, peer));
             }
         }
-        return new SyncRoundResult(at, applied, reached, failed, firstProblem);
+        if (disconnected && reached == 0)
+        {
+            DisconnectedSince ??= at;
+            _disconnectedAskedAt = at;
+        }
+        return new SyncRoundResult(at, applied, reached, failed, firstProblem, unreachable, firstUnreachable);
     }
 
-    private void Remember(Guid peer, DateTime attempt, string? problem)
+    private void Remember(Guid peer, DateTime attempt, string? code)
     {
         lock (_gate)
         {
             _peers.TryGetValue(peer, out var seen);
-            _peers[peer] = problem is null
+            _peers[peer] = code is null
                 ? new Seen(attempt, attempt, null, null)
-                : new Seen(seen.Success, attempt, problem, seen.FailingSince ?? attempt);
+                : new Seen(seen.Success, attempt, code, seen.FailingSince ?? attempt);
         }
     }
 
@@ -302,6 +384,7 @@ public sealed class FullSync(IServiceProvider services, ILogger<FullSync> logger
     /// </summary>
     public static string Describe(Exception ex, PeerStatus peer) => ex switch
     {
+        ThisDeviceRevokedException => ThisDeviceRevokedException.Sentence,
         HttpRequestException { HttpRequestError: HttpRequestError.SecureConnectionError } when peer.Pinned =>
             "it answered with another key than the one this iPhone pinned when it joined, so nothing was sent.",
         HttpRequestException { HttpRequestError: HttpRequestError.SecureConnectionError } =>

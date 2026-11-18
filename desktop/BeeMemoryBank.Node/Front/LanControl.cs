@@ -100,6 +100,19 @@ public sealed class LanControl
             return Results.Json(Status());
         });
 
+        // A join completed on this node (the Api says so once the joiner has its snapshot): "Show this node to devices in my
+        // network" turns ON by itself, through the same switch the Network settings page uses. Only from "off";
+        // "on" and "environment" are left alone. While a join through the door is still downloading its snapshot, the door's own
+        // finish callback does it after the stream, so the switch never closes the door mid-stream.
+        lan.MapPost("/joined", async () =>
+        {
+            if (_network == null)
+                return Results.Json(new { error = "This node cannot be opened to the network from here." }, statusCode: 409);
+            if (_listener is { JoinUnderway: true }) return Results.Json(Status());
+            await _network.TurnOnForJoinAsync(Console.WriteLine);
+            return Results.Json(Status());
+        });
+
         // "Sync with your devices on this network". {"enabled": true|false}.
         lan.MapPost("/sync", async (NetworkRequest request) =>
         {

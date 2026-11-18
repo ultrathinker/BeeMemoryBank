@@ -125,7 +125,8 @@ public sealed class EventLogResetStep : IRekeyStep
             problems.Add(new("tbl_event", cp.EventId.ToString(), $"a row's Lamport timestamp {highest} is above the checkpoint's {cp.LamportTs}"));
 
         var pub = await db.ExecuteScalarAsync<byte[]>("SELECT ed25519_public_key FROM tbl_node_identity LIMIT 1");
-        if (!Ed25519Signer.Verify(pub, EventSignature.BuildPayload(cp), cp.Signature))
+        // The checkpoint was just signed by this node's own current key (the helper's current-key check, plan WS-D D3).
+        if (!NodeEventVerifier.SignatureVerifies(pub, EventSignature.BuildPayload(cp), cp.Signature))
             problems.Add(new("tbl_event", cp.EventId.ToString(), "the checkpoint's signature does not verify"));
         return problems;
     }

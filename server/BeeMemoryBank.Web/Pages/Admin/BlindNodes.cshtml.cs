@@ -57,6 +57,8 @@ public class BlindNodesModel(ApiClient api) : AdminPageModel(api)
     public string? InviteLabel { get; set; }
     public string? InviteSourceName { get; set; }
     public int InviteLifetime { get; set; } = 30;
+    public string InviteOwnerChoice { get; set; } = "shared";
+    public List<UserDto>? Users { get; set; }
     public string? InviteError { get; set; }
 
     /// <summary>The phone just paired (the card "Add an Android blind copy"): shown on this response, with the code that tells the phone where to call.</summary>
@@ -87,6 +89,7 @@ public class BlindNodesModel(ApiClient api) : AdminPageModel(api)
     {
         Invites = await Api.ListBlindInvitesAsync();
         InviteDefaults = await Api.GetBlindInviteDefaultsAsync();
+        Users = await Api.GetUsersAsync();
         // The address a friend's device will call: what the operator declared for this node, else the address this page was opened at
         // (behind the node's front that is the address the browser used, not this process's own internal port: see BrowserAuthority).
         InviteAddress ??= InviteDefaults?.Address ?? BrowserAuthority.Origin(Request);
@@ -129,13 +132,15 @@ public class BlindNodesModel(ApiClient api) : AdminPageModel(api)
     /// Makes an invitation. The answer is this page again (not a redirect): the string is a one-time capability, so it is shown once, in the
     /// response to the operator's own request, and kept nowhere on the web side. A refusal shows the form again with what the operator typed.
     /// </summary>
-    public async Task<IActionResult> OnPostInviteAsync(string? label, string? sourceName, int lifetime, string? address)
+    public async Task<IActionResult> OnPostInviteAsync(string? label, string? sourceName, int lifetime, string? address, string? ownerChoice = null)
     {
         InviteLabel = label;
         InviteSourceName = sourceName;
         InviteAddress = address;
         InviteLifetime = lifetime;
-        var (invite, error) = await Api.IssueBlindInviteAsync(label, sourceName, lifetime, address);
+        InviteOwnerChoice = string.IsNullOrWhiteSpace(ownerChoice) ? "shared" : ownerChoice.Trim();
+        var (ownership, ownerPersonId) = ParseOwnerChoice(InviteOwnerChoice);
+        var (invite, error) = await Api.IssueBlindInviteAsync(label, sourceName, lifetime, address, ownership, ownerPersonId);
         InviteError = error;
         if (invite is not null)
         {
@@ -148,6 +153,15 @@ public class BlindNodesModel(ApiClient api) : AdminPageModel(api)
         }
         await LoadAsync();
         return Page();
+    }
+
+    private static (string Ownership, Guid? OwnerPersonId) ParseOwnerChoice(string choice)
+    {
+        if (choice.StartsWith("personal:", StringComparison.OrdinalIgnoreCase)
+            && Guid.TryParse(choice["personal:".Length..], out var personId)
+            && personId != Guid.Empty)
+            return ("personal", personId);
+        return ("shared", null);
     }
 
     public async Task<IActionResult> OnPostConfirmInviteAsync(string inviteId, string? password)

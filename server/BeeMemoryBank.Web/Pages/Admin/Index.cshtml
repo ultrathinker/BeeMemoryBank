@@ -28,6 +28,16 @@
 
         <partial name="_PendingDekRotations" model="Model.PeerPendingRotations" />
 
+        @if (Model.OpenRemovals.Count > 0)
+        {
+            <sl-alert id="offboarding-notice" variant="warning" open style="margin-bottom:16px;">
+                <sl-icon slot="icon" name="person-x"></sl-icon>
+                <strong>@Model.OpenRemovals.Count @(Model.OpenRemovals.Count == 1 ? "person is" : "people are") being removed:</strong>
+                @string.Join(", ", Model.OpenRemovals.Select(r => r.Person + " (" + r.Status + ")")).
+                <a href="@(AdminRoutes.Offboarding)">See what each removal waits for</a>.
+            </sl-alert>
+        }
+
         @if (Model.RestoredPeers.Count > 0)
         {
             <sl-alert id="restored-devices-notice" variant="warning" open style="margin-bottom:16px;">

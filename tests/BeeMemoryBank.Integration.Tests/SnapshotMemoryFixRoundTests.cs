@@ -57,7 +57,7 @@ internal sealed class FaultyStream(Stream inner, long failAfterBytes, Action onF
 }
 
 /// <summary>
-/// BMB-304 fix round, findings 2, 3, 5 and 7 at the level of the service: a legacy BMBDB1 snapshot (no page reserve) is restored from the one buffer it was
+/// BMB-304: a legacy BMBDB1 snapshot (no page reserve) is restored from the one buffer it was
 /// opened in; a container that does not authenticate leaves no plain bytes anywhere; the container is rewritten through a temp file that is renamed only when
 /// whole, so a full volume or a cancellation leaves the file as it was; an archive that fails or is cancelled while it is written leaves nothing.
 /// </summary>
@@ -164,7 +164,7 @@ public sealed class SnapshotMemoryFixRoundTests(SealedNodeTemplate template) : I
         var outcome = await node.Snapshots.RestoreAsync(legacy, masterPassword: SealedNodeTemplate.Password);
         watch.Stop();
 
-        outcome.Standalone.Should().BeFalse();
+        outcome.Standalone.Should().BeTrue("every restore of this route makes a new node (release 2.12, plan R2)");
         DisplayName(node.Factory).Should().Be(original, "the legacy snapshot's database is the node's now");
         log.Where(a => a.Native).Should().BeEmpty("no native copy of the image: it was imported where the container was opened");
         log.Where(a => a.Bytes >= container.Length).Should().ContainSingle("exactly one whole-image allocation, the buffer the container was opened in")
@@ -250,7 +250,7 @@ public sealed class SnapshotMemoryFixRoundTests(SealedNodeTemplate template) : I
         return (path, pageKey);
     }
 
-    /// <summary>BMB-304 fix2 (b): the sealed staging containers (the BMBDB2 of a snapshot, the BMBCH1 of a join) are written through a rename of a finished file and take the cancellation: a token that is cancelled leaves the staging copy as it was.</summary>
+    /// <summary>BMB-304: the sealed staging containers (the BMBDB2 of a snapshot, the BMBCH1 of a join) are written through a rename of a finished file and take the cancellation: a token that is cancelled leaves the staging copy as it was.</summary>
     [Fact]
     public async Task A_sealed_staging_container_made_under_a_cancelled_token_leaves_the_staging_copy_as_it_was_and_no_temp_file()
     {
@@ -418,7 +418,7 @@ public sealed class SnapshotMemoryFixRoundTests(SealedNodeTemplate template) : I
 }
 
 /// <summary>
-/// BMB-304 fix round, finding 4 and 7: the real <c>POST /api/snapshots/restore</c>. A node with too little memory answers 507 with the machine-readable code
+/// BMB-304: the real <c>POST /api/snapshots/restore</c>. A node with too little memory answers 507 with the machine-readable code
 /// (the route used to catch <c>InvalidOperationException</c> first and answer 400 without it), and a container that does not authenticate is a safe 400 that
 /// changes nothing.
 /// </summary>
@@ -460,7 +460,7 @@ public sealed class SnapshotRestoreEndpointFailureTests : IAsyncLifetime
         var dbSize = new FileInfo(Path.Combine(_node.DataPath, "beememorybank.db")).Length;
         Snapshots.FreeMemoryOverride = dbSize / 2;   // the fixture database is larger than this ceiling
 
-        var response = await _client.PostAsJsonAsync("/api/snapshots/restore", new { fileName = info.FileName, masterPassword = Password, createBackupFirst = false, mode = "keep-identity" });
+        var response = await _client.PostAsJsonAsync("/api/snapshots/restore", new { fileName = info.FileName, masterPassword = Password, createBackupFirst = false, mode = "standalone" });
 
         response.StatusCode.Should().Be((HttpStatusCode)507, await response.Content.ReadAsStringAsync());
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -469,7 +469,7 @@ public sealed class SnapshotRestoreEndpointFailureTests : IAsyncLifetime
         (await IdentityAsync()).Should().Be(before, "the live vault is untouched");
 
         Snapshots.FreeMemoryOverride = null;
-        var again = await _client.PostAsJsonAsync("/api/snapshots/restore", new { fileName = info.FileName, masterPassword = Password, createBackupFirst = false, mode = "keep-identity" });
+        var again = await _client.PostAsJsonAsync("/api/snapshots/restore", new { fileName = info.FileName, masterPassword = Password, createBackupFirst = false, mode = "standalone" });
         again.StatusCode.Should().Be(HttpStatusCode.OK, await again.Content.ReadAsStringAsync());
     }
 
@@ -485,7 +485,7 @@ public sealed class SnapshotRestoreEndpointFailureTests : IAsyncLifetime
         return image;
     }
 
-    /// <summary>BMB-304 fix2 (P2): a container that AUTHENTICATES but holds no readable database is the same safe 400 as any other damaged snapshot - never a 500, never the parser's text.</summary>
+    /// <summary>BMB-304: a container that AUTHENTICATES but holds no readable database is the same safe 400 as any other damaged snapshot - never a 500, never the parser's text.</summary>
     [Theory]
     [InlineData("not a database at all", 0, 0)]
     [InlineData("a header and no pages (no reserve)", 1, 0)]
@@ -499,7 +499,7 @@ public sealed class SnapshotRestoreEndpointFailureTests : IAsyncLifetime
         const string damaged = "authenticated-but-not-a-database.tar.gz";
         SnapshotMemoryFixRoundTests.RewriteDatabaseEntry(Snapshots.GetSnapshotPath(info.FileName), Path.Combine(Snapshots.SnapshotsDir, damaged), _ => container);
 
-        var response = await _client.PostAsJsonAsync("/api/snapshots/restore", new { fileName = damaged, masterPassword = Password, createBackupFirst = false, mode = "keep-identity" });
+        var response = await _client.PostAsJsonAsync("/api/snapshots/restore", new { fileName = damaged, masterPassword = Password, createBackupFirst = false, mode = "standalone" });
 
         var text = await response.Content.ReadAsStringAsync();
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, what + ": " + text);
@@ -524,7 +524,7 @@ public sealed class SnapshotRestoreEndpointFailureTests : IAsyncLifetime
             return copy;
         });
 
-        var response = await _client.PostAsJsonAsync("/api/snapshots/restore", new { fileName = tampered, masterPassword = Password, createBackupFirst = false, mode = "keep-identity" });
+        var response = await _client.PostAsJsonAsync("/api/snapshots/restore", new { fileName = tampered, masterPassword = Password, createBackupFirst = false, mode = "standalone" });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, await response.Content.ReadAsStringAsync());
         var error = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString()!;

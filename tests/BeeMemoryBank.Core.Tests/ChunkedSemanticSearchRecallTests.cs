@@ -8,10 +8,10 @@ using Dapper;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// WP-15's headline DoD: on a synthetic "needle in a long article" corpus, chunk-based semantic
+/// The headline goal: on a synthetic "needle in a long article" corpus, chunk-based semantic
 /// search (<see cref="ArticleRepository.SearchByChunkEmbeddingAsync"/>) must surface an article
 /// whose distinctive content sits past <see cref="OnnxEmbeddingGenerator.MaxSequenceLength"/>
-/// tokens, while the pre-WP-15 single-embedding-per-article search
+/// tokens, while the earlier single-embedding-per-article search
 /// (<see cref="ArticleRepository.SearchByEmbeddingAsync"/>) does not — proving chunking actually
 /// fixes the truncation blind spot, not just that it runs without error.
 ///
@@ -113,7 +113,7 @@ public class ChunkedSemanticSearchRecallTests : IAsyncLifetime
         var newScore = (await _chunkCache.GetOrRebuildAsync()).ScoreMaxPerArticle(query).GetValueOrDefault(haystack.Id, -1f);
 
         oldScore.Should().BeApproximately(0f, 1e-4f,
-            "the pre-WP-15 single full-document embedding truncates before the needle, so its cosine score against a needle-only query must be ~0 -- this pins the baseline bug WP-15 exists to fix");
+            "the earlier single full-document embedding truncates before the needle, so its cosine score against a needle-only query must be ~0 -- this pins the baseline bug chunking exists to fix");
         newScore.Should().BeApproximately(1f, 1e-4f,
             "the needle's own chunk should score a near-perfect cosine match against the needle-only query");
 
@@ -126,9 +126,9 @@ public class ChunkedSemanticSearchRecallTests : IAsyncLifetime
     [Fact]
     public async Task ChunkBasedSearch_ArticleWithoutChunksYet_FallsBackToFullDocumentScore()
     {
-        // Simulates an article embedded before WP-15 shipped (or never re-chunked): a full-document
+        // Simulates an article embedded before chunking shipped (or never re-chunked): a full-document
         // projection exists, but tbl_article_chunk_embedding has no rows for it.
-        var article = await InsertArticleAsync("Pre-WP-15 article");
+        var article = await InsertArticleAsync("Pre-chunking article");
         var embedding = new TruncationAwareFakeGenerator().Generate(NeedleMarker);
         var matrixRepo = new ProjectionMatrixRepository(_factory);
         var stored = await matrixRepo.GetAsync();

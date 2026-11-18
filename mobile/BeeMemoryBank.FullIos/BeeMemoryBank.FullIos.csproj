@@ -61,13 +61,44 @@
     <MauiIcon Include="..\BeeMemoryBank.Mobile\Resources\AppIcon\appicon.svg" Link="Resources\AppIcon\appicon.svg" Color="#FFFFFF" ForegroundScale="0.62" />
     <!-- Without a launch screen iOS runs the app in a letterboxed compatibility mode. -->
     <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#1c1017" BaseSize="128,128" />
-    <!-- The Android app's Bootstrap icons, larger: iOS tints the tab bar's icons itself. -->
+    <!-- The app's own earlier icons (the design's ones are linked below). -->
     <MauiImage Include="Resources\Images\*.svg" BaseSize="26,26" />
+    <!-- The design's icons, linked from the Android app: one source of the design on both phones.
+         iOS rasterizes each SVG to PNG at build time, so code and XAML name them .png. The colour
+         lives in the file (idle / active, dark / light), as on Android. -->
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\tab_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="26,26" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_sync_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="16,16" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_eye*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="24,24" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_new_folder*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="24,24" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_new_article*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="24,24" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_row_home_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="15,15" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_row_folder_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="20,20" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_row_file_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="20,20" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_row_lock_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="20,20" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_row_chevron_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="16,16" />
+    <!-- the list-density toggle and the editor's formatting toolbar, linked from Android too. -->
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_expand*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="20,20" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_compact*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="20,20" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_toolbar_list_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="18,18" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_toolbar_link_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="18,18" />
+    <MauiImage Include="..\BeeMemoryBank.Mobile\Resources\Images\icon_toolbar_image_*.svg" Link="Resources\Images\%(Filename)%(Extension)" BaseSize="18,18" />
+    <!-- The design's type faces (SIL OFL, licences next to the files in the Android app). Plus
+         Jakarta Sans is the display face of the Latin brand name only: it carries no Cyrillic, so
+         every localized title uses Noto Sans, the face the design's font stack falls back to. -->
+    <MauiFont Include="..\BeeMemoryBank.Mobile\Resources\Fonts\*.ttf" Link="Resources\Fonts\%(Filename)%(Extension)" />
+    <!-- The design's tokens and control styles: ResourceDictionary XAML without code-behind,
+         linked so both phones read one source (the iPhone-only parts are IosStyles.xaml). -->
+    <MauiXaml Include="..\BeeMemoryBank.Mobile\Resources\Styles\Colors.xaml" Link="Resources\Styles\Colors.xaml" />
+    <MauiXaml Include="..\BeeMemoryBank.Mobile\Resources\Styles\Styles.xaml" Link="Resources\Styles\Styles.xaml" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Apple's privacy manifest: the file-time, boot-time, disk-space and user-defaults APIs the .NET runtime and MAUI use. -->
     <BundleResource Include="Platforms\iOS\PrivacyInfo.xcprivacy" LogicalName="PrivacyInfo.xcprivacy" />
+    <!-- The photo-library permission text in the phone's language (image upload). The English
+         default also lives in Info.plist; these override it per localization. -->
+    <BundleResource Include="Platforms\iOS\en.lproj\InfoPlist.strings" LogicalName="en.lproj/InfoPlist.strings" />
+    <BundleResource Include="Platforms\iOS\ru.lproj\InfoPlist.strings" LogicalName="ru.lproj/InfoPlist.strings" />
   </ItemGroup>
 
   <ItemGroup>
@@ -91,8 +122,8 @@
 
   <ItemGroup>
     <!-- The shared libraries and the vault: the set the Android ordinary app references, without the model (Embeddings: search by meaning
-         is not on the phone, see docs/full-node/IOS.md) and without Media (no photo upload yet). Never Hosting, AppPaths, Infrastructure,
-         BeeMemoryBank.Platforms.Apple (the macOS Keychain layer) or the blind copies' libraries. -->
+         is not on the phone, see docs/full-node/IOS.md). MediaService (picture upload) lives in the Vault, so no extra assembly.
+         Never Hosting, AppPaths, Infrastructure, BeeMemoryBank.Platforms.Apple (the macOS Keychain layer) or the blind copies' libraries. -->
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Core\BeeMemoryBank.Core.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Crypto\BeeMemoryBank.Crypto.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Search\BeeMemoryBank.Search.csproj" />

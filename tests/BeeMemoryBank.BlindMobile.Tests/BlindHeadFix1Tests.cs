@@ -5,7 +5,7 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 
 namespace BeeMemoryBank.BlindMobile.Tests;
 
-/// <summary>Fix round 1 of the Android head, the parts that run on any OS: the input gate (paste, scanner, link), the backup reservation, and the words of the notification.</summary>
+/// <summary>The input gate (paste, scanner, link), the backup reservation, and the words of the notification.</summary>
 public sealed class BlindInviteInputTests
 {
     private static string Invitation(int length) => BlindInviteLinks.Scheme + new string('a', length - BlindInviteLinks.Scheme.Length);

@@ -54,23 +54,24 @@ public sealed class AdminCardsTests : IAsyncLifetime
     // ------------------------------------------------------------------ the three states
 
     [Fact]
-    public async Task An_open_node_shows_the_whole_page_the_way_to_encrypt_the_database_and_a_link_to_the_page_a_blocker_names()
+    public async Task An_open_node_shows_the_whole_page_the_self_encryption_and_a_link_to_the_page_a_blocker_names()
     {
         var metadata = await GetAsync(MetadataPage);
         Body(metadata).Should().Contain("Ask every device now");
         About(metadata).Should().Contain("Before you switch it on, take a fresh backup of this node and keep it offline");
         Body(metadata).Should().NotContain("On since");
 
-        // The page of the Admin area holds the whole thing: the way to encrypt is ON it, not behind a button to another page.
+        // The page of the Admin area holds the whole thing: the plain database encrypts itself after the unlock,
+        // with no button, and a blocker is one calm line on the page itself.
         var storage = await GetAsync("/Admin/StorageProtection");
-        Body(storage).Should().Contain("Encrypt this node").And.Contain("a plain file").And.NotContain("href=\"/VaultEncryption\"");
+        Body(storage).Should().Contain("a plain file").And.Contain("encrypts itself").And.NotContain("href=\"/VaultEncryption\"");
         storage.Should().NotContain("Storage protection");
 
         var page = storage;
-        page.Should().Contain("<title>Database encryption").And.Contain("Encrypt this node");
-        page.Should().NotContain("Storage protection");
-        // The blocker that names a page of the Admin area links to that page.
-        var blocker = Regex.Match(page, "<li data-blocker=\"not_activated\">(.*?)</li>", RegexOptions.Singleline).Groups[1].Value;
+        page.Should().Contain("<title>Database encryption");
+        page.Should().NotContain("Storage protection").And.NotContain("seal-form").And.NotContain("Encrypt this node");
+        // The blocker that names a page of the Admin area links to that page, in the calm line.
+        var blocker = Regex.Match(page, "Not encrypted yet:(.*?)It encrypts itself", RegexOptions.Singleline).Groups[1].Value;
         blocker.Should().Contain("Activate the new sync format first")
             .And.Contain("<a href=\"/Admin/MetadataEncryption\">Admin > Metadata encryption</a>")
             .And.NotContain("Admin > Sync");
@@ -93,7 +94,9 @@ public sealed class AdminCardsTests : IAsyncLifetime
         Message(admin).Should().Contain("Metadata encryption is on. Every device switches as it syncs.", "the result of the switch is on the page, where the button was");
         Regex.Matches(body, "<form").Should().BeEmpty("a finished switch has no form");
 
-        Body(await GetAsync("/Admin/StorageProtection")).Should().Contain("Encrypt this node", "the database of this node is still a plain file");
+        Body(await GetAsync("/Admin/StorageProtection")).Should().Contain("a plain file", "the database of this node is still a plain file")
+            .And.Contain("encrypts itself", "it encrypts itself after the unlock now, with no button")
+            .And.NotContain("seal-form");
 
         // The next visit of the page: the status line alone.
         var again = await GetAsync(MetadataPage);
@@ -311,7 +314,7 @@ public sealed class AdminCardsTests : IAsyncLifetime
         await FollowAsync(asked);   // the page reads the answer
     }
 
-    // ------------------------------------------------------------------ BMB-305 fix round (B1, B3, B4, B5)
+    // ------------------------------------------------------------------ BMB-305 (B1, B3, B4, B5)
 
     /// <summary>A sealed row held for a key that has not arrived: the node then refuses the switch with the blocker "events_held".</summary>
     private async Task HoldARowAsync()

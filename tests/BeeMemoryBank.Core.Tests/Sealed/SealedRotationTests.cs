@@ -56,7 +56,7 @@ public class SealedRotationTests : SealedWriterFixture
         {
             byte[] kek = KeyDerivation.DeriveKek(password, door.Salt!, door.ArgonMemory!.Value, door.ArgonIterations!.Value, door.ArgonParallelism!.Value);
             byte[] dek;
-            try { dek = MasterKeyManager.UnwrapMasterDek(door.EncryptedMasterDek, door.Iv, kek); }
+            try { dek = BeeMemoryBank.Crypto.Doors.OpenBootDoor(door, kek); }
             catch (CryptographicException) { continue; }
             finally { Array.Clear(kek); }
             if (await KeyService.TryUnwrapAsync(dek) is { } dbk) return (dek, dbk);
@@ -65,11 +65,11 @@ public class SealedRotationTests : SealedWriterFixture
     }
 
     [Fact]
-    public async Task AnInitiatorRotationLeavesOneWrapperUnderTheNewDek_AndOnlyTheInitiatorsSlot()
+    public async Task AnInitiatorRotationLeavesOneWrapperUnderTheNewDek_AndKeepsEveryOtherDoor_ResealedToIt()
     {
         await Users.CreateUserAsync("carol", "Carol", "CarolPass1", BeeMemoryBank.Core.Models.UserRoles.Superadmin);
-        await Keys.AddRecoveryKeyAsync();
         var admin = (await UserRepo.GetByUsernameAsync("admin"))!;
+        await Keys.AddRecoveryKeyAsync(admin.Id);   // a personal key of admin's (2.12); the rotation deletes it
         await CreateWrappedAgentAsync(admin.Id);
         await Mirror.RewriteAsync();
         var oldDek = Session.GetMasterDek();
@@ -86,9 +86,10 @@ public class SealedRotationTests : SealedWriterFixture
         (await KeyService.TryUnwrapAsync(newDek)).Should().Equal(Dbk);
         (await KeyService.TryUnwrapAsync(oldDekKept)).Should().BeNull("the old DEK opens nothing in the boot store");
         await AssertDoorsEqualSealedSetAsync();
-        (await Doors.ListAsync()).Should().ContainSingle(d => d.Kind == BootDoorKinds.Slot).Which.DekFingerprint.Should().Be(newFp);
-        (await Doors.ListAsync()).Should().NotContain(d => d.Kind == BootDoorKinds.Agent, "the rotation deleted every agent that carried a wrapped DEK");
-        server.Calls.Should().Be(1, "the rotation hook removed the local state of the server checkbox");
+        (await Doors.ListAsync()).Where(d => d.Kind == BootDoorKinds.Slot).Should().HaveCount(3, "admin, carol and the recovery key keep their doors (2.12)")
+            .And.OnlyContain(d => d.DekFingerprint == newFp);
+        (await Doors.ListAsync()).Should().NotContain(d => d.Kind == BootDoorKinds.Agent, "a v1 agent holds the old DEK and is deleted");
+        server.Calls.Should().Be(0, "there is no server door to switch off");
 
         // The password reaches the new DEK and the database key through the boot store alone.
         var unlocked = await UnlockFromBootAsync(AdminPassword);
@@ -98,10 +99,51 @@ public class SealedRotationTests : SealedWriterFixture
     }
 
     [Fact]
-    public async Task AnAutoAcceptingPeerKeepsTheOldWrapperUntilTheLastOldDekSlotIsGone_AndSwitchesTheServerCheckboxOff()
+    public async Task TodaysRotation_OnANodeWhoseDoorsAreV2_ReSealsTheInitiatorsDoorAsV2_ThatOpensAfterwards()
+    {
+        // ADR 0012: a node of 2.12 has sealed doors; today's rotation (whose behaviour this release does not change otherwise) writes the
+        // initiator's own door as a v2 box for its password, and that door opens the closed node afterwards.
+        await Users.CreateUserAsync("carol", "Carol", "CarolPass1", BeeMemoryBank.Core.Models.UserRoles.Superadmin);
+        await Mirror.RewriteAsync();
+        var slot = (await KeySlots.GetAllAsync()).Where(s => s.SlotType == "user").OrderBy(s => s.SlotId).First();
+        slot.DoorVersion.Should().Be(2);
+        var oldDek = Session.GetMasterDek();
+        var newDek = RandomNumberGenerator.GetBytes(32);
+        var newFp = DekFingerprint.Of(newDek);
+        var kek = KeyDerivation.DeriveKek(AdminPassword, slot.Salt!, slot.ArgonMemory!.Value, slot.ArgonIterations!.Value, slot.ArgonParallelism!.Value);
+        var door = BeeMemoryBank.Crypto.Doors.Seal(slot.SlotType, kek, slot.Salt, newDek);
+        Array.Clear(kek);
+
+        await DekRewrapper.RewrapAllAsync(Factory, Session, oldDek, (byte[])newDek.Clone(), newEpoch: 2, commitEventId: Guid.NewGuid().ToString(),
+            isInitiator: true, initiatorSlotId: slot.SlotId, newWrappedSlotDek: door.Box, newWrappedSlotIv: door.Iv,
+            sealedHooks: new SealedRotationHooks(Mirror, new ServerStub()), newSlotDoorPublicKey: door.PublicKey);
+
+        var after = (await KeySlots.GetAllAsync()).Single(s => s.SlotId == slot.SlotId);
+        (await KeySlots.GetAllAsync()).Should().HaveCount(2, "the other superadmin keeps her door (2.12)")
+            .And.OnlyContain(s => s.DoorVersion == 2 && s.DekFingerprint == newFp);
+        after.DoorVersion.Should().Be(2);
+        after.DoorPublicKey.Should().Equal(slot.DoorPublicKey, "the same password and salt derive the same door key");
+        after.DekFingerprint.Should().Be(newFp);
+        (await Wrappers.ListAsync()).Select(w => w.DekFingerprint).Should().Equal([newFp]);
+        await AssertDoorsEqualSealedSetAsync();
+        var bootDoor = (await Doors.ListAsync()).Single(d => d.Kind == BootDoorKinds.Slot && d.SourceId == slot.SlotId);
+        bootDoor.DoorVersion.Should().Be(2);
+        bootDoor.DekFingerprint.Should().Be(newFp);
+
+        var unlocked = await UnlockFromBootAsync(AdminPassword);
+        unlocked.Should().NotBeNull("the re-sealed door opens the closed node through the boot store alone");
+        unlocked!.Value.Dek.Should().Equal(newDek);
+        Session.Lock();
+        (await Session.UnlockAsync(AdminPassword)).Should().BeTrue();
+        Session.GetMasterDek().Should().Equal(newDek);
+    }
+
+    [Fact]
+    public async Task AnAutoAcceptingPeerReSealsItsV2Doors_DeletesItsV1AutoUnlockDoors_AndSwitchesTheCheckboxOffForAV1ServerDoor()
     {
         await Users.CreateUserAsync("carol", "Carol", "CarolPass1", BeeMemoryBank.Core.Models.UserRoles.Superadmin);
-        await Keys.AddRecoveryKeyAsync();
+        // A recovery key is personal (2.12): two superadmins, so the owner is named. Created after carol so the slot-id order is user, user, recovery.
+        await Keys.AddRecoveryKeyAsync((await UserRepo.GetByUsernameAsync("admin"))!.Id);
         using (var c = Factory.CreateConnection())
             await c.ExecuteAsync(
                 @"INSERT INTO tbl_key_slot (slot_type, encrypted_master_dek, iv, created_at) VALUES ('server_auto_unlock', zeroblob(49), zeroblob(12), 'now'), ('os_auto_unlock', zeroblob(49), zeroblob(12), 'now')");
@@ -114,18 +156,21 @@ public class SealedRotationTests : SealedWriterFixture
         await RotateAsync(oldDek, (byte[])newDek.Clone(), initiator: false, null, Mirror, server);
 
         using (var c = Factory.CreateConnection())
-            (await c.QueryAsync<string>("SELECT slot_type FROM tbl_key_slot ORDER BY slot_id")).Should().OnlyContain(t => t == "user",
-                "the peer deleted recovery, os_auto_unlock and server_auto_unlock (spec 11.2 item 6)");
+            (await c.QueryAsync<string>("SELECT slot_type FROM tbl_key_slot ORDER BY slot_id")).Should().Equal(["user", "user", "recovery"],
+                "the v2 doors are re-sealed; the v1 os_auto_unlock and server_auto_unlock doors cannot be, and are deleted");
         await AssertDoorsEqualSealedSetAsync();
-        (await Wrappers.ListAsync()).Select(w => w.DekFingerprint).Should().BeEquivalentTo([oldFp, DekFingerprint.Of(newDek)],
-            "the user slots still yield the old DEK until each is rewrapped lazily (spec 3.4)");
-        server.Calls.Should().Be(1);
+        (await Wrappers.ListAsync()).Select(w => w.DekFingerprint).Should().Equal([DekFingerprint.Of(newDek)],
+            "every remaining door names the new DEK: the old wrapper goes at once");
+        oldFp.Should().NotBe(DekFingerprint.Of(newDek));
+        server.Calls.Should().Be(1, "the v1 server door was deleted, so its local state goes too");
         (await UnlockFromBootAsync(AdminPassword))!.Value.Dbk.Should().Equal(Dbk);
     }
 
     [Fact]
     public async Task AFailureOfTheServerHookAfterTheCommitIsLoggedNotRaised()
     {
+        using (var c = Factory.CreateConnection())
+            await c.ExecuteAsync("INSERT INTO tbl_key_slot (slot_type, encrypted_master_dek, iv, created_at) VALUES ('server_auto_unlock', zeroblob(49), zeroblob(12), 'now')");
         var oldDek = Session.GetMasterDek();
         var server = new ServerStub { Throw = true };
 
@@ -237,7 +282,7 @@ public class SealedRotationTests : SealedWriterFixture
         foreach (var door in doors.Where(d => d.Kind == BootDoorKinds.Slot))
         {
             var kek = KeyDerivation.DeriveKek(AdminPassword, door.Salt!, door.ArgonMemory!.Value, door.ArgonIterations!.Value, door.ArgonParallelism!.Value);
-            var dek = MasterKeyManager.UnwrapMasterDek(door.EncryptedMasterDek, door.Iv, kek);
+            var dek = BeeMemoryBank.Crypto.Doors.OpenBootDoor(door, kek);
             (await KeyService.TryUnwrapAsync(dek)).Should().Equal(Dbk, door.Pending ? "the new copy yields the new DEK" : "the old copy yields the old DEK");
         }
 

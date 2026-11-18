@@ -28,7 +28,8 @@ public static class RemoteAuthEndpoints
                 return Results.BadRequest(new ErrorResponse("username and password are required"));
 
             var user = await userRepo.GetByUsernameAsync(req.Username);
-            if (user is null || !user.IsActive)
+            // A person being removed (2.12) gets nothing for the old password here either, as at sign-in: the same answer as for no account.
+            if (user is null || !user.IsActive || user.IsBeingRemoved)
             {
                 // Same Argon2id cost as a real account, so response time does not distinguish
                 // "no such user" / "deactivated" from "wrong password". See

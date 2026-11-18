@@ -112,7 +112,7 @@ public static class CopyEndpoints
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
         }).RequireInternalKey().WithTags("Copy")
-            // A tree is copied once at a time: a repeat of the request would copy it a second time (BMB-311 fix round).
+            // A tree is copied once at a time: a repeat of the request would copy it a second time (BMB-311).
             .SingleFlight("copy-folder:{id}", "Copying this folder");
     }
 }

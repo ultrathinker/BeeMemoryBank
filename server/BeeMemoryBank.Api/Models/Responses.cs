@@ -128,7 +128,7 @@ public static class ErrorCodes
     /// nothing was changed. Callers branch on THIS rather than on the message: <c>bmb blind init</c>
     /// re-run on a configured node keeps the password it finds and goes on to the backup target, and
     /// matching prose to decide that is how the branch silently stopped being reachable when the
-    /// message changed (review release-a2 sec#8).
+    /// message changed.
     /// </summary>
     public const string ConsolePasswordAlreadySet = "console_password_already_set";
 }
@@ -195,9 +195,10 @@ public record ActivityResponse(
 /// 2.7.5 or older makes an active row of every entry there, and ignores this member.</param>
 public record JoinResponse(JoinRemoteIdentity RemoteNode, JoinKeySlot KeySlot, List<JoinWhitelistEntry> Whitelist,
     List<BeeMemoryBank.Sync.NodeEndpointEntry>? Endpoints = null, string? TlsLeafSpki = null, string? TlsCaKey = null, int? LanPort = null,
-    List<BeeMemoryBank.Sync.JoinRevokedPeer>? RevokedPeers = null);
+    List<BeeMemoryBank.Sync.JoinRevokedPeer>? RevokedPeers = null, string? JoinedAsDisplayName = null);
 
-public record JoinRemoteIdentity(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion);
+public record JoinRemoteIdentity(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion,
+    string? Ownership = null, Guid? OwnerPersonId = null, string? OwnerLabel = null, BeeMemoryBank.Sync.JoinVersion? OwnershipVersion = null);
 
 // TlsTrust / TlsSpki: how this node reaches that peer (<c>pin</c> with the key's pin, or <c>public-ca</c>); absent = nothing recorded.
 // Optional on the wire: a node of an older version neither sends nor reads them, and the joiner then checks that peer the ordinary way.
@@ -208,7 +209,8 @@ public record JoinRemoteIdentity(Guid NodeId, string DisplayName, string Ed25519
 public record JoinWhitelistEntry(
     Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false,
     string? TlsTrust = null, string? TlsSpki = null, long? LamportTs = null, Guid? SourceNodeId = null,
-    BeeMemoryBank.Sync.JoinPeerVersions? Versions = null);
+    BeeMemoryBank.Sync.JoinPeerVersions? Versions = null,
+    string? Ownership = null, Guid? OwnerPersonId = null, string? OwnerLabel = null);
 
 public record JoinKeySlot(
     string EncryptedMasterDekB64,
@@ -220,7 +222,29 @@ public record JoinKeySlot(
 
 public record LoginResponse(int UserId, string Username, string DisplayName, string Role, bool IsUnlocked, string? MigratedSyntheticUsername = null, string? SecurityStamp = null);
 
-public record UserListItemResponse(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt, bool ChatAccess);
+/// <param name="AccountState"><c>active</c>, or <c>offboarding</c> while a removal holds the account (release 2.12.0).</param>
+/// <param name="RemovalStatus">"being removed, step k of n" while a removal of this person is open.</param>
+public record UserListItemResponse(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt, bool ChatAccess,
+    Guid PersonId = default, string AccountState = "active", string? RemovalStatus = null, Guid? RemovalProcessId = null, bool Replicated = false);
+
+public record SharedDoorBlockerResponse(Guid NodeId, string DisplayName);
+
+public record AccountsHomeResponse(Guid? NodeId, string? DisplayName, bool IsThisNode, bool IsThisNodeShared, bool ShouldOffer);
+
+public record SharedDoorsStatusResponse(
+    Guid? AccountsHomeNodeId,
+    string? AccountsHomeName,
+    bool IsThisNodeAccountsHome,
+    bool IsThisNodeShared,
+    bool ShouldOfferAccountsHome,
+    IReadOnlyList<SharedDoorBlockerResponse> BlockedSharedNodes,
+    long LastIssuedVersion,
+    long LatestReceivedVersion,
+    long AppliedVersion,
+    DateTime? AppliedAt,
+    string? LastError,
+    IReadOnlyList<SharedDoorBlockerResponse>? SkippedSharedNodes = null,
+    bool AccountsHomeChanged = false);
 
 /// <param name="BasePolicy">What "this role has no allow rows" means — "open" (whole vault minus
 /// deny rows) or "closed" (nothing). See BeeMemoryBank.Core.Models.RoleBasePolicy.</param>
@@ -261,22 +285,72 @@ public record WhitelistEntryResponse(
     // public (the hash of a certificate's key) and is what the Nodes page shows next to "Pinned certificate". Whether a
     // blind copy can really be told to call the node is the pairing list's decision (BlindListener.IsCallable).
     string? TlsTrust = null,
-    string? TlsSpki = null)
+    string? TlsSpki = null,
+    string Ownership = BeeMemoryBank.Core.Models.OwnershipKinds.Unknown,
+    Guid? OwnerPersonId = null,
+    string? OwnerLabel = null,
+    bool NeedsReview = false,
+    string? RuntimeKind = null,
+    string? ReportedAppVersion = null,
+    string? SuggestedOwnership = null,
+    Guid? SuggestedOwnerPersonId = null,
+    string? SuggestedOwnerLabel = null)
 {
-    public static WhitelistEntryResponse From(BeeMemoryBank.Core.Models.WhitelistEntry e) => new(
-        e.NodeId,
-        e.DisplayName,
-        Convert.ToBase64String(e.Ed25519PublicKey),
-        e.ApiAddress,
-        e.CanGenerateEmbeddings,
-        e.Status,
-        e.CreatedAt,
-        e.UpdatedAt,
-        e.AutoAcceptRestore,
-        e.AutoAcceptDekRotation,
-        e.IsSuperadmin,
-        e.EffectiveTlsTrust,
-        e.EffectivePin);
+    public static WhitelistEntryResponse From(BeeMemoryBank.Core.Models.WhitelistEntry e) =>
+        From(e, state: null, firstSuperadmin: null);
+
+    public static WhitelistEntryResponse From(
+        BeeMemoryBank.Core.Models.WhitelistEntry e,
+        BeeMemoryBank.Sync.NodeStateRecord? state,
+        BeeMemoryBank.Core.Models.User? firstSuperadmin)
+    {
+        var (sugOwn, sugPid, sugLabel) = SuggestOwnership(e, state, firstSuperadmin);
+        return new(
+            e.NodeId,
+            e.DisplayName,
+            Convert.ToBase64String(e.Ed25519PublicKey),
+            e.ApiAddress,
+            e.CanGenerateEmbeddings,
+            e.Status,
+            e.CreatedAt,
+            e.UpdatedAt,
+            e.AutoAcceptRestore,
+            e.AutoAcceptDekRotation,
+            e.IsSuperadmin,
+            e.EffectiveTlsTrust,
+            e.EffectivePin,
+            BeeMemoryBank.Core.Models.OwnershipKinds.Normalize(e.Ownership),
+            e.OwnerPersonId,
+            e.OwnerLabel,
+            e.NeedsReview,
+            string.IsNullOrWhiteSpace(state?.RuntimeKind) ? null : state!.RuntimeKind,
+            string.IsNullOrWhiteSpace(state?.AppVersion) ? null : state!.AppVersion,
+            sugOwn,
+            sugPid,
+            sugLabel);
+    }
+
+    public static (string Ownership, Guid? OwnerPersonId, string? OwnerLabel) SuggestOwnership(
+        BeeMemoryBank.Core.Models.WhitelistEntry e,
+        BeeMemoryBank.Sync.NodeStateRecord? state,
+        BeeMemoryBank.Core.Models.User? firstSuperadmin)
+    {
+        if (BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(e.NodeId)
+            || BeeMemoryBank.Sync.NodeRuntimeKinds.IsInfrastructure(state?.RuntimeKind))
+        {
+            return (BeeMemoryBank.Core.Models.OwnershipKinds.Shared, null, null);
+        }
+
+        if (firstSuperadmin is not null && firstSuperadmin.PersonId != Guid.Empty)
+        {
+            var label = string.IsNullOrWhiteSpace(firstSuperadmin.DisplayName)
+                ? firstSuperadmin.Username
+                : firstSuperadmin.DisplayName;
+            return (BeeMemoryBank.Core.Models.OwnershipKinds.Personal, firstSuperadmin.PersonId, label);
+        }
+
+        return (BeeMemoryBank.Core.Models.OwnershipKinds.Shared, null, null);
+    }
 }
 
 /// <summary>The answer to PUT /api/whitelist/{nodeId}/hub: the row, and what the administrator should know about the trust just set.</summary>

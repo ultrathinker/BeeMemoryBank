@@ -1,31 +1,32 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- The mock-up's Tree screen: the breadcrumb rail, the "Folders (N)" / "Articles (N)" sections,
+     rows with the icon box, the title, the meta line and the ⋮ action button, and the empty
+     folder state with the two create buttons. A double tap is the long press of the mock-up. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
              x:Class="BeeMemoryBank.Mobile.Pages.TreePage"
              x:Name="PageRoot"
-             Title="Tree"
-             BackgroundColor="{StaticResource BackgroundColor}">
+             Title="Tree">
 
     <ContentPage.ToolbarItems>
-        <ToolbarItem IconImageSource="icon_new_article.svg" AutomationId="NewArticleButton" Clicked="OnNewArticleClicked" Order="Primary" />
-        <ToolbarItem IconImageSource="icon_new_folder.svg" AutomationId="NewFolderButton" Clicked="OnNewFolderClicked" Order="Primary" />
-        <ToolbarItem x:Name="ExpandToggle" IconImageSource="icon_expand.svg" AutomationId="ExpandToggle" Clicked="OnToggleExpandClicked" Order="Primary" />
+        <ToolbarItem IconImageSource="{AppThemeBinding Light=icon_new_article_light.svg, Dark=icon_new_article.svg}" AutomationId="NewArticleButton" Clicked="OnNewArticleClicked" Order="Primary"
+                     AutomationProperties.Name="{loc:Translate NewArticle}" />
+        <ToolbarItem IconImageSource="{AppThemeBinding Light=icon_new_folder_light.svg, Dark=icon_new_folder.svg}" AutomationId="NewFolderButton" Clicked="OnNewFolderClicked" Order="Primary"
+                     AutomationProperties.Name="{loc:Translate NewFolder}" />
+        <ToolbarItem x:Name="ExpandToggle" IconImageSource="{AppThemeBinding Light=icon_expand_light.svg, Dark=icon_expand.svg}" AutomationId="ExpandToggle" Clicked="OnToggleExpandClicked" Order="Primary" />
     </ContentPage.ToolbarItems>
 
     <Grid RowDefinitions="Auto,*">
 
-        <Label Grid.Row="0" x:Name="BreadcrumbLabel"
-               Text="/"
-               FontSize="13"
-               TextColor="{StaticResource SecondaryTextColor}"
-               LineBreakMode="HeadTruncation"
-               Padding="12,8,12,4" />
+        <ScrollView Grid.Row="0" Orientation="Horizontal" Padding="16,10,16,4" HorizontalScrollBarVisibility="Never">
+            <HorizontalStackLayout x:Name="BreadcrumbsLayout" Spacing="4" />
+        </ScrollView>
 
         <ActivityIndicator x:Name="LoadingIndicator"
                            Grid.Row="0" Grid.RowSpan="2"
                            IsRunning="False"
                            IsVisible="False"
-                           Color="{StaticResource PrimaryColor}"
                            VerticalOptions="Center"
                            HorizontalOptions="Center"
                            ZIndex="10" />
@@ -34,44 +35,98 @@
             <CollectionView x:Name="TreeList"
                             AutomationId="TreeList"
                             SelectionMode="None"
-                            EmptyView="No items found."
-                            Margin="8,8,8,0">
+                            IsGrouped="True"
+                            Margin="16,4,16,16">
+                <CollectionView.GroupHeaderTemplate>
+                    <DataTemplate>
+                        <Label Text="{Binding Name}" Style="{StaticResource SectionLabel}" Margin="0,10,0,8" />
+                    </DataTemplate>
+                </CollectionView.GroupHeaderTemplate>
+                <CollectionView.EmptyView>
+                    <VerticalStackLayout Padding="20,36" Spacing="12" HorizontalOptions="Center">
+                        <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                                StrokeShape="RoundRectangle 16" WidthRequest="52" HeightRequest="52" HorizontalOptions="Center">
+                            <Image Source="{AppThemeBinding Light=icon_row_folder_light.svg, Dark=icon_row_folder_dark.svg}"
+                                   WidthRequest="26" HeightRequest="26" HorizontalOptions="Center" VerticalOptions="Center" />
+                        </Border>
+                        <Label Text="{loc:Translate TreeEmptyTitle}" Style="{StaticResource EmptyTitle}" />
+                        <Label Text="{loc:Translate TreeEmptyDesc}" Style="{StaticResource EmptyDesc}" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="10" Margin="0,4,0,0">
+                            <Button Grid.Column="0" Text="{loc:Translate NewFolder}" Style="{StaticResource SecondaryButton}"
+                                    AutomationId="EmptyNewFolderButton" Clicked="OnNewFolderClicked" />
+                            <Button Grid.Column="1" Text="{loc:Translate NewArticle}" Style="{StaticResource PrimaryButton}"
+                                    AutomationId="EmptyNewArticleButton" Clicked="OnNewArticleClicked" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </CollectionView.EmptyView>
                 <CollectionView.ItemTemplate>
                     <DataTemplate>
-                        <Frame Style="{StaticResource CardFrame}" Margin="0,4">
-                            <Frame.GestureRecognizers>
-                                <TapGestureRecognizer Tapped="OnItemTapped" />
-                                <TapGestureRecognizer Tapped="OnItemLongPressed" NumberOfTapsRequired="2" />
-                            </Frame.GestureRecognizers>
-                            <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="10">
-                                <Image Grid.Column="0"
-                                       Source="{Binding IconSource}"
-                                       WidthRequest="20" HeightRequest="20"
-                                       VerticalOptions="Center" />
-                                <Label Grid.Column="1"
-                                       Text="🔒"
-                                       FontSize="13"
-                                       IsVisible="{Binding ShowLock}"
-                                       VerticalOptions="Center" />
-                                <Label Grid.Column="2"
-                                       Text="{Binding DisplayName}"
-                                       FontSize="15"
-                                       LineBreakMode="{Binding ItemsLineBreakMode, Source={RelativeSource AncestorType={x:Type ContentPage}}}"
-                                       MaxLines="{Binding ItemsMaxLines, Source={RelativeSource AncestorType={x:Type ContentPage}}}"
-                                       VerticalOptions="Center">
-                                    <Label.Triggers>
-                                        <DataTrigger TargetType="Label" Binding="{Binding IsFolder}" Value="True">
-                                            <Setter Property="FontAttributes" Value="Bold" />
+                        <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                                Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                                StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                                Padding="6,6,6,12" Margin="0,4">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                                <Grid Grid.Column="0" ColumnDefinitions="Auto,*" ColumnSpacing="12"
+                                      Padding="0,4" MinimumHeightRequest="48">
+                                    <Grid.GestureRecognizers>
+                                        <TapGestureRecognizer Tapped="OnItemTapped" />
+                                        <TapGestureRecognizer Tapped="OnItemLongPressed" NumberOfTapsRequired="2" />
+                                    </Grid.GestureRecognizers>
+                                    <Border Grid.Column="0" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                            StrokeShape="RoundRectangle 12"
+                                            BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}">
+                                        <Border.Triggers>
+                                            <DataTrigger TargetType="Border" Binding="{Binding IsFolder}" Value="True">
+                                                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}" />
+                                            </DataTrigger>
+                                            <DataTrigger TargetType="Border" Binding="{Binding ShowLock}" Value="True">
+                                                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}" />
+                                            </DataTrigger>
+                                        </Border.Triggers>
+                                        <Image WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center"
+                                               Source="{AppThemeBinding Light=icon_row_file_light.svg, Dark=icon_row_file_dark.svg}">
+                                            <Image.Triggers>
+                                                <DataTrigger TargetType="Image" Binding="{Binding IsFolder}" Value="True">
+                                                    <Setter Property="Source" Value="{AppThemeBinding Light=icon_row_folder_light.svg, Dark=icon_row_folder_dark.svg}" />
+                                                </DataTrigger>
+                                                <DataTrigger TargetType="Image" Binding="{Binding ShowLock}" Value="True">
+                                                    <Setter Property="Source" Value="{AppThemeBinding Light=icon_row_lock_light.svg, Dark=icon_row_lock_dark.svg}" />
+                                                </DataTrigger>
+                                            </Image.Triggers>
+                                        </Image>
+                                    </Border>
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                            <Label Grid.Column="0"
+                                                   Text="{Binding Name}"
+                                                   Style="{StaticResource ItemTitle}"
+                                                   LineBreakMode="{Binding ItemsLineBreakMode, Source={RelativeSource AncestorType={x:Type ContentPage}}}"
+                                                   MaxLines="{Binding ItemsMaxLines, Source={RelativeSource AncestorType={x:Type ContentPage}}}" />
+                                            <Border Grid.Column="1" IsVisible="{Binding ShowLock}"
+                                                    BackgroundColor="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}"
+                                                    StrokeThickness="0" StrokeShape="RoundRectangle 11" Padding="8,3" VerticalOptions="Center">
+                                                <Label Text="{loc:Translate LockPill}" FontSize="11"
+                                                       FontFamily="{StaticResource FontBodySemibold}"
+                                                       TextColor="{AppThemeBinding Light={StaticResource BmbAccentTextLight}, Dark={StaticResource BmbAccentText}}" />
+                                            </Border>
+                                        </Grid>
+                                        <Label Text="{Binding Meta}" Style="{StaticResource ItemMeta}" LineBreakMode="TailTruncation" />
+                                    </VerticalStackLayout>
+                                </Grid>
+                                <Button Grid.Column="1" Text="⋮" Style="{StaticResource IconButton}"
+                                        AutomationId="RowMenuButton"
+                                        SemanticProperties.Description="{loc:Translate ArticleActions}"
+                                        CommandParameter="{Binding .}"
+                                        Clicked="OnItemMenuClicked">
+                                    <Button.Triggers>
+                                        <!-- A folder row's menu acts on the folder, not an article. -->
+                                        <DataTrigger TargetType="Button" Binding="{Binding IsFolder}" Value="True">
+                                            <Setter Property="SemanticProperties.Description" Value="{loc:Translate FolderActions}" />
                                         </DataTrigger>
-                                    </Label.Triggers>
-                                </Label>
-                                <Label Grid.Column="3"
-                                       Text="{Binding RightText}"
-                                       FontSize="15"
-                                       TextColor="{StaticResource SecondaryTextColor}"
-                                       VerticalOptions="Center" />
+                                    </Button.Triggers>
+                                </Button>
                             </Grid>
-                        </Frame>
+                        </Border>
                     </DataTemplate>
                 </CollectionView.ItemTemplate>
             </CollectionView>
@@ -80,10 +135,9 @@
         <Grid x:Name="NavBusyOverlay"
               Grid.Row="0" Grid.RowSpan="2"
               IsVisible="False"
-              BackgroundColor="#99000000"
+              BackgroundColor="{AppThemeBinding Light={StaticResource BmbScrimLight}, Dark={StaticResource BmbScrim}}"
               ZIndex="20">
             <ActivityIndicator IsRunning="True"
-                               Color="{StaticResource PrimaryColor}"
                                WidthRequest="48" HeightRequest="48"
                                VerticalOptions="Center" HorizontalOptions="Center" />
         </Grid>

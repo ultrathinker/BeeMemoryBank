@@ -11,8 +11,8 @@ public class DekRotationModel(ApiClient api) : AdminPageModel(api)
     /// <summary>The commit of a rotation this node proposed and has not confirmed yet; the page asks for the master password to begin the re-encryption.</summary>
     public string? DekRotationCommitId { get; private set; }
 
-    /// <summary>True right after a rotation was accepted: every recovery key died with the old data key, and the page says to issue a new one.</summary>
-    public bool ShowRecoveryKeyReminder { get; private set; }
+    /// <summary>The bridge from an old master key (2.12): the old-format doors a rotation could not re-seal; null when the API did not answer.</summary>
+    public DekBridgeDto? Bridge { get; private set; }
 
     /// <summary>A rotation is under way (not idle, not finished, not failed): the page refreshes itself every few seconds.</summary>
     public bool Active => DekRotationProgress != null
@@ -23,11 +23,19 @@ public class DekRotationModel(ApiClient api) : AdminPageModel(api)
     public async Task OnGetAsync()
     {
         DekRotationCommitId = TempData.Peek("DekRotationCommitId") as string;
-        // Its own key: "RecoveryKeyReminder" is the sentence the layout shows after a sign-in with a recovery key, and this flag is not a sentence.
-        ShowRecoveryKeyReminder = TempData["DekRotationRecoveryKeyReminder"] as string == "true";
         await Task.WhenAll(
             Api.GetDekRotationProgressAsync().ContinueWith(t => DekRotationProgress = t.Result),
+            Api.GetDekBridgeAsync().ContinueWith(t => Bridge = t.Result),
             LoadPeerPendingRotationsAsync());
+    }
+
+    public async Task<IActionResult> OnPostRemoveDekBridgeAsync()
+    {
+        var (ok, removed, err) = await Api.RemoveDekBridgeAsync();
+        if (!ok) return Back(err: err ?? "The bridge could not be removed");
+        return Back(msg: removed == 0
+            ? "There was no bridge from an old master key on this node."
+            : $"The bridge was removed: {removed} old-format door(s) deleted. Those people set their passwords again.");
     }
 
     public async Task<IActionResult> OnPostProposeDekRotationAsync(string masterPassword)
@@ -47,7 +55,6 @@ public class DekRotationModel(ApiClient api) : AdminPageModel(api)
         if (ok)
         {
             TempData.Remove("DekRotationCommitId");
-            TempData["DekRotationRecoveryKeyReminder"] = "true";
             return Back(msg: "DEK rotation accepted. Re-encryption is in progress.");
         }
         TempData["DekRotationCommitId"] = commitEventId;

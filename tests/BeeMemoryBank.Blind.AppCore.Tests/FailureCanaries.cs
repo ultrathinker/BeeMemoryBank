@@ -7,7 +7,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// The adversarial exceptions of the failure-text rule (fix round 2): each carries a canary and the kind of text a real one carries - a file path, a key alias, a request address with a token, a
+/// The adversarial exceptions of the failure-text rule: each carries a canary and the kind of text a real one carries - a file path, a key alias, a request address with a token, a
 /// library's words. Whatever a head can show - every string of a view record, the log, a job's outcome, the state a run leaves on disk - must hold none of <see cref="Needles"/>.
 /// </summary>
 internal static class FailureCanaries

@@ -10,4 +10,18 @@ public interface IPeerStateResetter
 {
     /// <summary>The peer was revoked, replaced or moved: forget what was learned about it, and run a cycle soon.</summary>
     void PeerChanged(Guid nodeId);
+
+    /// <summary>The peer was revoked: forget all cached state, local channels, relay queues, and host tokens.</summary>
+    Task PeerRevokedAsync(Guid nodeId, CancellationToken ct = default)
+    {
+        PeerChanged(nodeId);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Host-level cleanup invoked when a peer is revoked (for example, dropping cached bearer tokens).</summary>
+public interface IPeerRevocationCleanup
+{
+    /// <summary>Removes any cached state held for the revoked <paramref name="nodeId"/>.</summary>
+    Task OnPeerRevokedAsync(Guid nodeId, CancellationToken ct = default);
 }

@@ -4,22 +4,26 @@
 @* AI / Chat - the model providers (each with its keys and models), the default models and their fallback chain, and the chat switch.
    Superadmin-only (the whole area is). Everything is read and saved by ai-providers.js through /api-proxy/chat/*. *@
 @section About {
-    <p>
-        The built-in AI chat and Dream talk to a model through a <strong>provider</strong>: OpenRouter, Z.ai, Anthropic, Google, OpenAI, DeepSeek, a server on your
-        own network such as Ollama, or any service that speaks the OpenAI chat format at an address you type in. Each provider has its own <strong>API keys</strong>
-        and its own <strong>models</strong>; pick the provider from the list or add a custom one.
-    </p>
-    <p class="admin-warning">
-        <strong>Everything the AI reads is sent to the provider of the model that answers.</strong> That includes the articles it is asked about. Nothing is sent to a
-        provider until a superadmin <strong>approves</strong> it, and the approval names the exact host; changing a provider's address withdraws it. Keys are encrypted at
-        rest and usable only while the vault is unlocked; after a key is saved only its first characters are ever shown.
-    </p>
-    <p>
-        With several keys, the one with the <em>lowest priority number</em> is used first, and a key the provider refuses is paused for a while (or switched off) while
-        the next one is tried. When every key of the default text model's provider fails, the <strong>fallback models</strong> are tried in order, possibly at other
-        providers; the chat shows which model and provider answered. A role left on &ldquo;Default&rdquo; uses the oldest model that has the capability.
-        <strong>Allow AI chat for users</strong> is a node-wide switch: when it is off, only superadmins can chat (see <a href="/Users">Users</a>).
-    </p>
+    <p>Choose which AI models the chat and Dream use.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            The built-in AI chat and Dream talk to a model through a <strong>provider</strong>: OpenRouter, Z.ai, Anthropic, Google, OpenAI, DeepSeek, a server on your
+            own network such as Ollama, or any service that speaks the OpenAI chat format at an address you type in. Each provider has its own <strong>API keys</strong>
+            and its own <strong>models</strong>; pick the provider from the list or add a custom one.
+        </p>
+        <p class="admin-warning">
+            <strong>Everything the AI reads is sent to the provider of the model that answers.</strong> That includes the articles it is asked about. Nothing is sent to a
+            provider until a superadmin <strong>approves</strong> it, and the approval names the exact host; changing a provider's address withdraws it. Keys are encrypted at
+            rest and usable only while the vault is unlocked; after a key is saved only its first characters are ever shown.
+        </p>
+        <p>
+            With several keys, the one with the <em>lowest priority number</em> is used first, and a key the provider refuses is paused for a while (or switched off) while
+            the next one is tried. When every key of the default text model's provider fails, the <strong>fallback models</strong> are tried in order, possibly at other
+            providers; the chat shows which model and provider answered. A role left on &ldquo;Default&rdquo; uses the oldest model that has the capability.
+            <strong>Allow AI chat for users</strong> is a node-wide switch: when it is off, only superadmins can chat (see <a href="/Users">Users</a>).
+        </p>
+    </details>
 }
 
 <div class="card" style="max-width:640px;margin-bottom:24px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px;" data-busy-scope>
@@ -48,10 +52,11 @@
 <!-- Default models: three pinned defaults, labelled "model - provider", and the ordered fallback chain of the text model. -->
 <div id="card-defaults" style="margin-bottom:8px;">
     <strong>Default models</strong>
-    <p class="text-muted text-sm" style="margin:4px 0 0 0;">
-        Pin a model for each role, or leave on "Default" to use the oldest model with that capability. The text model is the entry point for every
-        chat turn; Dream uses it too unless Dream has its own model. Image generation is offered by OpenRouter only in this version.
-    </p>
+    <p class="text-muted text-sm" style="margin:4px 0 0 0;">Choose a model for each job, or leave &ldquo;Default&rdquo;.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>Pin a model for each role, or leave on "Default" to use the oldest model with that capability. The text model is the entry point for every chat turn; Dream uses it too unless Dream has its own model. Image generation is offered by OpenRouter only in this version.</p>
+    </details>
 </div>
 <div class="card" style="padding:16px;margin-bottom:24px;" data-busy-scope>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;">
@@ -78,10 +83,11 @@
 
 <div id="card-fallbacks" class="card" style="padding:16px;margin-bottom:24px;" data-busy-scope>
     <strong>Fallback chain of the text model</strong>
-    <p class="text-muted text-sm" style="margin:4px 0 10px 0;">
-        Tried in this order when every key of the default text model's provider is exhausted or the provider fails (for a streamed answer only before its first
-        word). Dream's model falls back to the same list.
-    </p>
+    <p class="text-muted text-sm" style="margin:4px 0 10px 0;">If the main model does not answer, these models are tried in this order.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>Tried in this order when every key of the default text model's provider is exhausted or the provider fails (for a streamed answer only before its first word). Dream's model falls back to the same list.</p>
+    </details>
     <ol id="fallback-list" class="text-sm" style="margin:0 0 10px 0;padding-left:20px;"></ol>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         <sl-select id="fallback-add" size="small" placeholder="Add a fallback model…" style="min-width:260px;"></sl-select>

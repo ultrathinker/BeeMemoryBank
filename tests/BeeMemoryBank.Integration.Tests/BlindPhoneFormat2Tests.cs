@@ -363,7 +363,7 @@ public class BlindPhoneFormat2Tests : IAsyncLifetime
 
     /// <summary>
     /// After the activation a page of the events endpoint is filled with the rows the copy may have, and it is empty only when none is left
-    /// (track 1's review round, spec 5.7). A copy more than one page behind, with protocol-3 rows in front of the sealed ones, must still reach
+    /// (track 1, spec 5.7). A copy more than one page behind, with protocol-3 rows in front of the sealed ones, must still reach
     /// them: its cursor is the last row it was given, so a page that is cut first and filtered after would have it ask for the same empty page
     /// for ever. The copy stores none of the protocol-3 rows.
     /// </summary>
@@ -625,5 +625,65 @@ public class BlindPhoneFormat2Tests : IAsyncLifetime
         public void StopBackgroundWork() { }
         public void StopBackupService() { }
         public void RestartAfterWipe() { }
+    }
+
+    // ---- A copy paired before the hub re-keyed, and a package cached before it ---------------------------------
+
+    /// <summary>The PC gives itself a new identity key through the real service (every peer row shows the capability first).</summary>
+    private async Task<byte[]> RekeyThePcAsync()
+    {
+        using (var conn = _pc.Services.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            await conn.ExecuteAsync("UPDATE tbl_whitelist SET last_capabilities = @caps", new { caps = string.Join(",", MetadataCapabilities.Advertised) });
+        using var scope = _pc.Services.CreateScope();
+        var result = await scope.ServiceProvider.GetRequiredService<NodeIdentityRekeyService>().RekeyAsync("test", "test");
+        result.Done.Should().BeTrue(result.Refusal);
+        return (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!.Ed25519PublicKey;
+    }
+
+    [Fact]
+    public async Task A_copy_paired_before_the_hub_rekeyed_installs_its_first_format1_package_signed_by_the_new_key()
+    {
+        var phone = await CreatePhoneAsync(hubIsThePc: true);
+        var newKey = await RekeyThePcAsync();
+        phone.Target.PublicKey.Should().NotEqual(newKey, "the copy still pins the key of its pairing");
+        using var http = new HttpClient(_pc.Server.CreateHandler(), disposeHandler: false);
+
+        await phone.Replica.FetchAndInstallAsync(http, phone.Target, Path.Combine(phone.Dir, "replica"), progress: null, CancellationToken.None);
+
+        (await phone.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(phone.Target.NodeId))!.Ed25519PublicKey
+            .Should().Equal(newKey, "the hub's row in the installed copy carries its current key");
+        (await ScalarAsync<long>(phone, "SELECT COUNT(*) FROM tbl_node_key_history WHERE node_id = @id COLLATE NOCASE",
+            new { id = phone.Target.NodeId.ToString("D") })).Should().Be(1, "the copy holds the link, so its next round moves its pin");
+    }
+
+    [Fact]
+    public async Task A_package_cached_before_the_hub_rekeyed_is_not_served_after_it()
+    {
+        var phone = await CreatePhoneAsync(hubIsThePc: true);
+        var cached = await _pc.Services.GetRequiredService<BlindReplicaPackageCache>().GetAsync(producerIsSuperadmin: true, CancellationToken.None);
+        cached.Should().NotBeNull("a package signed by the old key is in the cache");
+        var newKey = await RekeyThePcAsync();
+        using var http = new HttpClient(_pc.Server.CreateHandler(), disposeHandler: false);
+
+        // A copy whose pin already moved (it applied the rotation) asks for a package: it must be signed by the new key.
+        await phone.Replica.FetchAndInstallAsync(http, phone.Target with { PublicKey = newKey }, Path.Combine(phone.Dir, "replica"),
+            progress: null, CancellationToken.None);
+
+        (await phone.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(phone.Target.NodeId))!.Ed25519PublicKey.Should().Equal(newKey);
+    }
+
+    [Fact]
+    public async Task A_copy_paired_before_the_hub_rekeyed_installs_its_first_format2_package_signed_by_the_new_key()
+    {
+        (await _pcClient.PostAsJsonAsync("/api/sync/activation", new { password = Password })).StatusCode.Should().Be(HttpStatusCode.OK);
+        await ProduceBaselineAsync();
+        var phone = await CreatePhoneAsync(hubIsThePc: true);
+        var newKey = await RekeyThePcAsync();
+        using var http = new HttpClient(_pc.Server.CreateHandler(), disposeHandler: false);
+
+        await phone.Replica.FetchAndInstallAsync(http, phone.Target, Path.Combine(phone.Dir, "replica"), progress: null, CancellationToken.None);
+
+        (await phone.Services.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(phone.Target.NodeId))!.Ed25519PublicKey
+            .Should().Equal(newKey, "the baseline signed by the retired key verifies through the package's key history; the serving signature by the new key");
     }
 }

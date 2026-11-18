@@ -37,7 +37,7 @@ public static class BlindConsoleEndpoints
             // Two different refusals, told apart by what the request carried — not by re-reading
 // HasPassword() after the attempt, which cannot distinguish them: a node WITH a password answers
 // "wrong password" for a missing current one too, and the CLI's "already set, keep it and move on"
-// branch then never fires (review release-a2 agy#1, sec#8). The code is the contract; the message
+// branch then never fires. The code is the contract; the message
 // is for the operator.
             if (auth.HasPassword() && string.IsNullOrEmpty(req.CurrentPassword))
                 return Results.BadRequest(new ErrorResponse(

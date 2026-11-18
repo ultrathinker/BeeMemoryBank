@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-merge round 3 #3: a connection opened in the window between the pre-swap pool clear and the
+/// A connection opened in the window between the pre-swap pool clear and the
 /// file swap — a request allowed through maintenance, a background reader — went back to the pool still
 /// open on the file just moved away. Reused after the swap it read the old database and failed its writes
 /// as read-only (SQLITE_READONLY_DBMOVED): the reseed that failed only under load. The racing open is put

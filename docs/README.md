@@ -17,7 +17,7 @@ This folder contains technical documentation for the BeeMemoryBank project.
 | [compaction.md](compaction.md) | Event log compaction and snapshot lifecycle |
 | [snapshot-restore.md](snapshot-restore.md) | Restoring a snapshot: this node only (it becomes a new node) versus the whole network; what each does to identity, trusted nodes and blind copies, and what to do afterwards |
 | [long-operations.md](long-operations.md) | A button that starts a long operation: the one busy helper per UI technology (web, desktop, Android, iPhone, blind console), the "please wait" pop-up, the 409 "already running" a second identical request gets, and the tests that fail when a new button bypasses the helper |
-| [deployment.md](deployment.md) | Deployment guide: environment variables, systemd, Docker (the ready-made images on ghcr.io and building from source), reverse proxy, maintenance page, new node setup, audit log retention |
+| [deployment.md](deployment.md) | Deployment guide: environment variables, upgrading a network to 2.12.0, systemd, Docker (the ready-made images on ghcr.io and building from source), reverse proxy, maintenance page, new node setup, audit log retention |
 | [internet-access.md](internet-access.md) | Opening your node to the internet yourself: ports, router forwarding, Caddy / nginx with automatic certificates, tunnels and VPNs, security warnings |
 
 ## Other Project Files
@@ -54,6 +54,7 @@ For someone new to the project:
 - "Decide what Dream may do" → [dream.md](dream.md)
 - "Connect the AI chat to a provider (Z.ai, Anthropic, Google, Ollama ...)" → [ai-providers.md](ai-providers.md)
 - "Deploy to a new server" → [deployment.md](deployment.md)
+- "Upgrade a network to 2.12.0" → [deployment.md](deployment.md#upgrading-to-2120)
 - "Reach my node from outside my network" → [internet-access.md](internet-access.md)
 - "Restore a snapshot" → [snapshot-restore.md](snapshot-restore.md)
 - "Set up Docker" → [../README.md](../README.md) ("Docker: ready-made image"), then [deployment.md](deployment.md) ("The ready-made image", "Example Node Setup (Docker)")

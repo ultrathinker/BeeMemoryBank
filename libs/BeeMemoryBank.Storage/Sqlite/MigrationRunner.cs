@@ -38,9 +38,15 @@ public class MigrationRunner
     /// 41 is <c>041_blind_invite.sql</c>; 42 is <c>042_blind_invite_server.sql</c> (two columns of that table, and its trigger made again);
     /// 43 is <c>043_password_hint.sql</c> (a nullable column of tbl_user and three node-level columns with defaults, nothing redefined);
     /// 44 is <c>044_peer_channels.sql</c> (two new tables of the LAN sync, tbl_peer_endpoint and tbl_peer_channel, and an index);
-    /// 45 is <c>045_whitelist_concern_versions.sql</c> (eleven columns with defaults on tbl_whitelist, filled from its version, nothing redefined).
+    /// 45 is <c>045_whitelist_concern_versions.sql</c> (eleven columns with defaults on tbl_whitelist, filled from its version, nothing redefined);
+    /// 46 is <c>046_sealed_doors.sql</c> (six columns of tbl_key_slot and three of tbl_agent, with defaults or NULL, two triggers on tbl_user that
+    /// keep the owner of a user door, nothing redefined);
+    /// 47 is <c>047_ownership_and_node_state.sql</c> (person_id on tbl_user, ownership concern on tbl_whitelist, initial ownership on tbl_blind_invite, tbl_node_state);
+    /// 49 is <c>049_node_key_history.sql</c> (two new tables of the node identity re-key, tbl_node_key_history and tbl_node_key_conflict, and an index).
+    /// 50 is <c>050_shared_doors.sql</c> (tbl_user.replicated, tbl_accounts_home, tbl_shared_doors_state).
+    /// 51 is <c>051_offboarding.sql</c> (account_state on tbl_user with a default, three new tables of the removal process and its tombstones).
     /// </summary>
-    internal static readonly int[] AdditiveMigrations = [41, 42, 43, 44, 45];
+    internal static readonly int[] AdditiveMigrations = [41, 42, 43, 44, 45, 46, 47, 49, 50, 51];
 
     /// <summary>The resource name of the baseline, which is also its ledger row's file name.</summary>
     public const string BaselineResourceName = LegacyMigrationChain.ResourcePrefix + "040_baseline.sql";

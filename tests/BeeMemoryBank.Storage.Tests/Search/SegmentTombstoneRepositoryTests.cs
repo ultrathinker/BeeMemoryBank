@@ -4,7 +4,7 @@ using BeeMemoryBank.Storage.Sqlite;
 namespace BeeMemoryBank.Storage.Tests.Search;
 
 /// <summary>
-/// WP-11 Gap 2 coverage: tbl_search_segment_tombstone's repository. Local-only cache metadata,
+/// Gap 2 coverage: tbl_search_segment_tombstone's repository. Local-only cache metadata,
 /// same lifecycle expectations as <see cref="SegmentManifestRepository"/>'s own tests.
 /// </summary>
 public class SegmentTombstoneRepositoryTests : IAsyncLifetime

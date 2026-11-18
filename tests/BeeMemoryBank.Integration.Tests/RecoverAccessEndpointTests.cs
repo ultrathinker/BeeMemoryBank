@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Hosting.AspNetCore;
 using Dapper;
@@ -27,12 +28,15 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
     private readonly BmbWebApplicationFactory _api = new();
     private HttpClient _client = null!;
     private string _recoveryKey = null!;
+    private int _adminId;
 
     public async Task InitializeAsync()
     {
         _client = _api.CreateClient();
         await _api.InitializeNodeAsync(password: AdminPassword);
         (await _client.PostAsJsonAsync("/api/session/unlock", new { password = AdminPassword })).EnsureSuccessStatusCode();
+        using (var scope = _api.Services.CreateScope())
+            _adminId = (await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetByUsernameAsync("admin"))!.Id;
         _recoveryKey = await IssueRecoveryKeyAsync(_client);
     }
 
@@ -50,6 +54,14 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
         var resp = await client.PostAsync("/api/keys/add-recovery", null);
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("recoveryKey").GetString()!;
+    }
+
+    /// <summary>Issues a key as the named person (a recovery key belongs to the superadmin who issues it, 2.12).</summary>
+    private async Task<string> IssueRecoveryKeyAsAsync(int userId)
+    {
+        using var named = _api.CreateClient();
+        named.DefaultRequestHeaders.Add("X-User-Id", userId.ToString());
+        return await IssueRecoveryKeyAsync(named);
     }
 
     private Task<HttpResponseMessage> RecoverAsync(string username, string key, string newPassword = NewPassword, string ip = ClientIp) =>
@@ -155,7 +167,7 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
     public async Task OtherSuperadmins_AndOtherRecoveryKeys_AreUnchanged()
     {
         await CreateUserAsync("carol", "CarolPass123", "superadmin");
-        var secondKey = await IssueRecoveryKeyAsync(_client);
+        var secondKey = await IssueRecoveryKeyAsAsync(_adminId);   // another key OF ADMIN's, not carol's
         var carolStamp = await StampAsync("carol");
 
         (await RecoverAsync("admin", _recoveryKey)).EnsureSuccessStatusCode();
@@ -167,6 +179,65 @@ public sealed class RecoverAccessEndpointTests : IAsyncLifetime
             "the other recovery key still works");
         (await RecoverAsync("admin", _recoveryKey, "FourthAdminPass789")).StatusCode.Should().Be(HttpStatusCode.OK,
             "so does the one that was just used");
+    }
+
+    // ── a recovery key is personal (2.12): it resets only its owner ───────────────────────────
+
+    [Fact]
+    public async Task AKeyOwnedByCarol_ResetsCarol_ButNotAdmin_AndTheRefusalIsTheSameAnswer()
+    {
+        await CreateUserAsync("carol", "CarolPass123", "superadmin");
+        int carolId;
+        using (var scope = _api.Services.CreateScope())
+            carolId = (await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetByUsernameAsync("carol"))!.Id;
+        var carolKey = await IssueRecoveryKeyAsAsync(carolId);
+        await LockAsync();
+
+        // carol's key naming admin: refused with exactly the words a wrong key gets.
+        var refused = await RecoverAsync("admin", carolKey);
+        refused.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await refused.Content.ReadAsStringAsync()).Should().Be(
+            await (await RecoverAsync("admin", "not-the-key")).Content.ReadAsStringAsync());
+        (await LoginAsync("admin", AdminPassword)).StatusCode.Should().Be(HttpStatusCode.OK, "admin's password is untouched");
+
+        // carol's key naming carol: works.
+        (await RecoverAsync("carol", carolKey, "CarolNewPass456")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await LoginAsync("carol", "CarolNewPass456")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task OnASealedClosedNode_AnOwnerBoundKey_ResetsOnlyItsOwner()
+    {
+        using var sealedNode = new BmbWebApplicationFactory();
+        using var sealedClient = sealedNode.CreateClient();
+        await sealedNode.InitializeEncryptedNodeAsync(password: AdminPassword);
+        int carolId;
+        using (var scope = sealedNode.Services.CreateScope())
+        {
+            var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+            await scope.ServiceProvider.GetRequiredService<UserService>().CreateUserAsync("carol", "Carol", "CarolPass123", "superadmin", passwordHint: "A test hint");
+            carolId = (await users.GetByUsernameAsync("carol"))!.Id;
+        }
+        // Issue carol's key while the node is open, then lock it (the database closes).
+        using (var issuer = sealedNode.CreateClient())
+        {
+            issuer.DefaultRequestHeaders.Add("X-User-Id", carolId.ToString());
+            (await issuer.PostAsJsonAsync("/api/session/unlock", new { password = AdminPassword })).EnsureSuccessStatusCode();
+            var resp = await issuer.PostAsync("/api/keys/add-recovery", null);
+            resp.EnsureSuccessStatusCode();
+            var carolKey = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("recoveryKey").GetString()!;
+            (await sealedClient.PostAsync("/api/session/lock", null)).EnsureSuccessStatusCode();
+
+            // The closed node opens only for the reset: carol's key naming admin is refused, naming carol works.
+            var refused = await sealedClient.PostAsJsonAsync("/api/session/recover-access",
+                new { username = "admin", recoveryKey = carolKey, newPassword = NewPassword, clientIp = ClientIp, passwordHint = "A test hint" });
+            refused.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+            var ok = await sealedClient.PostAsJsonAsync("/api/session/recover-access",
+                new { username = "carol", recoveryKey = carolKey, newPassword = "CarolNewPass456", clientIp = ClientIp, passwordHint = "A test hint" });
+            ok.StatusCode.Should().Be(HttpStatusCode.OK, await ok.Content.ReadAsStringAsync());
+        }
+        (await sealedClient.PostAsJsonAsync("/api/session/login", new { username = "carol", password = "CarolNewPass456" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     // ── it says no, in one voice ──────────────────────────────────────────────────────────────

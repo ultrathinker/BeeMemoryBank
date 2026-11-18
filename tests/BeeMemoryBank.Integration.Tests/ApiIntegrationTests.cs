@@ -286,7 +286,7 @@ public class ApiIntegrationTests : IAsyncLifetime
         return list.EnumerateArray().Select(m => m.GetProperty("fileName").GetString()).ToList();
     }
 
-    // Codex review: attachmentIds used to link ANY unlinked row by id, so an id learned from
+    // A review found: attachmentIds used to link ANY unlinked row by id, so an id learned from
     // someone else would pull their file into an article the caller can read.
     [Fact]
     public async Task CreateArticle_CannotLinkAnotherUsersUnlinkedUpload()
@@ -316,7 +316,7 @@ public class ApiIntegrationTests : IAsyncLifetime
     }
 
     // Same takeover through the other door: a Markdown reference in the body links unlinked media
-    // too (Codex review, round 3).
+    // too.
     [Fact]
     public async Task ArticleBody_CannotLinkAnotherUsersUnlinkedImage()
     {

@@ -30,6 +30,10 @@ public sealed class SealPreflightApiTests(ActivatedPlainTemplate template) : ICl
         var dir = Path.Combine(Path.GetTempPath(), "bmb_seal_pre_" + Guid.NewGuid().ToString("N"));
         SealedNode.CopyTree(template.PlainDir, dir, skipDatabases: false);
         var node = SealedApiNode.PlainOver(dir, configure);
+        // Every test here drives the explicit seal API itself (preflight, erase, the warnings, the run through the routes the page used):
+        // the auto-seal an unlock starts in a product would race it. Turn it off on this test node only, the in-process way the kill-point
+        // tests set StepHook; the product's gate is the Testing-only BMB_AUTO_SEAL_TEST_OFF, never configurable in a product.
+        node.Services.GetRequiredService<BeeMemoryBank.Api.Services.AutoSealService>().Enabled = false;
         (await node.Session.UnlockAsync(Password)).Should().BeTrue();
         return node;
     }

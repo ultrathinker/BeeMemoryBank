@@ -190,7 +190,7 @@ public class MetadataActivationTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Stragglers on serve must not stall a pull (review finding): a page is filled with rows the requester may have, so a
+    /// Stragglers on serve must not stall a pull: a page is filled with rows the requester may have, so a
     /// client that follows its cursor row by row (<c>limit</c> 1, 2, 3) reaches every sealed row behind the pre-activation
     /// clear ones and ends with exactly what one big pull gives. Before the fix the page was cut first and filtered after,
     /// so a page that held only a clear row came back empty and the cursor never moved.

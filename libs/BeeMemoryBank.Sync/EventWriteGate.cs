@@ -2,7 +2,7 @@ namespace BeeMemoryBank.Sync;
 
 /// <summary>
 /// Lets one operation replace the database file under this process with no event write in flight
-/// (a blind node's reseed cutover, review L-stage1 #4). Every event write — <see cref="EventApplier.ApplyAsync"/>
+/// (a blind node's reseed cutover). Every event write — <see cref="EventApplier.ApplyAsync"/>
 /// and a blind node's log trim — and every local authoring operation (EventLogger.BeginAuthoringAsync,
 /// for the whole of its scope) runs inside the gate; <see cref="QuiesceAsync"/>
 /// holds new writes off and waits for the ones already running, so nothing lands in the file being

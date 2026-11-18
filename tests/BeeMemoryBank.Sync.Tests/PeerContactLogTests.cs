@@ -103,7 +103,7 @@ public class PeerContactLogTests
     }
 
     /// <summary>
-    /// BMB-313 fix round, F1: what a person sees as the reason is a CLOSED set. The text of an exception - an address with a user name in it, a token in a
+    /// BMB-313: what a person sees as the reason is a CLOSED set. The text of an exception - an address with a user name in it, a token in a
     /// header, a path of this computer, a parser's message - never crosses to the status page, whatever kind of exception it is.
     /// </summary>
     [Fact]
@@ -129,7 +129,7 @@ public class PeerContactLogTests
         PeerContactLog.Describe(new InvalidOperationException(new string('x', 400))).Should().Be("the call failed (the details are in this node's log)");
     }
 
-    // ---- BMB-313 fix round, F4: the lifecycle of what is remembered ----
+    // ---- BMB-313: the lifecycle of what is remembered ----
 
     [Fact]
     public void What_was_learned_at_another_address_is_not_shown_for_the_new_one_and_the_peers_own_calls_stay()

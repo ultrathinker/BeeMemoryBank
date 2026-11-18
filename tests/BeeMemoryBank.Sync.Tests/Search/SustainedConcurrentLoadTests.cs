@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace BeeMemoryBank.Sync.Tests.Search;
 
 /// <summary>
-/// WP-13 Task 4: mirrors this project's target load directly -- 20 concurrent simulated callers
+/// Mirrors this project's target load directly -- 20 concurrent simulated callers
 /// continuously issuing <see cref="SearchService.SearchIndexedContentAsync"/> calls while a
 /// background writer continuously creates/updates/deletes articles through
 /// <see cref="PendingIndexProcessor"/>'s real ingestion path (via <see cref="ArticleService"/>, the
@@ -22,10 +22,10 @@ namespace BeeMemoryBank.Sync.Tests.Search;
 ///
 /// <para>
 /// <b>Checked before writing this</b> to confirm this is new coverage: IndexBuilderConcurrencyTests.cs
-/// (WP-10) stresses <see cref="IndexBuilder"/> directly with a synthetic writer thread calling
+/// stresses <see cref="IndexBuilder"/> directly with a synthetic writer thread calling
 /// <c>AddOrUpdateDocument</c>/<c>RemoveDocument</c> in a tight loop -- no <see cref="ArticleService"/>,
 /// no encryption, no DB, no <see cref="PendingIndexProcessor"/>, no <see cref="SearchService"/>.
-/// SearchIndexLifecycleIntegrationTests.cs (WP-11) never runs concurrent load at all -- every test
+/// SearchIndexLifecycleIntegrationTests.cs never runs concurrent load at all -- every test
 /// there is sequential. This test is the first to combine the real end-to-end write path (article
 /// create/update/delete -> index_pending -> PendingIndexProcessor -> IndexBuilder -> persisted
 /// segment) with sustained concurrent read load through the real public search entry point, sized
@@ -34,7 +34,7 @@ namespace BeeMemoryBank.Sync.Tests.Search;
 ///
 /// <para>
 /// <b>Finding:</b> no new gap found. Across repeated runs (this test was run several times
-/// back-to-back per the WP-13 brief's flakiness check -- see wp-13-report.md), no exception ever
+/// back-to-back per the flakiness check), no exception ever
 /// escaped either the writer or any of the 20 reader loops, the run never hung, and every article
 /// the writer confirmed as fully processed (index_pending cleared) before the stress window ended
 /// remained findable by <see cref="SearchService.SearchIndexedContentAsync"/> once the window
@@ -166,9 +166,9 @@ public class SustainedConcurrentLoadTests : IAsyncLifetime
                     else if (roll < 0.85)
                     {
                         // Update an existing CHURN article's content through the real write path --
-                        // pure stress on the ingestion pipeline; this WP does not track/assert the
+                        // pure stress on the ingestion pipeline; this test does not track/assert the
                         // post-update term's findability (article soft-delete/update-driven
-                        // tombstoning of the search index is WP-11's documented, separately-scoped
+                        // tombstoning of the search index is a documented, separately-scoped
                         // concern -- see SearchIndexLifecycleIntegrationTests.cs's own remarks).
                         Guid id = churnPool[random.Next(churnPool.Count)];
                         await node.ArticleService.UpdateAsync(id, plaintext: $"updated content {Guid.NewGuid():N}");

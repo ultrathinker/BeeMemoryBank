@@ -1,7 +1,7 @@
 namespace BeeMemoryBank.Sync;
 
 /// <summary>
-/// The peer answered, and its software is too old for this node to sync with (BMB-307 fix round: it used to end the session as "nothing to do", and every screen
+/// The peer answered, and its software is too old for this node to sync with (BMB-307: it used to end the session as "nothing to do", and every screen
 /// - the phone's heartbeat, "Sync now", the status page - said the sync had gone well). It is a failure of the session like any other: it reaches
 /// <see cref="SyncCycleResult.PeerFailures"/>, the contact log and the phone's status, with a sentence a person can act on. No address, key or token in it.
 /// </summary>

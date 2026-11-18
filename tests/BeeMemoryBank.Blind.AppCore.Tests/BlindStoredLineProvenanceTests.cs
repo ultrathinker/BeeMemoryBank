@@ -6,7 +6,7 @@ using BeeMemoryBank.Sync.Blind;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Fix round 3, the stored text is not a closed set (review MAJOR-2): what a stored line may say is decided by WHERE IT CAME FROM, never by what it looks like. A line of the phone's log written by
+/// The stored text is not a closed set: what a stored line may say is decided by WHERE IT CAME FROM, never by what it looks like. A line of the phone's log written by
 /// this version carries the stamp <c>v</c> (<see cref="BlindFailureText.StoredVersion"/>); a line without it (everything 2.6.4 wrote) shows only its time, its kind and the fixed sentence; the
 /// <c>pairing</c> kind is no exception unless the line is stamped and has the exact shape this code writes. The hostile lines are the ones of the review: they carry no path marker, so the cheap
 /// filter alone lets them through.

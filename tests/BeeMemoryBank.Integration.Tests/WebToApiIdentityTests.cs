@@ -242,6 +242,7 @@ public class WebToApiIdentityTests
         public Task UpdateLastLoginAsync(int id) => inner.UpdateLastLoginAsync(id);
         public Task RepointKeySlotAsync(int oldSlotId, int newSlotId) => inner.RepointKeySlotAsync(oldSlotId, newSlotId);
         public Task<bool> TryAssignKeySlotAsync(int userId, int slotId) => inner.TryAssignKeySlotAsync(userId, slotId);
+        public Task<bool> TryReplacePasswordAsync(int userId, string expectedRole, int? expectedKeySlotId, int? newKeySlotId, string passwordHash, bool setHint, string? passwordHint) => inner.TryReplacePasswordAsync(userId, expectedRole, expectedKeySlotId, newKeySlotId, passwordHash, setHint, passwordHint);
         public Task ClearKeySlotAsync(int slotId) => inner.ClearKeySlotAsync(slotId);
         public Task<List<int>> GetUserIdsByRoleAsync(string role) => inner.GetUserIdsByRoleAsync(role);
         public Task<Dictionary<string, int>> CountActiveUsersPerRoleAsync() => inner.CountActiveUsersPerRoleAsync();

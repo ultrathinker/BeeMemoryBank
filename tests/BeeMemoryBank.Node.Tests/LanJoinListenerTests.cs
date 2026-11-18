@@ -149,6 +149,44 @@ public class LanJoinListenerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TheFinishedCallback_FiresOnlyAfterACompletedJoin_NotAfterARefusedOne()
+    {
+        // the node turns "Show this node to devices in my network" on when a join really completed
+        // (the device has its snapshot), never on a refused join and never mid-download.
+        var finished = 0;
+        var doorPort = 0;
+        LanJoinListener door;
+        LanJoinSession session;
+        for (var attempt = 1; ; attempt++)
+        {
+            doorPort = PortBinding.PickFreePort();
+            door = new LanJoinListener(_api.Urls.First(), () => _cert,
+                new IPEndPoint(IPAddress.Loopback, doorPort), _time, finished: () => Interlocked.Increment(ref finished));
+            try { session = await door.EnableAsync(); break; }
+            catch (Exception ex) when (attempt < 5 && PortBinding.IsAddressInUse(ex)) { await door.DisposeAsync(); }
+        }
+        await using var held = door;
+        // A client of this door alone (the class's _port belongs to the other tests' listener).
+        using var client = new HttpClient(new FollowPort(SpkiPin.CreatePinnedHandler(session.SpkiPin), () => doorPort))
+        { BaseAddress = new Uri($"https://127.0.0.1:{doorPort}") };
+
+        (await JoinAsync(client, session.Token, "wrong-password")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        finished.Should().Be(0, "a refused join changes nothing");
+
+        (await JoinAsync(client, session.Token, RightPassword)).EnsureSuccessStatusCode();
+        finished.Should().Be(0, "the join is not complete until the device has its snapshot");
+        door.JoinUnderway.Should().BeTrue("between the join and its snapshot the setting's auto-on waits for the finish");
+
+        (await client.PostAsync("/api/sync/challenge", null)).EnsureSuccessStatusCode();
+        var token = (await (await client.PostAsync("/api/sync/authenticate", null)).Content
+            .ReadFromJsonAsync<JsonElement>()).GetProperty("token").GetString();
+        (await SnapshotAsync(client, token)).EnsureSuccessStatusCode();
+
+        (await EventuallyAsync(() => Volatile.Read(ref finished) == 1)).Should().BeTrue("the completed join tells the node once");
+        door.JoinUnderway.Should().BeFalse("the finish callback ran; the door is in its abort grace");
+    }
+
+    [Fact]
     public async Task Abort_WithoutOrWithAWrongToken_IsRefused_AndNeverReachesTheApi()
     {
         await EnableAsync();

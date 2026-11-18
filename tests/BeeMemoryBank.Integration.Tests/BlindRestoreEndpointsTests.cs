@@ -127,7 +127,7 @@ public class BlindRestoreEndpointsTests : IAsyncLifetime
         (await PackageAsync(code)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
-    // ── RV7-01: wrong codes are counted against the ADDRESS that sent them, never against the codes ──
+    // ── Wrong codes are counted against the ADDRESS that sent them, never against the codes ──
 
     private Task<HttpResponseMessage> FromAsync(string address, HttpRequestMessage request)
     {
@@ -233,7 +233,7 @@ public class BlindRestoreEndpointsTests : IAsyncLifetime
         (await PackageAsync(code)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
-    /// <summary>BMB-306/307 fix round 2 (T1): the address a claiming device states about itself goes through the one policy for a peer's address.</summary>
+    /// <summary>BMB-306/307: the address a claiming device states about itself goes through the one policy for a peer's address.</summary>
     [Theory]
     [InlineData("HTTPS://New-Pc.LOCAL:443/", "https://new-pc.local")]
     [InlineData("https://user:pw@new-pc.local", null)]
@@ -254,7 +254,7 @@ public class BlindRestoreEndpointsTests : IAsyncLifetime
         (await scope.ServiceProvider.GetRequiredService<IWhitelistRepository>().GetByNodeIdAsync(device))!.ApiAddress.Should().Be(stored);
     }
 
-    // ─── Review release-a #9: the claim is idempotent for the device that spent the code ───
+    // ─── the claim is idempotent for the device that spent the code ───
 
     [Fact]
     public async Task Claim_WhoseTrustWriteFailed_IsRepeatedByTheSameDevice_AndCreatesOneRow()

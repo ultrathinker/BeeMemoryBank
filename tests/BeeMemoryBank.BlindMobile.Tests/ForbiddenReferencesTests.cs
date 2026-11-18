@@ -421,7 +421,7 @@ public class ForbiddenReferencesTests
                 "IBlindAppController" or "BlindAppStatus" or "BlindAppBackup" or "BlindAppOptions" or "BlindHomeView" or "BlindPaths" or
                 // the store line of the screen (docs/design/step-a-spec.md 10.2): what the copy holds, in the host-facing shape
                 "BlindStoreStats" or "BlindStoreInfo" or
-                // how the screen knows that the job it started has ended, from the state and not from a clock (BMB-311 fix round)
+                // how the screen knows that the job it started has ended, from the state and not from a clock (BMB-311)
                 "BlindJobWait" or "BlindJobAsk" or "BlindJobOutcome" or "BlindJobPhase" or
                 // the closed formatter of a failure (MauiProgram gives it to the generic BusyAction as its Describer); it holds text only and reads no exception's message
                 "BlindFailureText" or

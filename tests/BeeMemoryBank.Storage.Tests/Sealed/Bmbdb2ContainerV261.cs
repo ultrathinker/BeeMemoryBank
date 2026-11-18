@@ -1,6 +1,6 @@
 // FROZEN COPY of libs/BeeMemoryBank.Storage/Sealed/Bmbdb2Container.cs as it is in the tag v2.6.1 (git show v2.6.1:libs/BeeMemoryBank.Storage/Sealed/Bmbdb2Container.cs),
 // only the namespace and the class name changed. It is the reader and writer every 2.6.1 node has: Bmbdb2ContainerCompatibilityTests proves that a container the
-// CURRENT code writes opens with it, and that one it wrote opens with the current code (BMB-304 fix2, c). Do not "update" this file: it is the old release.
+// CURRENT code writes opens with it, and that one it wrote opens with the current code (BMB-304). Do not "update" this file: it is the old release.
 using System.Security.Cryptography;
 using System.Text;
 

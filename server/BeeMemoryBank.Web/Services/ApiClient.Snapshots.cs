@@ -234,6 +234,92 @@ public partial class ApiClient
         return (false, error);
     }
 
+    public async Task<NodeIdentityKeyDto?> GetNodeIdentityKeyAsync()
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<NodeIdentityKeyDto>("/api/node/identity", JsonOpts);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The re-key (release 2.12, plan WS-D): the new fingerprint, or the API's refusal sentence.</summary>
+    public async Task<(bool Ok, string? Fingerprint, string? Error)> RekeyNodeAsync(string? reason)
+    {
+        var resp = await http.PostAsJsonAsync("/api/node/identity/rekey", new { reason });
+        var body = await resp.Content.ReadAsStringAsync();
+        try
+        {
+            var doc = JsonDocument.Parse(body);
+            if (resp.IsSuccessStatusCode)
+                return (true, doc.RootElement.TryGetProperty("fingerprint", out var f) ? f.GetString() : null, null);
+            return (false, null, doc.RootElement.GetProperty("error").GetString() ?? "The node could not get a new identity key");
+        }
+        catch { return (false, null, "The node could not get a new identity key"); }
+    }
+
+    /// <summary>Acknowledges the retired-key attention mark of a node.</summary>
+    public async Task<(bool Ok, string? Error)> AcknowledgeRetiredKeyAttentionAsync(Guid nodeId)
+    {
+        var resp = await http.PostAsync($"/api/node/identity/attention/{nodeId:D}/acknowledge", null);
+        if (resp.IsSuccessStatusCode) return (true, null);
+        try
+        {
+            var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return (false, doc.RootElement.GetProperty("error").GetString() ?? "It could not be acknowledged");
+        }
+        catch { return (false, "It could not be acknowledged"); }
+    }
+
+    /// <summary>Acknowledges the "somebody signs as this node" mark.</summary>
+    public async Task<(bool Ok, string? Error)> AcknowledgeSignedAsThisNodeAsync()
+    {
+        var resp = await http.PostAsync("/api/node/identity/signed-as-this-node/acknowledge", null);
+        if (resp.IsSuccessStatusCode) return (true, null);
+        try
+        {
+            var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return (false, doc.RootElement.GetProperty("error").GetString() ?? "It could not be acknowledged");
+        }
+        catch { return (false, "It could not be acknowledged"); }
+    }
+
+    /// <summary>Settles another node's identity conflict: <paramref name="rotationEventId"/> names the rotation whose key is the right one.</summary>
+    public async Task<(bool Ok, string? Error)> ConfirmNodeKeyAsync(Guid nodeId, Guid rotationEventId)
+    {
+        var resp = await http.PostAsJsonAsync($"/api/node/identity/conflicts/{nodeId:D}/confirm", new { rotationEventId });
+        if (resp.IsSuccessStatusCode) return (true, null);
+        try
+        {
+            var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return (false, doc.RootElement.GetProperty("error").GetString() ?? "The conflict could not be settled");
+        }
+        catch { return (false, "The conflict could not be settled"); }
+    }
+
+    public async Task<DekBridgeDto?> GetDekBridgeAsync()
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<DekBridgeDto>("/api/dek-rotation/bridge", JsonOpts);
+        }
+        catch { return null; }
+    }
+
+    public async Task<(bool Ok, int DoorsRemoved, string? Error)> RemoveDekBridgeAsync()
+    {
+        var resp = await http.PostAsync("/api/dek-rotation/bridge/remove", null);
+        var body = await resp.Content.ReadAsStringAsync();
+        try
+        {
+            var doc = JsonDocument.Parse(body);
+            if (resp.IsSuccessStatusCode)
+                return (true, doc.RootElement.TryGetProperty("doorsRemoved", out var n) ? n.GetInt32() : 0, null);
+            return (false, 0, doc.RootElement.GetProperty("error").GetString() ?? "The bridge could not be removed");
+        }
+        catch { return (false, 0, "The bridge could not be removed"); }
+    }
+
     public async Task<(bool Ok, string? Error)> CancelDekRotationAsync(string eventId)
     {
         var resp = await http.PostAsync($"/api/dek-rotation/cancel/{Uri.EscapeDataString(eventId)}", null);

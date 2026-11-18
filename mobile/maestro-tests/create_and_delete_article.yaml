@@ -2,20 +2,18 @@ appId: com.beememorybank.mobile
 ---
 - runFlow: _go_home.yaml
 - evalScript: ${output.title = 'a' + Date.now()}
-- tapOn:
-    text: "Open navigation drawer"
 - extendedWaitUntil:
     visible:
       text: "Tree"
     timeout: 3000
 - tapOn:
-    text: "Tree"
+    point: "12%,95%"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/TreeList"
     timeout: 10000
 - tapOn:
-    text: "NewArticleButton"
+    text: "New article"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/TitleEntry"
@@ -51,7 +49,7 @@ appId: com.beememorybank.mobile
 # Confirm delete in confirmation dialog
 - extendedWaitUntil:
     visible:
-      text: "Delete this article?"
+      text: "Delete article?"
     timeout: 5000
 - tapOn:
     text: "Delete"

@@ -157,7 +157,7 @@ public class BlindNodeCompositionTests
     [InlineData("BeeMemoryBank.Storage.Sqlite.FavoriteRepository", "no favourites")]
     [InlineData("BeeMemoryBank.Storage.Sqlite.ArticleVersionRepository", "no article versions to show")]
     [InlineData("BeeMemoryBank.Embeddings.PendingEmbeddingProcessor", "no model, so nothing to embed")]
-    // The master-DEK and full-node machinery of the shared sync code, named exactly (Codex review B): not curated by feel.
+    // The master-DEK and full-node machinery of the shared sync code, named exactly: not curated by feel.
     [InlineData("BeeMemoryBank.Sync.DekRotation.PeerDekRotationApplier", "a peer re-wraps retained master DEKs; the blind node has BlindDekRotationApplier")]
     [InlineData("BeeMemoryBank.Sync.DekRotation.DekRewrapper", "re-wrapping a master DEK")]
     [InlineData("BeeMemoryBank.Sync.DekRotation.DekRotationMaterial", "handling the rotation material of a master DEK")]

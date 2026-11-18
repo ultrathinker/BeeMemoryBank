@@ -84,6 +84,69 @@ public class LanControlNetworkTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Joined_WhenOff_TurnsTheSettingOn_ThroughTheSameSwitchThePageUses()
+    {
+        // a successful join shows this node on the network by itself.
+        await using var node = await StartAsync();
+        (await node.GetStatusAsync()).Setting.Should().Be("off");
+
+        var resp = await node.PostAsync("/node/lan/joined", null);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var status = (await resp.Content.ReadFromJsonAsync<LanControl.LanStatus>(Json))!;
+        status.Setting.Should().Be("on");
+        status.Mode.Should().Be("permanent");
+        node.Listener.WebOn.Should().BeTrue();
+        new NodeNetworkSettingsStore(_dir).Load().DevicesOnMyNetwork.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Joined_WhenAlreadyOn_LeavesItOn()
+    {
+        await using var node = await StartAsync();
+        await node.PostAsync("/node/lan/network", new { enabled = true });
+
+        var resp = await node.PostAsync("/node/lan/joined", null);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await resp.Content.ReadFromJsonAsync<LanControl.LanStatus>(Json))!.Setting.Should().Be("on");
+        node.Listener.WebOn.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Joined_UnderTheEnvironmentOverride_IsLeftAlone()
+    {
+        await using var node = await StartAsync(new NetworkExposure(true, NetworkExposureSource.Environment), permanentByEnvironment: true);
+
+        var resp = await node.PostAsync("/node/lan/joined", null);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await resp.Content.ReadFromJsonAsync<LanControl.LanStatus>(Json))!.Setting.Should().Be("environment");
+        new NodeNetworkSettingsStore(_dir).Load().DevicesOnMyNetwork.Should().BeFalse("BMB_HTTPS_ENABLED decides; the join writes nothing");
+    }
+
+    [Fact]
+    public async Task DoorClosing_AfterTheJoinNotice_LeavesTheSettingOn()
+    {
+        await using var node = await StartAsync();
+        await node.PostAsync("/node/lan/joined", null);
+
+        // The on-demand door closing (its Stop button, or the switch's own close) never touches the setting.
+        await node.PostAsync("/node/lan/disable", null);
+
+        var status = await node.GetStatusAsync();
+        status.Setting.Should().Be("on");
+        node.Listener.WebOn.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Joined_RequiresTheInternalKey()
+    {
+        await using var node = await StartAsync();
+
+        var resp = await node.Client.PostAsync("/node/lan/joined", null);
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        new NodeNetworkSettingsStore(_dir).Load().DevicesOnMyNetwork.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Network_RequiresTheInternalKey_SoAWebPageInTheBrowserCannotOpenTheNode()
     {
         await using var node = await StartAsync();

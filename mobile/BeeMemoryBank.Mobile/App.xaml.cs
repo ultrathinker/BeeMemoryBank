@@ -1,4 +1,6 @@
+using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Mobile.Controls;
 using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Vault.Sealed;
@@ -24,6 +26,11 @@ public partial class App : Application
     public App(InitializationService initSvc, MigrationRunner migrationRunner, DbConnectionFactory dbFactory, FolderBootstrapper folderBootstrapper, Services.SyncNotificationService syncNotify, SessionService session, IServiceScopeFactory scopeFactory, IServiceProvider services)
     {
         InitializeComponent();
+        // The saved appearance (dark / light / system) before the first page is shown.
+        Services.ThemeManager.ApplySaved();
+        // A BusyAction failure with no result label is said in the app's own dialog, not the grey
+        // system alert (the shared helper's hook; the other apps keep the platform alert).
+        BusyAction.FailureDialog = (page, title, text) => AppDialog.AlertAsync(page, title, text);
         _initSvc = initSvc;
         _migrationRunner = migrationRunner;
         _dbFactory = dbFactory;
@@ -35,9 +42,34 @@ public partial class App : Application
         MainPage = new ContentPage();
     }
 
+    /// <summary>
+    /// The cold start. An async void that throws ends the app before anything is on the screen: what is not caught below is
+    /// caught here, written to the log, and the unlock page is shown - the person can still type the password.
+    /// </summary>
     protected override async void OnStart()
     {
         base.OnStart();
+        try
+        {
+            await StartAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Start error: {ex}");
+            try
+            {
+                if (MainPage is not AppShell) MainPage = new AppShell();
+                await Shell.Current.GoToAsync("//unlock");
+            }
+            catch (Exception routeEx)
+            {
+                System.Diagnostics.Debug.WriteLine($"Start route error: {routeEx}");
+            }
+        }
+    }
+
+    private async Task StartAsync()
+    {
         _syncNotify.SetForegroundMode(true);
         Services.MauiPhoneEnvironment.Foreground = true;
 
@@ -99,7 +131,8 @@ public partial class App : Application
 
         if (!await _initSvc.IsInitializedAsync())
         {
-            Shell.Current.GoToAsync("//setup").FireAndForget();
+            // A fresh install lands on the Welcome screen, which opens the connect (setup) screen.
+            Shell.Current.GoToAsync("//welcome").FireAndForget();
         }
         else
         {
@@ -144,9 +177,14 @@ public partial class App : Application
         // Auto-lock when the app leaves the foreground. Without this, an
         // attacker who grabs an unlocked phone (snatch-and-run, "show me
         // a photo") gets full vault access via the recent-apps switcher.
-        // Re-navigation happens in OnResume so the user lands on UnlockPage.
-        // On an encrypted phone the lock also closes the database (spec 5.4, 12.1); the lifecycle does both.
-        if (_session.IsUnlocked)
+        // The shared policy decides: the "lock when I leave" choice at once (grace zero, the default),
+        // or after the grace when the app comes back. On an encrypted phone the lock also closes the
+        // database (spec 5.4, 12.1); the lifecycle does both. Re-navigation happens via the Locked event.
+        if (_services.GetService<Services.AutoLockService>() is { } autoLock)
+        {
+            autoLock.OnBackground();
+        }
+        else if (_session.IsUnlocked)
         {
             if (_services.GetService<PhoneVaultLifecycle>() is { } lifecycle) _ = lifecycle.OnBackgroundAsync();
             else _session.Lock();
@@ -158,6 +196,10 @@ public partial class App : Application
         base.OnResume();
         _syncNotify.SetForegroundMode(true);
         Services.MauiPhoneEnvironment.Foreground = true;
+
+        // The shared policy judges the return: lock if the grace ran out while away, otherwise the
+        // idle count goes on. A lock here routes to unlock through the session's Locked event.
+        _services.GetService<Services.AutoLockService>()?.OnForeground();
 
         // After OnSleep locked the session, route the user to the unlock
         // page. Skip if the app is in setup or already on /unlock to avoid

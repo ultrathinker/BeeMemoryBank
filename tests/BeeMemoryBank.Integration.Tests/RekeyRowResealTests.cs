@@ -338,7 +338,7 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review release-b R1-9: a plaintext comment of a purged body is dropped and listed too (marked "plaintext"), and
+    /// A plaintext comment of a purged body is dropped and listed too (marked "plaintext"), and
     /// its text is nowhere in the copy afterwards.
     /// </summary>
     [Fact]
@@ -377,7 +377,7 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review release-b R1-7: a legacy media/{id}.enc that is a link (here, to a file outside the vault) is never read.
+    /// A legacy media/{id}.enc that is a link (here, to a file outside the vault) is never read.
     /// The attempt fails with the row named, instead of importing whatever the link points at.
     /// </summary>
     [Fact]
@@ -438,7 +438,7 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
         (await new RowResealStep().VerifyAsync(ctx)).Should().Contain(p => p.Table == RowResealStep.Body && p.Problem.Contains("old key"));
     }
 
-    /// <summary>BMB-307 fix2 (M2): the checks of the re-keyed copy and of the old material read "no sentinel" with the one predicate: NULL and an empty BLOB are both a problem, never a value to verify.</summary>
+    /// <summary>BMB-307: the checks of the re-keyed copy and of the old material read "no sentinel" with the one predicate: NULL and an empty BLOB are both a problem, never a value to verify.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

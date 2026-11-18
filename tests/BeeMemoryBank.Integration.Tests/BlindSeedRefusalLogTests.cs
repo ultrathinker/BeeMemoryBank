@@ -82,7 +82,7 @@ public sealed class BlindSeedRefusalLogTests : IAsyncLifetime
     [Fact]
     public async Task A_package_that_cannot_be_read_is_refused_with_the_fixed_sentence_and_the_log_names_the_code_and_only_the_type_of_the_cause()
     {
-        // BMB-306/307 fix round 2 (M3/P4): bytes that are no package at all. The reader's own words never leave the node.
+        // BMB-306/307: bytes that are no package at all. The reader's own words never leave the node.
         var code = await PairCodeAsync();
         var (key, _) = Ed25519Signer.GenerateKeyPair();
         var (seeder, seedId) = (Guid.NewGuid(), Guid.NewGuid());

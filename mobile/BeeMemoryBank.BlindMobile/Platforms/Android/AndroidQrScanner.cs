@@ -1,4 +1,4 @@
-using Android.Gms.Extensions;
+using GmsTasks = Android.Gms.Tasks;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using Xamarin.Google.MLKit.Vision.Barcode.Common;
 using Xamarin.Google.MLKit.Vision.CodeScanner;
@@ -18,20 +18,52 @@ public sealed class AndroidQrScanner : IBlindQrScanner
             .SetBarcodeFormats(Barcode.FormatQrCode)
             .Build();
         var scanner = GmsBarcodeScanning.GetClient(Platform.AppContext, options);
+        // Not a cancellation: Play services is missing, out of date, or could not fetch the scanner module. The sentence names no detail of the phone.
+        static Exception Unavailable(Exception ex) => new InvalidOperationException("The QR scanner of Google Play services is not available on this phone. Paste the invitation or open its link instead.", ex);
+        System.Threading.Tasks.Task<string?> scan;
         try
         {
-            var barcode = await scanner.StartScan().AsAsync<Barcode>().WaitAsync(ct);
-            return barcode?.RawValue;
-        }
-        catch (System.OperationCanceledException)
-        {
-            // The person closed the scanner (the task is cancelled), or this call was cancelled: nothing was read.
-            return null;
+            scan = Scan(scanner, Unavailable);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Not a cancellation: Play services is missing, out of date, or could not fetch the scanner module. The sentence names no detail of the phone.
-            throw new InvalidOperationException("The QR scanner of Google Play services is not available on this phone. Paste the invitation or open its link instead.", ex);
+            throw Unavailable(ex);
         }
+        try
+        {
+            // The person closing the scanner completes it with null: nothing was read.
+            return await scan.WaitAsync(ct);
+        }
+        catch (System.OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    // The Play services task, awaited through listeners of our own. Not the AsAsync wrapper of the bindings: when the person closes the scanner that wrapper
+    // completes its TaskCompletionSource with a null exception, which throws on the main thread and closes the app (seen on a real phone, 16.11).
+    private static System.Threading.Tasks.Task<string?> Scan(Xamarin.Google.MLKit.Vision.CodeScanner.IGmsBarcodeScanner scanner, Func<Exception, Exception> unavailable)
+    {
+        var done = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        scanner.StartScan()
+            .AddOnSuccessListener(new SuccessListener(result => done.TrySetResult((result as Barcode)?.RawValue)))
+            .AddOnCanceledListener(new CanceledListener(() => done.TrySetResult(null)))
+            .AddOnFailureListener(new FailureListener(error => done.TrySetException(unavailable(error))));
+        return done.Task;
+    }
+
+    private sealed class SuccessListener(Action<Java.Lang.Object?> then) : Java.Lang.Object, GmsTasks.IOnSuccessListener
+    {
+        public void OnSuccess(Java.Lang.Object? result) => then(result);
+    }
+
+    private sealed class CanceledListener(Action then) : Java.Lang.Object, GmsTasks.IOnCanceledListener
+    {
+        public void OnCanceled() => then();
+    }
+
+    private sealed class FailureListener(Action<Exception> then) : Java.Lang.Object, GmsTasks.IOnFailureListener
+    {
+        public void OnFailure(Java.Lang.Exception e) => then(e);
     }
 }

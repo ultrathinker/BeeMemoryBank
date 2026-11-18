@@ -40,6 +40,18 @@ public class ClearFieldGoldenTests
         [EventTypes.MetadataActivation] = typeof(MetadataActivationPayload),
         // LAN sync (docs/design/lan-peer-sync.md 8, decision D3): private and VPN addresses and public keys, in clear on purpose.
         [EventTypes.NodeEndpoints] = typeof(NodeEndpointsPayload),
+        // Self-authored node state (release 2.12.0): operational control metadata only.
+        [EventTypes.NodeState] = typeof(NodeStatePayload),
+        // Node identity re-key (release 2.12.0, plan WS-D): public keys, counters, event ids and signatures only.
+        [EventTypes.NodeKeyRotated] = typeof(NodeKeyRotatedPayload),
+        [EventTypes.NodeKeyConfirm] = typeof(NodeKeyConfirmPayload),
+        // Shared-node accounts home and encrypted superadmin doors list (release 2.12.0).
+        [EventTypes.AccountsHomeSet] = typeof(AccountsHomeSetPayload),
+        [EventTypes.SuperadminDoorsSet] = typeof(SuperadminDoorsSetPayload),
+        // The removal of a superadmin (release 2.12.0): ids, outcome, step and times only.
+        [EventTypes.PersonRemoved] = typeof(PersonRemovedPayload),
+        [EventTypes.OffboardingState] = typeof(OffboardingStatePayload),
+        [EventTypes.NodeRekeyRequest] = typeof(NodeRekeyRequestPayload),
     };
 
     [Fact]

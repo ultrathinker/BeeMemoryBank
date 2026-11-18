@@ -9,7 +9,7 @@ namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
 /// The controller with the real AppCore composition (real SQLite in a temp folder) and fake host seams: single flight,
-/// the failure log, the status contents and the progress that reaches the status (review notes of stage 1).
+/// the failure log, the status contents and the progress that reaches the status.
 /// The heavy job's one-at-a-time lock is static, so every test that runs it is in this one class (xunit runs a class serially).
 /// </summary>
 public sealed partial class BlindAppControllerBehaviorTests
@@ -114,7 +114,7 @@ public sealed partial class BlindAppControllerBehaviorTests
     }
 
     [Theory]
-    [InlineData(typeof(HttpRequestException), "no answer")]   // a failure of a call to the other computer is told as its KIND, never by the words of the HTTP stack (BMB-306/307 fix2, T3)
+    [InlineData(typeof(HttpRequestException), "no answer")]   // a failure of a call to the other computer is told as its KIND, never by the words of the HTTP stack (BMB-306/307)
     [InlineData(typeof(BlindSentenceException), "link went down")]   // a sentence this code threw on purpose is said
     [InlineData(typeof(InvalidOperationException), "an unexpected problem (InvalidOperationException)")]   // the type proves nothing about the words
     [InlineData(typeof(NullReferenceException), "an unexpected problem (NullReferenceException)")]   // the message of an exception that is not a sentence of this code is never said

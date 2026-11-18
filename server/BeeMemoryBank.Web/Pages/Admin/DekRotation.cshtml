@@ -2,41 +2,38 @@
 @model BeeMemoryBank.Web.Pages.Admin.DekRotationModel
 
 @section About {
-    <p>
-        Every article, version and file is encrypted under its own key, and those keys are wrapped by one <strong>master data key</strong> (the DEK). <strong>Rotating</strong> it makes a new
-        master key and re-encrypts everything under it; the old key is retired. Reasons: you suspect the key leaked, or a device that held it should be locked out for good (revoke it
-        first on <a href="/Admin/Devices">Devices</a>: a revoked device gets no copy of the new key), or you want periodic key hygiene.
-    </p>
-    <p class="admin-warning">
-        <strong>This is a heavy operation for the whole network.</strong> It is started on one node and the others apply it as they sync: each one must accept it (here, or automatically for
-        devices you set to Auto-DEK rotation). While it runs, this node is in maintenance and re-encrypts all article bodies, versions, conflict copies and files in one transaction. Do not
-        close the browser, restart the node or interrupt it until it completes.
-    </p>
-    <ul>
-        <li><strong>Agents that can unlock the vault by themselves</strong> (those owned by a superadmin that carry the master key) are deleted and must be issued again afterwards. All other agents keep working.</li>
-        <li><strong>The key slots of the other users are removed:</strong> they have to set their passwords again.</li>
-        <li><strong>All recovery keys stop working:</strong> <a href="/Admin/RecoveryKey">issue a new one</a> right after.</li>
-        <li>A snapshot of this node is taken automatically before anything is changed.</li>
-    </ul>
-    <p>It takes two steps: <em>propose</em> (with your master password), then <em>confirm</em> (with your master password again), which starts the re-encryption.</p>
-    <p class="text-muted text-sm">
-        Rotating the key here is not the same as the offline re-key of the desktop app (Manage storages, Re-key), which rebuilds the whole database under new keys. The checklist
-        that follows an offline re-key is kept on the <a href="/RekeyReport">Re-key report</a>.
-    </p>
+    <p>Replaces the key that encrypts your notes. Only needed if you think the key may have leaked.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            Every article, version and file is encrypted under its own key, and those keys are wrapped by one <strong>master data key</strong> (the DEK). <strong>Rotating</strong> it makes a new
+            master key and re-encrypts everything under it; the old key is retired. Reasons: you suspect the key leaked, or a device that held it should be locked out for good (revoke it
+            first on <a href="/Admin/Devices">Devices</a>: a revoked device gets no copy of the new key), or you want periodic key hygiene.
+        </p>
+        <p class="admin-warning">
+            <strong>This is a heavy operation for the whole network.</strong> It is started on one node and the others apply it as they sync: each one must accept it (here, or automatically for
+            devices you set to Auto-DEK rotation). While it runs, this node is in maintenance and re-encrypts all article bodies, versions, conflict copies and files in one transaction. Do not
+            close the browser, restart the node or interrupt it until it completes.
+        </p>
+        <ul>
+            <li><strong>Nobody has to do anything afterwards.</strong> Every door of the people who stay (their passwords, recovery keys, start unlocked,
+                quick unlock on a phone, agents that open the vault) is sealed to the new key during the rotation, on every node.</li>
+            <li>Only doors in the format of releases before 2.12 that were never used since the update cannot be sealed to the new key. A password or
+                recovery key door of that kind keeps working through a <strong>bridge</strong> from the old key until it is used once (see below); an old
+                agent key that opens the vault is deleted and must be issued again.</li>
+            <li>A snapshot of this node is taken automatically before anything is changed.</li>
+        </ul>
+        <p>It takes two steps: <em>propose</em> (with your master password), then <em>confirm</em> (with your master password again), which starts the re-encryption.</p>
+        <p class="text-muted text-sm">
+            Rotating the key here is not the same as the offline re-key of the desktop app (Manage storages, Re-key), which rebuilds the whole database under new keys. The checklist
+            that follows an offline re-key is kept on the <a href="/RekeyReport">Re-key report</a>.
+        </p>
+    </details>
 }
 
 <partial name="_PendingDekRotations" model="Model.PeerPendingRotations" />
 
 <div class="card mt-md" style="max-width:640px;" @(Model.Active ? "data-dek-active=\"true\"" : "")>
-    @if (Model.ShowRecoveryKeyReminder)
-    {
-        <sl-alert variant="warning" open style="margin-bottom:16px;">
-            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-            <strong>Issue a new recovery key!</strong> All previous recovery keys were invalidated by the DEK rotation.
-            <a href="/Admin/RecoveryKey">Issue one now</a>.
-        </sl-alert>
-    }
-
     @if (Model.Active)
     {
         <sl-alert variant="warning" open style="margin-bottom:16px;">
@@ -123,21 +120,83 @@
     }
 </div>
 
+@if (Model.Bridge is { } bridge && (bridge.BridgePresent || bridge.V1DoorCount > 0))
+{
+    <div class="card mt-md" style="max-width:640px;" data-dek-bridge="true">
+        @if (bridge.BridgePresent)
+        {
+            <h3 style="margin-top:0;">A bridge from the old key is still here</h3>
+            <p>
+                These people have not signed in on this node since the update, so their doors are still in the old format and a rotation cannot seal
+                them to the new key. To let them in, this node keeps a way from the old key to the new one@(bridge.SinceAppliedAt is { } since ? $" (since the rotation of {since})" : "").
+                It goes away by itself when the last of them signs in.
+            </p>
+        }
+        else
+        {
+            <h3 style="margin-top:0;">Doors in the old format</h3>
+            <p>
+                These people have not signed in on this node since the update, so their doors are still in the old format.
+                No master key rotation has needed a bridge for them yet.
+                If the key is rotated before they sign in, this node keeps a way from the old key to the new one so that they can still get in;
+                it goes away by itself when the last of them signs in.
+            </p>
+        }
+        <ul>
+            @foreach (var door in bridge.Doors)
+            {
+                <li>@(door.OwnerName ?? (door.Kind == "recovery" ? "A recovery key" : door.Kind == "password" ? "The master password of an older release" : "A door without an owner"))</li>
+            }
+        </ul>
+        @if (bridge.BridgePresent)
+        {
+            <p class="admin-warning">
+                <strong>Removing the bridge now</strong> deletes these old doors. The people above then cannot sign in on this node until a superadmin
+                sets their passwords again, and an old recovery key on this list stops working. Somebody who has the old key and a later copy of this
+                node's database can no longer use the bridge to reach the new one.
+            </p>
+            <form method="post" asp-page-handler="RemoveDekBridge" data-busy="short" class="form-confirm"
+                  data-confirm="Delete the old doors and remove the bridge now? The people listed must have their passwords set again.">
+                <sl-button type="submit" variant="danger" size="small">
+                    <sl-icon slot="prefix" name="sign-stop"></sl-icon> Remove the bridge now
+                </sl-button>
+            </form>
+        }
+        else
+        {
+            <p class="admin-warning">
+                <strong>Deleting these old doors now</strong> means the people above cannot sign in on this node until a superadmin sets their
+                passwords again, and an old recovery key on this list stops working.
+            </p>
+            <form method="post" asp-page-handler="RemoveDekBridge" data-busy="short" class="form-confirm"
+                  data-confirm="Delete the old doors now? The people listed must have their passwords set again.">
+                <sl-button type="submit" variant="danger" size="small">
+                    <sl-icon slot="prefix" name="sign-stop"></sl-icon> Delete these old doors now
+                </sl-button>
+            </form>
+        }
+    </div>
+}
+
 <!-- DEK Rotation Dialog -->
 <sl-dialog id="dlg-dek-rotation" label="Rotate DEK" style="--width:580px;">
     <sl-alert variant="danger" open style="margin-bottom:16px;">
         <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
         <strong>This is a destructive, network-wide operation.</strong>
     </sl-alert>
+    <p style="margin-bottom:12px;">All your notes get a new key on every device. Everybody's passwords, recovery keys and auto-unlock keep working.
+       Do not close this page until it ends.</p>
+    <details class="admin-more" style="margin-bottom:16px;">
+    <summary>More details</summary>
     <p style="margin-bottom:12px;">Before proceeding, understand the impact:</p>
     <ul style="margin:0 0 16px 20px;line-height:1.8;">
         <li>All article bodies, version history, conflict copies, and media files will be <strong>re-encrypted</strong> (one big transaction; node enters maintenance for the duration).</li>
-        <li><strong>Agents that can auto-unlock the vault</strong> (superadmin-owned agents that carry the master key) will be deleted and must be re-issued after rotation completes — their wrapped copy of the old key cannot be re-wrapped server-side. All other agents keep working unchanged.</li>
-        <li>All <strong>other user key slots</strong> will be removed — other users will need to re-register their passwords against the new DEK.</li>
-        <li>All <strong>recovery keys</strong> will be invalidated — issue a new recovery key immediately after rotation.</li>
+        <li>Every <strong>door</strong> of the people who stay (passwords, recovery keys, start unlocked, quick unlock, agents that open the vault) is sealed to the new key; nobody has to re-register.</li>
+        <li>Doors in the format of an older release that were never used since the update cannot be sealed: a password or recovery door keeps working through a bridge from the old key; an old agent key that opens the vault is deleted and must be re-issued.</li>
         <li>A <strong>pre-rotation snapshot</strong> is created automatically before any destructive change.</li>
         <li><strong>Do not close the browser, restart the node, or interrupt the process</strong> until it completes.</li>
     </ul>
+    </details>
     <form method="post" asp-page-handler="ProposeDekRotation" class="sl-form" data-busy="long" data-busy-title="Changing the data key">
         <div style="margin-bottom:16px;">
             <sl-input name="masterPassword" label="Master password" type="password" password-toggle required autocomplete="off"

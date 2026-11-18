@@ -1,7 +1,7 @@
 namespace BeeMemoryBank.Core.IO;
 
 /// <summary>
-/// Where a snapshot's working copy of the database is made (review release-a #1): a folder inside the node's data
+/// Where a snapshot's working copy of the database is made: a folder inside the node's data
 /// folder, not the OS temp folder. The copy is the whole vault database (key slots, wrapped key, password hashes, titles,
 /// paths) until the snapshot filters it, and a kill or power cut leaves it behind. In the OS temp folder that copy stayed
 /// forever, wherever the account's TEMP pointed (a shared /tmp, C:\Windows\Temp for a service), and nothing ever removed
@@ -12,7 +12,7 @@ public static class SnapshotStaging
     private const string Prefix = "snapshot-";
     private const string Suffix = ".tmp";
 
-    // What a join or a restore works in (review revsrv F10, revios F5): the downloaded archive and the folder it is extracted to. The extracted
+    // What a join or a restore works in: the downloaded archive and the folder it is extracted to. The extracted
     // database is the vault in clear (key slots, password hashes, titles, paths), so these get the same place and rules as the snapshot's copy.
     private const string WorkPrefix = "work-";
 

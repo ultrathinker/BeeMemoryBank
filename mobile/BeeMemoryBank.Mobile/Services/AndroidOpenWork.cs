@@ -19,10 +19,17 @@ public static class AndroidOpenWork
         PhoneVaultLifecycle.AddOpenStep(services, new PhoneOpenWork(200, (sp, _) => sp.GetRequiredService<FolderBootstrapper>().RunIfNeededAsync()));
         PhoneVaultLifecycle.AddOpenStep(services, new PhoneOpenWork(800, async (sp, _) =>
         {
-            using var conn = sp.GetRequiredService<DbConnectionFactory>().CreateConnection();
-            await conn.ExecuteAsync("PRAGMA journal_mode=WAL;");
-            await conn.ExecuteAsync("PRAGMA synchronous=NORMAL;");
-            await PhoneRotationAutoArm.ArmAsync(conn);
+            using (var conn = sp.GetRequiredService<DbConnectionFactory>().CreateConnection())
+            {
+                await conn.ExecuteAsync("PRAGMA journal_mode=WAL;");
+                await conn.ExecuteAsync("PRAGMA synchronous=NORMAL;");
+                await PhoneRotationAutoArm.ArmAsync(conn);
+            }
+            // The Lamport clock continues from the newest event this node holds, set when the database opens (as the iPhone's open work does): on an
+            // encrypted phone the sync service started before the unlock and could not read it then.
+            using var scope = sp.CreateScope();
+            var newest = await scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.IEventLogRepository>().GetMaxLamportTimestampAsync();
+            sp.GetRequiredService<BeeMemoryBank.Sync.LamportClock>().Initialize(newest);
         }));
         PhoneVaultLifecycle.AddOpenStep(services, new PhoneOpenWork(900, (sp, firstOpenInProcess) =>
         {

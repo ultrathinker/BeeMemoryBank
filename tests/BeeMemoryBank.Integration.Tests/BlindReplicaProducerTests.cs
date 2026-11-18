@@ -15,10 +15,10 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-merge #2 and #3: how the producer describes itself in a blind package — a replica says
+/// How the producer describes itself in a blind package — a replica says
 /// superadmin only where the network verifiably does, and the producer can be dialled and pinned where
 /// it said it can be reached. And what makes a first seed's producer the blind node's authority: the
-/// pair code the operator issued, not what its manifest claims (review r1-merge #3); after that, only
+/// pair code the operator issued, not what its manifest claims; after that, only
 /// signed standing changes it.
 /// </summary>
 public class BlindReplicaProducerTests : IAsyncLifetime
@@ -92,7 +92,7 @@ public class BlindReplicaProducerTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review r1-merge #3: the authority comes from the code, not from the manifest. Through the real
+    /// The authority comes from the code, not from the manifest. Through the real
     /// seed endpoint and the real seeder proof, the PC sends a package whose manifest does not claim
     /// superadmin for it, and no signed standing either — the blind node still takes it as superadmin,
     /// bound to the paired key, and takes its reseed.
@@ -118,7 +118,7 @@ public class BlindReplicaProducerTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-merge round 3 #1: the producer's only promotion is its signed admission — a root-signed
+    /// The producer's only promotion is its signed admission — a root-signed
     /// whitelist_add with is_superadmin — and that is enough: the blind node holds it as superadmin, and
     /// its reseed is accepted.
     /// </summary>
@@ -138,7 +138,7 @@ public class BlindReplicaProducerTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review r1-merge #3: the producer was admitted as superadmin and later revoked, both signed by the
+    /// The producer was admitted as superadmin and later revoked, both signed by the
     /// root and both in its log and its first seed. The operator gave it the pair code anyway, and that
     /// grant is newer than anything the stream says: it is the blind node's authority. The grant keeps
     /// the version the stream left, so an older revoke arriving later changes nothing, and a newer one,
@@ -171,7 +171,7 @@ public class BlindReplicaProducerTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review l-root2 #2: the grant is a versioned decision. The package carries no standing for the PC,
+    /// The grant is a versioned decision. The package carries no standing for the PC,
     /// and a demotion signed by the root that the package did not carry (no reachable peer had passed it
     /// on) and that is not newer than what the package reflected arrives afterwards: it loses against the
     /// grant. A newer one wins, as everywhere.
@@ -201,7 +201,7 @@ public class BlindReplicaProducerTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review l-root3: the grant's time comes from the raw maximum, not through the Lamport clock, whose
+    /// The grant's time comes from the raw maximum, not through the Lamport clock, whose
     /// update caps a jump at 10,000,000 ahead of it. A peer row in the package stands at 100,000,000; a
     /// root-signed demotion at 20,000,000 that the package did not carry is not newer than the grant.
     /// </summary>
@@ -221,7 +221,7 @@ public class BlindReplicaProducerTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review l-root3: a package holding a Lamport time at long.MaxValue leaves no time after it for the
+    /// A package holding a Lamport time at long.MaxValue leaves no time after it for the
     /// grant. It is refused before the switch: the blind node keeps its database and grants nothing.
     /// </summary>
     [Fact]

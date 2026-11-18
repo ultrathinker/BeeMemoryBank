@@ -294,7 +294,7 @@ public class BusyHelperGuardTests
         Assert.True(problems.Count == 0, "\n" + string.Join("\n", problems));
     }
 
-    // ---------------------------------------------------------------- BMB-311 fix round: what the phone apps do while a job runs
+    // ---------------------------------------------------------------- BMB-311: what the phone apps do while a job runs
 
     private static string Handler(string code, string name)
     {
@@ -360,7 +360,7 @@ public class BusyHelperGuardTests
     }
 
     /// <summary>
-    /// BMB-311 fix2 (R3): a link the app was opened with, one that waited for the screen, and the end-to-end check's code start the first load. They did it OUTSIDE the
+    /// BMB-311: a link the app was opened with, one that waited for the screen, and the end-to-end check's code start the first load. They did it OUTSIDE the
     /// busy helper (no pop-up, a second link or a tap could start another load). They must all end in the one funnel of the Connect button.
     /// </summary>
     [Fact]
@@ -404,7 +404,7 @@ public class BusyHelperGuardTests
     }
 
     /// <summary>
-    /// BMB-311 fix2 (R5): whatever the clean-up of the MAUI helper does - a pop-up whose dismissal throws, a spinner, a control of a page that is gone - the key of the
+    /// BMB-311: whatever the clean-up of the MAUI helper does - a pop-up whose dismissal throws, a spinner, a control of a page that is gone - the key of the
     /// running work is freed by an OUTER finally that holds nothing else, and no clean-up step is called outside a guard. A platform exception that skipped
     /// <c>Running.Remove(key)</c> refused the same button for ever. (The helper is MAUI code and cannot be run here; this reads its structure.)
     /// </summary>
@@ -511,7 +511,7 @@ public class BusyHelperGuardTests
         Assert.Empty(problems);
     }
 
-    // ---------------------------------------------------------------- BMB-311 fix2 (R4): every command a XAML binds, whatever class makes it
+    // ---------------------------------------------------------------- BMB-311: every command a XAML binds, whatever class makes it
 
     // Command="{Binding Name}", ReturnCommand="{Binding Path=Name}", CompiledBinding, a dotted path (the last name is the command). A binding with a Source is the
     // command of another ELEMENT (an Entry's ReturnCommand that points to the button), whose own handler the handler scanner covers.

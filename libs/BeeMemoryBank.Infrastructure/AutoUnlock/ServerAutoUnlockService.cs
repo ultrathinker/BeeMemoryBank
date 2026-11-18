@@ -36,22 +36,63 @@ public enum ServerAutoUnlockState
 public sealed record ServerAutoUnlockEvaluation(ServerAutoUnlockState State, IReadOnlyList<ServerSlotView> Slots, ServerEnableRecord? Record, bool RecordFileExists)
 {
     /// <summary>The slot the record names, when armed.</summary>
-    public ServerSlotView? MatchingSlot => Record is null ? null : Slots.FirstOrDefault(s => s.Matches(Record));
+    public ServerSlotView? MatchingSlot => MatchingSlots.FirstOrDefault();
+
+    /// <summary>
+    /// Every slot the record names, the one it names as next first. Mid-rotation (a crash between the commit and the rewrite of the boot store)
+    /// two doors match: the old one and the re-sealed one, and which of them holds the committed key only the database can say.
+    /// </summary>
+    public IReadOnlyList<ServerSlotView> MatchingSlots => Record is null
+        ? []
+        : Slots.Where(s => s.Matches(Record)).OrderByDescending(s => s.IsNext(Record)).ToList();
 }
 
-public sealed record ServerSlotView(long SlotId, string ContentSha256, byte[] EncryptedMasterDek, byte[] Iv, string? DekFingerprint, BootDoor? Door)
+public sealed record ServerSlotView(long SlotId, string ContentSha256, byte[] EncryptedMasterDek, byte[] Iv, string? DekFingerprint, BootDoor? Door,
+    int DoorVersion = 1, byte[]? DoorPublicKey = null)
 {
     public bool Matches(ServerEnableRecord record) =>
-        string.Equals(ContentSha256, record.SlotSha256, StringComparison.Ordinal)
-        && (DekFingerprint is null || string.Equals(DekFingerprint, record.DekFingerprint, StringComparison.Ordinal));
+        record.Names(ContentSha256) && (DekFingerprint is null || record.NamesDek(DekFingerprint));
+
+    /// <summary>True for the re-sealed door of a rotation the record was prepared for.</summary>
+    public bool IsNext(ServerEnableRecord record) =>
+        string.Equals(ContentSha256, record.NextSlotSha256, StringComparison.Ordinal)
+        || (DekFingerprint is not null && string.Equals(DekFingerprint, record.NextDekFingerprint, StringComparison.Ordinal));
+
+    /// <summary>Opens the slot with the secret of the key file, whatever its door format (ADR 0012). Throws <see cref="CryptographicException"/> for another secret.</summary>
+    public byte[] Open(byte[] secret) => Doors.Open(DoorVersion, ServerAutoUnlockService.SlotType, EncryptedMasterDek, Iv, secret, null, DoorPublicKey);
 }
 
-/// <summary>The local enable record <c>&lt;data&gt;/server-auto-unlock.enabled</c> (spec 11.2 part 3): says "the owner enabled exactly this slot on this server"; holds no secret.</summary>
+/// <summary>
+/// The local enable record <c>&lt;data&gt;/server-auto-unlock.enabled</c> (spec 11.2 part 3): says "the owner enabled exactly this slot on this server";
+/// holds no secret. <see cref="NextSlotSha256"/> is set only while the slot is being sealed again as a v2 door (ADR 0012): the record then names the
+/// door before and the door after, so that a crash between the two writes leaves the server armed rather than "stale". An older build ignores it.
+/// </summary>
 public sealed record ServerEnableRecord(
     [property: JsonPropertyName("v")] int Version,
     [property: JsonPropertyName("slot_sha256")] string SlotSha256,
     [property: JsonPropertyName("dek_fp")] string DekFingerprint,
-    [property: JsonPropertyName("enabled_at")] string EnabledAt);
+    [property: JsonPropertyName("enabled_at")] string EnabledAt,
+    [property: JsonPropertyName("next_slot_sha256"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextSlotSha256 = null,
+    [property: JsonPropertyName("next_dek_fp"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NextDekFingerprint = null)
+{
+    /// <summary>True when the record names the slot content <paramref name="slotSha256"/> (the slot, or the replacement in progress).</summary>
+    public bool Names(string slotSha256) =>
+        string.Equals(slotSha256, SlotSha256, StringComparison.Ordinal)
+        || (NextSlotSha256 is { Length: 64 } next && string.Equals(slotSha256, next, StringComparison.Ordinal));
+
+    /// <summary>
+    /// True when the record names the DEK <paramref name="dekFingerprint"/>: its own, or, while a rotation re-seals the door (2.12), the new one
+    /// (<see cref="NextDekFingerprint"/>).
+    /// </summary>
+    public bool NamesDek(string dekFingerprint) =>
+        string.Equals(dekFingerprint, DekFingerprint, StringComparison.Ordinal)
+        || (NextDekFingerprint is { Length: 64 } next && string.Equals(dekFingerprint, next, StringComparison.Ordinal));
+
+    /// <summary>The record once the change it names is done: the next door (and DEK) become the door; nothing is "next" any more.</summary>
+    public ServerEnableRecord Settled(bool toNext) => toNext && NextSlotSha256 is { Length: 64 } next
+        ? this with { SlotSha256 = next, DekFingerprint = NextDekFingerprint ?? DekFingerprint, NextSlotSha256 = null, NextDekFingerprint = null }
+        : this with { NextSlotSha256 = null, NextDekFingerprint = null };
+}
 
 /// <summary>What the status route and the status of the vault report (spec 6.7, 11.2).</summary>
 /// <param name="Enabled">The effective state: true only when the slot, the key file and the enable record agree.</param>
@@ -83,7 +124,7 @@ public sealed class ServerAutoUnlockException(string code, string message) : Inv
 /// checkbox off - every node after every upgrade - the call at start costs one read of the slot table (plain node) or of the boot store
 /// (sealed node) and one <c>File.Exists</c>: no key file is read, no boot store is created.
 /// </summary>
-public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
+public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState, IUnlockedDoorUpgrade
 {
     public const string SlotType = "server_auto_unlock";
     public const string KeyFileEnvironmentVariable = "BMB_AUTO_UNLOCK_KEY_FILE";
@@ -164,15 +205,20 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
         if (SealedAndClosed)
             return (await _sealedHost!.ListDoorsAsync(ct).ConfigureAwait(false))
                 .Where(d => d.Kind == BootDoorKinds.Slot && d.SlotType == SlotType)
-                .Select(d => new ServerSlotView(d.SourceId, d.ContentSha256, d.EncryptedMasterDek, d.Iv, d.DekFingerprint, d))
+                .Select(d => new ServerSlotView(d.SourceId, d.ContentSha256, d.EncryptedMasterDek, d.Iv, d.DekFingerprint, d, d.DoorVersion, d.DoorPublicKey))
                 .ToList();
 
         return (await _slots.GetAllAsync().ConfigureAwait(false))
             .Where(s => s.SlotType == SlotType)
-            .Select(s => new ServerSlotView(s.SlotId, BootDoorHash.OfSlot(s.SlotId, s.SlotType, s.EncryptedMasterDek, s.IV, s.Salt, s.ArgonMemory,
-                s.ArgonIterations, s.ArgonParallelism), s.EncryptedMasterDek, s.IV, null, null))
+            // The DEK the slot names, as on the closed path (null only for a v1 slot nobody has opened since the update).
+            .Select(s => new ServerSlotView(s.SlotId, SlotHash(s), s.EncryptedMasterDek, s.IV, s.DekFingerprint, null, s.DoorVersion, s.DoorPublicKey))
             .ToList();
     }
+
+    /// <summary>The content hash of a slot row as the boot store and the enable record name it (a v2 door includes its format and public key).</summary>
+    private static string SlotHash(MasterKeyStore s) =>
+        BootDoorHash.OfSlot(s.SlotId, s.SlotType, s.EncryptedMasterDek, s.IV, s.Salt, s.ArgonMemory, s.ArgonIterations, s.ArgonParallelism, s.DoorVersion,
+            s.DoorPublicKey);
 
     private ServerEnableRecord? ReadRecord()
     {
@@ -231,7 +277,6 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
 
     private async Task<bool> TryUnlockAsync(ServerAutoUnlockEvaluation evaluation, INodeIdentityRepository nodeRepo, CancellationToken ct)
     {
-        var slot = evaluation.MatchingSlot!;
         var record = evaluation.Record!;
         if (ConfiguredKeyFilePath is { } configured && ConfiguredKeyFileAliasesNodeKeyFile(configured))
         {
@@ -247,52 +292,66 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
             return false;
         }
 
+        try
+        {
+            // Every door the record names, the next one first: after a crash between a rotation's commit and the rewrite of the
+            // boot store the old door and the re-sealed one both match, and only the unlock (sentinel, door check) knows which key was committed.
+            // A crash before the commit leaves the same pair the other way round; the order only saves an attempt.
+            string? refusal = null;
+            foreach (var slot in evaluation.MatchingSlots)
+            {
+                var outcome = await TryUnlockThroughAsync(slot, record, secret, nodeRepo, ct).ConfigureAwait(false);
+                if (outcome is null) return true;
+                refusal ??= outcome;
+            }
+            _logger?.LogWarning("Start unlocked after a restart: {Refusal}; the vault stays locked.", refusal ?? "the enable record names no slot");
+            return false;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(secret);
+        }
+    }
+
+    /// <summary>One door of <see cref="TryUnlockAsync"/>: null when it unlocked, otherwise the fixed sentence of the refusal (no key, no path).</summary>
+    private async Task<string?> TryUnlockThroughAsync(ServerSlotView slot, ServerEnableRecord record, byte[] secret, INodeIdentityRepository nodeRepo,
+        CancellationToken ct)
+    {
         byte[]? masterDek = null;
         try
         {
             try
             {
-                masterDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.Iv, secret);
+                masterDek = slot.Open(secret);
             }
             catch (CryptographicException)
             {
-                _logger?.LogWarning("Start unlocked after a restart: the secret in the key file does not open the slot; the vault stays locked.");
-                return false;
+                return "the secret in the key file does not open the slot";
             }
 
-            if (!string.Equals(DekFingerprint.Of(masterDek), record.DekFingerprint, StringComparison.Ordinal))
-            {
-                _logger?.LogWarning("Start unlocked after a restart: the slot does not hold the key the enable record names; the vault stays locked.");
-                return false;
-            }
+            if (!record.NamesDek(DekFingerprint.Of(masterDek)))
+                return "the slot does not hold the key the enable record names";
 
             if (SealedAndClosed)
             {
                 if (!await OpenSealedWithoutTheLockAsync(masterDek, slot.Door, ct).ConfigureAwait(false))
-                {
-                    _logger?.LogWarning("Start unlocked after a restart: the sealed unlock refused; the vault stays locked.");
-                    return false;
-                }
+                    return "the sealed unlock refused";
                 if (slot.Door is not null)
-                    try { await _sealedHost.SetDekFingerprintAsync(slot.Door.DoorId, record.DekFingerprint, ct).ConfigureAwait(false); }
+                    try { await _sealedHost!.SetDekFingerprintAsync(slot.Door.DoorId, DekFingerprint.Of(masterDek), ct).ConfigureAwait(false); }
                     catch (Exception ex) when (ex is not OperationCanceledException) { /* the next rewrite learns it from the door that was used */ }
-                return true;
+                return null;
             }
 
             var sentinel = await nodeRepo.GetSentinelAsync().ConfigureAwait(false);
             if (!MasterKeyManager.IsSentinelMissing(sentinel) && !MasterKeyManager.VerifySentinel(sentinel!, masterDek))
-            {
-                _logger?.LogWarning("Start unlocked after a restart: the key does not match this vault's sentinel; the vault stays locked.");
-                return false;
-            }
+                return "the key does not match this vault's sentinel";
 
             _session.UnlockWithDek(masterDek);   // ownership of the buffer moves to the session
             masterDek = null;
-            return true;
+            return null;
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(secret);
             if (masterDek is not null) CryptographicOperations.ZeroMemory(masterDek);
         }
     }
@@ -362,9 +421,7 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
             var slots = (await _slots.GetAllAsync().ConfigureAwait(false)).Where(s => s.SlotType == SlotType).ToList();
             if (slots.Count == 0) return;
             var record = File.Exists(RecordPath) ? ReadRecord() : null;
-            var stale = slots.Where(s => record is null
-                || !string.Equals(BootDoorHash.OfSlot(s.SlotId, s.SlotType, s.EncryptedMasterDek, s.IV, s.Salt, s.ArgonMemory, s.ArgonIterations, s.ArgonParallelism),
-                    record.SlotSha256, StringComparison.Ordinal)).ToList();
+            var stale = slots.Where(s => record is null || !record.Names(SlotHash(s))).ToList();
             if (stale.Count == 0) return;
 
             foreach (var slot in stale)
@@ -402,14 +459,16 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
             {
                 try
                 {
-                    var slot = evaluation.MatchingSlot!;
-                    var dek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.Iv, secret);
-                    enabled = string.Equals(DekFingerprint.Of(dek), evaluation.Record!.DekFingerprint, StringComparison.Ordinal);
-                    CryptographicOperations.ZeroMemory(dek);
-                }
-                catch (CryptographicException)
-                {
-                    enabled = false;
+                    // Any door the record names that the secret opens to a key the record names (its current or, mid-rotation, its next one).
+                    foreach (var slot in evaluation.MatchingSlots)
+                    {
+                        byte[] dek;
+                        try { dek = slot.Open(secret); }
+                        catch (CryptographicException) { continue; }
+                        enabled = evaluation.Record!.NamesDek(DekFingerprint.Of(dek));
+                        CryptographicOperations.ZeroMemory(dek);
+                        if (enabled) break;
+                    }
                 }
                 finally
                 {
@@ -464,26 +523,28 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
                 await SlotDoors.DeleteSlotAsync(_slots, _mirror, existing.SlotId).ConfigureAwait(false);
             EnsureUniqueIndex();
 
-            var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, secret);
+            // A sealed (v2) door (ADR 0012): the secret is the KEK, there is no salt.
+            var door = Doors.Seal(SlotType, secret, null, masterDek);
             var slot = new MasterKeyStore
             {
                 SlotType = SlotType,
-                EncryptedMasterDek = encryptedDek,
-                IV = iv,
+                EncryptedMasterDek = door.Box,
+                IV = door.Iv,
                 // No salt and no Argon2 columns: the password path never tries this slot, the secret is used directly as the KEK.
                 Salt = null,
                 ArgonMemory = null,
                 ArgonIterations = null,
                 ArgonParallelism = null,
                 CreatedAt = DateTime.UtcNow,
+                DoorVersion = Doors.V2,
+                DoorPublicKey = door.PublicKey,
+                DekFingerprint = door.DekFingerprint,
             };
             await SlotDoors.CreateSlotAsync(_slots, _factory, _mirror, slot, masterDek).ConfigureAwait(false);
             await SlotDoors.RewriteAsync(_mirror, _logger).ConfigureAwait(false);
 
             // The record is written last: until it exists the slot is stale and nothing unlocks.
-            var record = new ServerEnableRecord(1,
-                BootDoorHash.OfSlot(slot.SlotId, slot.SlotType, slot.EncryptedMasterDek, slot.IV, slot.Salt, slot.ArgonMemory, slot.ArgonIterations, slot.ArgonParallelism),
-                DekFingerprint.Of(masterDek), DateTime.UtcNow.ToString("o"));
+            var record = new ServerEnableRecord(1, SlotHash(slot), DekFingerprint.Of(masterDek), DateTime.UtcNow.ToString("o"));
             WriteRecord(record);
             recordWritten = true;
 
@@ -544,6 +605,125 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
         return Task.CompletedTask;
     }
 
+    // --- the quiet rotation (2.12) ---------------------------------------------------------------------------------------------------
+
+    /// <inheritdoc />
+    public async Task PrepareRotationAsync(ServerRotationDoor change, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // Only the record file: the rotation transaction is open, and the slot is read from it by the caller.
+            if (!File.Exists(RecordPath) || ReadRecord() is not { } record || !record.Names(change.OldSlotSha256)) return;
+            await ReplaceRecordAsync(record with
+            {
+                SlotSha256 = change.OldSlotSha256, NextSlotSha256 = change.NewSlotSha256, NextDekFingerprint = change.NewDekFingerprint,
+            }, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task OnDekRotatedAsync(bool committed, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!File.Exists(RecordPath) || ReadRecord() is not { NextSlotSha256: not null } record) return;
+            await ReplaceRecordAsync(record.Settled(toNext: committed), ct).ConfigureAwait(false);
+            if (committed)
+                _logger?.LogInformation("Start unlocked after a restart stays on: the server door was sealed to the new master key by the rotation.");
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
+    /// A record that still names two doors (a crash between a rotation's commit and its settle, or during the upgrade below) is settled on the
+    /// door the slot holds now. Called under the lock with the node open.
+    /// </summary>
+    private async Task SettleRecordAsync(ServerAutoUnlockEvaluation evaluation, CancellationToken ct)
+    {
+        if (evaluation.Record is not { NextSlotSha256: not null } record) return;
+        var row = (await _slots.GetAllAsync().ConfigureAwait(false)).FirstOrDefault(s => s.SlotType == SlotType && record.Names(SlotHash(s)));
+        if (row is null) return;
+        var toNext = string.Equals(SlotHash(row), record.NextSlotSha256, StringComparison.Ordinal);
+        await ReplaceRecordAsync(record.Settled(toNext), ct).ConfigureAwait(false);
+    }
+
+    // --- the upgrade of ADR 0012 -------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Seals an armed server's v1 slot again as a v2 door, as soon as the node is open and the key file is readable (ADR 0012), and rewrites the
+    /// enable record in the same step so the slot is never "stale": first the record names the door before AND the door after, then the door is
+    /// replaced in place (pending boot door first, the row, the rewrite), then the record names only the new door. A crash at any point leaves a
+    /// record that names the slot there is. Only when the slot yields the session's DEK and the record names that DEK. Best effort: logged, tried
+    /// again at the next unlock.
+    /// </summary>
+    public async Task UpgradeAsync(CancellationToken ct = default)
+    {
+        if (Role != HostRole.Server || !_session.IsUnlocked || SealedAndClosed) return;
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        byte[]? secret = null;
+        byte[]? dek = null;
+        byte[]? current = null;
+        try
+        {
+            var evaluation = await EvaluateAsync(ct).ConfigureAwait(false);
+            if (evaluation.State != ServerAutoUnlockState.Armed) return;
+            if (evaluation.Record!.NextSlotSha256 is not null)
+            {
+                await SettleRecordAsync(evaluation, ct).ConfigureAwait(false);
+                evaluation = await EvaluateAsync(ct).ConfigureAwait(false);
+                if (evaluation.State != ServerAutoUnlockState.Armed) return;
+            }
+            var row = (await _slots.GetAllAsync().ConfigureAwait(false))
+                .FirstOrDefault(s => s.SlotType == SlotType && s.SlotId == evaluation.MatchingSlot!.SlotId);
+            if (row is null || !Doors.NeedsUpgrade(row)) return;
+            var configured = ConfiguredKeyFilePath;
+            if (configured is not null && ConfiguredKeyFileAliasesNodeKeyFile(configured)) return;
+            secret = _keyFiles.ReadSecret(KeyFilePath, out _);
+            if (secret is null) return;
+            try { dek = Doors.OpenSlot(row, secret); }
+            catch (CryptographicException) { return; }
+            current = _session.GetMasterDek();
+            var record = evaluation.Record!;
+            if (!CryptographicOperations.FixedTimeEquals(dek, current)
+                || !string.Equals(DekFingerprint.Of(current), record.DekFingerprint, StringComparison.Ordinal))
+                return;   // the slot holds another key than the session's: it stays as it is (a rotation deals with it)
+
+            var replacement = Doors.WithDoor(row, Doors.Seal(SlotType, secret, null, current));
+            var oldHash = SlotHash(row);
+            var newHash = SlotHash(replacement);
+            await ReplaceRecordAsync(record with { SlotSha256 = oldHash, NextSlotSha256 = newHash }, ct).ConfigureAwait(false);
+            if (!await SlotDoors.ReplaceSlotDoorAsync(_slots, _mirror, replacement, row.EncryptedMasterDek, _logger).ConfigureAwait(false))
+            {
+                await ReplaceRecordAsync(record with { SlotSha256 = oldHash, NextSlotSha256 = null }, CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+            await ReplaceRecordAsync(record with { SlotSha256 = newHash, NextSlotSha256 = null }, CancellationToken.None).ConfigureAwait(false);
+            _logger?.LogInformation("Start unlocked after a restart: the server slot was sealed again in the door format of 2.12.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger?.LogWarning("Start unlocked after a restart: the server slot could not be upgraded ({Type}); it is tried again at the next unlock.",
+                ex.GetType().Name);
+        }
+        finally
+        {
+            if (secret is not null) CryptographicOperations.ZeroMemory(secret);
+            if (dek is not null) CryptographicOperations.ZeroMemory(dek);
+            if (current is not null) CryptographicOperations.ZeroMemory(current);
+            _lock.Release();
+        }
+    }
+
     // --- files and helpers -----------------------------------------------------------------------------------------------------
 
     private void WriteRecord(ServerEnableRecord record)
@@ -551,6 +731,10 @@ public sealed class ServerAutoUnlockService : IServerAutoUnlockLocalState
         DeleteRecordFile();
         OwnerOnlyFile.WriteNew(RecordPath, JsonSerializer.SerializeToUtf8Bytes(record, Json));
     }
+
+    /// <summary>Replaces an existing record in one atomic rename (never deleted first: between a delete and a write a crash would leave the slot "stale").</summary>
+    private Task ReplaceRecordAsync(ServerEnableRecord record, CancellationToken ct) =>
+        OwnerOnlyFile.ReplaceAsync(RecordPath, JsonSerializer.SerializeToUtf8Bytes(record, Json), ct);
 
     private void DeleteRecordFile()
     {

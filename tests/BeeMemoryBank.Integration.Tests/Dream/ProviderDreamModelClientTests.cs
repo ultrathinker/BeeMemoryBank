@@ -301,7 +301,7 @@ public class ProviderDreamModelClientTests : IAsyncLifetime
         var chatCall = () => ChatCompleteAsync(handler, chatLog);
         await chatCall.Should().ThrowAsync<ProviderHttpException>();
         chatLog.Lines.Should().NotBeEmpty().And.OnlyContain(l => l.Contains("HTTP 403") && !l.Contains(excerpt),
-            "no call logs a provider's body any more (review prov-r2): it can quote the decrypted notes the chat sent");
+            "no call logs a provider's body any more: it can quote the decrypted notes the chat sent");
     }
 
     [Fact]

@@ -60,7 +60,7 @@ public class DataPathResolutionTests : IDisposable
         fs.Write(new byte[4096], 0, 4096);
     }
 
-    // ── Этап 6, §6 пункт 1.3 — rescue is a no-op for non-default vaults ─────────
+    // ── Rescue is a no-op for non-default vaults ─────────
 
     /// <summary>
     /// Fix #4 regression guard: <c>LegacyDataRescue.TryRescue</c> must NOT be invoked at all

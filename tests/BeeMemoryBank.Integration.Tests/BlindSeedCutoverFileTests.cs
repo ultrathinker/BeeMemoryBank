@@ -4,13 +4,13 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-stage1 round 3 #3: the cutover's file moves under injected faults. The switch runs under a
+/// The cutover's file moves under injected faults. The switch runs under a
 /// retry wrapper that repeats the whole action after an IOException, and rollback and finish are
 /// repeated by the next start, so a failure between the main database file and one of its sidecars
 /// must never cost a byte of the old database: nothing of it is deleted, and every step resumes.
 /// A directory where a move wants to put a file is the injected fault (the rename fails there).
 ///
-/// <para>Codex security #3 is the same rule against the other way of losing that file: the durable
+/// <para>The same rule applies against the other way of losing that file: the durable
 /// marker itself, torn or unreadable, read as "no cutover was ever here" — and the directory holding
 /// the old database was deleted. A marker nobody can read is an unresolved cutover, never an absent
 /// one.</para>
@@ -145,7 +145,7 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
     }
 
     /// <summary>
-    /// Codex security #3: a marker that cannot be read is not "no cutover at all". The old database
+    /// a marker that cannot be read is not "no cutover at all". The old database
     /// beside it is the only way back, and a start that reads the marker as absent drops the whole
     /// directory — old database, old media and all. Here the switch has already moved both aside and
     /// the process died before the new ones were in: the old ones must come back, not vanish.
@@ -202,7 +202,7 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
     }
 
     /// <summary>
-    /// Codex round 2, security #9, the naming half. The marker's temporary file used to be the fixed
+    /// The naming half. The marker's temporary file used to be the fixed
     /// name <c>marker.json.tmp</c>, opened with <c>FileMode.Create</c>: anything already sitting at
     /// that predictable name is truncated and then renamed onto the marker — an unrelated file
     /// consumed, and, when that name is a link someone planted, the write landing wherever it points.
@@ -321,7 +321,7 @@ public sealed class BlindSeedCutoverFileTests : IDisposable
     }
 
     /// <summary>
-    /// Review A2-c: the staged database and its sidecars. The switch renames <c>new.db</c> onto the live path, and a
+    /// The staged database and its sidecars. The switch renames <c>new.db</c> onto the live path, and a
     /// rename moves a link as a link, so a <c>new.db</c> planted as one would become the live database's path. Refused
     /// before anything moves: the live database, its sidecars and the staged media all stay where they were.
     /// </summary>

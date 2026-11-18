@@ -182,7 +182,7 @@ public class RestoreSeederFetchTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// BMB-311 fix2 (R1): the download takes the token of the background work. A cancelled token ends it as a CANCELLATION - not as "this seeder failed, try the next one" and
+    /// BMB-311: the download takes the token of the background work. A cancelled token ends it as a CANCELLATION - not as "this seeder failed, try the next one" and
     /// then "all seeders failed" - and nothing is written.
     /// </summary>
     [Fact]

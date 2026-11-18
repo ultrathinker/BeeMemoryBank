@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
@@ -52,16 +53,23 @@ public static class KeyEndpoints
                 return Results.BadRequest(new ErrorResponse(hintProblem));
             // A client that goes away (or a node that is stopping) stops the change while it is still only computation; once the key slot is being written it runs to its end.
             using var stop = BeeMemoryBank.Api.Helpers.RequestCancellation.Linked(ctx);
-            if (callerId is { } userId)
+            try
             {
-                try { await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword, stop.Token, req.PasswordHint); }
-                catch (UnauthorizedAccessException) { throw new InvalidOperationException("Incorrect old password."); }
+                if (callerId is { } userId)
+                {
+                    try { await userService.ChangePasswordAsync(userId, req.OldPassword, req.NewPassword, stop.Token, req.PasswordHint); }
+                    catch (UnauthorizedAccessException) { throw new InvalidOperationException("Incorrect old password."); }
+                }
+                else
+                {
+                    // No user row (older clients on the slot-only rotation): nothing to attach a hint to, but the
+                    // mandatory-hint rule still applies at the door.
+                    await svc.ChangePasswordAsync(req.OldPassword, req.NewPassword, stop.Token);
+                }
             }
-            else
+            catch (ReplicatedUserException ex)
             {
-                // No user row (older clients on the slot-only rotation): nothing to attach a hint to, but the
-                // mandatory-hint rule still applies at the door.
-                await svc.ChangePasswordAsync(req.OldPassword, req.NewPassword, stop.Token);
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
             }
 
             // The new password is in memory only now: build this node's strong recovery box with it,
@@ -134,12 +142,24 @@ public static class KeyEndpoints
             return Results.Ok(new MasterPasswordNoticeResponse(false, null, null));
         });
 
-        group.MapPost("/add-recovery", async (KeyManagementService svc, SessionService session, HttpContext ctx) =>
+        group.MapPost("/add-recovery", async (AddRecoveryKeyRequest? req, KeyManagementService svc, SessionService session, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
             if (!session.IsUnlocked)
                 return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
 
-            var key = await svc.AddRecoveryKeyAsync();
+            // A recovery key is personal (release 2.12): it belongs to the superadmin who issues it, for themself. The signed-in
+            // person is the owner; a machine-local caller that names nobody falls back to the node's only superadmin (the service
+            // refuses when there is nobody or several to choose from). The owner is never taken from the request body.
+            var owner = CallerIdentity.Extract(ctx).UserId;
+            var (key, slotId) = await svc.IssueRecoveryKeyAsync(owner, req?.Label);
+            // A key that opens the whole vault was just minted: who did it, whose it is, and which slot it opens. Never the key itself.
+            var label = string.IsNullOrWhiteSpace(req?.Label) ? "" : $", label '{req.Label.Trim()}'";
+            if (owner is { } ownerId)
+                await auditRepo.LogAsync("key_slot", slotId.ToString(), "recovery_key_issued", "web",
+                    $"Recovery key (slot #{slotId}, owner user #{ownerId}) issued by user {ownerId}{label}");
+            else
+                await auditRepo.LogAsync("key_slot", slotId.ToString(), "recovery_key_issued", "system",
+                    $"Recovery key (slot #{slotId}) issued by a local caller for the node's only superadmin{label}");
             return Results.Ok(new RecoveryKeyResponse(key));
         });
 
@@ -174,6 +194,31 @@ public static class KeyEndpoints
         {
             await nodeRepo.SetRecoveryKeyNoticeDismissedAtAsync(DateTime.UtcNow);
             return Results.Ok(new { dismissed = true });
+        });
+
+        // GET /api/keys/recovery-list — every recovery key of this node for the Admin "Recovery keys" page: its slot, its owner
+        // (or "no owner" for a key issued before 2.12), when it was issued and its label. Superadmin only (the group); never key material.
+        group.MapGet("/recovery-list", async (KeyManagementService svc) =>
+        {
+            return Results.Ok(await svc.ListRecoveryKeysAsync());
+        });
+
+        // POST /api/keys/recovery-revoke — revoke one recovery key (its slot). Refused (409) if the slot is not a recovery key or if it is
+        // the last door a person can open. The actor is the signed-in superadmin; the audit entry names them and the key's owner, never the key.
+        group.MapPost("/recovery-revoke", async (RevokeRecoveryKeyRequest req, KeyManagementService svc, HttpContext ctx) =>
+        {
+            var actor = CallerIdentity.Extract(ctx).UserId?.ToString();
+            await svc.RevokeRecoveryKeyAsync(req.SlotId, actor);
+            return Results.Ok(new { revoked = true });
+        });
+
+        // POST /api/keys/recovery-revoke-unknown — revoke every recovery key with no owner (issued before 2.12). Refused as a whole (409)
+        // if it would leave no door a person can open. Returns how many were revoked.
+        group.MapPost("/recovery-revoke-unknown", async (KeyManagementService svc, HttpContext ctx) =>
+        {
+            var actor = CallerIdentity.Extract(ctx).UserId?.ToString();
+            var count = await svc.RevokeUnknownOwnerRecoveryKeysAsync(actor);
+            return Results.Ok(new { revoked = count });
         });
     }
 }

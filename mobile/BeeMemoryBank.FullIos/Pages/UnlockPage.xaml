@@ -1,21 +1,43 @@
 <?xml version="1.0" encoding="utf-8" ?>
+<!-- The locked vault in the design's gate shape (the Android UnlockPage's): brand and subtitle
+     centred, one card with the master password (eye), the hint when the phone can read it before
+     unlock, the wrong-password error and Open vault; below the card "or" and Face ID when it is
+     turned on. The card centres when it fits and scrolls when it does not (big text). -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.FullIos.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
              x:Class="BeeMemoryBank.FullIos.Pages.UnlockPage"
              Title="Locked"
              NavigationPage.HasNavigationBar="False">
-    <Grid RowDefinitions="*,Auto" Padding="24,64,24,24">
-        <VerticalStackLayout Spacing="12">
-            <Label Text="Bee Memory Bank" Style="{StaticResource Title}" />
-            <Label x:Name="NodeLabel" Style="{StaticResource Muted}" />
-            <Label Text="Locked" FontSize="20" Margin="0,24,0,0" />
-            <Entry x:Name="PasswordEntry" IsPassword="True" Placeholder="Master password" ReturnType="Go" Completed="OnUnlock" AutomationId="PasswordEntry" />
-            <Label x:Name="ErrorLabel" Style="{StaticResource Error}" IsVisible="False" />
-            <ActivityIndicator x:Name="Busy" IsRunning="False" IsVisible="False" />
-        </VerticalStackLayout>
-        <VerticalStackLayout Grid.Row="1" Spacing="12">
-            <Button x:Name="QuickButton" Style="{StaticResource Secondary}" IsVisible="False" Clicked="OnQuickUnlock" AutomationId="QuickUnlockButton" />
-            <Button x:Name="UnlockButton" Text="Unlock" Clicked="OnUnlock" AutomationId="UnlockButton" />
-        </VerticalStackLayout>
-    </Grid>
+    <ScrollView x:Name="GateViewer">
+        <Grid x:Name="GateRoot" Padding="24,32,24,24">
+            <VerticalStackLayout Spacing="18" MaximumWidthRequest="400"
+                                 HorizontalOptions="Center" VerticalOptions="Center">
+                <Label Text="{loc:Translate AppTitle}" Style="{StaticResource BrandTitle}" HorizontalOptions="Center" />
+                <Label x:Name="SubtitleLabel" Style="{StaticResource SubtitleLabel}" HorizontalOptions="Center"
+                       HorizontalTextAlignment="Center" />
+                <!-- The gate width, like the other gate cards: the width follows the viewport
+                     in code-behind (no Entry here to ask for the offered width). -->
+                <Border x:Name="UnlockCard" Style="{StaticResource CardBorder}" HorizontalOptions="Fill">
+                    <VerticalStackLayout Spacing="14">
+                        <VerticalStackLayout Spacing="4">
+                            <Label Text="{loc:Translate MasterPasswordLabel}" Style="{StaticResource FieldLabel}" />
+                            <controls:PasswordBox x:Name="PasswordEntry" Placeholder="{loc:Translate UnlockPasswordPlaceholder}"
+                                                  ReturnType="Go" Completed="OnUnlock" AutomationId="PasswordEntry" />
+                        </VerticalStackLayout>
+                        <Label x:Name="HintLabel" Style="{StaticResource ItemMeta}" IsVisible="False" />
+                        <Label x:Name="ErrorLabel" Style="{StaticResource FieldError}" IsVisible="False" />
+                        <Button x:Name="UnlockButton" Text="{loc:Translate UnlockButton}" Style="{StaticResource PrimaryButton}"
+                                Clicked="OnUnlock" AutomationId="UnlockButton" />
+                    </VerticalStackLayout>
+                </Border>
+                <Label x:Name="OrLabel" Text="{loc:Translate UnlockOr}" FontSize="13" HorizontalOptions="Center" IsVisible="False"
+                       TextColor="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}" />
+                <Button x:Name="QuickButton" Style="{StaticResource BiometricButton}" IsVisible="False"
+                        Clicked="OnQuickUnlock" AutomationId="QuickUnlockButton" />
+                <ActivityIndicator x:Name="Busy" IsRunning="False" IsVisible="False" />
+            </VerticalStackLayout>
+        </Grid>
+    </ScrollView>
 </ContentPage>

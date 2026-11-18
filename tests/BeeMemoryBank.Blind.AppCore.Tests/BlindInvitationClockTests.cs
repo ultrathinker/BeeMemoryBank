@@ -4,7 +4,7 @@ using BeeMemoryBank.Core.Models;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Fix round 1, MAJOR-7 and MINOR-1. A 410 to the status request is "this invitation is not valid" only when the device's clock and the hub's agree (the proof of the request carries
+/// A 410 to the status request is "this invitation is not valid" only when the device's clock and the hub's agree (the proof of the request carries
 /// the device's time, which the hub takes within ten minutes of its own): from a device whose clock is off it says nothing, and the card says that the clock is off, by how much, and keeps asking
 /// at a low rate - never "refused", never "expired". And a held Retry-After never postpones what the invitation running out means.
 /// </summary>

@@ -13,7 +13,8 @@ public class AgentRepository(DbConnectionFactory factory) : BaseRepository(facto
           kdf_version AS KdfVersion, salt AS Salt,
           status AS Status, created_at AS CreatedAt,
           last_accessed_at AS LastAccessedAt, request_count AS RequestCount,
-          owner_user_id AS OwnerUserId";
+          owner_user_id AS OwnerUserId, door_public_key AS DoorPublicKey, dek_fp AS DekFingerprint,
+          created_by_user_id AS CreatedByUserId";
 
     public async Task<Agent?> GetByKeyHashAsync(string keyHash)
     {
@@ -51,9 +52,11 @@ public class AgentRepository(DbConnectionFactory factory) : BaseRepository(facto
         using var conn = OpenConnection();
         return await conn.ExecuteScalarAsync<int>(
             @"INSERT INTO tbl_agent
-                (name, description, key_prefix, key_hash, encrypted_dek, dek_iv, kdf_version, salt, status, created_at, owner_user_id)
+                (name, description, key_prefix, key_hash, encrypted_dek, dek_iv, kdf_version, salt, status, created_at, owner_user_id,
+                 door_public_key, dek_fp, created_by_user_id)
               VALUES
-                (@Name, @Description, @KeyPrefix, @KeyHash, @EncryptedDek, @DekIV, @KdfVersion, @Salt, @Status, @CreatedAt, @OwnerUserId);
+                (@Name, @Description, @KeyPrefix, @KeyHash, @EncryptedDek, @DekIV, @KdfVersion, @Salt, @Status, @CreatedAt, @OwnerUserId,
+                 @DoorPublicKey, @DekFingerprint, @CreatedByUserId);
               SELECT last_insert_rowid()",
             agent);
     }
@@ -70,7 +73,7 @@ public class AgentRepository(DbConnectionFactory factory) : BaseRepository(facto
         // undeletes an agent.
         await conn.ExecuteAsync(
             @"UPDATE tbl_agent
-              SET status = 'D', encrypted_dek = NULL, dek_iv = NULL, salt = NULL, kdf_version = 0
+              SET status = 'D', encrypted_dek = NULL, dek_iv = NULL, salt = NULL, kdf_version = 0, door_public_key = NULL, dek_fp = NULL
               WHERE id = @id",
             new { id });
     }
@@ -93,7 +96,7 @@ public class AgentRepository(DbConnectionFactory factory) : BaseRepository(facto
         // does not care whether the row is marked revoked.
         return await conn.ExecuteAsync(
             @"UPDATE tbl_agent
-              SET encrypted_dek = NULL, dek_iv = NULL, salt = NULL, kdf_version = 0
+              SET encrypted_dek = NULL, dek_iv = NULL, salt = NULL, kdf_version = 0, door_public_key = NULL, dek_fp = NULL
               WHERE owner_user_id = @ownerUserId AND encrypted_dek IS NOT NULL",
             new { ownerUserId });
     }

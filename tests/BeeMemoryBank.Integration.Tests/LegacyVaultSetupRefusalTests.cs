@@ -11,7 +11,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// <summary>
 /// The setup endpoints against a database that already belongs to somebody.
 ///
-/// <para>R2's live mixed-version test (release A2, finding U2c) ran /api/init/standalone against a
+/// <para>A live mixed-version test ran /api/init/standalone against a
 /// vault in the pre-unification shape and it SUCCEEDED: a second tbl_node_identity row and a
 /// setupadmin with a fresh master DEK, next to data still sealed under the old one. Recognizing the
 /// legacy shape in <c>IsInitializedAsync</c> closes that particular door; this is the guard behind it,

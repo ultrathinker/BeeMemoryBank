@@ -89,6 +89,16 @@ public class EventAuthorizationGuardTests
             // Step A: the metadata key record and the one-way activation are vault-wide decisions.
             EventTypes.MetadataKeySet,
             EventTypes.MetadataActivation,
+            // 2.12 (plan WS-D): a node's new identity key and the settlement of two competing keys decide who signs for a node.
+            EventTypes.NodeKeyRotated,
+            EventTypes.NodeKeyConfirm,
+            // Shared nodes (release 2.12.0): naming accounts home and issuing replicated superadmin doors are superadmin decisions.
+            EventTypes.AccountsHomeSet,
+            EventTypes.SuperadminDoorsSet,
+            // The removal of a superadmin (release 2.12.0): a tombstone and the state of a removal process.
+            EventTypes.PersonRemoved,
+            EventTypes.OffboardingState,
+            EventTypes.NodeRekeyRequest,
         });
     }
 

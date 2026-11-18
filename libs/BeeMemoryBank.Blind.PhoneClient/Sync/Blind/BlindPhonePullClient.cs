@@ -162,7 +162,8 @@ public sealed class BlindPhonePullClient(
 
     private static async Task<bool> IsProvenOwnAsync(IEventLogRepository log, NodeIdentity identity, SyncEvent evt) =>
         await log.ExistsAsync(evt.EventId) || (identity.Ed25519PublicKey is { Length: > 0 }
-            && Ed25519Signer.Verify(identity.Ed25519PublicKey, EventSignature.BuildPayload(evt), evt.Signature));
+            // A blind copy never re-keys (plan WS-D D5): its own echo is its current key (the helper's current-key check).
+            && NodeEventVerifier.SignatureVerifies(identity.Ed25519PublicKey, EventSignature.BuildPayload(evt), evt.Signature));
 
     private async Task ReportPositionAsync(HttpClient http, string address, string token, long sequence, int declaredProtocol, CancellationToken ct)
     {

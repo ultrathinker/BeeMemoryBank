@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Codex security #5. What a peer reports at <c>POST /api/sync/report-position</c> is a claim about
+/// What a peer reports at <c>POST /api/sync/report-position</c> is a claim about
 /// how far it has read OUR log, and that number is what lets the log be cut: a blind node trims up to
 /// the position every active peer has reached (<c>BlindLogTrimmer</c> takes the minimum, and a peer
 /// that never reported pins the log whole), and ordinary compaction reads the same rows. Nothing
@@ -71,7 +71,7 @@ public class SyncReportPositionTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Codex round 2, security #3. Serving a page is not the peer having read it: <c>/api/sync/events</c>
+    /// Serving a page is not the peer having read it: <c>/api/sync/events</c>
     /// records how far it has been *sent* the moment it answers, and the report is the peer's own word
     /// about what it applied. The two are kept apart — only the reported one may delete events — and
     /// this is the case that tells them apart: an honest peer that has applied less than it was served

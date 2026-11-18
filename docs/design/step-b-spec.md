@@ -1502,7 +1502,7 @@ never has one), and a plain server that never uses the checkbox starts exactly a
   3. *stale slot* - a slot exists and the record is missing, unreadable or does not match it: the slot came with restored or copied
      data, or a crash left a half-done enable. It is **never used**: nothing is unlocked and no key file is read. The state is
      repaired where that needs no key: the boot door is retired and boot meta `server_auto_unlock = 0` (sealed node), the slot row is
-     deleted at once on a plain node and by the open step `StaleServerSlot` (order 50, every open) on a sealed node, an audit entry
+     deleted at once on a plain node and by the open step `StaleServerSlot` (order 150, after the migrations, every open) on a sealed node, an audit entry
      `server_auto_unlock_retired_stale` (no names) is written, and a node-created key file is wiped and removed (an operator's file
      never is). The status shows `server: false` and a one-time notice "Start unlocked after a restart was switched off because this
      data came from a backup or a copy; turn it on again if you want it";

@@ -57,11 +57,32 @@ public static class PhonePeers
         WhitelistEntry node, ChannelPlan plan, IReadOnlyList<PeerChannelRow> rows, PeerReachability? reachability, PeerContactLog.Contact? contact,
         TimeSpan syncInterval, bool ownCycleRecent, DateTime nowUtc)
     {
-        DateTime? directAt = null;
-        string? directScope = null;
-        if (reachability?.DirectOf(node.NodeId) is { } direct) (directAt, directScope) = direct;
-        else if (rows.Where(r => r.LastOkAt is not null).MaxBy(r => r.LastOkAt) is { } ok) (directAt, directScope) = (ok.LastOkAt, ok.Scope);
+        var state = ReachStateOf(node, plan, rows, reachability, contact, syncInterval, ownCycleRecent, nowUtc);
+        var name = string.IsNullOrWhiteSpace(node.DisplayName) ? "it" : node.DisplayName;
 
+        return state switch
+        {
+            ReachabilityStates.DirectLan => "Direct, on this network",
+            ReachabilityStates.DirectInternet => "Direct, over the internet",
+            ReachabilityStates.ViaRelay => reachability?.RelayOf(node.NodeId) is { } r && !string.IsNullOrWhiteSpace(r.ViaName)
+                ? $"Not on this network; reachable through {r.ViaName} ({Ago(r.SeenAt, nowUtc)})"
+                : "Not on this network; its changes arrive through another device",
+            ReachabilityStates.Away => "Not on this network",
+            ReachabilityStates.OldVersion => $"Direct sync on this network needs an update on {name}",
+            ReachabilityStates.NotAnswering => contact?.OutboundFailingSince is { } since ? $"Not answering since {Ago(since, nowUtc)}" : "Not answering",
+            ReachabilityStates.Silent when ownCycleRecent => new[] { DirectAtOf(node, rows, reachability), reachability?.RelayOf(node.NodeId)?.SeenAt }.Max() is { } last
+                ? $"Not heard from for {(int)(nowUtc - last).TotalDays} days"
+                : "Not heard from",
+            _ => null,
+        };
+    }
+
+    /// <summary>The reachability state behind <see cref="StatusText"/>, for the screens' own words (the card colours it).</summary>
+    public static string ReachStateOf(
+        WhitelistEntry node, ChannelPlan plan, IReadOnlyList<PeerChannelRow> rows, PeerReachability? reachability, PeerContactLog.Contact? contact,
+        TimeSpan syncInterval, bool ownCycleRecent, DateTime nowUtc)
+    {
+        var (directAt, directScope) = DirectOf(node, rows, reachability);
         var relay = reachability?.RelayOf(node.NodeId);
         var summary = new PeerReachability.PlanSummary(plan.All.Count > 0, plan.HasDialable, plan.OnlyLan, plan.AnyLanOnCurrentNetwork, nowUtc);
         bool? hasLanSync = node.LastCapabilitiesSeenAt is null
@@ -69,25 +90,18 @@ public static class PhonePeers
             : MetadataCapabilities.HasPeerEndpointsV1(MetadataCapabilities.Parse(node.LastCapabilities));
         var inputs = new PeerReachability.Inputs(
             TimeSpan.FromTicks((long)(syncInterval.Ticks * 2.5)), directAt, directScope, null, contact?.OutboundFailingSince, relay, null, summary, hasLanSync);
-        var state = PeerReachability.Compute(inputs, nowUtc);
-        var name = string.IsNullOrWhiteSpace(node.DisplayName) ? "it" : node.DisplayName;
-
-        return state switch
-        {
-            ReachabilityStates.DirectLan => "Direct, on this network",
-            ReachabilityStates.DirectInternet => "Direct, over the internet",
-            ReachabilityStates.ViaRelay => relay is { } r && !string.IsNullOrWhiteSpace(r.ViaName)
-                ? $"Not on this network; reachable through {r.ViaName} ({Ago(r.SeenAt, nowUtc)})"
-                : "Not on this network; its changes arrive through another device",
-            ReachabilityStates.Away => "Not on this network",
-            ReachabilityStates.OldVersion => $"Direct sync on this network needs an update on {name}",
-            ReachabilityStates.NotAnswering => contact?.OutboundFailingSince is { } since ? $"Not answering since {Ago(since, nowUtc)}" : "Not answering",
-            ReachabilityStates.Silent when ownCycleRecent => new[] { directAt, relay?.SeenAt }.Max() is { } last
-                ? $"Not heard from for {(int)(nowUtc - last).TotalDays} days"
-                : "Not heard from",
-            _ => null,
-        };
+        return PeerReachability.Compute(inputs, nowUtc);
     }
+
+    private static (DateTime? At, string? Scope) DirectOf(WhitelistEntry node, IReadOnlyList<PeerChannelRow> rows, PeerReachability? reachability)
+    {
+        if (reachability?.DirectOf(node.NodeId) is { } direct) return (direct.At, direct.Scope);
+        if (rows.Where(r => r.LastOkAt is not null).MaxBy(r => r.LastOkAt) is { } ok) return (ok.LastOkAt, ok.Scope);
+        return (null, null);
+    }
+
+    private static DateTime? DirectAtOf(WhitelistEntry node, IReadOnlyList<PeerChannelRow> rows, PeerReachability? reachability)
+        => DirectOf(node, rows, reachability).At;
 
     /// <summary>"just now", "5 min ago", "3 h ago", "2 d ago".</summary>
     public static string Ago(DateTime atUtc, DateTime nowUtc)

@@ -1,14 +1,16 @@
 appId: com.beememorybank.mobile
 ---
-# === GO HOME: get to a root page with hamburger visible ===
+# === GO HOME: get to a root tab page ===
 #
 # 1. launchApp — if app exited or is in background, brings it back
 # 2. If on Unlock screen — enter password
-# 3. If drawer is open (no hamburger, no "Navigate up") — tap right side to close
-# 4. If on a pushed page ("Navigate up" visible) — press back (up to 6 times)
+# 3. If on a pushed page ("Navigate up" visible) — press back (up to 6 times)
 #
-# After this flow, hamburger ("Open navigation drawer") is visible.
-# Each test then opens drawer and navigates where it needs.
+# After this flow the four-tab bar is visible (Tree / Search / Sync / Settings).
+# There is no navigation drawer any more: each test taps its tab directly.
+# Tab taps are by point (12% / 37% / 62% / 87% of the width, near the bottom):
+# the header title shows the same word as the tab label, so a text tap would
+# land on the header instead of the tab.
 
 # Restart app to get clean navigation state
 - launchApp:
@@ -34,7 +36,8 @@ appId: com.beememorybank.mobile
 # Handle Unlock screen
 - runFlow:
     when:
-      visible: "Enter password to unlock"
+      visible:
+        id: "com.beememorybank.mobile:id/UnlockButton"
     commands:
       - tapOn:
           id: "com.beememorybank.mobile:id/PasswordEntry"
@@ -44,20 +47,8 @@ appId: com.beememorybank.mobile
           id: "com.beememorybank.mobile:id/UnlockButton"
       - extendedWaitUntil:
           visible:
-            text: "Node Info"
+            text: "State"
           timeout: 30000
-
-# If drawer is open: no hamburger AND no "Navigate up" — tap right side to close drawer
-- runFlow:
-    when:
-      notVisible: "Open navigation drawer"
-    commands:
-      - runFlow:
-          when:
-            notVisible: "Navigate up"
-          commands:
-            - tapOn:
-                point: "90%,50%"
 
 # Pop pushed pages: press back while "Navigate up" is visible
 - runFlow:

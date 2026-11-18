@@ -112,7 +112,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
             var salt = KeyDerivation.GenerateSalt();
             var kek = KeyDerivation.DeriveKek(_password, salt, (int)s.Mem, (int)s.It, (int)s.Par);
             var (w, iv) = MasterKeyManager.WrapMasterDek(dc, kek);
-            await db.ExecuteAsync("UPDATE tbl_key_slot SET encrypted_master_dek = @w, iv = @iv, salt = @salt WHERE slot_id = @_slot", new { w, iv, salt, _slot });
+            await db.ExecuteAsync("UPDATE tbl_key_slot SET encrypted_master_dek = @w, iv = @iv, salt = @salt, door_version = 1, door_public_key = NULL, dek_fp = NULL WHERE slot_id = @_slot", new { w, iv, salt, _slot });
             await db.ExecuteAsync("UPDATE tbl_user SET key_slot_id = NULL WHERE key_slot_id <> @_slot", new { _slot });
             await db.ExecuteAsync("DELETE FROM tbl_key_slot WHERE slot_id <> @_slot", new { _slot });
             await db.ExecuteAsync("UPDATE tbl_agent SET encrypted_dek = NULL, dek_iv = NULL");
@@ -248,7 +248,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
         db.Open();
         var slot = db.QuerySingle<(byte[] W, byte[] Iv, byte[] Salt, long Mem, long It, long Par)>(
             "SELECT encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot");
-        var dc = MasterKeyManager.UnwrapMasterDek(slot.W, slot.Iv, KeyDerivation.DeriveKek(Password, slot.Salt, (int)slot.Mem, (int)slot.It, (int)slot.Par));
+        var dc = BeeMemoryBank.Crypto.Doors.OpenByShape("user", slot.W, slot.Iv, KeyDerivation.DeriveKek(Password, slot.Salt, (int)slot.Mem, (int)slot.It, (int)slot.Par), slot.Salt);
         MasterKeyManager.VerifySentinel(db.ExecuteScalar<byte[]>("SELECT sentinel_value FROM tbl_node_identity"), dc).Should().BeTrue();
         var b = db.QuerySingle<(byte[] W, byte[] DekIv, byte[] Iv, byte[] Ct)>(
             "SELECT b.encrypted_dek, b.dek_iv, b.iv, bl.data FROM tbl_article_body b JOIN tbl_blob bl ON bl.hash = b.ciphertext_hash WHERE b.article_id = @a COLLATE NOCASE",
@@ -276,7 +276,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
         AssertOldVaultInUse(await RunAsync(password: "not the owner"), RekeyExit.PreflightRefused);
     }
 
-    /// <summary>BMB-307 fix2 (M2): a vault without a sentinel has no owner to take the keys from, whether the column is NULL or an empty BLOB (the one predicate, NodeSentinel).</summary>
+    /// <summary>BMB-307: a vault without a sentinel has no owner to take the keys from, whether the column is NULL or an empty BLOB (the one predicate, NodeSentinel).</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -407,7 +407,7 @@ public sealed class RekeyVerbTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review release-b R1-8: an old ciphertext hidden in a file the carry-over brings from D (here, under certs/). The
+    /// An old ciphertext hidden in a file the carry-over brings from D (here, under certs/). The
     /// last D1 scan runs after the carry-over, so it sees it and the run fails before the swap.
     /// </summary>
     [Fact]

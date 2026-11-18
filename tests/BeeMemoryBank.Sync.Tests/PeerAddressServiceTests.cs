@@ -14,7 +14,7 @@ using Xunit;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// BMB-307 fix round (F3, F4, F6, F7, F8): the ONE writer of a peer's address, run against a real node (real event log, whitelist and signing) with a fake network.
+/// BMB-307: the ONE writer of a peer's address, run against a real node (real event log, whitelist and signing) with a fake network.
 /// Nothing is sent before the policy has accepted the address, the same canonical address is a no-op, the peer's key must be the one on record, what the loop
 /// learned about the old address is forgotten, and the audit line carries fingerprints, never the address.
 /// </summary>

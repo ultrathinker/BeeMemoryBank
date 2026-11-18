@@ -7,6 +7,7 @@ using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage;
 using BeeMemoryBank.Storage.Sqlite;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BeeMemoryBank.Integration.Tests;
@@ -214,5 +215,59 @@ public class AgentAutoUnlockTests : IAsyncLifetime
         ctx.Items.ContainsKey("AuthAgent").Should().BeFalse();
         ctx.Items.ContainsKey("CallerIdentity").Should().BeFalse();
         _session.IsUnlocked.Should().BeFalse();
+    }
+
+    // ---- sealed doors (ADR 0012) --------------------------------------------------------------------------------------------------
+
+    /// <summary>A request with the services the door upgrade reads (the database; no mirror on this plain node).</summary>
+    private DefaultHttpContext ServedRequestWith(string apiKey)
+    {
+        var ctx = RequestWith(apiKey);
+        ctx.RequestServices = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSingleton<IDbConnectionFactory>(_factory)
+            .BuildServiceProvider();
+        return ctx;
+    }
+
+    [Fact]
+    public async Task AV1AutoUnlockAgent_UnlocksTheLockedVault_AndIsSealedAgainAtThatFirstRequest_AndStillUnlocksAfterwards()
+    {
+        await _session.UnlockAsync(Password);
+        var dek = _session.GetMasterDek();
+        var admin = (await _userRepo.GetByUsernameAsync("admin"))!;
+        var apiKey = await CreateWrappedAgentAsync(admin.Id);
+        _session.Lock();
+
+        await CreateMiddleware().InvokeAsync(ServedRequestWith(apiKey), _agentRepo, _userRepo, _session, _remoteTokenRepo);
+
+        _session.IsUnlocked.Should().BeTrue("a v1 agent door still opens the vault");
+        var agent = (await _agentRepo.GetByKeyHashAsync(AgentKeyHelper.ComputeKeyHash(apiKey)))!;
+        agent.KdfVersion.Should().Be(Agent.SealedDoorKdfVersion, "its first authenticated request seals it again");
+        agent.DoorPublicKey.Should().HaveCount(DoorBox.PublicKeySize);
+        agent.EncryptedDek.Should().HaveCount(DoorBox.BoxSize);
+        agent.DekFingerprint.Should().Be(DekFingerprint.Of(dek));
+
+        _session.Lock();
+        await CreateMiddleware().InvokeAsync(ServedRequestWith(apiKey), _agentRepo, _userRepo, _session, _remoteTokenRepo);
+        _session.IsUnlocked.Should().BeTrue("the sealed agent door opens the vault with the same key");
+        _session.GetMasterDek().Should().Equal(dek);
+        (await _agentRepo.GetByKeyHashAsync(AgentKeyHelper.ComputeKeyHash(apiKey)))!.EncryptedDek.Should().Equal(agent.EncryptedDek,
+            "a v2 door is left alone");
+    }
+
+    [Fact]
+    public async Task AnAgentWithAWrongKeyIsNotUpgradedAndUnlocksNothing()
+    {
+        await _session.UnlockAsync(Password);
+        var admin = (await _userRepo.GetByUsernameAsync("admin"))!;
+        var apiKey = await CreateWrappedAgentAsync(admin.Id);
+        var before = (await _agentRepo.GetByKeyHashAsync(AgentKeyHelper.ComputeKeyHash(apiKey)))!;
+        _session.Lock();
+
+        // The same row reached with a key whose hash matches nothing: no agent, nothing opened, nothing written.
+        await CreateMiddleware().InvokeAsync(ServedRequestWith(AgentKeyHelper.GenerateApiKey()), _agentRepo, _userRepo, _session, _remoteTokenRepo);
+
+        _session.IsUnlocked.Should().BeFalse();
+        (await _agentRepo.GetByKeyHashAsync(AgentKeyHelper.ComputeKeyHash(apiKey)))!.EncryptedDek.Should().Equal(before.EncryptedDek);
     }
 }

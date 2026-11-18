@@ -26,6 +26,26 @@ public static class DekRotationEndpoints
         var group = app.MapGroup("/api/dek-rotation").WithTags("DekRotation")
             .RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 
+        // The bridge from an old master key (2.12): the v1 doors a rotation could not re-seal and the chain that lets them reach the
+        // current key. Shown on the Master key page; the owner can remove it at once.
+        group.MapGet("/bridge", async (BeeMemoryBank.Sync.DekRotation.DekBridgeService bridge) => Results.Ok(await bridge.GetReportAsync()));
+
+        group.MapPost("/bridge/remove", async (BeeMemoryBank.Sync.DekRotation.DekBridgeService bridge, SessionService session, HttpContext ctx) =>
+        {
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+            var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() is { Length: > 0 } uid ? $"user {uid}" : "system";
+            try
+            {
+                var removal = await bridge.RemoveNowAsync(actor);
+                return Results.Ok(new { removal.DoorsRemoved, removal.ChainRowsCleared });
+            }
+            catch (InvalidOperationException)
+            {
+                return Results.Json(new ErrorResponse(BeeMemoryBank.Sync.DekRotation.DekBridgeService.NobodyLeftRefusal), statusCode: 409);
+            }
+        });
+
         group.MapPost("/propose", async (
             ProposeDekRotationRequest req,
             DekRotationService svc,
@@ -43,7 +63,8 @@ public static class DekRotationEndpoints
                 if (int.TryParse(ctx.Request.Headers["X-User-Id"].FirstOrDefault(), out var uid))
                     initiatorUserId = uid;
 
-                var commitEventId = await svc.ProposeRotationAsync(req.MasterPassword, initiatorUserId);
+                // The reason is taken from a superadmin only: the group is superadmin-only, and the shape is checked by the service.
+                var commitEventId = await svc.ProposeRotationAsync(req.MasterPassword, initiatorUserId, string.IsNullOrWhiteSpace(req.Reason) ? null : req.Reason);
 
                 var actorId = initiatorUserId?.ToString() ?? "system";
                 await auditRepo.LogAsync(
@@ -51,7 +72,7 @@ public static class DekRotationEndpoints
                     commitEventId.ToString(),
                     "dek_rotation_proposed",
                     "web",
-                    $"DEK rotation proposed by user {actorId}");
+                    $"DEK rotation proposed by user {actorId}" + (string.IsNullOrWhiteSpace(req.Reason) ? "" : $"; reason {req.Reason}"));
 
                 return Results.Ok(new { commitEventId });
             }
@@ -73,7 +94,8 @@ public static class DekRotationEndpoints
         // work. For large vaults the rewrap loop takes minutes, longer than nginx/browser
         // timeouts. UI already polls /progress; password / "already applied" errors surface as
         // currentStep=Failed + errorMessage in the next poll. "Another rotation is in progress"
-        // is answered right here with 409: the lock is claimed before this handler returns.
+        // and a held key-operation lock (an offline or identity re-key) are answered right here with
+        // 409: both locks are claimed before this handler returns.
         group.MapPost("/accept", (
             AcceptDekRotationRequest req,
             DekRotationService svc,
@@ -88,9 +110,9 @@ public static class DekRotationEndpoints
             if (int.TryParse(ctx.Request.Headers["X-User-Id"].FirstOrDefault(), out var uid))
                 initiatorUserId = uid;
 
-            var accept = svc.TryStartAcceptCommit(req.CommitEventId, req.MasterPassword, initiatorUserId);
+            var accept = svc.TryStartAcceptCommit(req.CommitEventId, req.MasterPassword, initiatorUserId, out var refusal);
             if (accept == null)
-                return Results.Json(new ErrorResponse("Another rotation is in progress."), statusCode: 409);
+                return Results.Json(new ErrorResponse(refusal ?? DekRotationService.AnotherRotationRefusal), statusCode: 409);
 
             _ = Task.Run(async () =>
             {

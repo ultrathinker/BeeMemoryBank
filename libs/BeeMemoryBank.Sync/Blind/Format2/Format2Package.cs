@@ -208,6 +208,22 @@ public static class Format2Package
         return null;
     }
 
+    /// <summary>Writes one entry of a .tar.gz to <paramref name="targetPath"/>, at most <paramref name="maximumBytes"/>; false when it is absent.</summary>
+    public static async Task<bool> ExtractEntryAsync(string archivePath, string name, string targetPath, long maximumBytes, CancellationToken ct = default)
+    {
+        await using var file = File.OpenRead(archivePath);
+        await using var gzip = new GZipStream(file, CompressionMode.Decompress);
+        using var tar = new TarReader(gzip);
+        while (await tar.GetNextEntryAsync(cancellationToken: ct) is { } entry)
+        {
+            if (entry.Name != name) continue;
+            await using var output = File.Create(targetPath);
+            if (entry.DataStream is not null) await CopyWithLimitAsync(entry.DataStream, output, maximumBytes, ct);
+            return true;
+        }
+        return false;
+    }
+
     /// <summary>Copies at most <paramref name="maximumBytes"/>; a longer stream is refused.</summary>
     public static async Task<long> CopyWithLimitAsync(Stream input, Stream output, long maximumBytes, CancellationToken ct)
     {

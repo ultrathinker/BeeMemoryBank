@@ -5,7 +5,7 @@ using BeeMemoryBank.Rekey;
 namespace BeeMemoryBank.Rekey.Tests;
 
 /// <summary>
-/// Review release-b-fix #2: a vault reached through a link is refused. D itself, or any directory above it, being a
+/// A vault reached through a link is refused. D itself, or any directory above it, being a
 /// junction or symbolic link, the verb stops before it locks, creates or reads anything, and the carry-over refuses such
 /// a source. Symbolic links everywhere; on Windows, junctions as well (they need no special right). Where the account may
 /// not create a link, the test has nothing to check and returns.

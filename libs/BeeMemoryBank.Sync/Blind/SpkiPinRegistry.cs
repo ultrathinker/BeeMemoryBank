@@ -106,7 +106,7 @@ public sealed class SpkiPinRegistry(IServiceScopeFactory scopeFactory, TlsTrustA
     internal SocketsHttpHandler NewSocketsHandlerFor(PeerNetwork net, PeerTlsAnchor? anchor) => new()
     {
         // A redirect would take the request to a host the pin never covered — an unpinned host
-        // with any CA-valid certificate passes the ordinary check (review L-stage1 #5).
+        // with any CA-valid certificate passes the ordinary check.
         AllowAutoRedirect = false,
         // A proxy would resolve and connect on this node's behalf: the check below would judge the proxy, not the peer.
         UseProxy = false,

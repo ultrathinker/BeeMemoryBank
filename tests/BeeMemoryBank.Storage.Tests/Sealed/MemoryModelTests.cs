@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Storage.Tests.Sealed;
 
 /// <summary>
-/// BMB-304 fix round, findings 1, 2 and 7: the memory budget is ONE model of the limit that really governs a whole-image allocation (the heap limit the
+/// BMB-304: the memory budget is ONE model of the limit that really governs a whole-image allocation (the heap limit the
 /// runtime enforces and the limit of the process: a container's cgroup, a Windows job, the machine), the recommended limit comes from the same model, and
 /// every whole-image allocation goes through it - the container codec's buffers, its copy, and the importer's native copy of a legacy image.
 /// </summary>
@@ -171,7 +171,7 @@ public sealed class MemoryModelTests : IDisposable
         MemoryLimits.CgroupLimit(_ => null).Should().BeNull();
     }
 
-    // ---------------------------------------------------------------- what the limit is charged for: the cgroup's usage (BMB-304 fix2)
+    // ---------------------------------------------------------------- what the limit is charged for: the cgroup's usage (BMB-304)
 
     [Fact]
     public void Cgroup_v2_usage_is_memory_current_less_the_inactive_file_cache_of_the_cgroup_that_has_the_limit()

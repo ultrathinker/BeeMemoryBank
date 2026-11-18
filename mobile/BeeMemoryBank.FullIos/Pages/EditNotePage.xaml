@@ -1,21 +1,135 @@
 <?xml version="1.0" encoding="utf-8" ?>
+<!-- The editor in the design's shape (the Android editor's layout): captioned fields in the
+     rounded shells, the body in its own shell, Save in the header and at the bottom of the
+     scroll (both AutomationIds kept), the bottom navigation hidden. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.FullIos.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
              x:Class="BeeMemoryBank.FullIos.Pages.EditNotePage"
-             Title="Edit">
+             Title="Edit"
+             Shell.TabBarIsVisible="False">
     <ContentPage.ToolbarItems>
-        <ToolbarItem Text="Save" Clicked="OnSave" AutomationId="SaveToolbarButton" />
+        <ToolbarItem Text="{loc:Translate Save}" Clicked="OnSave" AutomationId="SaveToolbarButton" />
     </ContentPage.ToolbarItems>
-    <Grid RowDefinitions="Auto,Auto,*,Auto" Padding="16,4,16,12" RowSpacing="8">
-        <Entry x:Name="TitleEntry" Placeholder="Title" FontSize="20" FontAttributes="Bold" TextChanged="OnChanged" AutomationId="TitleEntry" />
-        <Grid Grid.Row="1" ColumnDefinitions="Auto,*" ColumnSpacing="8">
-            <Label Text="Folder" Style="{StaticResource Muted}" VerticalOptions="Center" />
-            <Entry Grid.Column="1" x:Name="PathEntry" Placeholder="/" FontSize="15" Keyboard="Url" TextChanged="OnChanged" />
-        </Grid>
-        <Editor Grid.Row="2" x:Name="BodyEditor" Placeholder="Write in Markdown…" TextChanged="OnChanged" AutomationId="BodyEditor" />
-        <VerticalStackLayout Grid.Row="3" Spacing="6">
-            <Label x:Name="ErrorLabel" Style="{StaticResource Error}" IsVisible="False" />
-            <Button x:Name="SaveButton" Text="Save" Clicked="OnSave" AutomationId="SaveButton" />
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="14">
+            <VerticalStackLayout Spacing="6">
+                <Label Text="{loc:Translate TitleLabel}" Style="{StaticResource FieldLabel}" />
+                <Entry x:Name="TitleEntry" Placeholder="{loc:Translate TitlePlaceholder}" TextChanged="OnChanged" AutomationId="TitleEntry" />
+            </VerticalStackLayout>
+            <VerticalStackLayout Spacing="6">
+                <Label Text="{loc:Translate FolderLabel}" Style="{StaticResource FieldLabel}" />
+                <!-- The field itself is the one control: a tap opens the folder picker. -->
+                <Border Style="{StaticResource InputShell}" AutomationId="ChooseFolderButton"
+                        SemanticProperties.Description="{loc:Translate ChooseFolder}">
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Tapped="OnChooseFolder" />
+                    </Border.GestureRecognizers>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <Label Grid.Column="0" x:Name="PathValue" VerticalOptions="Center" />
+                        <Image Grid.Column="1" WidthRequest="18" HeightRequest="18" VerticalOptions="Center"
+                               Source="{AppThemeBinding Light=icon_row_chevron_light.png, Dark=icon_row_chevron_dark.png}"
+                               Rotation="90" />
+                    </Grid>
+                </Border>
+            </VerticalStackLayout>
+            <VerticalStackLayout Spacing="6">
+                <Label Text="{loc:Translate TagsLabel}" Style="{StaticResource FieldLabel}" />
+                <controls:WrapLayout x:Name="TagChips" Spacing="8" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <Entry Grid.Column="0" x:Name="TagEntry" Placeholder="{loc:Translate AddTagPlaceholder}"
+                           ReturnType="Done" Completed="OnAddTag" AutomationId="TagEntry" />
+                    <Button Grid.Column="1" Text="{loc:Translate AddTag}" Style="{StaticResource SecondaryButton}"
+                            Clicked="OnAddTag" AutomationId="AddTagButton" />
+                </Grid>
+            </VerticalStackLayout>
+            <VerticalStackLayout Spacing="6">
+                <controls:InfoRow Label="{loc:Translate ContentLabel}">
+                    <controls:InfoRow.Value>
+                        <controls:SegmentedControl x:Name="ModeSegments" />
+                    </controls:InfoRow.Value>
+                </controls:InfoRow>
+                <!-- The formatting toolbar: heading, bold, list, link, image (the Android editor). -->
+                <Border x:Name="EditorToolbar"
+                        BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                        Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                        StrokeThickness="1" StrokeShape="RoundRectangle 12" Padding="6">
+                    <Grid ColumnDefinitions="*,*,*,*,*" ColumnSpacing="6">
+                        <Button Grid.Column="0" Text="H2" Style="{StaticResource EditorToolbarButton}"
+                                SemanticProperties.Description="{loc:Translate ToolbarHeading}"
+                                Clicked="OnToolbarHeading" AutomationId="ToolbarHeadingButton" />
+                        <Button Grid.Column="1" Text="B" Style="{StaticResource EditorToolbarButton}"
+                                SemanticProperties.Description="{loc:Translate ToolbarBold}"
+                                Clicked="OnToolbarBold" AutomationId="ToolbarBoldButton" />
+                        <Button Grid.Column="2" Style="{StaticResource EditorToolbarButton}"
+                                SemanticProperties.Description="{loc:Translate ToolbarList}"
+                                Clicked="OnToolbarList" AutomationId="ToolbarListButton"
+                                ImageSource="{AppThemeBinding Light=icon_toolbar_list_light.png, Dark=icon_toolbar_list_dark.png}" />
+                        <Button Grid.Column="3" Style="{StaticResource EditorToolbarButton}"
+                                SemanticProperties.Description="{loc:Translate ToolbarLink}"
+                                Clicked="OnToolbarLink" AutomationId="ToolbarLinkButton"
+                                ImageSource="{AppThemeBinding Light=icon_toolbar_link_light.png, Dark=icon_toolbar_link_dark.png}" />
+                        <Button Grid.Column="4" Style="{StaticResource EditorToolbarButton}"
+                                SemanticProperties.Description="{loc:Translate ToolbarImage}"
+                                Clicked="OnAddImage" AutomationId="AddImageButton"
+                                ImageSource="{AppThemeBinding Light=icon_toolbar_image_light.png, Dark=icon_toolbar_image_dark.png}" />
+                    </Grid>
+                </Border>
+                <Border x:Name="ContentEditorShell"
+                        BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                        Stroke="{AppThemeBinding Light={StaticResource BmbBorderStrongLight}, Dark={StaticResource BmbBorderStrong}}"
+                        StrokeThickness="1" StrokeShape="RoundRectangle 16" Padding="14,12">
+                    <Editor x:Name="BodyEditor" Placeholder="{loc:Translate EditorBodyPlaceholder}"
+                            AutoSize="TextChanges" MinimumHeightRequest="200" BackgroundColor="Transparent"
+                            TextChanged="OnChanged" AutomationId="BodyEditor" />
+                </Border>
+                <Border x:Name="PreviewBox" IsVisible="False"
+                        BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                        Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                        StrokeThickness="1" StrokeShape="RoundRectangle 16" Padding="16">
+                    <WebView x:Name="PreviewBody" HeightRequest="320" BackgroundColor="Transparent" />
+                </Border>
+            </VerticalStackLayout>
+            <!-- The article password card: a switch, then the passphrase, its repeat and a hint. -->
+            <Border x:Name="ProtectSection"
+                    BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                    Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                    StrokeThickness="1" StrokeShape="RoundRectangle 24" Padding="16">
+                <VerticalStackLayout Spacing="12">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2">
+                            <Label Text="{loc:Translate ArticlePasswordCardTitle}" Style="{StaticResource FieldLabel}" Margin="0" />
+                            <Label Text="{loc:Translate ArticlePasswordCardMeta}" Style="{StaticResource ItemMeta}" />
+                        </VerticalStackLayout>
+                        <Switch Grid.Column="1" x:Name="ProtectSwitch" Toggled="OnProtectToggled" VerticalOptions="Center" AutomationId="ProtectSwitch" />
+                    </Grid>
+                    <VerticalStackLayout x:Name="ProtectFields" IsVisible="False" Spacing="10">
+                        <VerticalStackLayout Spacing="6">
+                            <Label Text="{loc:Translate ArticlePasswordLabel}" Style="{StaticResource FieldLabel}" />
+                            <controls:PasswordBox x:Name="ProtectPassEntry" Placeholder="{loc:Translate ArticlePasswordPlaceholder}"
+                                                  BackgroundColor="Transparent" AutomationId="ProtectPassEntry" />
+                        </VerticalStackLayout>
+                        <VerticalStackLayout Spacing="6">
+                            <Label Text="{loc:Translate RepeatPasswordLabel}" Style="{StaticResource FieldLabel}" />
+                            <controls:PasswordBox x:Name="ProtectPass2Entry" Placeholder="{loc:Translate RepeatPasswordPlaceholder}"
+                                                  BackgroundColor="Transparent" AutomationId="ProtectPass2Entry" />
+                        </VerticalStackLayout>
+                        <VerticalStackLayout Spacing="6">
+                            <Label Text="{loc:Translate HintLabel}" Style="{StaticResource FieldLabel}" />
+                            <Border Style="{StaticResource InputShell}">
+                                <Entry x:Name="ProtectHintEntry" Placeholder="{loc:Translate HintPlaceholder}"
+                                       BackgroundColor="Transparent" TextChanged="OnChanged" AutomationId="ProtectHintEntry" />
+                            </Border>
+                        </VerticalStackLayout>
+                        <Label Text="{loc:Translate PasswordWarning}" FontSize="13" LineBreakMode="WordWrap"
+                               TextColor="{AppThemeBinding Light={StaticResource BmbWarningLight}, Dark={StaticResource BmbWarning}}" />
+                        <Label x:Name="ProtectErrorLabel" Style="{StaticResource FieldError}" IsVisible="False" />
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+            <Label x:Name="ErrorLabel" Style="{StaticResource FieldError}" IsVisible="False" />
+            <Button x:Name="SaveButton" Text="{loc:Translate SaveArticle}" Style="{StaticResource PrimaryButton}" Clicked="OnSave" AutomationId="SaveButton" />
         </VerticalStackLayout>
-    </Grid>
+    </ScrollView>
 </ContentPage>

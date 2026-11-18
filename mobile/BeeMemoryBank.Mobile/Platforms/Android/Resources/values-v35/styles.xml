@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 15+ (API 35) edge-to-edge: the status bar is transparent, and on a Shell page what
+         shows through it is the Shell app bar's background. MAUI's MauiAppBarLayout style paints that
+         with ?colorPrimary (#2C3E50), which sits on top of the window background SystemBarColors sets,
+         so the status-bar area stayed navy. Override the app bar background with the LIGHT appearance
+         background token here (v35 = API 35+ only; below that the bars are painted by SystemBarColors
+         and this file does not apply). The night counterpart is values-night-v35. The parent is kept so
+         the app bar's other attributes are untouched. -->
+    <style name="MauiAppBarLayout" parent="ThemeOverlay.AppCompat.Dark.ActionBar">
+        <item name="android:background">#F6F7FA</item>
+    </style>
+</resources>

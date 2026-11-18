@@ -19,6 +19,17 @@ public static class DependencyInjection
         services.AddNodeSync();
 
         services.AddScoped<IEventLogger, EventLogger>();
+        services.AddScoped<INodeStateContributor, DekFingerprintNodeStateContributor>();
+        // The bridge from an old master key (v1 door count, chain material) in node_state: a removal reads it from every full node (2.12, plan E6).
+        services.AddScoped<INodeStateContributor, DekBridgeNodeStateContributor>();
+        // Why this node cannot give itself a new identity key when a removal asks (2.12, step S1): an external key store, or the last refusal.
+        services.AddScoped<INodeStateContributor, IdentityRekeyNodeStateContributor>();
+        services.AddScoped<INodeStateContributor, BeeMemoryBank.Vault.SharedDoors.SharedDoorsNodeStateContributor>();
+        services.TryAddSingleton<BeeMemoryBank.Vault.SharedDoors.SuperadminDoorsPublisher>();
+        services.TryAddSingleton<ISuperadminDoorsNotifier>(
+            sp => sp.GetRequiredService<BeeMemoryBank.Vault.SharedDoors.SuperadminDoorsPublisher>());
+        services.AddScoped<BeeMemoryBank.Vault.SharedDoors.AccountsHomeService>();
+        services.AddScoped<ISharedDoorsApplier, BeeMemoryBank.Vault.SharedDoors.SharedDoorsApplier>();
         // The one writer of a peer's address: the node's "Change node address" and the phone's "Edit URL" both call it (BMB-307).
         services.AddScoped<PeerAddressService>();
         // The master-DEK sentinel check of SyncClient (a blind node registers none and skips the check).
@@ -52,6 +63,11 @@ public static class DependencyInjection
         // DekRotationService over this (AddSingleton beats TryAddSingleton) because it also
         // proposes, accepts and reports progress — but both run the identical rewrap.
         services.TryAddSingleton<IDekRotationApplier, DekRotation.PeerDekRotationApplier>();
+        // The bridge from an old master DEK (2.12): its report, its removal, and the small status a node's state report reads.
+        services.TryAddScoped<DekRotation.DekBridgeService>();
+        // The node identity re-key (release 2.12, plan WS-D): the page, the API, the CLI and the removal process call the same service.
+        services.TryAddScoped<NodeIdentityRekeyService>();
+        services.TryAddScoped<IDekBridgeStatus>(sp => sp.GetRequiredService<DekRotation.DekBridgeService>());
 
         services.AddRecovery();
 

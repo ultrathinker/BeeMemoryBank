@@ -36,6 +36,8 @@ public static class DependencyInjection
         services.AddScoped<IFavoriteRepository, FavoriteRepository>();
         services.AddScoped<IProjectionMatrixRepository, ProjectionMatrixRepository>();
         services.AddScoped<IArticleVersionRepository, ArticleVersionRepository>();
+        services.AddScoped<IAccountsHomeRepository, AccountsHomeRepository>();
+        services.AddScoped<ISharedDoorsStateRepository, SharedDoorsStateRepository>();
 
         return services;
     }

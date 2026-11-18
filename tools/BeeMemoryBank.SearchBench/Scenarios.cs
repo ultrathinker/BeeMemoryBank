@@ -95,7 +95,7 @@ internal static class Scenarios
                 DurationSeconds = (DateTime.UtcNow - started).TotalSeconds,
                 Note = $"skipped: embeddings not available (projection matrix not initialized / no articles indexed within the wait). " +
                        "On a freshly-seeded corpus the node has can_generate_embeddings=0, so the embedding processor never builds the projection matrix " +
-                       "and semantic search 503s indefinitely. See wp-03-report.md."
+                       "and semantic search 503s indefinitely."
             };
         }
 

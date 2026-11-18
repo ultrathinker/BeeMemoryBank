@@ -39,7 +39,32 @@ public static class SnapshotTables
         "tbl_metadata_key", "tbl_metadata_activation",
         // What each node announced about itself (node_endpoints, migration 044): a joiner can reach the host's other peers directly from the start,
         // even when their last announcement was compacted away. Older joiners never get here (schema 44), and ignore a table they do not list.
-        "tbl_peer_endpoint"
+        "tbl_peer_endpoint",
+        // Latest control state per node (node_state, migration 047): app version, runtime kind, key fingerprints and attention flags so a joiner
+        // sees every node's runtime state even when superseded node_state events were compacted away.
+        "tbl_node_state",
+        // The retired identity keys of every node (node_key_rotated, migration 049): a joiner verifies a node's events signed before its
+        // re-key, and walks the key transition chain, even when the rotation events were compacted away.
+        "tbl_node_key_history",
+        // Replicated accounts-home designation (accounts_home_set, migration 050): which node manages user accounts and superadmin doors.
+        "tbl_accounts_home",
+        // The tombstones of removed people (person_removed, migration 051, plan R1): a joiner and a restored node learn who was removed even when
+        // the events were compacted away, and close those accounts before anybody signs in. Ids, outcome and time only.
+        "tbl_removed_person"
+    ];
+
+    /// <summary>
+    /// The replicated tables that only ever grow (release 2.12, plan R1): a network restore MERGES them (insert-or-ignore, nothing deleted)
+    /// instead of replacing them, because an older snapshot does not undo what happened since. <c>tbl_dek_retired_link</c>: a link a later
+    /// rotation wrote is what lets this node read data and restores sealed under the keys it retired. Later packages add their own (the
+    /// removed people, the node key history). Every entry is also in <see cref="Replicated"/>.
+    /// </summary>
+    public static readonly string[] Monotonic =
+    [
+        "tbl_dek_retired_link",
+        "tbl_node_key_history",
+        // A restore of a snapshot from before a removal must not bring the removed person back (plan R1).
+        "tbl_removed_person",
     ];
 
     /// <summary>
@@ -50,7 +75,18 @@ public static class SnapshotTables
     public static readonly string[] Control =
     [
         "tbl_metadata_key", "tbl_metadata_activation",
-        "tbl_recovery_box", "tbl_dek_retired_link", "tbl_state_anchor", "tbl_sealed_secret"
+        "tbl_recovery_box", "tbl_dek_retired_link", "tbl_state_anchor", "tbl_sealed_secret",
+        // A package signed before the producer's re-key, and the events in it, verify only with the key history (plan D4).
+        "tbl_node_key_history"
+    ];
+
+    /// <summary>
+    /// The control tables a package made before release 2.12 does not have (<c>tbl_node_key_history</c>, migration 049): a reader accepts a
+    /// package without them, and checks their rows when they are there. Every entry is also in <see cref="Control"/>.
+    /// </summary>
+    public static readonly string[] ControlOptional =
+    [
+        "tbl_node_key_history",
     ];
 
     /// <summary>

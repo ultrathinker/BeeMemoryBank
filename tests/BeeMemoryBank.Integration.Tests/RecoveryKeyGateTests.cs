@@ -230,7 +230,7 @@ public sealed class RecoveryKeyGateTests : IAsyncLifetime
         using var tree = await browser.GetAsync("/Tree");
         var html = await tree.Content.ReadAsStringAsync();
         html.Should().Contain("recovery-key-notice");
-        html.Should().Contain("No recovery key has been issued for this node");
+        html.Should().Contain("Make a recovery key, in case you forget your password.");
 
         var token = TokenField.Match(html).Groups[1].Value;
         using var dismiss = new HttpRequestMessage(HttpMethod.Post, "/Admin?handler=DismissRecoveryKeyNotice")

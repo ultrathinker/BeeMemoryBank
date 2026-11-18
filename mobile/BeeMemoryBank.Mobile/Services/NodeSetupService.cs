@@ -204,7 +204,10 @@ public class NodeSetupService
 
             var localSalt = KeyDerivation.GenerateSalt();
             var localKek = KeyDerivation.DeriveKek(password, localSalt);
-            var (localEncryptedDek, localIv) = MasterKeyManager.WrapMasterDek(masterDek, localKek);
+            // This node's first door is a sealed (v2) door (ADR 0012).
+            var localDoor = Doors.Seal(KeySlotTypes.User, localKek, localSalt, masterDek);
+            Array.Clear(localKek);
+            var (localEncryptedDek, localIv) = (localDoor.Box, localDoor.Iv);
 
             var now = DateTime.UtcNow;
 
@@ -237,6 +240,9 @@ public class NodeSetupService
                 EncryptedMasterDek = localEncryptedDek,
                 IV = localIv,
                 Salt = localSalt,
+                DoorVersion = Doors.V2,
+                DoorPublicKey = localDoor.PublicKey,
+                DekFingerprint = localDoor.DekFingerprint,
                 ArgonMemory = CryptoConstants.DefaultArgonMemory,
                 ArgonIterations = CryptoConstants.DefaultArgonIterations,
                 ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
@@ -283,6 +289,8 @@ public class NodeSetupService
                         continue;
                     }
 
+                    var (entryOwnership, entryOwnerPid, entryOwnerLabel) =
+                        OwnershipKinds.Resolve(entry.Ownership, entry.OwnerPersonId, entry.OwnerLabel);
                     var inherited = new WhitelistEntry
                     {
                         NodeId = entry.NodeId,
@@ -299,7 +307,11 @@ public class NodeSetupService
                         // events get rejected once a 3rd node joins.
                         IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin),
                         TlsTrust = tlsTrust,
-                        TlsSpki = tlsSpki
+                        TlsSpki = tlsSpki,
+                        Ownership = entryOwnership,
+                        OwnerPersonId = entryOwnerPid,
+                        OwnerLabel = entryOwnerLabel,
+                        NeedsReview = !OwnershipKinds.IsKnown(entryOwnership),
                     };
                     // The host's version of each field (none from a 2.7.5 host): later events are judged here as they are there.
                     JoinRevocations.Inherit(inherited, entry.Versions);
@@ -312,7 +324,9 @@ public class NodeSetupService
             }
 
             remote = joinResponse.RemoteNode;
-            await _whitelistRepo.CreateAsync(new WhitelistEntry
+            var (remoteOwnership, remoteOwnerPid, remoteOwnerLabel) =
+                OwnershipKinds.Resolve(remote.Ownership, remote.OwnerPersonId, remote.OwnerLabel);
+            var remoteEntry = new WhitelistEntry
             {
                 NodeId = remote.NodeId,
                 DisplayName = remote.DisplayName,
@@ -327,8 +341,16 @@ public class NodeSetupService
                 // The key the code pinned is the key this phone dials the node by from now on (SpkiPinRegistry), as the desktop
                 // setup and `bmb join --code` record it: the node's certificate is self-signed or from its own local CA, which no
                 // ordinary check on the phone trusts, so without the pin every sync after the join would fail.
-                TlsSpki = code?.SpkiPin
-            });
+                TlsSpki = code?.SpkiPin,
+                Ownership = remoteOwnership,
+                OwnerPersonId = remoteOwnerPid,
+                OwnerLabel = remoteOwnerLabel,
+                NeedsReview = !OwnershipKinds.IsKnown(remoteOwnership),
+            };
+            if (OwnershipKinds.IsKnown(remoteOwnership)
+                && remote.OwnershipVersion is { LamportTs: > 0 and < BeeMemoryBank.Sync.SnapshotJoin.MaxAcceptedLamport } ownVer)
+                remoteEntry.SetVersionOf(WhitelistConcerns.Ownership, RowVersion.Of(ownVer.LamportTs, ownVer.SourceNodeId));
+            await _whitelistRepo.CreateAsync(remoteEntry);
 
             // The peers the host has revoked (a host of 2.7.5 or older sends none): kept as revoked rows, so an old add for one of them that another
             // node's log delivers later is refused here as it is on the host.
@@ -412,10 +434,12 @@ public class NodeSetupService
 
     private sealed record JoinResponseDto(JoinRemoteNodeDto RemoteNode, JoinKeySlotDto KeySlot, List<JoinWhitelistEntryDto>? Whitelist,
         List<JoinRevokedPeer>? RevokedPeers = null);
-    private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);
+    private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0,
+        string? Ownership = null, Guid? OwnerPersonId = null, string? OwnerLabel = null, JoinVersion? OwnershipVersion = null);
     private sealed record JoinWhitelistEntryDto(
         Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, string? ApiAddress, bool IsSuperadmin = false,
-        string? TlsTrust = null, string? TlsSpki = null, JoinPeerVersions? Versions = null);
+        string? TlsTrust = null, string? TlsSpki = null, JoinPeerVersions? Versions = null,
+        string? Ownership = null, Guid? OwnerPersonId = null, string? OwnerLabel = null);
     private sealed record JoinKeySlotDto(
         string EncryptedMasterDekB64,
         string IvB64,

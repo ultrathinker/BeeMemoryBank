@@ -6,7 +6,7 @@ using BeeMemoryBank.Crypto;
 namespace BeeMemoryBank.Sync;
 
 /// <summary>
-/// The one policy for the address of a peer (BMB-307 fix round): what may be typed, in what form it is stored and sent to the other nodes, and what a person is
+/// The one policy for the address of a peer (BMB-307): what may be typed, in what form it is stored and sent to the other nodes, and what a person is
 /// told when it is refused. Every writer of the address - the node's "Change node address", the phone's "Edit URL" - goes through <see cref="Canonicalize"/>
 /// (inside <see cref="PeerAddressService"/>), so the rules cannot differ between a screen and the API, or between the node and the phone.
 /// <para>

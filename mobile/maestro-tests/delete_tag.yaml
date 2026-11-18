@@ -1,20 +1,18 @@
 appId: com.beememorybank.mobile
 ---
 - runFlow: _go_home.yaml
-- tapOn:
-    text: "Open navigation drawer"
 - extendedWaitUntil:
     visible:
-      text: "Articles"
+      text: "Search"
     timeout: 3000
 - tapOn:
-    text: "Articles"
+    point: "37%,95%"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/ArticlesList"
     timeout: 10000
 - tapOn:
-    text: "NewArticleButton"
+    text: "New article"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/TitleEntry"
@@ -28,6 +26,8 @@ appId: com.beememorybank.mobile
 - inputText: "maestro-temp-tag"
 - pressKey: back
 - tapOn:
+    id: "com.beememorybank.mobile:id/AddTagButton"
+- tapOn:
     text: "SaveToolbarButton"
 - extendedWaitUntil:
     visible:
@@ -35,12 +35,16 @@ appId: com.beememorybank.mobile
     timeout: 30000
 - takeScreenshot: temp_article
 - runFlow: _go_home.yaml
+- extendedWaitUntil:
+    visible:
+      text: "Search"
+    timeout: 3000
 - tapOn:
-    text: "Open navigation drawer"
+    point: "37%,95%"
 - extendedWaitUntil:
     visible:
       text: "Tags"
-    timeout: 3000
+    timeout: 10000
 - tapOn:
     text: "Tags"
 - extendedWaitUntil:
@@ -64,7 +68,7 @@ appId: com.beememorybank.mobile
     text: "Delete"
 - extendedWaitUntil:
     visible:
-      text: "Delete Tag"
+      text: "Delete tag"
     timeout: 3000
 - tapOn:
     text: "Delete"

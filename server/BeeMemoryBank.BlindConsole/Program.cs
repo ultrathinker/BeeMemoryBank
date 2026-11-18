@@ -75,15 +75,15 @@ var allowed = new HashSet<(string Method, string Path)>
     ("GET", "api/blind/backup/settings"),
     ("GET", "api/blind/backup/list"),
     ("GET", "api/blind/console/logins"),
-    ("GET", "api/blind/pair-code"),              // Opus-L
-    ("GET", "api/blind/restore-codes"),          // Opus-R1 (the issue log, never the codes)
+    ("GET", "api/blind/pair-code"),
+    ("GET", "api/blind/restore-codes"),          // the issue log, never the codes
     ("POST", "api/blind/backup/now"),
     ("POST", "api/blind/backup/copy"),
     ("POST", "api/blind/backup/verify"),
     ("POST", "api/blind/backup/mode"),
     ("POST", "api/blind/console/password"),
-    ("POST", "api/blind/pair-code/renew"),       // Opus-L
-    ("POST", "api/blind/restore-code"),          // Opus-R1
+    ("POST", "api/blind/pair-code/renew"),
+    ("POST", "api/blind/restore-code"),
     ("POST", "api/blind/wipe"),
     ("PUT", "api/blind/backup/settings"),
 };

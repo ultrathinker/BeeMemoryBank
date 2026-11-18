@@ -107,7 +107,7 @@ public sealed class PeerDialer(PeerChannelStore store, ILogger<PeerDialer>? logg
             var identity = await SyncAddress.ReadIdentityAsync(http, candidate.Url, bound.Token);
             if (identity.NodeId != peer.NodeId)
                 throw new PeerIdentityMismatchException(peer.NodeId, identity.NodeId);
-            if (peer.Ed25519PublicKey is { Length: 32 } && !PeerKey.Matches(peer.Ed25519PublicKey, identity.Ed25519PublicKeyB64))
+            if (peer.Ed25519PublicKey is { Length: 32 } && !PeerKey.MatchesOrFollows(peer.NodeId, peer.Ed25519PublicKey, identity))  // a re-keyed peer: its signed chain leads from the pinned key (plan WS-D D4)
                 throw new PeerKeyMismatchException(peer.NodeId);
             return (true, null);
         }

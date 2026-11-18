@@ -5,7 +5,7 @@ using BeeMemoryBank.Hosting.AspNetCore;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The process-wide ceiling of the public invitation routes and the key a caller is counted under (release 2.7, fix round 1): many callers, each of them within
+/// The process-wide ceiling of the public invitation routes and the key a caller is counted under (release 2.7): many callers, each of them within
 /// their own budget, still add up to a bounded amount of work, and the table of callers stays bounded.
 /// </summary>
 public sealed class BlindInviteBudgetTests
@@ -170,7 +170,7 @@ public sealed class BlindInviteBudgetTests
         other.Allowed.Should().BeTrue("one noisy address does not use up what everybody else may do");
     }
 
-    // ── fix round 2: refused traffic does not fill the table; the reserved lane ──
+    // ── refused traffic does not fill the table; the reserved lane ──
 
     [Fact]
     public void ARequestTheSharedBudgetTurnsAway_DoesNotUseUpTheCallersBudget_NorFillTheTableOfCallers()

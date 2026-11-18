@@ -28,7 +28,7 @@ public sealed class DreamEngineScript
     public TaskCompletionSource DetectorStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
-/// <summary>The detector of plan 4 P0b's acceptance list: whatever the test scripts, with whatever delays it scripts.</summary>
+/// <summary>The detector of plan 4's acceptance list: whatever the test scripts, with whatever delays it scripts.</summary>
 public sealed class TrainingDetector(DreamEngineScript script, CallerScopeHolder holder) : IDreamDetector
 {
     public string Name => "Training";

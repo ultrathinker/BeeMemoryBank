@@ -73,7 +73,8 @@ builder.Services.AddRazorPages();
 // Web only browses (the API does the announcing); the manual-URL-entry path stays fully functional.
 builder.Services.AddMdnsBrowser();
 // Caches security-stamp lookups so OnValidatePrincipal does not round-trip the API on every
-// authenticated request. The 5-minute TTL bounds how stale a revocation can be.
+// authenticated request. The 5-minute TTL bounds how stale a revocation can be on a route that is not for a
+// superadmin; a superadmin page or proxy route never reads this cache (PrincipalStampValidator).
 builder.Services.AddMemoryCache();
 
 builder.Services.AddAuthentication("BeeWebCookie")
@@ -99,96 +100,12 @@ builder.Services.AddAuthentication("BeeWebCookie")
         // below runs AFTER this delegate and overrides both with the DB-backed values. Security-stamp
         // revalidation adds per-event revocation on top, regardless of the configured lifetime.
 
-        // Revalidate the cookie's embedded security stamp against the API on every AUTHENTICATED
-        // request (static files run before auth, so never on CSS/JS). Lookups are cached per user
-        // for 5 minutes. An authoritative 404 must not be conflated with a transport error:
-        //   * absent stamp claim → REJECT → forced re-login;
-        //   * stamp mismatch (password/role change, deletion) → REJECT;
-        //   * HTTP 404 / user definitively gone → REJECT (authoritative answer, not fail-open);
-        //   * API unreachable / 5xx / lookup throws → FAIL OPEN: an API hiccup must not log out
-        //     the whole site, and nothing is cached, so revocation resumes on the next lookup.
+        // Revalidate the cookie's embedded security stamp against the API on every AUTHENTICATED request (static files run before auth, so never on
+        // CSS/JS). A request for a superadmin page or proxy route asks the API every time and fails CLOSED when it cannot be answered; any other
+        // request uses a 5-minute cache and fails open on a transport error. See PrincipalStampValidator for the full rules.
         options.Events = new CookieAuthenticationEvents
         {
-            OnValidatePrincipal = async context =>
-            {
-                var principal = context.Principal;
-                var stampClaim = principal?.FindFirst("SecurityStamp")?.Value;
-                // Absent claim → reject: a stampless cookie cannot be revalidated, so it forces a re-login.
-                if (string.IsNullOrEmpty(stampClaim))
-                {
-                    context.RejectPrincipal();
-                    return;
-                }
-
-                var userId = principal?.FindFirst("UserId")?.Value;
-                if (string.IsNullOrEmpty(userId) || !int.TryParse(userId, out var userIdInt))
-                {
-                    context.RejectPrincipal();
-                    return;
-                }
-
-                // Without the per-sign-in WebSessionId claim the API never caches a protected-article
-                // unlock (no "locks in N min" countdown, every reload re-prompts). Upgrade such a
-                // cookie in place instead of forcing a re-login: add a fresh id and re-issue it. Two
-                // concurrent requests on the same cookie may each mint one; the last Set-Cookie wins,
-                // costing at worst one extra passphrase prompt. A later RejectPrincipal still wins.
-                if (principal!.FindFirst(InternalKeyHandler.WebSessionClaim) == null
-                    && principal.Identity is ClaimsIdentity oldIdentity)
-                {
-                    // Copy constructor: keeps the auth type, name/role claim types and any actor.
-                    var upgraded = new ClaimsIdentity(oldIdentity);
-                    upgraded.AddClaim(new Claim(InternalKeyHandler.WebSessionClaim, Guid.NewGuid().ToString("N")));
-                    principal = new ClaimsPrincipal(upgraded);
-                    context.ReplacePrincipal(principal);
-                    context.ShouldRenew = true;
-                }
-
-                var cache = context.HttpContext.RequestServices.GetRequiredService<IMemoryCache>();
-                var api = context.HttpContext.RequestServices.GetRequiredService<ApiClient>();
-                var logger = context.HttpContext.RequestServices
-                    .GetRequiredService<ILogger<Program>>();
-
-                var cacheKey = WebSignIn.StampCacheKey(userId);
-                if (!cache.TryGetValue(cacheKey, out string? currentStamp) || currentStamp is null)
-                {
-                    SecurityStampLookup lookup;
-                    try
-                    {
-                        lookup = await api.GetSecurityStampAsync(userIdInt);
-                    }
-                    catch (Exception ex)
-                    {
-                        // FAIL OPEN: do not reject on unexpected errors.
-                        logger.LogWarning(ex,
-                            "Security-stamp lookup failed for user {UserId}; allowing request (fail-open).", userId);
-                        return;
-                    }
-
-                    // HTTP 404 / definitive "user no longer exists" → REJECT. Unlike a transport
-                    // error, a 404 is an authoritative answer, so failing open would keep a
-                    // deleted/demoted user's session alive. Not cached (the next request rejects too).
-                    if (lookup.Outcome == SecurityStampLookupOutcome.NotFound)
-                    {
-                        logger.LogWarning("Security-stamp lookup 404 for user {UserId}; rejecting principal.", userId);
-                        context.RejectPrincipal();
-                        return;
-                    }
-
-                    // Transport error / 5xx / unreachable / malformed body → FAIL OPEN. Do NOT log
-                    // everyone out on an API hiccup. The 5-min cache is NOT populated, so the next
-                    // request retries the lookup.
-                    if (lookup.Outcome != SecurityStampLookupOutcome.Found || string.IsNullOrEmpty(lookup.Stamp))
-                        return;
-
-                    currentStamp = lookup.Stamp;
-                    // Only cache successful (200) lookups for the TTL.
-                    cache.Set(cacheKey, currentStamp,
-                        new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = WebSignIn.StampCacheTtl });
-                }
-
-                if (!string.Equals(stampClaim, currentStamp, StringComparison.Ordinal))
-                    context.RejectPrincipal();
-            },
+            OnValidatePrincipal = BeeMemoryBank.Web.Services.PrincipalStampValidator.ValidateAsync,
 
             // Redirect to /Login with a RELATIVE Location. The default builds an absolute URL from
             // Request.Host, and behind the desktop node's front (YARP, which forwards with the Web

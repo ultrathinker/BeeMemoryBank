@@ -19,10 +19,10 @@ using BeeMemoryBank.Node;
 namespace BeeMemoryBank.Node.Tests;
 
 /// <summary>
-/// Load-bearing proof (DoD #3) that the opt-in HTTPS front actually serves TLS presenting the
+/// Load-bearing proof that the opt-in HTTPS front actually serves TLS presenting the
 /// <see cref="LocalCaService"/>-issued leaf, that a client trusting the CA can complete a real
-/// HTTPS request, AND that the plain-HTTP listener keeps working alongside it (coexistence,
-/// DoD #2). Windows-only: LocalCaService (DPAPI) is Windows-only. The HTTPS listener binds the
+/// HTTPS request, AND that the plain-HTTP listener keeps working alongside it (coexistence).
+/// Windows-only: LocalCaService (DPAPI) is Windows-only. The HTTPS listener binds the
 /// fixed <see cref="NodeFront.HttpsPort"/> (5311); the test assumes that port is free on the
 /// machine running it.
 /// </summary>
@@ -176,7 +176,7 @@ public class NodeFrontHttpsTests : IAsyncLifetime
     [Fact]
     public void RegisterServices_WithHttpsDisabled_DoesNotThrowAndNeedsNoDataPath()
     {
-        // DoD #2: with HTTPS off (the default), RegisterServices must behave exactly as before —
+        // With HTTPS off (the default), RegisterServices must behave exactly as before —
         // no dataPath required, no exception, identical service registration.
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
         var front = new NodeFront("http://127.0.0.1:9", "http://127.0.0.1:8",

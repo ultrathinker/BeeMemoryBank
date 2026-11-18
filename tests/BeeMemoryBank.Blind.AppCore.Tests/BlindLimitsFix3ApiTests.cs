@@ -7,8 +7,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Fix round 3 of the limits, the tests that use what only round 3 has (the file system seam of the usage files, the device total over every listed account, the abandoned owner of the
-/// device gate ...). Not run against the code before the fix: it does not compile there. (A partial of the round-2 class: it uses that class's pipeline rig.)
+/// The limits, the tests that use what only the later round adds (the file system seam of the usage files, the device total over every listed account, the abandoned owner of the
+/// device gate ...). Not run against the code before the fix: it does not compile there. (A partial of the earlier class: it uses that class's pipeline rig.)
 /// </summary>
 public sealed partial class BlindLimitsFix2Tests
 {
@@ -193,7 +193,7 @@ public sealed partial class BlindLimitsFix2Tests
     }
 }
 
-/// <summary>The device gate records who holds it, and whether that job was let go of (fix round 3).</summary>
+/// <summary>The device gate records who holds it, and whether that job was let go of.</summary>
 public sealed class BlindDeviceGateFix3Tests
 {
     private static readonly DateTimeOffset Noon = new(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);

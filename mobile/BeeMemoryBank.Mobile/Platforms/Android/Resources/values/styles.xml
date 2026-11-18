@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The system bars wear the app background of the LIGHT appearance (BmbBackgroundLight).
+         MAUI hosts every modal page (PushModalAsync) in its own dialog window themed
+         Maui.MainTheme.NoActionBar -> Maui.MainTheme, and on API 30+ that window takes its bar
+         colours from the theme, not from the activity window that SystemBarColors paints. Overriding
+         Maui.MainTheme here (light) and in values-night (dark) therefore covers the modal windows too.
+         These resource qualifiers follow AppCompat night mode, which MAUI's UserAppTheme sets, so the
+         bars track the appearance chosen in Settings (or the system theme while the choice is System).
+         The parent is kept so the MaterialComponents theming underneath is untouched. -->
+    <style name="Maui.MainTheme" parent="Maui.MainTheme.Base">
+        <item name="android:statusBarColor">#F6F7FA</item>
+        <item name="android:navigationBarColor">#F6F7FA</item>
+        <!-- A light bar wants dark icons. -->
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

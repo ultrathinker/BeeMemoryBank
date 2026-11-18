@@ -1,6 +1,6 @@
 // A small harness that runs wwwroot/js/bmb-busy.js in a fake page (no browser, no packages): a tiny DOM, timers that only move when the test says so, and a
 // scripted fetch. It prints one JSON line {"ok": true|false, "detail": "..."} for the scenario named on the command line. The scenarios are the ones of
-// BusyHelperBehaviorTests.cs (BMB-311 fix round): what the helper DOES, not what its source says.
+// BusyHelperBehaviorTests.cs (BMB-311): what the helper DOES, not what its source says.
 //
 //   node bmb-busy-harness.js <path of bmb-busy.js> <scenario>
 'use strict';
@@ -290,7 +290,7 @@ const scenarios = {
         const ok = await bmbBusy.request('/x', {});
         assert(ok.status === 200 && ok.body.ok === true, 'a good answer is not returned');
     },
-    // BMB-311 fix2 (R6): a long message is a preview in the line and ALL of it in an area that opens; a short one is plain text
+    // BMB-311: a long message is a preview in the line and ALL of it in an area that opens; a short one is plain text
     async a_long_error_keeps_its_whole_text_in_an_area_that_opens() {
         const card = fresh('div');
         card.className = 'card';
@@ -310,7 +310,7 @@ const scenarios = {
         assert(!alertOf().children.some((c) => c.localName === 'details') && alertOf().textContent === 'It did not work.', 'a short message got an area of its own');
     },
 
-    // BMB-311 fix2 (R7): the first submit event is SEEN as busy (the buttons spin, the note and the pop-up are up) and a declined confirmation undoes all of it;
+    // BMB-311: the first submit event is SEEN as busy (the buttons spin, the note and the pop-up are up) and a declined confirmation undoes all of it;
     // the submit buttons are only disabled after the event, when the data of the form has been taken
     async the_first_submit_event_is_seen_busy_at_once_and_a_declined_one_is_undone() {
         function page(declines) {

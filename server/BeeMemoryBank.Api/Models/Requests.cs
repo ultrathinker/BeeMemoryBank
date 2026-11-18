@@ -2,6 +2,8 @@ namespace BeeMemoryBank.Api.Models;
 
 public record UnlockRequest(string Password);
 
+public record SetAccountsHomeRequest(Guid NodeId);
+
 public record CreateArticleRequest(
     string Title,
     string TreePath,
@@ -32,6 +34,12 @@ public record UnlockArticleRequest(string Passphrase);
 
 public record ChangePasswordRequest(string OldPassword, string NewPassword, string? PasswordHint = null);
 
+/// <summary>POST /api/keys/add-recovery: the key belongs to the signed-in superadmin who issues it; only a label is the caller's to give.</summary>
+public record AddRecoveryKeyRequest(string? Label = null);
+
+/// <summary>POST /api/keys/recovery-revoke: which recovery key (its slot) to revoke.</summary>
+public record RevokeRecoveryKeyRequest(int SlotId);
+
 public record UpdateWhitelistEntryRequest(
     string? DisplayName = null,
     string? ApiAddress = null,
@@ -48,6 +56,14 @@ public record SetHubRequest(string Trust, string? Address, string Password, stri
 
 /// <summary>Promote or demote a peer. See PUT /api/whitelist/{nodeId}/superadmin.</summary>
 public record SetPeerSuperadminRequest(bool IsSuperadmin);
+
+/// <summary>Set device ownership (shared infrastructure or personal to an active user's person_id). See PUT /api/whitelist/{nodeId}/ownership.</summary>
+public record SetPeerOwnershipRequest(string Ownership, Guid? OwnerPersonId = null);
+
+public record ReviewOwnershipItem(Guid NodeId, string Ownership, Guid? OwnerPersonId = null);
+
+/// <summary>Batch ownership review confirmation or explicit per-device decisions. See POST /api/whitelist/review-ownership.</summary>
+public record ReviewOwnershipRequest(List<ReviewOwnershipItem>? Items = null, bool ConfirmAll = false);
 
 public record SemanticSearchRequest(string Query, int TopK = 10);
 
@@ -88,7 +104,9 @@ public record JoinRequest(
     List<BeeMemoryBank.Sync.NodeEndpointEntry>? Endpoints = null,
     string? TlsLeafSpki = null,
     string? TlsCaKey = null,
-    int? LanPort = null);
+    int? LanPort = null,
+    string? Login = null,
+    string? Ownership = null);
 
 /// <summary>
 /// <c>POST /api/join/abort</c>: the joiner of <see cref="NodeId"/> takes back the row its join made. The same proof as the join (the master
@@ -112,7 +130,36 @@ public record SessionSettingsRequest(int ExpireHours, bool SlidingExpiration);
 
 public record CreateUserRequest(string Username, string DisplayName, string Password, string Role, bool ChatAccess = true, string? PasswordHint = null);
 
-public record UpdateUserRequest(string DisplayName, string? Role = null, string? Password = null, bool? ChatAccess = null, string? PasswordHint = null);
+/// <param name="AllowOpenRole">Only for taking superadmin rights away: the caller says out loud that the person may see everything an open role sees. Never the default.</param>
+/// <param name="FolderRules">Only for taking superadmin rights away: the folders (per-user rules, built-in 'user' role only) the person may see afterwards.</param>
+/// <param name="AdminPassword">Taking superadmin rights away is a removal process (release 2.12.0): it starts only with the administrator's own password.</param>
+public record UpdateUserRequest(string DisplayName, string? Role = null, string? Password = null, bool? ChatAccess = null, string? PasswordHint = null,
+    bool? AllowOpenRole = null, List<AddAclEntryRequest>? FolderRules = null, string? AdminPassword = null);
+
+/// <summary>
+/// Starts the removal of a superadmin (release 2.12.0, plan E1/E3). <paramref name="Target"/> is <c>delete</c> or <c>demote</c>; a demotion names the role
+/// and says what the person may see (folders, a role that is not open, or <paramref name="AllowOpenRole"/>). <paramref name="Password"/> is the
+/// administrator's own. <paramref name="ActingUser"/>: a machine-local caller (the CLI), which names no signed-in person, says who acts.
+/// </summary>
+public record StartOffboardingRequest(int UserId, string Target, string? Role = null, List<AddAclEntryRequest>? FolderRules = null,
+    bool AllowOpenRole = false, string Password = "", string? ActingUser = null);
+
+/// <summary>"Continue" a removal; the password only when its rotation (S4) needs it.</summary>
+public record ContinueOffboardingRequest(string? Password = null, string? ActingUser = null);
+
+/// <summary>One decision of the S3 review; removing another superadmin says what happens to their account.</summary>
+public record OffboardingReviewDecisionRequest(string ItemId, string Decision, string? Reason = null, string? Target = null, string? Role = null,
+    List<AddAclEntryRequest>? FolderRules = null, bool AllowOpenRole = false);
+
+/// <summary>The decisions of S3; <paramref name="AcceptDefaults"/> takes the pre-selected choice for every item still open.</summary>
+public record ResolveOffboardingReviewRequest(List<OffboardingReviewDecisionRequest>? Decisions = null, bool AcceptDefaults = false,
+    string? Password = null, string? ActingUser = null);
+
+/// <summary>Take a removal over on a shared full node (the node where it started was revoked).</summary>
+public record TakeOverOffboardingRequest(string Password = "", string? ActingUser = null);
+
+/// <summary>Deleting a superadmin is a removal process (release 2.12.0): it starts only with the administrator's own password.</summary>
+public record DeleteUserRequest(string? AdminPassword = null, string? ActingUser = null);
 
 public record ChangeUserPasswordRequest(string NewPassword, string? PasswordHint = null);
 
@@ -137,22 +184,31 @@ public record CreateRemoteAccountRequest(string DisplayName, string BaseUrl, str
 
 public record AddRemoteSubscriptionRequest(Guid RemoteAccountId, Guid RemoteFolderId, string RemoteFolderPath, string MountPath);
 
-/// <param name="StandaloneMode">Older clients: true = <see cref="SnapshotRestoreModes.Standalone"/>, false = <see cref="SnapshotRestoreModes.KeepIdentity"/>. Ignored when <paramref name="Mode"/> is given.</param>
+/// <param name="StandaloneMode">Older clients: true = <see cref="SnapshotRestoreModes.Standalone"/>, false = <see cref="SnapshotRestoreModes.KeepIdentity"/> (refused since release 2.12). Ignored when <paramref name="Mode"/> is given.</param>
 /// <param name="Mode">One of <see cref="SnapshotRestoreModes"/>; names what the restore does to this node's identity.</param>
 public record RestoreSnapshotRequest(string FileName, string MasterPassword, bool CreateBackupFirst = true, bool StandaloneMode = false, string? Mode = null);
 
 /// <summary>
 /// The ways a snapshot can be restored, named as they are shown and as they are written to the audit log.
-/// <see cref="Standalone"/> and <see cref="KeepIdentity"/> are served by <c>POST /api/snapshots/restore</c>;
-/// <see cref="Network"/> by <c>POST /api/snapshots/restore-network</c>.
+/// <see cref="Standalone"/> is served by <c>POST /api/snapshots/restore</c>; <see cref="Network"/> by
+/// <c>POST /api/snapshots/restore-network</c>. <see cref="KeepIdentity"/> is refused (release 2.12, plan R2).
 /// </summary>
 public static class SnapshotRestoreModes
 {
     /// <summary>This node only: it leaves the network and becomes a new node (new id, new key pair, no trusted nodes, blind copies or sync history).</summary>
     public const string Standalone = "standalone";
 
-    /// <summary>The snapshot's database replaces this one as it is, identity and trusted nodes included. Only a snapshot of this very node leaves the network coherent.</summary>
+    /// <summary>
+    /// Was: the snapshot's database replaced this one as it was, identity and trusted nodes included. Refused since release 2.12
+    /// (plan R2): it would put back an identity key this node may have retired, which anybody holding an old backup can sign with.
+    /// The name stays only so that the refusal can say why.
+    /// </summary>
     public const string KeepIdentity = "keep-identity";
+
+    /// <summary>What a request for <see cref="KeepIdentity"/> (or an older client's <c>standaloneMode: false</c>) is told.</summary>
+    public const string KeepIdentityRefusal =
+        "Restoring a snapshot over this node with the identity it had then is no longer offered: it could bring back an identity key " +
+        "this node has retired. Use \"standalone\" (this node becomes a new node with the snapshot's data), or restore the whole network.";
 
     /// <summary>The whole network: every trusted node is told to restore the same snapshot (the originator keeps its identity).</summary>
     public const string Network = "network";
@@ -168,13 +224,15 @@ public static class SnapshotRestoreModes
         switch (resolved)
         {
             case Standalone:
-            case KeepIdentity:
                 return true;
+            case KeepIdentity:
+                refusal = KeepIdentityRefusal;
+                return false;
             case Network:
                 refusal = "Restoring the whole network is started with /api/snapshots/restore-network, not here.";
                 return false;
             default:
-                refusal = $"Unknown restore mode. Use \"{Standalone}\" or \"{KeepIdentity}\".";
+                refusal = $"Unknown restore mode. Use \"{Standalone}\".";
                 return false;
         }
     }
@@ -187,7 +245,8 @@ public record InitStandaloneRequest(string AdminUsername, string DisplayName, st
 /// code's address is used instead of <paramref name="RemoteUrl"/> (which may then be empty), every request of the join goes only to a
 /// server holding the pinned key, and <c>/api/join</c> carries the code's token. Null: the address and the ordinary certificate check.
 /// </param>
-public record InitJoinRequest(string AdminUsername, string DisplayName, string RemoteUrl, string Password, string? JoinCode = null, string? PasswordHint = null);
+public record InitJoinRequest(string AdminUsername, string DisplayName, string RemoteUrl, string Password, string? JoinCode = null, string? PasswordHint = null,
+    string? Login = null, bool Shared = false);
 
 public record ResetRequest(string MasterPassword);
 
@@ -227,7 +286,8 @@ public record DekRotationCancelRequest(string EventId);
 
 public record DekRotationAcceptRequest(string CommitEventId);
 
-public record ProposeDekRotationRequest(string MasterPassword);
+/// <param name="Reason">Null, or <c>offboarding:&lt;process id&gt;</c> for the rotation that ends a removal (2.12, applied by every node by itself).</param>
+public record ProposeDekRotationRequest(string MasterPassword, string? Reason = null);
 
 public record AcceptDekRotationRequest(string CommitEventId, string MasterPassword);
 

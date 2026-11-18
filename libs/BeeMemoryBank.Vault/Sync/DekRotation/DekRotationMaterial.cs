@@ -38,7 +38,8 @@ public static class DekRotationMaterial
         NodeIdentity identity,
         byte[] oldDek,
         out string chainEncryptedNewDekB64,
-        out string chainIvB64)
+        out string chainIvB64,
+        DekEnvelopeAnswer? refreshed = null)
     {
         ArgumentNullException.ThrowIfNull(payload);
         ArgumentNullException.ThrowIfNull(identity);
@@ -62,9 +63,15 @@ public static class DekRotationMaterial
             byte[] newDek;
             try
             {
-                newDek = DekEnvelope.Open(
-                    envelopes.EphemeralPub, box.Wrapped, box.Nonce,
-                    commitEventId, identity.NodeId, seed);
+                // An envelope fetched for this node's current key after a re-key (plan WS-D D4) takes the place of the one in the event.
+                newDek = refreshed is { } fresh
+                    ? DekEnvelope.Open(fresh.EphemeralPublicKeyB64, fresh.WrappedB64, fresh.NonceB64, commitEventId, identity.NodeId, seed)
+                    : DekEnvelope.Open(envelopes.EphemeralPub, box.Wrapped, box.Nonce, commitEventId, identity.NodeId, seed);
+            }
+            catch (System.Security.Cryptography.CryptographicException)
+            {
+                // Sealed for the key this node had when the rotation was made: retryable, never Failed (plan WS-D D4).
+                throw new DekEnvelopeStaleException(commitEventId);
             }
             finally
             {

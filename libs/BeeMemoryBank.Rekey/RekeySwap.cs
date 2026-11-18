@@ -48,13 +48,13 @@ public static class RekeySwap
         CarryOver(dataDir, newDir, skippedLinks: null, fault);
 
     /// <summary>
-    /// The carry-over, never following a link (review release-b R1-7): a junction or symbolic link anywhere under a
+    /// The carry-over, never following a link: a junction or symbolic link anywhere under a
     /// carried-over entry, the entry itself included, is not copied and its path relative to D goes into
     /// <paramref name="skippedLinks"/>. Only regular files and directories that really are inside D are copied.
     /// </summary>
     public static IReadOnlyList<string> CarryOver(string dataDir, string newDir, List<string>? skippedLinks, Action<string>? fault = null)
     {
-        // The source root is judged too, not only what is under it (review release-b-fix #2).
+        // The source root is judged too, not only what is under it.
         if (NoFollow.IsOrUnderLink(dataDir))
             throw new InvalidOperationException($"{dataDir} is, or sits under, a junction or symbolic link; nothing is carried over from it.");
         var copied = new List<string>();
@@ -105,7 +105,7 @@ public static class RekeySwap
     /// <paramref name="fault"/> is the tests' fault injection, called at each named point.
     /// </summary>
     /// <param name="carryOver">False when the caller has already carried the files over (the verb does, before its
-    /// last D1 scan, so that scan covers them: review release-b R1-8).</param>
+    /// last D1 scan, so that scan covers them).</param>
     public static string Swap(string dataDir, DateTimeOffset now, Action<string>? fault = null, bool carryOver = true)
     {
         var d = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dataDir));

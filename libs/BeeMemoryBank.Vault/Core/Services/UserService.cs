@@ -3,12 +3,14 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Vault.Sealed;
+using BeeMemoryBank.Vault.SharedDoors;
+using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace BeeMemoryBank.Core.Services;
 
-public class UserService(
+public partial class UserService(
     IUserRepository userRepo,
     IKeySlotRepository keySlotRepo,
     SessionService session,
@@ -18,7 +20,14 @@ public class UserService(
     IAgentRepository? agentRepo = null,
     IRecoveryBoxPublisher? recoveryBoxes = null,
     IDbConnectionFactory? factory = null,
-    IUnlockMaterialMirror? mirror = null)
+    IUnlockMaterialMirror? mirror = null,
+    IAccountsHomeRepository? accountsHomeRepo = null,
+    IWhitelistRepository? whitelistRepo = null,
+    INodeIdentityRepository? nodeIdentityRepo = null,
+    ISharedDoorsStateRepository? sharedDoorsStateRepo = null,
+    ISuperadminDoorsNotifier? doorsNotifier = null,
+    Microsoft.Extensions.Logging.ILogger<UserService>? logger = null,
+    ILazySlotRewrapService? lazyRewrap = null)
 {
     // Step B (docs/design/step-b-spec.md 3.6, 4.3): every key slot this service creates or deletes is a door of a sealed node. The
     // pending door is written before the sealed insert commits, the copies of a deleted slot's door are retired before the delete, and
@@ -77,26 +86,16 @@ public class UserService(
         {
             var salt = KeyDerivation.GenerateSalt();
             kek = KeyDerivation.DeriveKek(password, salt);
-            var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, kek);
-
-            var slot = new MasterKeyStore
-            {
-                SlotType = "user",
-                EncryptedMasterDek = encryptedDek,
-                IV = iv,
-                Salt = salt,
-                ArgonMemory = CryptoConstants.DefaultArgonMemory,
-                ArgonIterations = CryptoConstants.DefaultArgonIterations,
-                ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
-                CreatedAt = DateTime.UtcNow
-            };
+            // A new door is always a sealed (v2) door (ADR 0012). Its owner is set by the database when tbl_user points at it (migration 046).
+            var slot = Doors.NewPasswordSlot(KeySlotTypes.User, kek, salt, CryptoConstants.DefaultArgonMemory, CryptoConstants.DefaultArgonIterations,
+                CryptoConstants.DefaultArgonParallelism, masterDek);
             await SlotDoors.CreateSlotAsync(keySlotRepo, factory, mirror, slot, masterDek);
 
             // Every UserService path that gives a password a slot — self-service and admin password
             // change, provisioning at login, creating or promoting a superadmin — comes through here,
             // so this one call is what puts the new password's device box on the blind nodes.
             if (recoveryBoxes != null)
-                await recoveryBoxes.PublishDeviceBoxAsync(slot, masterDek);
+                await recoveryBoxes.PublishDeviceBoxAsync(slot, masterDek, kek);
             return slot.SlotId;
         }
         finally
@@ -106,7 +105,39 @@ public class UserService(
         }
     }
 
+    public Task RecordLoginAsync(int userId) => userRepo.UpdateLastLoginAsync(userId);
+
+    /// <summary>
+    /// A door was deleted (2.12, plan WS-A4): this node's device box may have copied it, so it is published again from the door it should copy
+    /// now. Best effort, like every device-box publication.
+    /// </summary>
+    private async Task RepublishDeviceBoxAsync()
+    {
+        if (recoveryBoxes == null || !session.IsUnlocked) return;
+        var dek = session.GetMasterDek();
+        try
+        {
+            await recoveryBoxes.RepublishForDoorsAsync(dek);
+        }
+        finally
+        {
+            Array.Clear(dek);
+        }
+    }
+
     public async Task<User?> AuthenticateAsync(string username, string password)
+    {
+        var (user, dek) = await AuthenticateWithDekAsync(username, password);
+        if (dek is not null) Array.Clear(dek);
+        return user;
+    }
+
+    /// <summary>
+    /// Authenticates a user and, when the account is replicated (<c>replicated = 1</c>), also returns
+    /// the sentinel-verified master DEK unwrapped from THAT person's door so <c>/api/session/login</c>
+    /// can unlock a plain node with the same single Argon2 derivation. Caller must clear any non-null DEK.
+    /// </summary>
+    public async Task<(User? User, byte[]? VerifiedMasterDek)> AuthenticateWithDekAsync(string username, string password)
     {
         var user = await userRepo.GetByUsernameAsync(username);
         if (user == null)
@@ -117,13 +148,41 @@ public class UserService(
             // usernames from outside with no failed-login trail, which is exactly the input a
             // targeted password-guessing campaign wants.
             BurnPasswordVerification(password);
-            return null;
+            return (null, null);
         }
 
-        if (!VerifyPassword(password, user.PasswordHash)) return null;
+        if (user.Replicated)
+        {
+            if (user.KeySlotId is not { } slotId)
+            {
+                BurnPasswordVerification(password);
+                return (null, null);
+            }
+
+            var opened = await session.TryOpenUserDoorAsync(slotId, password);
+            if (!opened.DerivationAttempted)
+                BurnPasswordVerification(password);
+            if (opened.Dek is null)
+                return (null, null);
+            // A mirror row of a person a removal holds (a shared node, release 2.12.0): the door was opened as for anybody, then refused.
+            if (user.IsBeingRemoved)
+            {
+                Array.Clear(opened.Dek);
+                return (null, null);
+            }
+
+            await userRepo.UpdateLastLoginAsync(user.Id);
+            return (user, opened.Dek);
+        }
+
+        if (!VerifyPassword(password, user.PasswordHash)) return (null, null);
+
+        // An account a removal process holds cannot sign in (release 2.12.0, plan E4 S0). The password was checked first, so the refusal costs what a wrong
+        // password costs and says nothing more than one.
+        if (user.IsBeingRemoved) return (null, null);
 
         await userRepo.UpdateLastLoginAsync(user.Id);
-        return user;
+        return (user, null);
     }
 
     /// <summary>
@@ -197,27 +256,46 @@ public class UserService(
     // reset): new login hash, the user's key slot re-pointed at the new password, then the
     // revocations that make the old password stop meaning anything — security stamp (every web
     // cookie of this user is rejected at its next revalidation) and remote API tokens.
-    private async Task ReplacePasswordAsync(User user, string newPassword, byte[]? providedDek = null, CancellationToken ct = default, string? passwordHint = null)
+    //
+    // `user` was loaded before the Argon2id work and the slot rewrite, so it can be stale by the time it is written: a demotion that committed in
+    // between must not be undone by it. The row is therefore written by TryReplacePasswordAsync - the columns a replacement owns, and only while
+    // the row still has the role and the key slot this call loaded. Returns false when it no longer does: nothing is written, the slot made here is
+    // dropped, and the caller says so.
+    private async Task<bool> ReplacePasswordAsync(User user, string newPassword, byte[]? providedDek = null, CancellationToken ct = default, string? passwordHint = null)
     {
         ValidatePassword(newPassword);
+        var loadedRole = user.Role;
+        var loadedKeySlotId = user.KeySlotId;
         // A caller WITH a person replaces the hint; a caller without one (a seed or a tool) leaves the stored hint
         // untouched rather than silently deleting something a person wrote.
         if (passwordHint != null)
             user.PasswordHint = PasswordHintPolicy.NormalizeAndValidate(passwordHint, newPassword, user.Username);
         user.PasswordHash = HashPassword(newPassword);
 
-        // The last point at which the replacement can stop (BMB-311 fix round 3): the hash is only in this object, nothing is written. From the key slot on - the new slot
+        // The last point at which the replacement can stop (BMB-311): the hash is only in this object, nothing is written. From the key slot on - the new slot
         // stored, the old one dropped, the row, the security stamp, the remote tokens, the doors - it runs to its consistent end whatever the caller does.
         AfterHashForTests?.Invoke();
         ct.ThrowIfCancellationRequested();
 
         await RewrapOrProvisionKeySlotAsync(user, newPassword, providedDek);
 
-        await userRepo.UpdateAsync(user);
+        if (!await userRepo.TryReplacePasswordAsync(user.Id, loadedRole, loadedKeySlotId, user.KeySlotId, user.PasswordHash, passwordHint != null, user.PasswordHint))
+        {
+            if (user.KeySlotId is { } madeHere && madeHere != loadedKeySlotId)
+                await SlotDoors.DeleteSlotAsync(keySlotRepo, mirror, madeHere);
+            await SlotDoors.RewriteAsync(mirror);
+            return false;
+        }
+
         await userRepo.BumpSecurityStampAsync(user.Id);
+        CallerStateCache.Invalidate(user.Id);
         await RevokeRemoteTokensAsync(user.Id);
         await SlotDoors.RewriteAsync(mirror);
+        return true;
     }
+
+    private static InvalidOperationException AccountChangedDuringReplacement() =>
+        new("The account changed while the password was being replaced, so nothing was changed. Look at the account again and retry.");
 
     /// <summary>
     /// Gives a superadmin who has no key slot one derived from the password they just
@@ -230,6 +308,8 @@ public class UserService(
     /// <returns>true if a slot was created.</returns>
     public async Task<bool> ProvisionMissingKeySlotAsync(User user, string password)
     {
+        if (user.Replicated)
+            throw await SharedDoorsGuards.ReplicatedUserRefusalAsync(accountsHomeRepo, nodeIdentityRepo, whitelistRepo);
         if (user.Role != UserRoles.Superadmin || user.KeySlotId.HasValue || !session.IsUnlocked)
             return false;
 
@@ -250,7 +330,85 @@ public class UserService(
 
         user.KeySlotId = slotId;
         await SlotDoors.RewriteAsync(mirror);
+        if (doorsNotifier != null) await doorsNotifier.NotifyChangedAsync(immediate: true);
         return true;
+    }
+
+    /// <summary>
+    /// The upgrade of ADR 0012 at a superadmin's sign-in while the vault is already open (the unlock path upgrades the door it opened itself):
+    /// the user's own slot, when it is a v1 door or its DEK is unknown, is opened with the password that just authenticated and sealed again
+    /// as a v2 door for it. Costs one Argon2id derivation, and only while the door still needs it. Best effort: a failure is logged.
+    /// </summary>
+    /// <returns>true if the door was replaced.</returns>
+    public async Task<bool> UpgradeKeySlotDoorAsync(User user, string password)
+    {
+        if (user.Replicated || user.Role != UserRoles.Superadmin || !user.KeySlotId.HasValue || !session.IsUnlocked) return false;
+        byte[]? kek = null;
+        byte[]? dek = null;
+        try
+        {
+            var slot = (await keySlotRepo.GetAllAsync()).FirstOrDefault(s => s.SlotId == user.KeySlotId.Value);
+            if (slot is null || slot.SlotType != KeySlotTypes.User || slot.Salt is null || slot.ArgonMemory is null || slot.ArgonIterations is null
+                || slot.ArgonParallelism is null)
+                return false;
+            if (!Doors.NeedsUpgrade(slot) && slot.DekFingerprint is not null) return false;
+            KeyDerivation.ValidateUntrustedParameters(slot.ArgonMemory.Value, slot.ArgonIterations.Value, slot.ArgonParallelism.Value);
+            kek = KeyDerivation.DeriveKek(password, slot.Salt, slot.ArgonMemory.Value, slot.ArgonIterations.Value, slot.ArgonParallelism.Value);
+            dek = session.GetMasterDek();
+            if (await WalkedToCurrentDekAsync(slot, kek, dek) is { } walked)
+            {
+                if (walked && doorsNotifier != null)
+                    await doorsNotifier.NotifyChangedAsync(immediate: true);
+                return walked;
+            }
+            var upgraded = await SlotDoors.UpgradeOpenedSlotAsync(keySlotRepo, mirror, slot, kek, dek, logger);
+            if (upgraded && doorsNotifier != null)
+                await doorsNotifier.NotifyChangedAsync(immediate: true);
+            return upgraded;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The kind of failure only: no key material, no message that could carry it.
+            logger?.LogWarning("A key slot door could not be upgraded at sign-in ({Type}); it is tried again at the next sign-in.", ex.GetType().Name);
+            return false;
+        }
+        finally
+        {
+            if (kek is not null) Array.Clear(kek);
+            if (dek is not null) Array.Clear(dek);
+        }
+    }
+
+    /// <summary>
+    /// A straggler of a quiet rotation (2.12) signing in while the vault is already open: the door yields an older master key, so the
+    /// open session's key cannot be checked against it. The chain is walked from it to the current key (the lazy rewrap of the unlock path),
+    /// which replaces the row with a v2 door through SlotDoors; the replace ends the bridge when this was its last v1 door (DekBridge).
+    /// </summary>
+    /// <returns>null when the door already yields the current key (the plain upgrade decides); otherwise whether the walk replaced it.</returns>
+    private async Task<bool?> WalkedToCurrentDekAsync(MasterKeyStore slot, byte[] kek, byte[] currentDek)
+    {
+        byte[]? yielded = null;
+        try
+        {
+            try { yielded = Doors.OpenSlot(slot, kek); }
+            catch (CryptographicException) { return false; }
+            if (CryptographicOperations.FixedTimeEquals(yielded, currentDek)) return null;
+            if (lazyRewrap is null || factory is null) return false;
+            byte[]? sentinel;
+            using (var conn = factory.CreateConnection())
+                sentinel = await Dapper.SqlMapper.ExecuteScalarAsync<byte[]?>(conn, "SELECT sentinel_value FROM tbl_node_identity LIMIT 1");
+            if (MasterKeyManager.IsSentinelMissing(sentinel)) return false;
+            var result = await lazyRewrap.TryRewrapAsync(slot, kek, yielded, sentinel!);
+            if (result.RewrappedDek is null) return false;
+            var reached = result.Success && CryptographicOperations.FixedTimeEquals(result.RewrappedDek, currentDek);
+            Array.Clear(result.RewrappedDek);
+            if (reached) logger?.LogInformation("A key slot door from before a master key rotation was walked to the current key at sign-in.");
+            return reached;
+        }
+        finally
+        {
+            if (yielded is not null) Array.Clear(yielded);
+        }
     }
 
     /// <param name="passwordHint">
@@ -264,6 +422,10 @@ public class UserService(
         ValidatePassword(password);
 
         role = await CanonicalRoleNameAsync(role);
+
+        if (role == UserRoles.Superadmin
+            && await SharedDoorsGuards.IsSharedNonHomeNodeAsync(accountsHomeRepo, nodeIdentityRepo, sharedDoorsStateRepo, factory))
+            throw await SharedDoorsGuards.SharedSuperadminWriteRefusalAsync(accountsHomeRepo, nodeIdentityRepo, whitelistRepo);
 
         var existing = await userRepo.GetByUsernameAsync(username);
         if (existing != null)
@@ -285,7 +447,10 @@ public class UserService(
             user.KeySlotId = await CreateUserKeySlotAsync(password);
 
         user.Id = await userRepo.CreateAsync(user);
+        CallerStateCache.Invalidate(user.Id);
         await SlotDoors.RewriteAsync(mirror);
+        if (role == UserRoles.Superadmin && user.KeySlotId.HasValue && doorsNotifier != null)
+            await doorsNotifier.NotifyChangedAsync(immediate: true);
         return user;
     }
 
@@ -299,10 +464,14 @@ public class UserService(
     {
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
+        if (user.Replicated)
+            throw await SharedDoorsGuards.ReplicatedUserRefusalAsync(accountsHomeRepo, nodeIdentityRepo, whitelistRepo);
         var normalized = PasswordHintPolicy.NormalizeAndValidate(passwordHint, password: "", username: user.Username);
         await userRepo.SetPasswordHintAsync(userId, normalized);
         // A sealed node's sign-in page reads the pre-unlock mirror, not the closed database: save the new text there now.
         await SlotDoors.RewriteAsync(mirror);
+        if (user.Role == UserRoles.Superadmin && user.KeySlotId.HasValue && doorsNotifier != null)
+            await doorsNotifier.NotifyChangedAsync(immediate: true);
     }
 
     /// <summary>Test seam: called after the new login hash is made and before anything is written (a test stops the replacement from here).</summary>
@@ -314,6 +483,8 @@ public class UserService(
         ct.ThrowIfCancellationRequested();
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
+        if (user.Replicated)
+            throw await SharedDoorsGuards.ReplicatedUserRefusalAsync(accountsHomeRepo, nodeIdentityRepo, whitelistRepo);
 
         if (!VerifyPassword(oldPassword, user.PasswordHash))
             throw new UnauthorizedAccessException("Incorrect current password");
@@ -322,7 +493,10 @@ public class UserService(
         // Bumps the security stamp: any outstanding Web cookie (this user's other sessions,
         // and this session too) is rejected on next revalidation. Self-service password
         // change therefore forces a re-login — intended.
-        await ReplacePasswordAsync(user, newPassword, ct: ct, passwordHint: passwordHint);
+        if (!await ReplacePasswordAsync(user, newPassword, ct: ct, passwordHint: passwordHint))
+            throw AccountChangedDuringReplacement();
+        if (user.Role == UserRoles.Superadmin && user.KeySlotId.HasValue && doorsNotifier != null)
+            await doorsNotifier.NotifyChangedAsync(immediate: true);
     }
 
     /// <param name="ct">Stops the reset before it writes anything (see <see cref="ReplacePasswordAsync"/>); never in the middle of the key-slot rewrite.</param>
@@ -331,9 +505,14 @@ public class UserService(
         ct.ThrowIfCancellationRequested();
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
+        if (user.Replicated)
+            throw await SharedDoorsGuards.ReplicatedUserRefusalAsync(accountsHomeRepo, nodeIdentityRepo, whitelistRepo);
 
         // Admin reset bumps the stamp — logs out every session for this user (intended).
-        await ReplacePasswordAsync(user, newPassword, ct: ct, passwordHint: passwordHint);
+        if (!await ReplacePasswordAsync(user, newPassword, ct: ct, passwordHint: passwordHint))
+            throw AccountChangedDuringReplacement();
+        if (user.Role == UserRoles.Superadmin && user.KeySlotId.HasValue && doorsNotifier != null)
+            await doorsNotifier.NotifyChangedAsync(immediate: true);
     }
 
     /// <summary>
@@ -350,6 +529,9 @@ public class UserService(
     /// caller is not signed in.</description></item>
     /// <item><description>Only a superadmin qualifies. A recovery key is the owner's tool; it is
     /// not a way for the holder to take over an ordinary account.</description></item>
+    /// <item><description>A key WITH an owner (every key issued since 2.12) resets only that owner. Naming another
+    /// superadmin is refused like a wrong key, after the same work — no oracle for who owns which key. A key WITHOUT an
+    /// owner (issued before 2.12) keeps the older rule and resets any active superadmin.</description></item>
     /// </list>
     /// Other slots — other superadmins' passwords, every recovery key — are not touched.
     /// </summary>
@@ -367,7 +549,8 @@ public class UserService(
         // either end (or wrapped in the middle). The key itself is Base64 and holds no whitespace.
         recoveryKey = string.Concat((recoveryKey ?? "").Where(c => !char.IsWhiteSpace(c)));
 
-        var dek = await session.TryOpenWithRecoveryKeyAsync(recoveryKey);
+        var opened = await session.TryOpenWithRecoveryKeyAsync(recoveryKey);
+        var dek = opened?.Dek;
         try
         {
             // A successful reset performs two more costly operations after opening the recovery
@@ -385,7 +568,20 @@ public class UserService(
             }
 
             var user = await userRepo.GetByUsernameAsync((username ?? "").Trim());
-            var eligible = user is { Role: UserRoles.Superadmin };
+            // A recovery key is personal (2.12): a key WITH an owner resets only that owner. Naming anybody else — even another
+            // superadmin — is refused exactly like a wrong key, after the same work, so the answer is no oracle for who owns what.
+            // A key WITHOUT an owner (issued before 2.12) keeps the old rule: it resets any active superadmin. An account a removal process
+            // holds is never eligible (2.12, plan E4 S0).
+            var ownsTheKey = opened is null || opened.OwnerUserId is null || user?.Id == opened.OwnerUserId;
+            if (dek != null && ownsTheKey && user is { Replicated: true })
+            {
+                BurnPasswordVerification(recoveryKey);
+                BurnPasswordVerification(recoveryKey);
+                var (homeId, homeName) = await SharedDoorsGuards.ResolveHomeAsync(accountsHomeRepo, nodeIdentityRepo, whitelistRepo);
+                return new RecoveryResetResult(RecoveryResetOutcome.ReplicatedUser, user.Id, homeId, homeName);
+            }
+
+            var eligible = user is { Role: UserRoles.Superadmin, IsBeingRemoved: false } && ownsTheKey;
 
             if (dek == null || user == null || !eligible)
             {
@@ -401,7 +597,10 @@ public class UserService(
                     user?.Id);
             }
 
-            await ReplacePasswordAsync(user, newPassword, dek, passwordHint: normalizedHint);
+            // The account stopped being a superadmin's (or changed otherwise) between the lookup and the write: it is not eligible any more.
+            if (!await ReplacePasswordAsync(user, newPassword, dek, passwordHint: normalizedHint))
+                return new RecoveryResetResult(RecoveryResetOutcome.NotEligible, user.Id);
+            if (doorsNotifier != null) await doorsNotifier.NotifyChangedAsync(immediate: true);
             return new RecoveryResetResult(RecoveryResetOutcome.Reset, user.Id);
         }
         finally
@@ -410,10 +609,20 @@ public class UserService(
         }
     }
 
-    public async Task DeleteUserAsync(int userId)
+    /// <summary>
+    /// Deletes a user. In one transaction: the key slot, the remote API tokens, the agents (revoked, their wrapped master keys wiped), the security stamp
+    /// and the account itself (a deleted person's token or agent never outlives them). See <see cref="ApplyDeletionAsync"/>.
+    /// </summary>
+    public async Task DeleteUserAsync(int userId, string? actor = null)
     {
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
+        if (user.Replicated)
+            throw await SharedDoorsGuards.ReplicatedUserRefusalAsync(accountsHomeRepo, nodeIdentityRepo, whitelistRepo);
+
+        // While a removal process holds the person, only that process changes the account (release 2.12.0, plan E5).
+        if (user.IsBeingRemoved)
+            throw new InvalidOperationException("This person is being removed: the removal process decides what happens to the account.");
 
         if (user.Role == UserRoles.Superadmin)
         {
@@ -424,53 +633,15 @@ public class UserService(
                 throw new InvalidOperationException("Cannot delete the last superadmin");
         }
 
+        // Can still throw and abort the deletion: nothing has been touched yet, and the wrapped key material of the person's agents
+        // (shown once at creation, not recoverable) must not be wiped for a deletion that then fails.
         if (user.KeySlotId.HasValue)
-        {
             await EnsureAnotherSuperadminHoldsAKeySlotAsync(userId, "delete");
-            await SlotDoors.DeleteSlotAsync(keySlotRepo, mirror, user.KeySlotId.Value);
-        }
 
-        // Strip the wrapped master DEK from every agent this user owns. Deleting the account
-        // leaves its agent rows in tbl_agent (owner_user_id is ON DELETE RESTRICT and DeleteAsync
-        // only flips is_active), so without this a deleted superadmin's agent keys stay vault keys
-        // forever — the same hole demotion closes in UpdateUserAsync. Placed
-        // after the last-superadmin and key-slot guards above, which can still throw and abort the
-        // deletion: wiping key material that cannot be re-wrapped (the plaintext API key was shown
-        // once at creation and is not recoverable from key_hash) must not happen for a deletion
-        // that then fails.
-        if (agentRepo != null)
-            await agentRepo.ClearWrappedDekForOwnerAsync(userId);
-
-        // Bump the stamp so the deleted user's outstanding Web cookie is rejected on next
-        // revalidation. Done before the soft-delete so it lands even though DeleteAsync only
-        // flips is_active (the stamp lookup ignores is_active, so the bumped value still resolves).
-        await userRepo.BumpSecurityStampAsync(userId);
-        // Drop their cached folder rules too. Nothing should be able to authenticate as them
-        // afterwards, but leaving a permissive entry behind for the cache TTL is not a bet worth
-        // taking for one dictionary removal.
-        folderAccess.InvalidateCache(userId);
-
-        const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        for (int attempt = 0; attempt < 3; attempt++)
-        {
-            var suffix = new string(Enumerable.Range(0, 3)
-                .Select(_ => chars[RandomNumberGenerator.GetInt32(chars.Length)]).ToArray());
-            var releasedUsername = $"{user.Username}_del_{suffix}";
-            try
-            {
-                await userRepo.DeleteAsync(userId, releasedUsername);
-                await SlotDoors.RewriteAsync(mirror);
-                return;
-            }
-            catch (UsernameConflictException)
-            {
-                // The random suffix collided with an already-released username; try another one.
-                // The last attempt must NOT let the repository's exception escape: it would reach
-                // the client as a 409 naming a `_del_xxx` username the caller never asked for.
-                if (attempt == 2) break;
-            }
-        }
-        throw new ConflictException("Failed to release username after 3 attempts. Please try again.");
+        var wasSuperadmin = user.Role == UserRoles.Superadmin;
+        await ApplyDeletionAsync(user, actor: actor);
+        if (wasSuperadmin && doorsNotifier != null)
+            await doorsNotifier.NotifyChangedAsync(immediate: true);
     }
 
     /// <returns>
@@ -482,6 +653,8 @@ public class UserService(
     {
         var user = await userRepo.GetByIdAsync(userId)
             ?? throw new KeyNotFoundException($"User {userId} not found");
+        if (user.Replicated)
+            throw await SharedDoorsGuards.ReplicatedUserRefusalAsync(accountsHomeRepo, nodeIdentityRepo, whitelistRepo);
 
         user.DisplayName = displayName.Trim();
 
@@ -494,24 +667,30 @@ public class UserService(
         if (role != null)
             role = await CanonicalRoleNameAsync(role);
 
+        if (role == UserRoles.Superadmin && user.Role != UserRoles.Superadmin
+            && await SharedDoorsGuards.IsSharedNonHomeNodeAsync(accountsHomeRepo, nodeIdentityRepo, sharedDoorsStateRepo, factory))
+            throw await SharedDoorsGuards.SharedSuperadminWriteRefusalAsync(accountsHomeRepo, nodeIdentityRepo, whitelistRepo);
+
         bool roleChanged = false;
         bool passwordChanged = false;
         if (role != null && role != user.Role)
         {
+            // While a removal process holds the person, only that process changes the role (release 2.12.0, plan E5).
+            if (user.IsBeingRemoved)
+                throw new InvalidOperationException("This person is being removed: the removal process decides what happens to the account.");
             var oldRole = user.Role;
 
-            // Any move off superadmin is a demotion — not just a move to the built-in 'user'
-            // role.
+            // Any move off superadmin is a demotion, and a demotion says what the person may see afterwards, in one transaction with the loss of
+            // their door, tokens and agents: it is DemoteSuperadminAsync, never a role string written on its own.
             var demotedFromSuperadmin = oldRole == UserRoles.Superadmin && role != UserRoles.Superadmin;
-
             if (demotedFromSuperadmin)
-            {
-                var allActiveUsers = await userRepo.ListActiveAsync();
-                var remainingSuperadmins = allActiveUsers.Count(u =>
-                    u.Role == UserRoles.Superadmin && u.Id != userId);
-                if (remainingSuperadmins == 0)
-                    throw new InvalidOperationException("Cannot demote the last superadmin");
-            }
+                throw new InvalidOperationException(
+                    "Taking superadmin rights away needs an explicit choice of what the person may see afterwards: use the demotion operation.");
+
+            // Promotion (release 2.12.0, plan E7): refused while a removal of this person is open anywhere this node knows of; a person removed before
+            // gets a new person id, so the old tombstone never takes the new rights away again (a restore or a join would otherwise apply it).
+            if (role == UserRoles.Superadmin && oldRole != UserRoles.Superadmin)
+                await PrepareForPromotionAsync(user);
 
             user.Role = role;
             roleChanged = true;
@@ -521,15 +700,19 @@ public class UserService(
             // re-promoting must not orphan it by creating a second one.
             if (role != UserRoles.Superadmin && user.KeySlotId.HasValue)
             {
-                // "Cannot demote the last superadmin" above is not enough on its own: the
-                // remaining superadmins may all be promoted-but-not-yet-logged-in, and so hold
-                // no slot. Dropping the only slot left would lock the vault permanently. This can
-                // still throw and abort the whole role change — see the agent-DEK comment below
-                // for why that ordering matters.
+                // A user who is not a superadmin but still holds a slot: what a demotion that failed midway left behind before
+                // demotion became one transaction. Dropping the only slot left would lock the vault permanently, so this can still refuse.
                 await EnsureAnotherSuperadminHoldsAKeySlotAsync(userId, "demote");
+                // ...and, as in the frame, only while another superadmin holds a sealed door: the device box is published again from one.
+                if (factory is not null)
+                {
+                    using var conn = factory.CreateConnection();
+                    await EnsureAnotherSuperadminHoldsASealedDoorAsync(conn, null, userId);
+                }
 
                 await SlotDoors.DeleteSlotAsync(keySlotRepo, mirror, user.KeySlotId.Value);
                 user.KeySlotId = null;
+                await RepublishDeviceBoxAsync();
             }
             else if (role == UserRoles.Superadmin && !user.KeySlotId.HasValue)
             {
@@ -561,22 +744,6 @@ public class UserService(
                     passwordChanged = true;
                 }
             }
-
-            // A demoted user must not keep agents that can auto-unlock the vault. Only a
-            // superadmin's agents are allowed to carry a wrapped master DEK (AgentEndpoints /
-            // Agent.CanAutoUnlock) — a stale one left on this user's existing agents would let a
-            // demoted admin (or anyone who steals one of their old keys) keep unlocking the vault
-            // indefinitely. This does NOT depend on whether the user held a key slot above — an
-            // agent can have been minted at any point while its owner was still a superadmin. Only
-            // clears wrapped key material; the agent keeps authenticating like an ordinary user's
-            // agent. Placed AFTER the key-slot branch above deliberately: that branch can still
-            // throw ("their key slot is the only remaining way to unlock the vault"), and an
-            // aborted demotion must not have already, irreversibly, wiped agent key material that
-            // cannot be re-wrapped without the plaintext API key. Deliberately not swallowed in a
-            // try/catch the way RevokeRemoteTokensAsync is — a wrapped DEK left behind IS the
-            // backdoor, so a failure here must fail the whole role change.
-            if (demotedFromSuperadmin && agentRepo != null)
-                await agentRepo.ClearWrappedDekForOwnerAsync(userId);
         }
 
         await userRepo.UpdateAsync(user);
@@ -598,8 +765,13 @@ public class UserService(
         if (passwordChanged)
             await RevokeRemoteTokensAsync(userId);
 
-        // A demotion drops the user's slot and the wrapped DEK of their agents; a promotion with a password gives a slot.
+        // What the API says this person is (role, active) is read from the row: forget the answer it may have kept.
+        CallerStateCache.Invalidate(userId);
+
+        // A promotion with a password gives a slot; a leftover slot of a non-superadmin is dropped.
         await SlotDoors.RewriteAsync(mirror);
+        if (user.Role == UserRoles.Superadmin && (passwordChanged || user.KeySlotId.HasValue) && doorsNotifier != null)
+            await doorsNotifier.NotifyChangedAsync(immediate: true);
         return passwordChanged;
     }
 
@@ -651,12 +823,18 @@ public enum RecoveryResetOutcome
     Reset,
     /// <summary>No recovery slot of this node opens with the key.</summary>
     WrongKey,
-    /// <summary>The key is right, but the name is unknown, inactive, or not a superadmin.</summary>
+    /// <summary>The key is right, but the name is unknown, inactive, not a superadmin, or not the key's owner.</summary>
     NotEligible,
+    /// <summary>The key is right, but the named account is replicated from the accounts node.</summary>
+    ReplicatedUser,
 }
 
 /// <param name="UserId">The account that was reset, or the one that refused (null when no such user).</param>
-public sealed record RecoveryResetResult(RecoveryResetOutcome Outcome, int? UserId)
+public sealed record RecoveryResetResult(
+    RecoveryResetOutcome Outcome,
+    int? UserId,
+    Guid? AccountsHomeNodeId = null,
+    string? AccountsHomeName = null)
 {
     public bool Succeeded => Outcome == RecoveryResetOutcome.Reset;
 }

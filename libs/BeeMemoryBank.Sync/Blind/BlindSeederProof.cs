@@ -4,7 +4,7 @@ using System.Text;
 namespace BeeMemoryBank.Sync.Blind;
 
 /// <summary>
-/// How the first seed names its seeder (plan 4.2, review L-stage1 #3). The node that holds a pair
+/// How the first seed names its seeder (plan 4.2). The node that holds a pair
 /// code sends its node id and Ed25519 public key with an HMAC over them and the seed id, under a key
 /// derived from the one-time pairing secret. The blind node checks the MAC before it reads a byte of
 /// the package, and then accepts only a package signed by exactly that key — the package's own

@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The traffic cap at the door (srvfix6, R4-03): admission reserves, the reservation is settled with what really moved, and the route matrix, chunked bodies, ranges and
+/// The traffic cap at the door: admission reserves, the reservation is settled with what really moved, and the route matrix, chunked bodies, ranges and
 /// the days around a clock change are pinned. The middleware is driven as it runs in the node, with a stand-in for the handler.
 /// </summary>
 public sealed class BlindUsageAdmissionTests : IDisposable
@@ -108,7 +108,7 @@ public sealed class BlindUsageAdmissionTests : IDisposable
         return (Volatile.Read(ref admitted), Volatile.Read(ref refused), Task.WhenAll(tasks));
     }
 
-    // ── R4-03: concurrent admission ───────────────────────────────────────
+    // ── Concurrent admission ───────────────────────────────────────
 
     [Fact]
     public async Task R4_03_concurrent_requests_cannot_all_pass_against_the_one_budget_that_is_left()

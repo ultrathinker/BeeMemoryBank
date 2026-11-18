@@ -4,7 +4,7 @@ using BeeMemoryBank.Boundary;
 namespace BeeMemoryBank.BlindMobile.Tests;
 
 /// <summary>
-/// Fix round 1 of the Android head, for the parts that only compile for Android and so are read as source (the behaviour they feed is tested in the portable classes, on fakes that answer failure).
+/// The parts of the Android head that only compile for Android and so are read as source (the behaviour they feed is tested in the portable classes, on fakes that answer failure).
 /// </summary>
 public sealed class BlindHeadFix1SourceTests
 {
@@ -183,7 +183,7 @@ public sealed class BlindHeadFix1SourceTests
         (page + xaml).Should().NotContainEquivalentOf("encrypted", "what the invitation is called is the shared record's wording alone, whatever it becomes");
     }
 
-    // ---- fix round 3, shared busy helper: every route of a failed action goes through the closed failure text ----------------------
+    // ---- shared busy helper: every route of a failed action goes through the closed failure text ----------------------
 
     [Fact]
     public void TheApp_SetsTheClosedFailureTextOnTheSharedBusyHelper_BeforeAnythingElseAtStart()

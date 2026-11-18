@@ -48,7 +48,7 @@ public static class InitEndpoints
             await _initLock.WaitAsync();
             try
             {
-                // IsClaimedAsync as well as IsInitializedAsync (review release-a2, U2c): this path
+                // IsClaimedAsync as well as IsInitializedAsync: this path
                 // WRITES a new identity and a new master DEK, and a database that already carries
                 // either is somebody's vault whatever its shape looks like. Without this, a vault
                 // whose shape nobody recognizes gets a second identity row and a second DEK written
@@ -126,7 +126,7 @@ public static class InitEndpoints
             await _initLock.WaitAsync();
             try
             {
-                // IsClaimedAsync as well as IsInitializedAsync (review release-a2, U2c): this path
+                // IsClaimedAsync as well as IsInitializedAsync: this path
                 // WRITES a new identity and a new master DEK, and a database that already carries
                 // either is somebody's vault whatever its shape looks like. Without this, a vault
                 // whose shape nobody recognizes gets a second identity row and a second DEK written
@@ -218,6 +218,8 @@ public static class InitEndpoints
                     tlsLeafSpki = lanOffer?.TlsLeafSpki,
                     tlsCaKey = lanOffer?.TlsCaKey,
                     lanPort = lanOffer?.LanPort,
+                    login = string.IsNullOrWhiteSpace(req.Login) ? null : req.Login.Trim(),
+                    ownership = req.Shared ? OwnershipKinds.Shared : null,
                 };
 
                 // The host writes this node's row as soon as it accepts the join. From there on a failure leaves that row behind unless the host
@@ -363,7 +365,10 @@ public static class InitEndpoints
 
                     var localSalt = KeyDerivation.GenerateSalt();
                     var localKek = KeyDerivation.DeriveKek(req.Password, localSalt);
-                    var (localEncryptedDek, localIv) = MasterKeyManager.WrapMasterDek(masterDek, localKek);
+                    // This node's first door is a sealed (v2) door (ADR 0012).
+                    var localDoor = Doors.Seal(KeySlotTypes.User, localKek, localSalt, masterDek);
+                    Array.Clear(localKek);
+                    var (localEncryptedDek, localIv) = (localDoor.Box, localDoor.Iv);
 
                     var now = DateTime.UtcNow;
 
@@ -394,6 +399,9 @@ public static class InitEndpoints
                         EncryptedMasterDek = localEncryptedDek,
                         IV = localIv,
                         Salt = localSalt,
+                        DoorVersion = Doors.V2,
+                        DoorPublicKey = localDoor.PublicKey,
+                        DekFingerprint = localDoor.DekFingerprint,
                         ArgonMemory = CryptoConstants.DefaultArgonMemory,
                         ArgonIterations = CryptoConstants.DefaultArgonIterations,
                         ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
@@ -454,6 +462,7 @@ public static class InitEndpoints
                                 continue;
                             }
 
+                            var entryOwnership = OwnershipKinds.NormalizeOrNull(entry.Ownership);
                             var inherited = new WhitelistEntry
                             {
                                 NodeId = entry.NodeId,
@@ -470,7 +479,11 @@ public static class InitEndpoints
                                 // events would be rejected once a 3rd node joins.
                                 IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin),
                                 TlsTrust = tlsTrust,
-                                TlsSpki = tlsSpki
+                                TlsSpki = tlsSpki,
+                                Ownership = entryOwnership ?? OwnershipKinds.Unknown,
+                                OwnerPersonId = entryOwnership == OwnershipKinds.Personal ? entry.OwnerPersonId : null,
+                                OwnerLabel = entryOwnership == OwnershipKinds.Personal ? entry.OwnerLabel : null,
+                                NeedsReview = !OwnershipKinds.IsKnown(entryOwnership),
                             };
                             // The host's version of each field (none from a 2.7.5 host): later events are judged here as they are there.
                             BeeMemoryBank.Sync.JoinRevocations.Inherit(inherited, entry.Versions);
@@ -483,7 +496,8 @@ public static class InitEndpoints
                     }
 
                     remote = joinResponse.RemoteNode;
-                    await whitelistRepo.CreateAsync(new WhitelistEntry
+                    var remoteOwnership = OwnershipKinds.NormalizeOrNull(remote.Ownership);
+                    var remoteEntry = new WhitelistEntry
                     {
                         NodeId = remote.NodeId,
                         DisplayName = remote.DisplayName,
@@ -498,8 +512,16 @@ public static class InitEndpoints
                         IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId),
                         // The key the code pinned is the key this node dials it by from now on (SpkiPinRegistry): its certificate comes
                         // from its own local CA, which no ordinary check here trusts, so the later sync would otherwise fail.
-                        TlsSpki = code?.SpkiPin
-                    });
+                        TlsSpki = code?.SpkiPin,
+                        Ownership = remoteOwnership ?? OwnershipKinds.Unknown,
+                        OwnerPersonId = remoteOwnership == OwnershipKinds.Personal ? remote.OwnerPersonId : null,
+                        OwnerLabel = remoteOwnership == OwnershipKinds.Personal ? remote.OwnerLabel : null,
+                        NeedsReview = !OwnershipKinds.IsKnown(remoteOwnership),
+                    };
+                    if (OwnershipKinds.IsKnown(remoteOwnership)
+                        && remote.OwnershipVersion is { LamportTs: > 0 and < BeeMemoryBank.Sync.SnapshotJoin.MaxAcceptedLamport } ownVer)
+                        remoteEntry.SetVersionOf(WhitelistConcerns.Ownership, RowVersion.Of(ownVer.LamportTs, ownVer.SourceNodeId));
+                    await whitelistRepo.CreateAsync(remoteEntry);
 
                     // The peers the host has revoked (a host of 2.7.5 or older sends none): kept as revoked rows, so an old add for one of them
                     // that another node's log delivers later is refused here as it is on the host.
@@ -592,6 +614,13 @@ public static class InitEndpoints
                         // the same tail as bmb join.
                         var cappedLamport = await BeeMemoryBank.Sync.SnapshotJoin.CompleteAsync(
                             remote.NodeId, cpSeq, lamportTs, syncPositionRepo, lamportClock, nodeRepo, dbConnFactory, logger);
+
+                        if (req.Shared)
+                        {
+                            var accountsHome = ctx.RequestServices.GetService<BeeMemoryBank.Vault.SharedDoors.AccountsHomeService>();
+                            if (accountsHome is not null)
+                                await accountsHome.RecordSelfOwnershipAtJoinAsync(OwnershipKinds.Shared);
+                        }
 
                         logger.LogInformation("Snapshot join complete. CP={Cp}, Lamport={Lamport}",
                             cpSeq, cappedLamport);
@@ -748,9 +777,11 @@ public static class InitEndpoints
         string? TlsLeafSpki = null,
         string? TlsCaKey = null,
         int? LanPort = null,
-        List<BeeMemoryBank.Sync.JoinRevokedPeer>? RevokedPeers = null);
+        List<BeeMemoryBank.Sync.JoinRevokedPeer>? RevokedPeers = null,
+        string? JoinedAsDisplayName = null);
 
-    private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion);
+    private sealed record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion,
+        string? Ownership = null, Guid? OwnerPersonId = null, string? OwnerLabel = null, BeeMemoryBank.Sync.JoinVersion? OwnershipVersion = null);
 
     private sealed record JoinWhitelistEntryDto(
         Guid NodeId,
@@ -760,7 +791,10 @@ public static class InitEndpoints
         bool IsSuperadmin = false,
         string? TlsTrust = null,
         string? TlsSpki = null,
-        BeeMemoryBank.Sync.JoinPeerVersions? Versions = null);
+        BeeMemoryBank.Sync.JoinPeerVersions? Versions = null,
+        string? Ownership = null,
+        Guid? OwnerPersonId = null,
+        string? OwnerLabel = null);
 
     private sealed record JoinKeySlotDto(
         string EncryptedMasterDekB64,

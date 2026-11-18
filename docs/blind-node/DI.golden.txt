@@ -89,6 +89,7 @@ Singleton BeeMemoryBank.Storage.Sqlite.DbConnectionFactory => factory
 Singleton BeeMemoryBank.Storage.Sqlite.EmbeddingVectorCache => BeeMemoryBank.Storage.Sqlite.EmbeddingVectorCache
 Scoped BeeMemoryBank.Storage.Sqlite.FolderBootstrapper => BeeMemoryBank.Storage.Sqlite.FolderBootstrapper
 Singleton BeeMemoryBank.Storage.Sqlite.MigrationRunner => BeeMemoryBank.Storage.Sqlite.MigrationRunner
+Singleton BeeMemoryBank.Storage.Sqlite.NodeKeyHistoryStore => BeeMemoryBank.Storage.Sqlite.NodeKeyHistoryStore
 Singleton BeeMemoryBank.Sync.Blind.BlindRestoreInitiator => BeeMemoryBank.Sync.Blind.BlindRestoreInitiator
 Singleton BeeMemoryBank.Sync.Blind.BlindState => BeeMemoryBank.Sync.Blind.BlindState
 Singleton BeeMemoryBank.Sync.Blind.Format2.IBaselineSource => BeeMemoryBank.Sync.Blind.Format2.BlindBaselineSource
@@ -105,6 +106,10 @@ Singleton BeeMemoryBank.Sync.Channels.PeerReachability => BeeMemoryBank.Sync.Cha
 Scoped BeeMemoryBank.Sync.EventApplier => BeeMemoryBank.Sync.EventApplier
 Singleton BeeMemoryBank.Sync.FileNodeKey => instance BeeMemoryBank.Sync.FileNodeKey
 Scoped BeeMemoryBank.Sync.HardDeleteService => BeeMemoryBank.Sync.HardDeleteService
+Scoped BeeMemoryBank.Sync.INodeStateContributor => BeeMemoryBank.Sync.DefaultNodeStateContributor
+Scoped BeeMemoryBank.Sync.INodeStateContributor => BeeMemoryBank.Sync.RetiredKeyAttentionContributor
+Scoped BeeMemoryBank.Sync.INodeStateContributor => BeeMemoryBank.Sync.SignedAsThisNodeContributor
+Singleton BeeMemoryBank.Sync.IPeerRevocationCleanup => factory
 Singleton BeeMemoryBank.Sync.IPeerStateResetter => factory
 Singleton BeeMemoryBank.Sync.IRestoreInitiator => factory
 Singleton BeeMemoryBank.Sync.LamportClock => BeeMemoryBank.Sync.LamportClock
@@ -114,6 +119,9 @@ Singleton BeeMemoryBank.Sync.Metadata.IHeldEventDrain => BeeMemoryBank.Sync.Meta
 Singleton BeeMemoryBank.Sync.Metadata.IHeldEventStatus => BeeMemoryBank.Sync.Metadata.HeldEventStatus
 Singleton BeeMemoryBank.Sync.Metadata.IMetadataActivationObserver => BeeMemoryBank.Api.Services.BlindActivationObserver
 Singleton BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy => BeeMemoryBank.Sync.Metadata.SyncProtocolPolicy
+Singleton BeeMemoryBank.Sync.NodeStateAnnouncer => factory
+Scoped BeeMemoryBank.Sync.NodeStatePublisher => BeeMemoryBank.Sync.NodeStatePublisher
+Scoped BeeMemoryBank.Sync.NodeStateStore => BeeMemoryBank.Sync.NodeStateStore
 Singleton BeeMemoryBank.Sync.PeerContactLog => BeeMemoryBank.Sync.PeerContactLog
 Singleton BeeMemoryBank.Sync.PeerNewerProtocolState => BeeMemoryBank.Sync.PeerNewerProtocolState
 Scoped BeeMemoryBank.Sync.PeerTlsBackfill => BeeMemoryBank.Sync.PeerTlsBackfill
@@ -125,6 +133,7 @@ Singleton BeeMemoryBank.Sync.SyncTrigger => BeeMemoryBank.Sync.SyncTrigger
 Singleton Microsoft.AspNetCore.Hosting.IStartupFilter => BeeMemoryBank.Integration.Tests.BmbWebApplicationFactory+LoopbackRemoteIpStartupFilter
 Singleton Microsoft.Extensions.Hosting.IHostedService => factory
 Singleton Microsoft.Extensions.Hosting.IHostedService => factory
+Singleton Microsoft.Extensions.Hosting.IHostedService => factory
 Singleton Microsoft.Extensions.Hosting.IHostedService => BeeMemoryBank.Api.Services.BlindBackup.BlindBackupScheduleService
 Singleton Microsoft.Extensions.Hosting.IHostedService => factory
 Singleton Microsoft.Extensions.Hosting.IHostedService => factory
@@ -134,5 +143,6 @@ BeeMemoryBank.Api.Services.BlindBackup.BlindBackupScheduleService
 BeeMemoryBank.Api.Services.BlindLogTrimmer
 BeeMemoryBank.Api.Services.BlindReplicaPackageCache
 BeeMemoryBank.Sync.CleanupService
+BeeMemoryBank.Sync.NodeStateAnnouncer
 BeeMemoryBank.Sync.SyncScheduler
 Microsoft.AspNetCore.Hosting.GenericWebHostService

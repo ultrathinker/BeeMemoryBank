@@ -50,6 +50,9 @@ public static class KeyDerivation
                && Interlocked.CompareExchange(ref _peakInFlightKiB, inFlight, peak) != peak) { }
         try
         {
+            Interlocked.Increment(ref _derivationCount);
+            if (_scopedCount.Value is { } scoped)
+                Interlocked.Increment(ref scoped[0]);
             return DeriveKekCore(password, salt, memory, iterations, parallelism);
         }
         finally
@@ -62,8 +65,25 @@ public static class KeyDerivation
     // Diagnostics: Argon2 memory currently committed, and the highest it has been.
     private static long _inFlightKiB;
     private static long _peakInFlightKiB;
+    private static long _derivationCount;
+    private static readonly AsyncLocal<long[]?> _scopedCount = new();
     internal static long PeakInFlightKiB => Interlocked.Read(ref _peakInFlightKiB);
+    internal static long DerivationCount => Interlocked.Read(ref _derivationCount);
     internal static void ResetPeakForTests() => Interlocked.Exchange(ref _peakInFlightKiB, 0);
+
+    internal static ScopedCounter BeginScopedCountForTests()
+    {
+        var prior = _scopedCount.Value;
+        var box = new long[1];
+        _scopedCount.Value = box;
+        return new ScopedCounter(box, prior);
+    }
+
+    internal sealed class ScopedCounter(long[] box, long[]? prior) : IDisposable
+    {
+        public long Count => Interlocked.Read(ref box[0]);
+        public void Dispose() => _scopedCount.Value = prior;
+    }
 
     /// <summary>
     /// Budget units a derivation of <paramref name="memoryKiB"/> takes. A request larger than the

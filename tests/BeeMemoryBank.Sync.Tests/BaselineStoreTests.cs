@@ -305,7 +305,7 @@ public sealed class BaselineStoreTests : IAsyncLifetime
 
     public static IEnumerable<object[]> NotAContainer() => Format2TestKit.NotAContainerCases.Select(c => new object[] { c });
 
-    /// <summary>Spec 7.1 (review round): the store takes only a BMBCH1-framed container, whatever else it is signed as.</summary>
+    /// <summary>Spec 7.1: the store takes only a BMBCH1-framed container, whatever else it is signed as.</summary>
     [Theory]
     [MemberData(nameof(NotAContainer))]
     public async Task Adopt_RefusesAContainerThatIsNotBmbch1(string what)
@@ -322,7 +322,7 @@ public sealed class BaselineStoreTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review round: the files behind <c>tbl_baseline</c> are checked against the signed manifest every time the store hands
+    /// the files behind <c>tbl_baseline</c> are checked against the signed manifest every time the store hands
     /// them out, not only when they arrive. A baseline whose files changed on disk is not served (fail closed), and the same
     /// baseline sent again puts its files back.
     /// </summary>
@@ -384,7 +384,7 @@ public sealed class BaselineStoreTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review round, finding 1: the flag that says "legacy content is gone" is set after the file is rebuilt and the WAL
+    /// the flag that says "legacy content is gone" is set after the file is rebuilt and the WAL
     /// truncated, never before. Here the truncation cannot finish (a reader holds an old snapshot of the WAL): the adoption
     /// fails, the flag is not set, and the next adoption - of the baseline already current - finishes the purge.
     /// </summary>

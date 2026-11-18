@@ -2,19 +2,23 @@
 @model BeeMemoryBank.Web.Pages.Admin.AgentsModel
 
 @section About {
-    <p>
-        An <strong>agent</strong> is a key that lets an AI assistant (or a script) reach this vault through the MCP interface. This page lists the agents of <em>every</em> user: its name, its owner, the
-        start of its key, when it was last used and how many requests it has made. <strong>Revoking</strong> an agent (the bin) stops its key from working at once, and cannot be undone: it needs
-        a new agent and a new key.
-    </p>
-    <p>
-        An agent has <strong>no access rules of its own</strong>: it can do exactly what the user it belongs to can do. If that user may see only some folders, or may only read, so can the agent.
-        An agent owned by a superadmin has no restrictions at all. To limit an agent, limit its owner on the <a href="/Users">Users</a> page. The <em>Auto-unlock</em> column marks agents that can
-        wake a locked node by themselves, which only a superadmin's agent can; they are why a lock can be undone from outside (see <a href="/Admin/LockServer">Lock Server</a>).
-    </p>
-    <p>
-        New agents are not created here: a person makes their own on their <a href="/Profile">Profile</a> page, where the full key is shown <strong>once</strong>.
-    </p>
+    <p>Keys that let AI assistants use your notes. Switch off the ones you no longer use.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            An <strong>agent</strong> is a key that lets an AI assistant (or a script) reach this vault through the MCP interface. This page lists the agents of <em>every</em> user: its name, its owner, the
+            start of its key, when it was last used and how many requests it has made. <strong>Revoking</strong> an agent (the bin) stops its key from working at once, and cannot be undone: it needs
+            a new agent and a new key.
+        </p>
+        <p>
+            An agent has <strong>no access rules of its own</strong>: it can do exactly what the user it belongs to can do. If that user may see only some folders, or may only read, so can the agent.
+            An agent owned by a superadmin has no restrictions at all. To limit an agent, limit its owner on the <a href="/Users">Users</a> page. The <em>Auto-unlock</em> column marks agents that can
+            wake a locked node by themselves, which only a superadmin's agent can; they are why a lock can be undone from outside (see <a href="/Admin/LockServer">Lock Server</a>).
+        </p>
+        <p>
+            New agents are not created here: a person makes their own on their <a href="/Profile">Profile</a> page, where the full key is shown <strong>once</strong>.
+        </p>
+    </details>
 }
 
 @if (Model.Agents != null && Model.Agents.Count > 0)

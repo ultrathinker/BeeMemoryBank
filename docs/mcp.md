@@ -45,7 +45,7 @@ to know:
 - **While closed, the node leaks nothing.** The sealed vault answers no metadata search, no tree, no activity log —
   there is no open key in the process. Status and health still answer.
 
-[sealed-database.md](sealed-database.md#locked-and-unlocked-what-a-restart-does) has the full closed-node picture.
+[sealed-database.md](sealed-database.md#unlocking) has the full closed-node picture.
 Nothing about the tools, the addresses or the keys changes, and agents take no part in encrypting a node.
 
 ## 7 Tool Groups

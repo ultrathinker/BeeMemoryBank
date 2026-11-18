@@ -30,7 +30,7 @@ public sealed record BlindJobOutcome(BlindJobPhase Phase, string? Message = null
 public sealed record BlindJobAsk(string Kind, DateTimeOffset At, DateTimeOffset? SyncAtAsk, DateTimeOffset? BackupAtAsk);
 
 /// <summary>
-/// How a screen knows that the job it started has ended (BMB-311 fix round): from the STATE of the phone, not from a clock. The first version of the
+/// How a screen knows that the job it started has ended (BMB-311): from the STATE of the phone, not from a clock. The first version of the
 /// screens waited for twenty seconds to see the job begin and for an hour to see it end, and let the button go when a limit passed - with the job possibly
 /// still running, and a second tap free to ask for another. A job is open until the state says otherwise: it is running, or it has been asked for and the
 /// system has not started it yet (a queue grace), and it ends when its mark appears (the first load is done, the time of the last sync or backup moved) or
