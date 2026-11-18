@@ -1,31 +1,55 @@
 <?xml version="1.0" encoding="utf-8" ?>
+<!-- Joining the owner's memory bank, in the design's gate shape (the Android SetupPage's card): brand centred, one card with as
+     few words as possible: "Scan QR code" first, then the join code field at full width with Paste beside its label,
+     the master password with one line under it, this phone's name, Join. Where the code comes from and the rest of the explanation
+     sit under "More", folded. No password hint here: joining does not create a password, it reuses the computer's. The checks and
+     the join itself are unchanged. Centres when it fits, scrolls when it does not. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.FullIos.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
              x:Class="BeeMemoryBank.FullIos.Pages.JoinPage"
-             Title="Join">
-    <Grid RowDefinitions="*,Auto" Padding="24,8,24,24">
-        <ScrollView>
-            <VerticalStackLayout Spacing="8">
-                <Label Text="Join code" Style="{StaticResource Section}" />
-                <Label Style="{StaticResource Muted}" Text="On your computer open Admin, then Connect a device, and copy the code that starts with bmb-join: (or scan its QR code with the Camera). A server with its own https address can be typed instead." />
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <Editor x:Name="CodeEditor" Placeholder="bmb-join:?a=..." AutoSize="TextChanges" MinimumHeightRequest="80" AutomationId="CodeEditor" />
-                    <Button Grid.Column="1" Text="Paste" Style="{StaticResource Secondary}" VerticalOptions="Start" Clicked="OnPaste" />
-                </Grid>
-                <Label Text="Master password" Style="{StaticResource Section}" />
-                <Entry x:Name="PasswordEntry" IsPassword="True" Placeholder="The master password of your memory bank" ReturnType="Next" AutomationId="PasswordEntry" />
-                <Label Style="{StaticResource Muted}" Text="With a join code it goes only to the computer that made the code: the code pins that computer's key." />
-                <Label Text="Password hint (required). If you forget your password, we will show this hint on the sign-in page, because there is no e-mail recovery. Write it so that other people cannot work out your password from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it." Style="{StaticResource Muted}" />
-                <Entry x:Name="HintEntry" Placeholder="Password hint" ReturnType="Next" AutomationId="PasswordHintEntry" />
-                <Label Text="Name of this iPhone" Style="{StaticResource Section}" />
-                <Entry x:Name="NameEntry" Placeholder="iPhone" ReturnType="Done" Completed="OnJoin" AutomationId="NameEntry" />
-                <Label x:Name="ErrorLabel" Style="{StaticResource Error}" IsVisible="False" />
+             Title="">
+    <ScrollView x:Name="GateViewer">
+        <Grid x:Name="GateRoot" Padding="24,32,24,24">
+            <VerticalStackLayout Spacing="18" MaximumWidthRequest="400"
+                                 HorizontalOptions="Fill" VerticalOptions="Center">
+                <Label Text="{loc:Translate AppTitle}" Style="{StaticResource BrandTitle}" HorizontalOptions="Center" />
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="14">
+                        <Label Text="{loc:Translate ConnectTitle}" Style="{StaticResource CardTitle}" />
+                        <Button x:Name="ScanButton" Text="{loc:Translate JoinScanQr}" Style="{StaticResource SecondaryButton}"
+                                Clicked="OnScan" AutomationId="ScanQrButton" />
+                        <VerticalStackLayout Spacing="4">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Text="{loc:Translate ConnectAddrLabel}" Style="{StaticResource FieldLabel}" VerticalOptions="Center" />
+                                <Button Grid.Column="1" Text="{loc:Translate JoinPaste}" Style="{StaticResource TextButton}"
+                                        Clicked="OnPaste" AutomationId="PasteCodeButton" />
+                            </Grid>
+                            <Editor x:Name="CodeEditor" Placeholder="bmb-join:?a=..." AutoSize="TextChanges"
+                                    BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                                    MinimumHeightRequest="48" HorizontalOptions="Fill" AutomationId="CodeEditor" />
+                        </VerticalStackLayout>
+                        <VerticalStackLayout Spacing="4">
+                            <Label Text="{loc:Translate MasterPasswordLabel}" Style="{StaticResource FieldLabel}" />
+                            <controls:PasswordBox x:Name="PasswordEntry" ReturnType="Next" AutomationId="PasswordEntry" />
+                            <Label Text="{loc:Translate JoinPasswordMeta}" Style="{StaticResource ItemMeta}" />
+                        </VerticalStackLayout>
+                        <VerticalStackLayout Spacing="4">
+                            <Label Text="{loc:Translate ConnectDeviceNameLabel}" Style="{StaticResource FieldLabel}" />
+                            <Entry x:Name="NameEntry" Placeholder="{loc:Translate ConnectDeviceNamePlaceholder}"
+                                   ReturnType="Done" Completed="OnJoin" AutomationId="NameEntry" />
+                        </VerticalStackLayout>
+                        <Label x:Name="ErrorLabel" Style="{StaticResource FieldError}" IsVisible="False" />
+                        <Button x:Name="JoinButton" Text="{loc:Translate ConnectStart}" Style="{StaticResource PrimaryButton}"
+                                Clicked="OnJoin" AutomationId="JoinVaultButton" />
+                        <Button x:Name="MoreButton" Text="{loc:Translate JoinMore}" Style="{StaticResource TextButton}"
+                                HorizontalOptions="Center" Clicked="OnMore" AutomationId="JoinMoreButton" />
+                        <Label x:Name="MoreLabel" Text="{loc:Translate JoinCodeMeta}" Style="{StaticResource ItemMeta}"
+                               IsVisible="False" AutomationId="JoinMoreText" />
+                    </VerticalStackLayout>
+                </Border>
             </VerticalStackLayout>
-        </ScrollView>
-        <VerticalStackLayout Grid.Row="1" Spacing="8">
-            <Label x:Name="StatusLabel" Style="{StaticResource Muted}" HorizontalTextAlignment="Center" IsVisible="False" />
-            <ActivityIndicator x:Name="Busy" IsRunning="False" IsVisible="False" />
-            <Button x:Name="JoinButton" Text="Join" Clicked="OnJoin" AutomationId="JoinVaultButton" />
-        </VerticalStackLayout>
-    </Grid>
+        </Grid>
+    </ScrollView>
 </ContentPage>

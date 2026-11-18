@@ -403,7 +403,7 @@ public class McpAclTests : IAsyncLifetime
     [Fact]
     public async Task Acl_BeeGetTree_DepthAndPagination_ComposeWithScope()
     {
-        // WP-19 self-check #5: depth/pagination must compose with ACL scope filtering, never bypass
+        // Depth/pagination must compose with ACL scope filtering, never bypass
         // it. A folder-scoped caller (denied /Secret) must not see /Secret at any depth or on any
         // pagination page, while still seeing everything they're allowed to.
         await _articleService.CreateAsync("Secret 1", "/Secret/Sub/Deep", [], "t");
@@ -927,6 +927,8 @@ public class McpAclTests : IAsyncLifetime
         ctx.Request.Headers["X-Internal-Key"] = envKey;
         ctx.Request.Headers["X-User-Id"] = "1";
         ctx.Request.Headers["X-User-Role"] = "superadmin";
+        // In the real pipeline CallerIdentityMiddleware reads user 1's role from tbl_user and parks the identity here; this fixture has no pipeline.
+        ctx.Items[BeeMemoryBank.Api.Helpers.CallerIdentity.ItemKey] = new BeeMemoryBank.Api.Helpers.CallerIdentity(1, null, null, true);
         _httpContextAccessor.HttpContext = ctx;
     }
 

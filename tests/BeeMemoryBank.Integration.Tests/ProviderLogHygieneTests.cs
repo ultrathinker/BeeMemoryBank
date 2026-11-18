@@ -8,7 +8,7 @@ using BeeMemoryBank.Api.Services.Providers;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// No protocol client writes what a provider answered into the node's log or into an exception text (review prov-r2, finding 1): an error
+/// No protocol client writes what a provider answered into the node's log or into an exception text: an error
 /// body or an answer can quote what was sent - decrypted note text, tool results, write arguments, thinking. A sentinel in every response
 /// body (error JSON, plain text, a stream's error event, an answer the client only inspects) and in the request itself must appear in no log
 /// line at any level and in no exception message, for every client and every path: completion, tools, stream, image generation, fetch models.

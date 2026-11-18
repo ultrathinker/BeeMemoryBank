@@ -44,7 +44,7 @@ public static class SyncActivationEndpoints
                 generation = outcome.Generation,
             });
         }).RequireSuperadmin().RequireNonAgent().WithTags("Sync")
-            // A second request while one runs is refused at once, not queued behind it to publish a second activation (BMB-311 fix round).
+            // A second request while one runs is refused at once, not queued behind it to publish a second activation (BMB-311).
             .SingleFlight("metadata-activation", "The metadata activation");
     }
 }

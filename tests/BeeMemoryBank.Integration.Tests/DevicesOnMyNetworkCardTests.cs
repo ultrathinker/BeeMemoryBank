@@ -16,7 +16,7 @@ using NodeLanClient = WebApp::BeeMemoryBank.Web.Services.NodeLanClient;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The "Devices on my network" card of Admin &gt; Nodes (task P7): what it offers on each system and in each state, and the client that
+/// The "Devices on my network" card of Admin &gt; Nodes: what it offers on each system and in each state, and the client that
 /// carries the switch to the desktop node. The card must say what applies instead of showing a dead switch (Docker), name the macOS
 /// prompt instead of a firewall button (Mac), and never offer to edit a firewall the app does not manage (Windows service).
 /// </summary>
@@ -172,7 +172,7 @@ public class DevicesOnMyNetworkCardTests
     [InlineData("a proxy page")]
     public async Task TheClient_TellsAFailedCallAsAKindOfFailure_NeverWithTheExceptionsOwnText(string what)
     {
-        // BMB-306/307 fix round 3 (G3): LanStatus.Error went to the page with the message of the exception: the address dialled, whatever a proxy in between said.
+        // BMB-306/307: LanStatus.Error went to the page with the message of the exception: the address dialled, whatever a proxy in between said.
         const string hostile = "Could not reach http://127.0.0.1:5311/node/lan?token=tok_5c4b3a29 (<html>Pay now</html>)";
         Exception failure = what == "connection refused"
             ? new HttpRequestException(hostile, new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused))

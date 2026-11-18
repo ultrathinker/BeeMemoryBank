@@ -1,6 +1,6 @@
 namespace BeeMemoryBank.SearchBench;
 
-/// <summary>Parsed command-line options. Defaults match the brief's recommended values.</summary>
+/// <summary>Parsed command-line options. Defaults match the recommended values.</summary>
 internal sealed class Options
 {
     public string? DataPath { get; set; }

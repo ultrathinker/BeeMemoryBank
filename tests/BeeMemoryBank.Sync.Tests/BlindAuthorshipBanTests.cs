@@ -51,7 +51,7 @@ public class BlindAuthorshipBanTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage0 round 2 #1: an event a pre-fix build already stored is refused on replay too,
+    /// An event a pre-fix build already stored is refused on replay too,
     /// not waved through by the "already applied" shortcut.
     /// </summary>
     [Fact]

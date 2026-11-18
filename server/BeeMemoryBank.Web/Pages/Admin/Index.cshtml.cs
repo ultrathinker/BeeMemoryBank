@@ -13,13 +13,17 @@ public class IndexModel(ApiClient api) : AdminPageModel(api)
     /// <summary>Devices a restore kept inactive until a superadmin confirms them (no anchor vouched for them).</summary>
     public List<RestoredPeerDto> RestoredPeers { get; private set; } = [];
 
+    /// <summary>The removals of superadmins still open (release 2.12.0): the banner of the index while one is (plan E5).</summary>
+    public List<OffboardingDto> OpenRemovals { get; private set; } = [];
+
     public async Task OnGetAsync()
     {
         await Task.WhenAll(
             LoadMasterPasswordNoticeAsync(),
             LoadRecoveryKeyStatusAsync(),
             LoadPeerPendingRotationsAsync(),
-            Api.GetRestoredPeersAsync().ContinueWith(t => RestoredPeers = t.Result));
+            Api.GetRestoredPeersAsync().ContinueWith(t => RestoredPeers = t.Result),
+            Api.GetOffboardingsAsync().ContinueWith(t => OpenRemovals = (t.Result ?? []).Where(r => r.Open).ToList()));
     }
 
     public Task<IActionResult> OnPostDismissPasswordNoticeAsync() => DismissPasswordNoticeAsync();

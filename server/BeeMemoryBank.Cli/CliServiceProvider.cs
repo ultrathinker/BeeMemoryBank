@@ -33,7 +33,7 @@ public static class CliServiceProvider
     /// <param name="forFreshSeal">True for <c>bmb init</c>: a plain folder gets the pieces that encrypt the node it is about to set up (<see cref="CliSealed.AddFreshSealCli"/>).</param>
     public static async Task<ServiceProvider> CreateAsync(string dataPath, bool openSealed = true, bool forFreshSeal = false)
     {
-        // The vault gate (review release-b R1-2): refused while a re-key runs, an interrupted swap finished first, and
+        // The vault gate: refused while a re-key runs, an interrupted swap finished first, and
         // vault.lease held shared as long as the provider lives, so the re-key refuses while this command runs.
         var (resolution, vaultLease) = BeeMemoryBank.AppPaths.VaultStartup.Enter(dataPath);
         dataPath = resolution.DataDir;

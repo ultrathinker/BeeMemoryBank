@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-42, the divergence the owner's decision fixes: a node joined with the master password did a
+/// BMB-42, the divergence the join-authority decision fixes: a node joined with the master password did a
 /// superadmin-only action on its own copy (hard delete, password change) and applied it locally,
 /// while the node it joined through refused the event — "requires superadmin", quarantined — and the
 /// two copies stayed different for good. Both nodes here are real in-process nodes; the host's row

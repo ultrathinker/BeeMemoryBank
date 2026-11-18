@@ -3,7 +3,7 @@ using BeeMemoryBank.AppPaths;
 namespace BeeMemoryBank.Rekey;
 
 /// <summary>
-/// The re-key never follows a junction or a symbolic link out of the directories it works on (review release-b R1-7):
+/// The re-key never follows a junction or a symbolic link out of the directories it works on:
 /// a link under D could otherwise import files from anywhere into the new vault, make it read an outside file as a
 /// vault's media, or loop a walk forever. Links are skipped (and named, so the report can say so), never followed.
 /// </summary>
@@ -21,7 +21,7 @@ public static class NoFollow
 
     /// <summary>
     /// Whether <paramref name="path"/> itself, or any directory above it, is a junction, a symbolic link or another
-    /// reparse point (review release-b-fix #2). The volume root is not judged. A vault reached through a link would make
+    /// reparse point. The volume root is not judged. A vault reached through a link would make
     /// the re-key read, copy and rename through it, so the verb refuses such a path and asks for the real one.
     /// </summary>
     public static bool IsOrUnderLink(string path)

@@ -2,19 +2,23 @@
 @model BeeMemoryBank.Web.Pages.Admin.LockServerModel
 
 @section About {
-    <p>
-        Locking <strong>erases the master encryption key from this node's memory</strong>. Everyone is logged out at once: you, the other users, MCP agents and the mobile apps. Nobody
-        can read or edit articles until the vault is opened again. A superadmin who signs in opens it, and after that the server is open for everyone again. Nothing is deleted.
-    </p>
-    <p>
-        Use it when you leave the server unattended and want nobody, not even an agent that is already connected, to get at your data while you are away. Think of it as taking
-        the key out of the lock and putting it in your pocket.
-    </p>
-    <p>
-        <strong>Two things can open the vault again without a superadmin signing in</strong>, and the page tells you which of them apply to this node: an <strong>agent key</strong> that
-        is allowed to unlock the node by itself (it does so on its next request; revoke it on <a href="/Admin/Agents">Agents</a> if the lock has to hold), and <strong>OS auto-unlock</strong>,
-        which reopens the vault when the node restarts (it does not undo a lock while the node keeps running).
-    </p>
+    <p>Locks the vault now and signs everybody out until someone unlocks it again.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            Locking <strong>erases the master encryption key from this node's memory</strong>. Everyone is logged out at once: you, the other users, MCP agents and the mobile apps. Nobody
+            can read or edit articles until the vault is opened again. A superadmin who signs in opens it, and after that the server is open for everyone again. Nothing is deleted.
+        </p>
+        <p>
+            Use it when you leave the server unattended and want nobody, not even an agent that is already connected, to get at your data while you are away. Think of it as taking
+            the key out of the lock and putting it in your pocket.
+        </p>
+        <p>
+            <strong>Two things can open the vault again without a superadmin signing in</strong>, and the page tells you which of them apply to this node: an <strong>agent key</strong> that
+            is allowed to unlock the node by itself (it does so on its next request; revoke it on <a href="/Admin/Agents">Agents</a> if the lock has to hold), and <strong>OS auto-unlock</strong>,
+            which reopens the vault when the node restarts (it does not undo a lock while the node keeps running).
+        </p>
+    </details>
 }
 
 <div class="card mt-md" style="max-width:560px;">

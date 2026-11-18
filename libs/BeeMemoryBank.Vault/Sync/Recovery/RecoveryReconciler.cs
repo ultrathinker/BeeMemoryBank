@@ -11,6 +11,8 @@ namespace BeeMemoryBank.Sync.Recovery;
 /// Continuous reconciliation on a full node (plan 6.4, 6.8). Two jobs, both "publish only what is
 /// missing", so a quiet mesh sends nothing:
 /// <list type="bullet">
+/// <item>Rotation links. A rotation of 2.12 writes its own link (OLD under NEW) inside its transaction with a marker; this publishes it
+/// (<see cref="DekRotation.RotationLinks"/>).</item>
 /// <item>Chain links. For every master DEK this node retired (<see cref="IRetiredMasterDekStore"/>) it
 /// can rebuild the pair (retired key, the key that replaced it) from the local chain material and
 /// publish the retired key wrapped under its successor. The first run on a node back-fills every
@@ -36,6 +38,9 @@ public class RecoveryReconciler(
         await Gate.WaitAsync(ct);
         try
         {
+            // The links rotations of 2.12 wrote themselves (in their transaction) and have not published yet; then the chain walk for
+            // rotations applied before 2.12.
+            await DekRotation.RotationLinks.PublishPendingAsync(connFactory, publisher, logger);
             await PublishMissingLinksAsync();
             await ResealSecretsAsync();
         }
@@ -69,8 +74,11 @@ public class RecoveryReconciler(
                     newDek = await SuccessorOfAsync(commitId, oldDek);
                     if (newDek == null)
                     {
-                        logger.LogInformation(
-                            "Retired DEK of rotation {CommitId} has no local chain material; no link can be published for it", commitId);
+                        // A rotation of 2.12 wrote its link itself (RotationLinks, published above) and keeps no chain without v1 doors:
+                        // nothing is missing then, and nothing is said.
+                        if (!await HasOwnLinkAsync(commitId, DekFingerprint.Of(oldDek)))
+                            logger.LogInformation(
+                                "Retired DEK of rotation {CommitId} has no local chain material; no link can be published for it", commitId);
                         continue;
                     }
 
@@ -119,6 +127,14 @@ public class RecoveryReconciler(
         {
             return null;
         }
+    }
+
+    private async Task<bool> HasOwnLinkAsync(string commitId, string oldFp)
+    {
+        using var conn = connFactory.CreateConnection();
+        return await conn.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM tbl_dek_retired_link WHERE commit_id = @commitId COLLATE NOCASE AND old_fingerprint = @oldFp",
+            new { commitId, oldFp }) > 0;
     }
 
     private async Task<bool> HasVerifiedLinkAsync(string oldFp, string newFp, byte[] newDek)

@@ -450,10 +450,17 @@ public class ProviderRegistryTests : IAsyncLifetime
     [Fact]
     public async Task AUserWhoIsNotSuperadmin_CanNeitherReadNorChangeProvidersOrKeys()
     {
+        // A real ordinary user: the API reads the caller's role from its own table, so user 1 (the admin) would be a superadmin whatever the header says.
+        var created = await _client.PostAsJsonAsync("/api/users", new
+        {
+            username = "plain", password = "PlainUser12345", displayName = "Plain", role = "user", passwordHint = "the colour of the sea",
+        });
+        created.EnsureSuccessStatusCode();
+        var plainId = (await created.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>()).GetProperty("id").GetInt32();
         using var user = _factory.Server.CreateClient();
         user.DefaultRequestHeaders.Add("X-Internal-Key", BmbWebApplicationFactory.InternalKeyForTests);
         user.DefaultRequestHeaders.Add("X-User-Role", "user");
-        user.DefaultRequestHeaders.Add("X-User-Id", "1");
+        user.DefaultRequestHeaders.Add("X-User-Id", plainId.ToString());
         foreach (var (method, path) in ManagementRoutes())
         {
             using var request = new HttpRequestMessage(new HttpMethod(method), path);

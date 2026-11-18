@@ -6,7 +6,7 @@ using BeeMemoryBank.Core.Models;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The invitation on its real way to the owner (release 2.7, fix round 1): a Web host in front of the hub, the owner logged in as in a browser, the page's own
+/// The invitation on its real way to the owner (release 2.7): a Web host in front of the hub, the owner logged in as in a browser, the page's own
 /// form posted with its antiforgery token and the same call made through the Web proxy. The invitation is a bearer capability, so nothing between the hub and
 /// the owner's screen may keep it: the answers carry <c>Cache-Control: no-store</c> and <c>Pragma: no-cache</c>, and a later visit to the page does not show it.
 /// </summary>

@@ -30,6 +30,10 @@ public class DevicesModel(ApiClient api, IHttpClientFactory httpClientFactory, M
 
     public List<WhitelistEntryDto> Whitelist { get; private set; } = [];
 
+    public List<UserDto> Users { get; private set; } = [];
+
+    public SharedDoorsStatusDto? SharedDoors { get; private set; }
+
     /// <summary>Devices a restore kept inactive until a superadmin confirms them (no anchor vouched for them).</summary>
     public List<RestoredPeerDto> RestoredPeers { get; private set; } = [];
 
@@ -66,6 +70,37 @@ public class DevicesModel(ApiClient api, IHttpClientFactory httpClientFactory, M
             .Where(e => e.Status == "A" && !e.IsSuperadmin && !BlindNodeId.IsBlind(e.NodeId))
             .ToList();
 
+    /// <summary>The rows whose ownership a superadmin is asked to confirm. Never the accounts node: it is shared by definition.</summary>
+    public IReadOnlyList<WhitelistEntryDto> OwnershipReviewEntries =>
+        Whitelist.Where(e => e.Status == "A" && e.NeedsReview && e.NodeId != Identity?.NodeId && e.NodeId != SharedDoors?.AccountsHomeNodeId).ToList();
+
+    public bool IsSingleSuperadminBank =>
+        Users.Count(u => string.Equals(u.Role, UserRoles.Superadmin, StringComparison.OrdinalIgnoreCase)) <= 1;
+
+    public bool ShowOwnershipReviewCard => OwnershipReviewEntries.Count > 0 && !IsSingleSuperadminBank;
+
+    public WhitelistEntryDto? WhitelistEntryFor(Guid nodeId) =>
+        Whitelist.FirstOrDefault(e => e.NodeId == nodeId);
+
+    public static string OwnershipChoiceValue(WhitelistEntryDto entry)
+    {
+        if (entry.Ownership == OwnershipKinds.Shared) return OwnershipKinds.Shared;
+        if (entry.Ownership == OwnershipKinds.Personal && entry.OwnerPersonId is { } pid) return $"personal:{pid}";
+        if (entry.SuggestedOwnership == OwnershipKinds.Personal && entry.SuggestedOwnerPersonId is { } sugPid)
+            return $"personal:{sugPid}";
+        return OwnershipKinds.Shared;
+    }
+
+    public static (bool Ok, string Ownership, Guid? OwnerPersonId) ParseOwnershipChoice(string? choice)
+    {
+        if (string.Equals(choice, OwnershipKinds.Shared, StringComparison.OrdinalIgnoreCase))
+            return (true, OwnershipKinds.Shared, null);
+        if (choice is not null && choice.StartsWith("personal:", StringComparison.OrdinalIgnoreCase)
+            && Guid.TryParse(choice["personal:".Length..], out var pid) && pid != Guid.Empty)
+            return (true, OwnershipKinds.Personal, pid);
+        return (false, "", null);
+    }
+
     public async Task OnGetAsync(CancellationToken ct) => await LoadAsync(await Client.GetAsync(ct));
 
     // ---- the join dialog ---------------------------------------------------------------------------------------------------------------------------------
@@ -91,14 +126,18 @@ public class DevicesModel(ApiClient api, IHttpClientFactory httpClientFactory, M
         var network = Api.GetNetworkAsync();
         var identity = Quietly(Api.GetIdentityAsync());
         var whitelist = Quietly(Api.GetWhitelistAsync());
+        var users = Quietly(Api.GetUsersAsync());
         var restored = Api.GetRestoredPeersAsync();
         var blind = Api.ListBlindNodesAsync();
-        await Task.WhenAll(network, identity, whitelist, restored, blind);
+        var sharedDoors = Quietly(Api.GetSharedDoorsStatusAsync());
+        await Task.WhenAll(network, identity, whitelist, users, restored, blind, sharedDoors);
 
         Network = network.Result;
         Identity = identity.Result;
         Whitelist = whitelist.Result ?? [];
+        Users = users.Result ?? [];
         RestoredPeers = restored.Result;
+        SharedDoors = sharedDoors.Result;
         var alarms = (blind.Result ?? []).ToDictionary(b => b.NodeId, b => (IReadOnlyCollection<string>)b.Alarms);
         var now = DateTime.UtcNow;
         Rows = (Network?.Peers ?? [])
@@ -150,5 +189,46 @@ public class DevicesModel(ApiClient api, IHttpClientFactory httpClientFactory, M
         return failed.Count == 0
             ? Back(msg: $"{promoted} device(s) granted superadmin.")
             : Back(err: $"{promoted} granted; failed: {string.Join("; ", failed)}");
+    }
+
+    public async Task<IActionResult> OnPostConfirmOwnershipAsync(Guid nodeId, string? choice)
+    {
+        var (okChoice, ownership, pid) = ParseOwnershipChoice(choice);
+        if (!okChoice)
+            return Back(err: "Select shared infrastructure or a person for this device.");
+        var (ok, error) = await Api.SetPeerOwnershipAsync(nodeId, ownership, pid);
+        return ok
+            ? Back(msg: "Device ownership confirmed.")
+            : Back(err: error ?? "Failed to update device ownership.");
+    }
+
+    public async Task<IActionResult> OnPostConfirmAllOwnershipAsync()
+    {
+        var (ok, updated, skipped, error) = await Api.ReviewOwnershipAsync(confirmAll: true);
+        if (!ok)
+            return Back(err: error ?? "Failed to confirm device ownership.");
+        if (skipped.Count > 0)
+        {
+            var reasons = string.Join("; ", skipped.Select(s => s.Reason).Where(r => !string.IsNullOrWhiteSpace(r)).Distinct());
+            return Back(msg: $"Confirmed ownership for {updated} device(s); skipped {skipped.Count}"
+                + (string.IsNullOrEmpty(reasons) ? "." : $" ({reasons})."));
+        }
+        return Back(msg: $"Confirmed ownership for {updated} device(s).");
+    }
+
+    public async Task<IActionResult> OnPostAcknowledgeAccountsHomeChangeAsync()
+    {
+        var (ok, error) = await Api.AcknowledgeAccountsHomeChangeAsync();
+        return ok
+            ? Back(msg: "Acknowledged: the change of the accounts node is no longer flagged.")
+            : Back(err: error ?? "The change could not be acknowledged.");
+    }
+
+    public async Task<IActionResult> OnPostSetAccountsHomeAsync(Guid nodeId)
+    {
+        var (ok, error) = await Api.SetAccountsHomeAsync(nodeId);
+        return ok
+            ? Back(msg: "Accounts node updated.")
+            : Back(err: error ?? "Failed to update the accounts node.");
     }
 }

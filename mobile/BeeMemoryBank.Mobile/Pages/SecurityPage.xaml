@@ -1,209 +1,197 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- The mock-up's Settings screen: sign-in, lock, recovery, trash, appearance, about this device and
+     the danger zone. The password slots and the dev password are a Debug build only. No encryption
+     card or button: every database on this phone is encrypted by itself right after a
+     create or a join (SetupPage + PhoneSealing), the same rule as the iPhone. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.Mobile.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
              x:Class="BeeMemoryBank.Mobile.Pages.SecurityPage"
-             Title="Security"
-             BackgroundColor="{StaticResource BackgroundColor}">
+             Title="{loc:Translate TabSettings}">
 
     <ScrollView>
         <VerticalStackLayout Padding="16" Spacing="12">
 
-            <!-- Password Slots -->
-            <Frame Style="{StaticResource CardFrame}">
+            <!-- Sign-in -->
+            <Border Style="{StaticResource CardBorder}" AutomationId="SettingsSignInCard">
                 <VerticalStackLayout Spacing="12">
-                    <Label Text="Password Slots" FontAttributes="Bold" FontSize="18" />
-                    <Label Text="Each slot is an independent password that unlocks the same data."
-                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}"
-                           LineBreakMode="WordWrap" />
+                    <Label Text="{loc:Translate SettingsSignIn}" Style="{StaticResource CardTitle}" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2" VerticalOptions="Center">
+                            <Label Text="{loc:Translate SettingsFingerprint}" Style="{StaticResource ItemTitle}" />
+                            <Label Text="{loc:Translate SettingsFingerprintDesc}" Style="{StaticResource ItemMeta}" />
+                        </VerticalStackLayout>
+                        <Switch Grid.Column="1" x:Name="FingerprintSwitch" AutomationId="FingerprintSwitch"
+                                VerticalOptions="Center" Toggled="OnFingerprintToggled" />
+                    </Grid>
+                    <Button x:Name="ChangeMasterButton" AutomationId="ChangeMasterButton"
+                            Text="{loc:Translate SettingsChangeMaster}" Style="{StaticResource SecondaryButton}"
+                            Clicked="OnChangeMasterClicked" />
+                </VerticalStackLayout>
+            </Border>
 
+            <!-- Lock -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SettingsLock}" Style="{StaticResource CardTitle}" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <Label Grid.Column="0" Text="{loc:Translate SettingsLockOnLeave}" Style="{StaticResource ItemTitle}" VerticalOptions="Center" />
+                        <Switch Grid.Column="1" x:Name="LockOnLeaveSwitch" AutomationId="LockOnLeaveSwitch"
+                                VerticalOptions="Center" Toggled="OnLockOnLeaveToggled" />
+                    </Grid>
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="{loc:Translate SettingsLockIdle}" Style="{StaticResource FieldLabel}" />
+                        <!-- The app's rounded field (value + chevron), not the stock underlined Picker;
+                             tapping it opens the same choices in a bottom sheet. -->
+                        <Border x:Name="IdleField" AutomationId="IdlePicker" Style="{StaticResource InputShell}">
+                            <Border.GestureRecognizers>
+                                <TapGestureRecognizer Tapped="OnIdleFieldTapped" />
+                            </Border.GestureRecognizers>
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Grid.Column="0" x:Name="IdleValueLabel" VerticalOptions="Center" />
+                                <Image Grid.Column="1" WidthRequest="18" HeightRequest="18" VerticalOptions="Center"
+                                       Source="{AppThemeBinding Light=icon_row_chevron_light.svg, Dark=icon_row_chevron_dark.svg}"
+                                       Rotation="90" />
+                            </Grid>
+                        </Border>
+                    </VerticalStackLayout>
+                    <Button x:Name="LockNowButton" AutomationId="LockNowButton"
+                            Text="{loc:Translate LockNow}" Style="{StaticResource SecondaryButton}"
+                            Clicked="OnLockNowClicked" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Recovery -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SettingsRecovery}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate SettingsRecoveryDesc}" Style="{StaticResource ItemMeta}" />
+                    <Button x:Name="NewRecoveryButton" AutomationId="NewRecoveryButton"
+                            Text="{loc:Translate SettingsNewRecovery}" Style="{StaticResource SecondaryButton}"
+                            Clicked="OnNewRecoveryClicked" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Trash -->
+            <Border Style="{StaticResource CardBorder}">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <VerticalStackLayout Grid.Column="0" Spacing="2" VerticalOptions="Center">
+                        <Label Text="{loc:Translate SettingsTrash}" Style="{StaticResource ItemTitle}" />
+                        <Label x:Name="TrashCountLabel" Style="{StaticResource ItemMeta}" />
+                    </VerticalStackLayout>
+                    <Button Grid.Column="1" x:Name="OpenTrashButton" AutomationId="OpenTrashButton"
+                            Text="{loc:Translate SettingsOpen}" Style="{StaticResource SecondaryButton}"
+                            VerticalOptions="Center" Clicked="OnOpenTrashClicked" />
+                </Grid>
+            </Border>
+
+            <!-- Appearance -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate Appearance}" Style="{StaticResource CardTitle}" />
+                    <controls:SegmentedControl x:Name="ThemeSegments" AutomationId="ThemeSegments" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- About this device -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="{loc:Translate SettingsAbout}" Style="{StaticResource CardTitle}" />
+                    <VerticalStackLayout Spacing="8">
+                        <controls:InfoRow Label="{loc:Translate SettingsDeviceName}">
+                            <Label x:Name="AboutName" Style="{StaticResource ItemTitle}" />
+                        </controls:InfoRow>
+
+                        <controls:InfoRow Label="{loc:Translate SettingsDeviceId}">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                <Label Grid.Column="0" x:Name="AboutId" FontFamily="monospace" FontSize="12"
+                                       LineBreakMode="TailTruncation" VerticalOptions="Center"
+                                       TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+                                <Button Grid.Column="1" x:Name="CopyIdButton" AutomationId="CopyIdButton"
+                                        ImageSource="{AppThemeBinding Light=icon_copy_light.svg, Dark=icon_copy_dark.svg}"
+                                        Style="{StaticResource IconButton}" Clicked="OnCopyIdClicked"
+                                        SemanticProperties.Description="{loc:Translate SettingsDeviceId}" />
+                            </Grid>
+                        </controls:InfoRow>
+
+                        <controls:InfoRow Label="{loc:Translate SettingsDeviceKey}">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                <Label Grid.Column="0" x:Name="AboutKey" FontFamily="monospace" FontSize="12"
+                                       LineBreakMode="TailTruncation" VerticalOptions="Center"
+                                       TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+                                <Button Grid.Column="1" x:Name="CopyKeyButton" AutomationId="CopyKeyButton"
+                                        ImageSource="{AppThemeBinding Light=icon_copy_light.svg, Dark=icon_copy_dark.svg}"
+                                        Style="{StaticResource IconButton}" Clicked="OnCopyKeyClicked"
+                                        SemanticProperties.Description="{loc:Translate SettingsDeviceKey}" />
+                            </Grid>
+                        </controls:InfoRow>
+
+                        <!-- Whose device this is (2.12), when the bank has more than one person who holds the key: hidden otherwise. -->
+                        <controls:InfoRow x:Name="AboutOwnerRow" IsVisible="False" Label="{loc:Translate SettingsDeviceOwner}">
+                            <Label x:Name="AboutOwner" Style="{StaticResource ItemTitle}" />
+                        </controls:InfoRow>
+                        <controls:InfoRow Label="{loc:Translate SettingsAppVersion}">
+                            <Label x:Name="AboutVersion" Style="{StaticResource ItemTitle}" />
+                        </controls:InfoRow>
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Danger zone -->
+            <Border Style="{StaticResource CardBorder}"
+                    Stroke="{AppThemeBinding Light={StaticResource BmbErrorBorderLight}, Dark={StaticResource BmbErrorBorder}}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SettingsDangerZone}" Style="{StaticResource CardTitle}"
+                           TextColor="{AppThemeBinding Light={StaticResource BmbErrorLight}, Dark={StaticResource BmbError}}" />
+                    <Button x:Name="WipeButton" AutomationId="WipeButton"
+                            Text="{loc:Translate SettingsWipe}" Style="{StaticResource DangerButton}"
+                            Clicked="OnWipeClicked" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Password slots: a Debug build only (the design has no place for them; the real feature
+                 stays reachable there). Hidden in Release. -->
+            <Border x:Name="SlotsCard" Style="{StaticResource CardBorder}" IsVisible="False">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SlotsTitle}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate SlotsDesc}" Style="{StaticResource ItemMeta}" />
                     <CollectionView x:Name="SlotsList" AutomationId="SlotsList" SelectionMode="None"
-                                    EmptyView="No slots found.">
+                                    EmptyView="{loc:Translate SlotsEmpty}">
                         <CollectionView.ItemTemplate>
                             <DataTemplate>
                                 <Grid ColumnDefinitions="Auto,*,Auto" Padding="0,8" ColumnSpacing="12">
-                                    <!-- Icon -->
-                                    <Label Grid.Column="0" Text="{Binding Icon}"
-                                           FontSize="22" VerticalOptions="Center" />
-
-                                    <!-- Info -->
+                                    <Label Grid.Column="0" Text="{Binding Icon}" FontSize="22" VerticalOptions="Center" />
                                     <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
-                                        <Label Text="{Binding DisplayName}"
-                                               FontAttributes="Bold" FontSize="15" />
-                                        <Label Text="{Binding CreatedAtFormatted}"
-                                               FontSize="12"
-                                               TextColor="{StaticResource SecondaryTextColor}" />
+                                        <Label Text="{Binding DisplayName}" FontAttributes="Bold" FontSize="15" />
+                                        <Label Text="{Binding CreatedAtFormatted}" Style="{StaticResource ItemMeta}" />
                                     </VerticalStackLayout>
-
-                                    <!-- Delete button (hidden for main/only slot) -->
-                                    <Button Grid.Column="2"
-                                            Text="✕"
-                                            FontSize="14"
-                                            Padding="10,6"
-                                            BackgroundColor="{StaticResource ErrorColor}"
-                                            TextColor="White"
-                                            IsVisible="{Binding CanDelete}"
-                                            CommandParameter="{Binding .}"
+                                    <Button Grid.Column="2" Text="✕" Style="{StaticResource DangerButton}"
+                                            FontSize="14" Padding="10,6" HeightRequest="36"
+                                            IsVisible="{Binding CanDelete}" CommandParameter="{Binding .}"
                                             Clicked="OnDeleteSlotClicked" />
                                 </Grid>
                             </DataTemplate>
                         </CollectionView.ItemTemplate>
                     </CollectionView>
                 </VerticalStackLayout>
-            </Frame>
+            </Border>
 
-            <!-- Add Dev Password -->
-            <Frame Style="{StaticResource CardFrame}" x:Name="AddDevCard">
+            <!-- Add dev password: a Debug build only (product rule 7). -->
+            <Border x:Name="AddDevCard" Style="{StaticResource CardBorder}" IsVisible="False">
                 <VerticalStackLayout Spacing="10">
-                    <Label Text="Add Dev Password" FontAttributes="Bold" FontSize="16" />
-                    <Label Text="A secondary password for testing. Can be deleted at any time."
-                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}"
-                           LineBreakMode="WordWrap" />
-
-                    <Entry x:Name="DevPasswordEntry"
-                           AutomationId="DevPasswordEntry"
-                           Placeholder="New dev password"
-                           IsPassword="True"
-                           BackgroundColor="{StaticResource SurfaceColor}"
-                           TextColor="{StaticResource TextColor}"
-                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
-
-                    <Entry x:Name="DevPasswordConfirmEntry"
-                           AutomationId="DevPasswordConfirmEntry"
-                           Placeholder="Confirm dev password"
-                           IsPassword="True"
-                           BackgroundColor="{StaticResource SurfaceColor}"
-                           TextColor="{StaticResource TextColor}"
-                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
-
-                    <Label x:Name="AddErrorLabel"
-                           TextColor="{StaticResource ErrorColor}"
-                           FontSize="13"
-                           IsVisible="False"
-                           LineBreakMode="WordWrap" />
-
-                    <Button Text="Add Dev Password"
-                            AutomationId="AddDevPasswordButton"
-                            Style="{StaticResource PrimaryButton}"
-                            Clicked="OnAddDevPasswordClicked" />
+                    <Label Text="{loc:Translate AddDevTitle}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate AddDevDesc}" Style="{StaticResource ItemMeta}" />
+                    <controls:PasswordBox x:Name="DevPasswordEntry" AutomationId="DevPasswordEntry"
+                                          Placeholder="{loc:Translate DevPasswordPlaceholder}" />
+                    <controls:PasswordBox x:Name="DevPasswordConfirmEntry" AutomationId="DevPasswordConfirmEntry"
+                                          Placeholder="{loc:Translate DevPasswordConfirmPlaceholder}" />
+                    <Label x:Name="AddErrorLabel" Style="{StaticResource FieldError}" IsVisible="False" />
+                    <Button Text="{loc:Translate AddDevTitle}" AutomationId="AddDevPasswordButton"
+                            Style="{StaticResource PrimaryButton}" Clicked="OnAddDevPasswordClicked" />
                 </VerticalStackLayout>
-            </Frame>
-
-            <!-- Change Main Password -->
-            <Frame Style="{StaticResource CardFrame}">
-                <VerticalStackLayout Spacing="10">
-                    <Label Text="Change Main Password" FontAttributes="Bold" FontSize="16" />
-
-                    <Entry x:Name="OldPasswordEntry"
-                           AutomationId="OldPasswordEntry"
-                           Placeholder="Current password"
-                           IsPassword="True"
-                           BackgroundColor="{StaticResource SurfaceColor}"
-                           TextColor="{StaticResource TextColor}"
-                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
-
-                    <Entry x:Name="NewPasswordEntry"
-                           AutomationId="NewPasswordEntry"
-                           Placeholder="New password"
-                           IsPassword="True"
-                           BackgroundColor="{StaticResource SurfaceColor}"
-                           TextColor="{StaticResource TextColor}"
-                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
-
-                    <Entry x:Name="NewPasswordConfirmEntry"
-                           AutomationId="NewPasswordConfirmEntry"
-                           Placeholder="Confirm new password"
-                           IsPassword="True"
-                           BackgroundColor="{StaticResource SurfaceColor}"
-                           TextColor="{StaticResource TextColor}"
-                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
-
-                    <Label Text="Password hint (required). If you forget your password, we will show this hint on the sign-in page, because there is no e-mail recovery. Write it so that other people cannot work out your password from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it."
-                           FontSize="12"
-                           TextColor="{StaticResource SecondaryTextColor}"
-                           LineBreakMode="WordWrap" />
-                    <Entry x:Name="NewPasswordHintEntry"
-                           AutomationId="NewPasswordHintEntry"
-                           Placeholder="Password hint"
-                           BackgroundColor="{StaticResource SurfaceColor}"
-                           TextColor="{StaticResource TextColor}"
-                           PlaceholderColor="{StaticResource SecondaryTextColor}" />
-
-                    <Label x:Name="ChangeErrorLabel"
-                           TextColor="{StaticResource ErrorColor}"
-                           FontSize="13"
-                           IsVisible="False"
-                           LineBreakMode="WordWrap" />
-
-                    <Button Text="Change Password"
-                            AutomationId="ChangePasswordButton"
-                            Style="{StaticResource PrimaryButton}"
-                            Clicked="OnChangePasswordClicked" />
-                </VerticalStackLayout>
-            </Frame>
-
-            <!-- Database encryption (docs/design/step-b-spec.md 10.8). Shown while PhoneVaultLifecycle.PhoneEncryptionAvailable is true
-                 (it is, in this build). -->
-            <Frame Style="{StaticResource CardFrame}" x:Name="EncryptionCard" IsVisible="False">
-                <VerticalStackLayout Spacing="10">
-                    <Label Text="Database encryption" FontAttributes="Bold" FontSize="16" />
-                    <Label x:Name="EncryptionStatusLabel"
-                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}"
-                           LineBreakMode="WordWrap" />
-
-                    <VerticalStackLayout x:Name="EncryptionForm" Spacing="10">
-                        <Label Text="Keep the app open and the phone plugged in or charged while the database is encrypted. If you stop it half-way, the app finishes or undoes it the next time it starts."
-                               FontSize="13" TextColor="{StaticResource SecondaryTextColor}"
-                               LineBreakMode="WordWrap" />
-
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <Entry x:Name="EncryptPasswordEntry"
-                                   Grid.Column="0"
-                                   AutomationId="EncryptPasswordEntry"
-                                   Placeholder="Master password"
-                                   IsPassword="True"
-                                   BackgroundColor="{StaticResource SurfaceColor}"
-                                   TextColor="{StaticResource TextColor}"
-                                   PlaceholderColor="{StaticResource SecondaryTextColor}" />
-                            <Button x:Name="ToggleEncryptPasswordButton"
-                                    Grid.Column="1"
-                                    AutomationId="ToggleEncryptPasswordButton"
-                                    Text="Show"
-                                    VerticalOptions="Center"
-                                    Clicked="OnToggleEncryptPasswordClicked" />
-                        </Grid>
-
-                        <Button x:Name="EncryptFingerprintButton"
-                                AutomationId="EncryptFingerprintButton"
-                                Text="Confirm with fingerprint"
-                                IsVisible="False"
-                                Clicked="OnEncryptFingerprintClicked" />
-
-                        <HorizontalStackLayout Spacing="8" x:Name="OnlyCopyRow" IsVisible="False">
-                            <CheckBox x:Name="OnlyCopyCheck" AutomationId="OnlyCopyCheck" VerticalOptions="Center" />
-                            <Label Text="This phone holds the only copy of these notes; encrypting cannot be undone"
-                                   FontSize="13" VerticalOptions="Center" LineBreakMode="WordWrap" />
-                        </HorizontalStackLayout>
-
-                        <Label x:Name="EncryptErrorLabel"
-                               TextColor="{StaticResource ErrorColor}"
-                               FontSize="13"
-                               IsVisible="False"
-                               LineBreakMode="WordWrap" />
-
-                        <ProgressBar x:Name="EncryptProgress" Progress="0" IsVisible="False" />
-                        <Label x:Name="EncryptStepLabel" FontSize="12" IsVisible="False"
-                               TextColor="{StaticResource SecondaryTextColor}" />
-
-                        <Button x:Name="EncryptButton"
-                                Text="Encrypt this phone's database"
-                                AutomationId="EncryptDatabaseButton"
-                                Style="{StaticResource PrimaryButton}"
-                                Clicked="OnEncryptDatabaseClicked" />
-                    </VerticalStackLayout>
-                </VerticalStackLayout>
-            </Frame>
+            </Border>
 
         </VerticalStackLayout>
     </ScrollView>
-
 </ContentPage>

@@ -1,49 +1,106 @@
 <?xml version="1.0" encoding="utf-8" ?>
+<!-- The tree folder in the design's shape: the tappable breadcrumb rail back to the root, the
+     card rows with the icon box and the row menu, the empty state with the two actions. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:services="clr-namespace:BeeMemoryBank.FullIos.Services"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
              x:Class="BeeMemoryBank.FullIos.Pages.FolderPage"
+             x:Name="PageRoot"
              Title="Notes">
     <ContentPage.ToolbarItems>
-        <ToolbarItem Text="Trash" Order="Secondary" Clicked="OnTrash" />
-        <ToolbarItem IconImageSource="new_folder.png" Text="New folder" Clicked="OnNewFolder" />
+        <ToolbarItem x:Name="NewArticleItem" Text="{loc:Translate NewArticle}" AutomationId="NewNoteButton" Clicked="OnNewNote" />
+        <ToolbarItem x:Name="NewFolderItem" Text="{loc:Translate NewFolder}" Clicked="OnNewFolder" />
+        <!-- In the overflow menu, not the bar: on a 375 pt iPhone four header buttons cut the
+             page title to "De..." (real-device check, 15.11). -->
+        <ToolbarItem x:Name="ExpandToggle" Order="Secondary" Clicked="OnToggleExpand" AutomationId="ExpandToggle" />
+        <ToolbarItem Text="{loc:Translate SettingsTrash}" Order="Secondary" Clicked="OnTrash" />
     </ContentPage.ToolbarItems>
-    <Grid>
-        <RefreshView x:Name="Refresher" Refreshing="OnRefreshing">
-            <CollectionView x:Name="List" SelectionMode="None" AutomationId="FolderList">
-                <CollectionView.Header>
-                    <Label x:Name="PathLabel" Style="{StaticResource Muted}" Padding="20,8,20,4" />
-                </CollectionView.Header>
+    <Grid RowDefinitions="Auto,*">
+        <ScrollView Grid.Row="0" Orientation="Horizontal" Padding="16,10,16,4" HorizontalScrollBarVisibility="Never">
+            <HorizontalStackLayout x:Name="Crumbs" Spacing="4" />
+        </ScrollView>
+        <RefreshView Grid.Row="1" x:Name="Refresher" Refreshing="OnRefreshing">
+            <CollectionView x:Name="List" SelectionMode="None" AutomationId="FolderList" Margin="16,4,16,100">
                 <CollectionView.EmptyView>
-                    <Label x:Name="EmptyLabel" Text="Nothing here yet. Tap + to write a note." Style="{StaticResource Muted}" HorizontalTextAlignment="Center" Margin="24,48" />
+                    <VerticalStackLayout Padding="20,36" Spacing="12" HorizontalOptions="Center">
+                        <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                                StrokeThickness="0" StrokeShape="RoundRectangle 16" WidthRequest="52" HeightRequest="52" HorizontalOptions="Center">
+                            <Image Source="{AppThemeBinding Light=icon_row_folder_light.png, Dark=icon_row_folder_dark.png}"
+                                   WidthRequest="26" HeightRequest="26" HorizontalOptions="Center" VerticalOptions="Center" />
+                        </Border>
+                        <Label Text="{loc:Translate TreeEmptyTitle}" Style="{StaticResource EmptyTitle}" />
+                        <Label x:Name="EmptyDesc" Text="{loc:Translate TreeEmptyDesc}" Style="{StaticResource EmptyDesc}" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="10" Margin="0,4,0,0">
+                            <Button Grid.Column="0" Text="{loc:Translate NewFolder}" Style="{StaticResource SecondaryButton}" Clicked="OnNewFolder" />
+                            <Button Grid.Column="1" Text="{loc:Translate NewArticle}" Style="{StaticResource PrimaryButton}" Clicked="OnNewNote" />
+                        </Grid>
+                    </VerticalStackLayout>
                 </CollectionView.EmptyView>
                 <CollectionView.ItemTemplate>
                     <DataTemplate x:DataType="services:NoteListItem">
                         <SwipeView>
                             <SwipeView.RightItems>
                                 <SwipeItems Mode="Execute">
-                                    <SwipeItem Text="Delete" BackgroundColor="{StaticResource DangerColor}" Invoked="OnSwipeDelete" IsVisible="{Binding IsNote}" />
+                                    <SwipeItem Text="{loc:Translate Delete}" BackgroundColor="{StaticResource BmbError}" Invoked="OnSwipeDelete" IsVisible="{Binding IsNote}" />
                                 </SwipeItems>
                             </SwipeView.RightItems>
-                            <Grid ColumnDefinitions="36,*" Padding="20,12" MinimumHeightRequest="56"
-                                  BackgroundColor="{AppThemeBinding Light={StaticResource LightBackground}, Dark={StaticResource DarkBackground}}">
-                                <Grid.GestureRecognizers>
-                                    <TapGestureRecognizer Tapped="OnItemTapped" />
-                                </Grid.GestureRecognizers>
-                                <Label Text="{Binding Glyph}" FontSize="20" VerticalOptions="Center" />
-                                <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
-                                    <Label Text="{Binding Name}" FontSize="17" LineBreakMode="TailTruncation" />
-                                    <Label Text="{Binding Detail}" Style="{StaticResource Muted}" FontSize="12" IsVisible="{Binding IsNote}" />
-                                </VerticalStackLayout>
+                        <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                                Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                                StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                                Padding="6" Margin="0,4">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                                <Grid Grid.Column="0" ColumnDefinitions="Auto,*" ColumnSpacing="12"
+                                      Padding="0,4" MinimumHeightRequest="48">
+                                    <Grid.GestureRecognizers>
+                                        <TapGestureRecognizer Tapped="OnItemTapped" />
+                                    </Grid.GestureRecognizers>
+                                    <Border Grid.Column="0" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                            StrokeShape="RoundRectangle 12"
+                                            BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}">
+                                        <Border.Triggers>
+                                            <DataTrigger TargetType="Border" Binding="{Binding IsFolder}" Value="True">
+                                                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}" />
+                                            </DataTrigger>
+                                            <DataTrigger TargetType="Border" Binding="{Binding IsProtected}" Value="True">
+                                                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}" />
+                                            </DataTrigger>
+                                        </Border.Triggers>
+                                        <Image WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center"
+                                               Source="{AppThemeBinding Light=icon_row_file_light.png, Dark=icon_row_file_dark.png}">
+                                            <Image.Triggers>
+                                                <DataTrigger TargetType="Image" Binding="{Binding IsFolder}" Value="True">
+                                                    <Setter Property="Source" Value="{AppThemeBinding Light=icon_row_folder_light.png, Dark=icon_row_folder_dark.png}" />
+                                                </DataTrigger>
+                                                <DataTrigger TargetType="Image" Binding="{Binding IsProtected}" Value="True">
+                                                    <Setter Property="Source" Value="{AppThemeBinding Light=icon_row_lock_light.png, Dark=icon_row_lock_dark.png}" />
+                                                </DataTrigger>
+                                            </Image.Triggers>
+                                        </Image>
+                                    </Border>
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                        <Label Text="{Binding Name}" Style="{StaticResource ItemTitle}"
+                                               LineBreakMode="{Binding Source={x:Reference PageRoot}, Path=ItemsLineBreakMode}"
+                                               MaxLines="{Binding Source={x:Reference PageRoot}, Path=ItemsMaxLines}" />
+                                        <Label Text="{Binding UpdatedAt, Converter={StaticResource ShortDate}}" Style="{StaticResource ItemMeta}"
+                                               IsVisible="{Binding IsNote}" LineBreakMode="TailTruncation" />
+                                    </VerticalStackLayout>
+                                </Grid>
+                                <Button Grid.Column="1" Text="⋮" Style="{StaticResource IconButton}"
+                                        AutomationId="RowMenuButton" CommandParameter="{Binding .}" Clicked="OnRowMenu"
+                                        SemanticProperties.Description="{loc:Translate ArticleActions}">
+                                    <Button.Triggers>
+                                        <DataTrigger TargetType="Button" Binding="{Binding IsFolder}" Value="True">
+                                            <Setter Property="SemanticProperties.Description" Value="{loc:Translate FolderActions}" />
+                                        </DataTrigger>
+                                    </Button.Triggers>
+                                </Button>
                             </Grid>
+                        </Border>
                         </SwipeView>
                     </DataTemplate>
                 </CollectionView.ItemTemplate>
             </CollectionView>
         </RefreshView>
-        <!-- The main action of the page where the thumb is: bottom right. -->
-        <Button Text="+" FontSize="30" Padding="0" WidthRequest="60" HeightRequest="60" CornerRadius="30"
-                HorizontalOptions="End" VerticalOptions="End" Margin="20" Clicked="OnNewNote" AutomationId="NewNoteButton"
-                SemanticProperties.Description="New note" />
     </Grid>
 </ContentPage>

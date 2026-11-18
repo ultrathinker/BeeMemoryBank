@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- The design's .segmented-control: a rounded surface with equal segments; the active one
+     (.segment-btn.is-active) is a raised surface-high chip in the accent text colour. -->
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Controls.SegmentedControl">
+    <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+            Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+            StrokeThickness="1"
+            StrokeShape="RoundRectangle 14"
+            Padding="4">
+        <Grid x:Name="SegmentsGrid" ColumnSpacing="4" />
+    </Border>
+</ContentView>

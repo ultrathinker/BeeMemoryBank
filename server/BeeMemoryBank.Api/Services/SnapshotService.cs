@@ -39,6 +39,22 @@ public partial class SnapshotService
     /// <summary>The node's data folder: where its working copies of a join or a restore are made (<see cref="SnapshotStaging"/>).</summary>
     public string DataPath => _dataPath;
 
+    /// <summary>
+    /// Run after a restore replaced the database and before it is reported (release 2.12.0): the host closes the accounts the tombstones of removed
+    /// people name (plan R1). Best effort: a failure is logged and the next open runs it again.
+    /// </summary>
+    public Func<Task>? AfterRestoreAsync { get; init; }
+
+    private async Task RunAfterRestoreAsync()
+    {
+        if (AfterRestoreAsync is null) return;
+        try { await AfterRestoreAsync(); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger?.LogError("The tombstones of removed people could not be applied after the restore ({Failure}); the next start tries again.", ex.GetType().Name);
+        }
+    }
+
     public SnapshotService(string dataPath, DbConnectionFactory connFactory,
         INodeIdentityRepository? nodeRepo = null, ILamportClock? clock = null,
         ILogger<SnapshotService>? logger = null,

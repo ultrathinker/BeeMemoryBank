@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-stage0 #2: protocol 3 is enforced, not just recorded. A peer that declares an older
+/// Protocol 3 is enforced, not just recorded. A peer that declares an older
 /// protocol, or none (an old build), is a node that would accept a blind node's events and seal the
 /// master DEK for it — it gets no sync token, and so none of the data endpoints.
 /// </summary>

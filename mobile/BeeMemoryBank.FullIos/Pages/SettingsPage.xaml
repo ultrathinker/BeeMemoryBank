@@ -1,30 +1,165 @@
 <?xml version="1.0" encoding="utf-8" ?>
+<!-- Settings in the design's shape, the Android SecurityPage's card order with only the actions
+     this app has: sign-in (Face ID), lock (the two auto-lock fields with their sheets, Lock now
+     inside the card), recovery, the encryption offer, trash, appearance, about this device. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.FullIos.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
              x:Class="BeeMemoryBank.FullIos.Pages.SettingsPage"
              Title="Settings">
-    <Grid RowDefinitions="*,Auto" Padding="20,8,20,20">
-        <ScrollView>
-            <VerticalStackLayout Spacing="8">
-                <Label Text="Unlocking" Style="{StaticResource Section}" />
-                <Grid ColumnDefinitions="*,Auto">
-                    <Label x:Name="QuickLabel" VerticalOptions="Center" />
-                    <Switch Grid.Column="1" x:Name="QuickSwitch" Toggled="OnQuickToggled" />
+    <ScrollView x:Name="Scroller">
+        <!-- Bottom room for the tab bar: at the end of the scroll the last card sits fully
+             above it, not under it. -->
+        <VerticalStackLayout Padding="16,16,16,100" Spacing="12">
+
+            <!-- Sign-in -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SettingsSignIn}" Style="{StaticResource CardTitle}" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2" VerticalOptions="Center">
+                            <Label x:Name="QuickLabel" Style="{StaticResource ItemTitle}" />
+                            <Label x:Name="QuickDetail" Style="{StaticResource ItemMeta}" />
+                        </VerticalStackLayout>
+                        <Switch Grid.Column="1" x:Name="QuickSwitch" VerticalOptions="Center" Toggled="OnQuickToggled" />
+                    </Grid>
+                    <Button x:Name="ChangeMasterButton" Text="{loc:Translate SettingsChangeMaster}"
+                            Style="{StaticResource SecondaryButton}" Clicked="OnChangeMaster" AutomationId="ChangeMasterButton" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Lock -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SettingsLock}" Style="{StaticResource CardTitle}" />
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="{loc:Translate SettingsLockOnLeave}" Style="{StaticResource FieldLabel}" />
+                        <Border x:Name="GraceField" Style="{StaticResource InputShell}">
+                            <Border.GestureRecognizers>
+                                <TapGestureRecognizer Tapped="OnGraceFieldTapped" />
+                            </Border.GestureRecognizers>
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Grid.Column="0" x:Name="GraceValue" VerticalOptions="Center" />
+                                <Image Grid.Column="1" WidthRequest="18" HeightRequest="18" VerticalOptions="Center"
+                                       Source="{AppThemeBinding Light=icon_row_chevron_light.png, Dark=icon_row_chevron_dark.png}"
+                                       Rotation="90" />
+                            </Grid>
+                        </Border>
+                    </VerticalStackLayout>
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="{loc:Translate SettingsLockIdle}" Style="{StaticResource FieldLabel}" />
+                        <Border x:Name="IdleField" Style="{StaticResource InputShell}">
+                            <Border.GestureRecognizers>
+                                <TapGestureRecognizer Tapped="OnIdleFieldTapped" />
+                            </Border.GestureRecognizers>
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Grid.Column="0" x:Name="IdleValue" VerticalOptions="Center" />
+                                <Image Grid.Column="1" WidthRequest="18" HeightRequest="18" VerticalOptions="Center"
+                                       Source="{AppThemeBinding Light=icon_row_chevron_light.png, Dark=icon_row_chevron_dark.png}"
+                                       Rotation="90" />
+                            </Grid>
+                        </Border>
+                    </VerticalStackLayout>
+                    <Button x:Name="LockNowButton" AutomationId="LockButton" Text="{loc:Translate LockNow}"
+                            Style="{StaticResource SecondaryButton}" Clicked="OnLock" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Recovery -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SettingsRecovery}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate SettingsRecoveryDesc}" Style="{StaticResource ItemMeta}" />
+                    <Button x:Name="NewRecoveryButton" Text="{loc:Translate SettingsNewRecovery}"
+                            Style="{StaticResource SecondaryButton}" Clicked="OnNewRecoveryKey" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Trash -->
+            <Border Style="{StaticResource CardBorder}">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                    <VerticalStackLayout Grid.Column="0" Spacing="2" VerticalOptions="Center">
+                        <Label Text="{loc:Translate SettingsTrash}" Style="{StaticResource ItemTitle}" />
+                        <Label x:Name="TrashCountLabel" Style="{StaticResource ItemMeta}" />
+                    </VerticalStackLayout>
+                    <Button Grid.Column="1" x:Name="OpenTrashButton" Text="{loc:Translate SettingsOpen}"
+                            Style="{StaticResource SecondaryButton}" VerticalOptions="Center" Clicked="OnTrash" />
                 </Grid>
-                <Label x:Name="QuickDetail" Style="{StaticResource Muted}" />
-                <Label Text="Lock when I leave the app" Style="{StaticResource Section}" />
-                <Picker x:Name="GracePicker" SelectedIndexChanged="OnGraceChanged" />
-                <Label Text="Lock when the app is open but not used" Style="{StaticResource Section}" />
-                <Picker x:Name="IdlePicker" SelectedIndexChanged="OnIdleChanged" />
-                <Label Text="Recovery" Style="{StaticResource Section}" />
-                <Button Text="Make a new recovery key" Style="{StaticResource Secondary}" Clicked="OnNewRecoveryKey" />
-                <Label Style="{StaticResource Muted}" Text="Recovery keys made earlier keep working. Make a new one if a copy was lost or seen by someone." />
-                <Label x:Name="EncryptionSection" Text="Database" Style="{StaticResource Section}" IsVisible="False" />
-                <Button x:Name="EncryptionButton" Text="Encrypt this iPhone's database" Style="{StaticResource Secondary}" Clicked="OnEncryption" IsVisible="False" />
-                <Label Text="About" Style="{StaticResource Section}" />
-                <Label x:Name="AboutLabel" Style="{StaticResource Muted}" />
-            </VerticalStackLayout>
-        </ScrollView>
-        <Button Grid.Row="1" Text="Lock now" Clicked="OnLock" AutomationId="LockButton" />
-    </Grid>
+            </Border>
+
+            <!-- Appearance -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate Appearance}" Style="{StaticResource CardTitle}" />
+                    <controls:SegmentedControl x:Name="ThemeSegments" AutomationId="ThemeSegments" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- About this device -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="{loc:Translate SettingsAbout}" Style="{StaticResource CardTitle}" />
+                    <VerticalStackLayout Spacing="8">
+                        <controls:InfoRow Label="{loc:Translate SettingsDeviceName}">
+                            <Label x:Name="AboutName" Style="{StaticResource ItemTitle}" />
+                        </controls:InfoRow>
+                        <controls:InfoRow Label="{loc:Translate SettingsDeviceId}">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Grid.Column="0" x:Name="AboutId" FontFamily="Menlo" FontSize="12" LineBreakMode="CharacterWrap"
+                                       TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+                                <Button Grid.Column="1" Text="{loc:Translate Copy}" Style="{StaticResource TextButton}"
+                                        Clicked="OnCopyId" AutomationId="CopyIdButton" />
+                            </Grid>
+                        </controls:InfoRow>
+                        <controls:InfoRow Label="{loc:Translate SettingsDeviceKey}">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Grid.Column="0" x:Name="AboutKey" FontFamily="Menlo" FontSize="12" LineBreakMode="CharacterWrap"
+                                       TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+                                <Button Grid.Column="1" Text="{loc:Translate Copy}" Style="{StaticResource TextButton}"
+                                        Clicked="OnCopyKey" AutomationId="CopyKeyButton" />
+                            </Grid>
+                        </controls:InfoRow>
+                        <!-- Whose device this is (2.12), when the bank has more than one person who holds the key: hidden otherwise. -->
+                        <controls:InfoRow x:Name="AboutOwnerRow" IsVisible="False" Label="{loc:Translate SettingsDeviceOwner}">
+                            <Label x:Name="AboutOwner" Style="{StaticResource ItemTitle}" />
+                        </controls:InfoRow>
+                        <controls:InfoRow Label="{loc:Translate SettingsAppVersion}">
+                            <Label x:Name="AboutVersion" Style="{StaticResource ItemTitle}" />
+                        </controls:InfoRow>
+                    </VerticalStackLayout>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Password slots and the dev password: a Debug build only (a testing tool, product rule 7). -->
+            <Border x:Name="SlotsCard" Style="{StaticResource CardBorder}" IsVisible="False">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SlotsTitle}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate SlotsDesc}" Style="{StaticResource ItemMeta}" />
+                    <VerticalStackLayout x:Name="SlotsList" Spacing="8" />
+                </VerticalStackLayout>
+            </Border>
+            <Border x:Name="AddDevCard" Style="{StaticResource CardBorder}" IsVisible="False">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="{loc:Translate AddDevTitle}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate AddDevDesc}" Style="{StaticResource ItemMeta}" />
+                    <controls:PasswordBox x:Name="DevPasswordEntry" Placeholder="{loc:Translate DevPasswordPlaceholder}" BackgroundColor="Transparent" />
+                    <controls:PasswordBox x:Name="DevPasswordConfirmEntry" Placeholder="{loc:Translate DevPasswordConfirmPlaceholder}" BackgroundColor="Transparent" />
+                    <Label x:Name="AddErrorLabel" Style="{StaticResource FieldError}" IsVisible="False" />
+                    <Button Text="{loc:Translate AddDevTitle}" Style="{StaticResource PrimaryButton}" Clicked="OnAddDevPassword" AutomationId="AddDevPasswordButton" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Danger zone -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SettingsDangerZone}" Style="{StaticResource CardTitle}"
+                           TextColor="{AppThemeBinding Light={StaticResource BmbErrorLight}, Dark={StaticResource BmbError}}" />
+                    <Button x:Name="WipeButton" Text="{loc:Translate SettingsWipe}" Style="{StaticResource DangerButton}"
+                            Clicked="OnWipe" AutomationId="WipeButton" />
+                </VerticalStackLayout>
+            </Border>
+
+        </VerticalStackLayout>
+    </ScrollView>
 </ContentPage>

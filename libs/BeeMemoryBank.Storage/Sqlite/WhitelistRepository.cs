@@ -40,6 +40,12 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                 address_source_node_id     AS AddressSourceNodeId,
                 tls_lamport_ts             AS TlsLamportTs,
                 tls_source_node_id         AS TlsSourceNodeId,
+                ownership_lamport_ts       AS OwnershipLamportTs,
+                ownership_source_node_id   AS OwnershipSourceNodeId,
+                ownership                  AS Ownership,
+                owner_person_id            AS OwnerPersonId,
+                owner_label                AS OwnerLabel,
+                needs_review               AS NeedsReview,
                 undated_fields             AS UndatedFields";
 
     public async Task<WhitelistEntry?> GetByNodeIdAsync(Guid nodeId, bool includeDeleted = false)
@@ -60,11 +66,15 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
     /// </summary>
     private static WhitelistEntry? Normalized(WhitelistEntry? entry)
     {
-        if (entry != null && BlindNodeId.IsBlind(entry.NodeId))
+        if (entry != null)
         {
-            entry.IsSuperadmin = false;
-            entry.AutoAcceptDekRotation = false;
-            entry.AutoAcceptRestore = false;
+            entry.Ownership = OwnershipKinds.Normalize(entry.Ownership);
+            if (BlindNodeId.IsBlind(entry.NodeId))
+            {
+                entry.IsSuperadmin = false;
+                entry.AutoAcceptDekRotation = false;
+                entry.AutoAcceptRestore = false;
+            }
         }
         return entry;
     }
@@ -105,14 +115,16 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
             Parameters(entry), tx);
     }
 
-    // The version of each concern (migration 045, WhitelistConcerns), written as the entity carries them.
+    // The version of each concern (migration 045 + 047, WhitelistConcerns), written as the entity carries them.
     private const string ConcernColumns =
         "member_lamport_ts, member_source_node_id, superadmin_lamport_ts, superadmin_source_node_id, name_lamport_ts, name_source_node_id, " +
-        "address_lamport_ts, address_source_node_id, tls_lamport_ts, tls_source_node_id, undated_fields";
+        "address_lamport_ts, address_source_node_id, tls_lamport_ts, tls_source_node_id, " +
+        "ownership_lamport_ts, ownership_source_node_id, ownership, owner_person_id, owner_label, needs_review, undated_fields";
 
     private const string ConcernValues =
         "@MemberLamportTs, @MemberSourceNodeId, @SuperadminLamportTs, @SuperadminSourceNodeId, @NameLamportTs, @NameSourceNodeId, " +
-        "@AddressLamportTs, @AddressSourceNodeId, @TlsLamportTs, @TlsSourceNodeId, @UndatedFields";
+        "@AddressLamportTs, @AddressSourceNodeId, @TlsLamportTs, @TlsSourceNodeId, " +
+        "@OwnershipLamportTs, @OwnershipSourceNodeId, @Ownership, @OwnerPersonId, @OwnerLabel, @NeedsReview, @UndatedFields";
 
     private const string ConcernAssignments = @"
                   member_lamport_ts = @MemberLamportTs, member_source_node_id = @MemberSourceNodeId,
@@ -120,36 +132,51 @@ public class WhitelistRepository(DbConnectionFactory factory) : BaseRepository(f
                   name_lamport_ts = @NameLamportTs, name_source_node_id = @NameSourceNodeId,
                   address_lamport_ts = @AddressLamportTs, address_source_node_id = @AddressSourceNodeId,
                   tls_lamport_ts = @TlsLamportTs, tls_source_node_id = @TlsSourceNodeId,
+                  ownership_lamport_ts = @OwnershipLamportTs, ownership_source_node_id = @OwnershipSourceNodeId,
+                  ownership = @Ownership, owner_person_id = @OwnerPersonId, owner_label = @OwnerLabel, needs_review = @NeedsReview,
                   undated_fields = @UndatedFields";
 
-    private static object Parameters(WhitelistEntry entry) => new
+    private static object Parameters(WhitelistEntry entry)
     {
-        entry.NodeId,
-        entry.DisplayName,
-        entry.Ed25519PublicKey,
-        entry.ApiAddress,
-        entry.CanGenerateEmbeddings,
-        entry.Status,
-        entry.CreatedAt,
-        entry.UpdatedAt,
-        entry.DeletedAt,
-        IsSuperadmin = entry.IsSuperadmin ? 1 : 0,
-        entry.LamportTs,
-        entry.SourceNodeId,
-        entry.TlsSpki,
-        entry.TlsTrust,
-        entry.MemberLamportTs,
-        entry.MemberSourceNodeId,
-        entry.SuperadminLamportTs,
-        entry.SuperadminSourceNodeId,
-        entry.NameLamportTs,
-        entry.NameSourceNodeId,
-        entry.AddressLamportTs,
-        entry.AddressSourceNodeId,
-        entry.TlsLamportTs,
-        entry.TlsSourceNodeId,
-        UndatedFields = (int)entry.UndatedFields
-    };
+        var rawNormalized = OwnershipKinds.NormalizeOrNull(entry.Ownership);
+        var (ownership, ownerPersonId, ownerLabel) =
+            OwnershipKinds.Resolve(entry.Ownership, entry.OwnerPersonId, entry.OwnerLabel);
+        var needsReview = entry.NeedsReview || (rawNormalized == OwnershipKinds.Personal && ownership == OwnershipKinds.Unknown);
+        return new
+        {
+            entry.NodeId,
+            entry.DisplayName,
+            entry.Ed25519PublicKey,
+            entry.ApiAddress,
+            entry.CanGenerateEmbeddings,
+            entry.Status,
+            entry.CreatedAt,
+            entry.UpdatedAt,
+            entry.DeletedAt,
+            IsSuperadmin = entry.IsSuperadmin ? 1 : 0,
+            entry.LamportTs,
+            entry.SourceNodeId,
+            entry.TlsSpki,
+            entry.TlsTrust,
+            entry.MemberLamportTs,
+            entry.MemberSourceNodeId,
+            entry.SuperadminLamportTs,
+            entry.SuperadminSourceNodeId,
+            entry.NameLamportTs,
+            entry.NameSourceNodeId,
+            entry.AddressLamportTs,
+            entry.AddressSourceNodeId,
+            entry.TlsLamportTs,
+            entry.TlsSourceNodeId,
+            entry.OwnershipLamportTs,
+            entry.OwnershipSourceNodeId,
+            Ownership = ownership,
+            OwnerPersonId = ownerPersonId,
+            OwnerLabel = ownerLabel,
+            NeedsReview = needsReview ? 1 : 0,
+            UndatedFields = (int)entry.UndatedFields
+        };
+    }
 
     public async Task UpdateAsync(WhitelistEntry entry)
     {

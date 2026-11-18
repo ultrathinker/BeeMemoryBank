@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace BeeMemoryBank.Core.Tests.Mdns;
 
 /// <summary>
-/// The network-setting gate of the announcer (task P7): a desktop node announces itself only while "Devices on my network" is on, and
+/// The network-setting gate of the announcer: a desktop node announces itself only while "Devices on my network" is on, and
 /// withdraws when it goes off. These tests never open a multicast socket (the closed gate returns before anything is touched); the
 /// announcement itself is <see cref="MdnsRoundTripTests"/>.
 /// </summary>

@@ -191,6 +191,38 @@ public sealed class RelayInbox : IRelayInbox
         await connection.ExecuteAsync("DELETE FROM tbl_relay_report");
     }
 
+    public async Task DeleteForPeerAsync(Guid peer, CancellationToken ct = default)
+    {
+        var id = peer.ToString("D");
+        using var connection = _factory.Open();
+        var tables = (await connection.QueryAsync<string>(
+            new CommandDefinition(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('tbl_relay_report', 'tbl_relay_event')",
+                cancellationToken: ct))).ToHashSet(StringComparer.Ordinal);
+        if (tables.Count == 0) return;
+
+        using var transaction = connection.BeginTransaction();
+        if (tables.Contains("tbl_relay_report"))
+        {
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    "DELETE FROM tbl_relay_report WHERE remote_node_id = @peer COLLATE NOCASE",
+                    new { peer = id },
+                    transaction: transaction,
+                    cancellationToken: ct));
+        }
+        if (tables.Contains("tbl_relay_event"))
+        {
+            await connection.ExecuteAsync(
+                new CommandDefinition(
+                    "DELETE FROM tbl_relay_event WHERE node_id = @peer COLLATE NOCASE",
+                    new { peer = id },
+                    transaction: transaction,
+                    cancellationToken: ct));
+        }
+        transaction.Commit();
+    }
+
     private static DateTime ParseUtc(string text)
     {
         var parsed = DateTime.Parse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);

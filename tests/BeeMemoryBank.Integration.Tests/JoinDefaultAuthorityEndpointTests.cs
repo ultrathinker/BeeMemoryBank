@@ -65,7 +65,7 @@ public class JoinDefaultAuthorityEndpointTests : IAsyncLifetime
         var entry = await getResp.Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
 
         entry.GetProperty("isSuperadmin").GetBoolean().Should().BeTrue(
-            "whoever knows the master password is a superadmin (owner's decision, BMB-42)");
+            "whoever knows the master password is a superadmin (BMB-42)");
 
         using var scope = _factory.Services.CreateScope();
         var eventLog = scope.ServiceProvider.GetRequiredService<IEventLogRepository>();

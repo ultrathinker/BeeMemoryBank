@@ -10,7 +10,7 @@ using Dapper;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// WP-16: <see cref="HybridSearchService"/> integration tests — keyword-only and semantic-only
+/// <see cref="HybridSearchService"/> integration tests — keyword-only and semantic-only
 /// modes each defer entirely to their single underlying source, and hybrid mode surfaces an article
 /// that literal keyword search cannot find at all (because it uses a synonym instead of the exact
 /// query word) via its semantic contribution — the actual value proposition of hybrid search.

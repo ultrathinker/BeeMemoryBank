@@ -162,7 +162,8 @@ public class SnapshotJoinClient
 
         var payload = await ComputeSignaturePayloadAsync(manifestBytes, tarGzPath, ct);
 
-        if (!Ed25519Signer.Verify(producerPublicKey, payload, signature))
+        // A join snapshot is made at the request: only the producer's current key (the helper's current-key check, plan WS-D D3).
+        if (!BeeMemoryBank.Sync.NodeEventVerifier.SignatureVerifies(producerPublicKey, payload, signature))
             throw new InvalidOperationException("Snapshot signature verification failed");
 
         using var manifestDoc = JsonDocument.Parse(manifestBytes);

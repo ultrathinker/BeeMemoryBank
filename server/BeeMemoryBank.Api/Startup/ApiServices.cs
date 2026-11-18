@@ -1,4 +1,5 @@
 using System.Text.Encodings.Web;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using BeeMemoryBank.Api.Endpoints;
 using BeeMemoryBank.Api.McpTools;
 using BeeMemoryBank.Api.Models;
@@ -62,6 +63,13 @@ AddFormat2ApiServices(builder.Services, role, dataPath);
 AddBaselineServices(builder.Services, role, dataPath);
 builder.Services.AddRecoveryApi();
 builder.Services.AddSingleton<SyncTokenStore>();
+builder.Services.AddSingleton<BeeMemoryBank.Sync.IPeerRevocationCleanup>(sp => sp.GetRequiredService<SyncTokenStore>());
+builder.Services.AddSingleton(sp => new BeeMemoryBank.Sync.NodeStateAnnouncer(
+    sp.GetRequiredService<IServiceScopeFactory>(),
+    sp.GetRequiredService<ILogger<BeeMemoryBank.Sync.NodeStateAnnouncer>>(),
+    sp.GetService<BeeMemoryBank.Core.Interfaces.IVaultGate>(),
+    sp.GetService<IHostEnvironment>()));
+builder.Services.AddHostedService(sp => sp.GetRequiredService<BeeMemoryBank.Sync.NodeStateAnnouncer>());
 // Per-node, not per-process: see SyncChallengeRateLimiter.
 builder.Services.AddSingleton<BeeMemoryBank.Api.Endpoints.SyncEndpoints.SyncChallengeRateLimiter>();
 // The leases of the long operations (BMB-311): per node as well, so two nodes hosted by one process never refuse each other.
@@ -207,8 +215,22 @@ BlindRoleServices.AddSnapshotService(builder.Services, dataPath, sp =>
 // operation to avoid capturing a single scope at construction time.
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<RestoreInitiatorService>(sp, dataPath));
 builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<DekRotationService>(sp, dataPath));
+// The identity re-key gets the data folder too, so the offline re-key's lock refuses it (plan WS-A6): it replaces the
+// vault's own registration (AddSync, which has no data folder).
+builder.Services.Replace(ServiceDescriptor.Scoped(sp => ActivatorUtilities.CreateInstance<BeeMemoryBank.Sync.NodeIdentityRekeyService>(sp, dataPath)));
 if (!role.IsBlind)
     builder.Services.AddSingleton<IDekRotationApplier>(sp => sp.GetRequiredService<DekRotationService>());
+if (!role.IsBlind)
+{
+    // The removal of a superadmin (release 2.12.0, plan WS-E). S1 runs with the identity re-key and a signed request to the shared nodes, S2 with
+    // the doors list (TryAdd: a test host may put its own steps in first).
+    builder.Services.TryAddScoped<BeeMemoryBank.Core.Interfaces.IIdentityRekeyStep, BeeMemoryBank.Api.Services.Offboarding.IdentityRekeyStep>();
+    builder.Services.TryAddScoped<BeeMemoryBank.Core.Interfaces.ISharedDoorsStep, BeeMemoryBank.Api.Services.Offboarding.SharedDoorsStep>();
+    builder.Services.TryAddScoped<BeeMemoryBank.Sync.NodeStateStore>();
+    builder.Services.AddSingleton(sp => ActivatorUtilities.CreateInstance<BeeMemoryBank.Api.Services.Offboarding.OffboardingService>(sp, dataPath));
+    builder.Services.AddSingleton<BeeMemoryBank.Api.Services.Offboarding.OffboardingDriver>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<BeeMemoryBank.Api.Services.Offboarding.OffboardingDriver>());
+}
 // Singleton: UpdateService holds in-memory state-machine state for /node/update/status polling.
 // All collaborators (Snapshot/Maintenance/DekRotation/SnapshotRestore/Session services) are
 // singletons resolved from the container; dataPath is the explicit ActivatorUtilities arg.
@@ -238,7 +260,11 @@ if (platformSecretStore.IsSupported && !role.IsBlind)
             sp.GetRequiredService<BeeMemoryBank.Core.Interfaces.IKeySlotRepository>(),
             sp.GetRequiredService<BeeMemoryBank.Core.Services.SessionService>(),
             dataPath,
-            sp.GetRequiredService<IUserSecretStore>()));
+            sp.GetRequiredService<IUserSecretStore>(),
+            sp.GetService<ILogger<BeeMemoryBank.Infrastructure.OsAutoUnlock.OsAutoUnlockService>>()));
+    // ADR 0012: a v1 OS auto-unlock slot is sealed again as a v2 door after an unlock.
+    builder.Services.AddSingleton<BeeMemoryBank.Core.Interfaces.IUnlockedDoorUpgrade>(sp =>
+        sp.GetRequiredService<BeeMemoryBank.Infrastructure.OsAutoUnlock.OsAutoUnlockService>());
     // Keeps the vault open across the restart of a desktop app update (see the class).
     builder.Services.AddSingleton(sp =>
         new BeeMemoryBank.Infrastructure.OsAutoUnlock.UpdateUnlockHandoff(

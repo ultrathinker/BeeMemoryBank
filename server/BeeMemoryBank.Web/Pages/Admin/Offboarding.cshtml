@@ -1,0 +1,197 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.OffboardingModel
+
+@section About {
+    <p>Taking a superadmin's rights away is a process, not one click: the person is locked out at once, and the account is closed only when every way back is shut.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            <strong>Step 1, at once:</strong> the person is signed out everywhere and their password, recovery keys, agents, remote tokens and personal devices stop working.
+            <strong>Then:</strong> this node and the shared nodes get new identity keys, the shared nodes stop accepting the person's password, you review the devices and
+            the ways in the person could have planted, and the master key is changed - on every node, by itself, for everybody who stays.
+            <strong>Last:</strong> the account is deleted, or becomes an ordinary user's with the folders you chose.
+        </p>
+        <p>
+            A step that waits for a device that is offline, locked or too old offers two things only: wait for it, or revoke it. No step can be skipped, and a removal cannot be
+            cancelled once it has started.
+        </p>
+    </details>
+}
+
+@if (Model.Process is { } p)
+{
+    <div class="card mt-md">
+        <h3 style="margin-top:0;">@p.Person <sl-badge variant="@(p.Open ? "warning" : "neutral")" pill>@p.Status</sl-badge></h3>
+        <p class="text-muted text-sm" style="margin:0 0 12px 0;">
+            Started @p.StartedAt.ToLocalTime().ToString("g")@(string.IsNullOrEmpty(p.StartedBy) ? "" : " by " + p.StartedBy).
+            At the end: @(p.Target == "delete" ? "the account is deleted" : "an ordinary user" + (p.TargetRole is null ? "" : " (role " + p.TargetRole + ")")).
+        </p>
+
+        @if (p.CanTakeOver)
+        {
+            <sl-alert variant="warning" open style="margin-bottom:12px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                The node where this removal started was revoked. You can finish it from here.
+                <form data-busy="short" method="post" asp-page-handler="TakeOver" style="margin-top:8px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+                    <input type="hidden" name="id" value="@p.ProcessId" />
+                    <sl-input name="password" label="Your password" type="password" password-toggle required autocomplete="off" data-1p-ignore data-lpignore="true"></sl-input>
+                    <sl-button type="submit" variant="warning" size="small">Take this removal over</sl-button>
+                </form>
+            </sl-alert>
+        }
+
+        <ol class="offboarding-steps" style="padding-left:20px;">
+            @foreach (var step in p.Steps)
+            {
+                <li style="margin-bottom:10px;" data-step="@step.Number">
+                    <strong>@step.Title</strong>
+                    <sl-badge variant="@(step.State == "done" ? "success" : step.State == "waiting" ? "warning" : "neutral")" pill>@step.State</sl-badge>
+                    @if (!string.IsNullOrEmpty(step.Sentence))
+                    {
+                        <div class="text-muted text-sm">@step.Sentence</div>
+                    }
+                    @if (step.Waits.Count > 0)
+                    {
+                        <ul style="margin:4px 0 0 0;">
+                            @foreach (var wait in step.Waits)
+                            {
+                                <li class="text-sm">
+                                    @wait.NodeName: @wait.State@(string.IsNullOrEmpty(wait.Why) ? "" : " - " + wait.Why)
+                                    @if (wait.CanRevoke && p.DrivenHere)
+                                    {
+                                        <form data-busy="short" method="post" asp-page-handler="RevokeNode" style="display:inline;margin-left:8px;">
+                                            <input type="hidden" name="id" value="@p.ProcessId" />
+                                            <input type="hidden" name="nodeId" value="@wait.NodeId" />
+                                            <sl-button type="submit" variant="danger" size="small" outline>Revoke this node</sl-button>
+                                        </form>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                </li>
+            }
+        </ol>
+
+        @if (p.Open && p.DrivenHere)
+        {
+            <form data-busy="long" data-busy-title="Moving the removal on" method="post" asp-page-handler="Continue" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:8px;">
+                <input type="hidden" name="id" value="@p.ProcessId" />
+                @if (p.NeedsPassword)
+                {
+                    <sl-input name="password" label="Your password, to change the master key" type="password" password-toggle required autocomplete="off"
+                              data-1p-ignore data-lpignore="true"></sl-input>
+                }
+                <sl-button type="submit" variant="primary" size="small">Continue</sl-button>
+            </form>
+        }
+    </div>
+
+    @if (p.Review.Count > 0)
+    {
+        <div class="card mt-md">
+            <h3 style="margin-top:0;">Devices and planted ways back</h3>
+            <p class="text-muted text-sm">Every item needs a decision. Items marked "pre-selected: remove" are unknown-owner keys, devices of this person or things this person made; keeping one needs a reason. Every superadmin needs your own decision: none is decided for you.</p>
+            @if (p.Open && p.DrivenHere && p.Review.Any(i => i.Decision is null))
+            {
+                <form data-busy="short" method="post" asp-page-handler="AcceptDefaults" style="margin-bottom:12px;">
+                    <input type="hidden" name="id" value="@p.ProcessId" />
+                    <sl-button type="submit" variant="default" size="small">Decide every other open item as pre-selected</sl-button>
+                </form>
+            }
+            <table class="data-table">
+                <thead><tr><th>Item</th><th>Why it is here</th><th>Decision</th></tr></thead>
+                <tbody>
+                    @foreach (var item in p.Review)
+                    {
+                        <tr data-item="@item.Id">
+                            <td>@item.Label @if (item.DefaultRemove) { <sl-badge variant="danger" pill>pre-selected: remove</sl-badge> }</td>
+                            <td class="text-sm">@item.Why</td>
+                            <td class="text-sm">
+                                @if (item.Decision is not null)
+                                {
+                                    <span>@(item.Decision == "remove" ? (item.Applied ? "removed" : "to be removed") : "kept")@(string.IsNullOrEmpty(item.Reason) ? "" : ": " + item.Reason)</span>
+                                }
+                                else if (p.Open && p.DrivenHere)
+                                {
+                                    @if (item.Kind == "superadmin")
+                                    {
+                                        <form data-busy="short" method="post" asp-page-handler="RemoveSuperadmin" style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">
+                                            <input type="hidden" name="id" value="@p.ProcessId" />
+                                            <input type="hidden" name="itemId" value="@item.Id" />
+                                            <sl-input name="password" size="small" placeholder="Your password" type="password" autocomplete="off" data-1p-ignore data-lpignore="true"></sl-input>
+                                            <sl-button type="submit" variant="danger" size="small" outline>Remove (delete account)</sl-button>
+                                        </form>
+                                    }
+                                    else
+                                    {
+                                        <form data-busy="short" method="post" asp-page-handler="Decide" style="display:inline;">
+                                            <input type="hidden" name="id" value="@p.ProcessId" />
+                                            <input type="hidden" name="itemId" value="@item.Id" />
+                                            <input type="hidden" name="decision" value="remove" />
+                                            <sl-button type="submit" variant="danger" size="small" outline>Remove</sl-button>
+                                        </form>
+                                    }
+                                    <form data-busy="short" method="post" asp-page-handler="Decide" style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;margin-top:4px;">
+                                        <input type="hidden" name="id" value="@p.ProcessId" />
+                                        <input type="hidden" name="itemId" value="@item.Id" />
+                                        <input type="hidden" name="decision" value="keep" />
+                                        @if (item.DefaultRemove)
+                                        {
+                                            <sl-input name="reason" size="small" placeholder="Why it stays" required maxlength="500"></sl-input>
+                                        }
+                                        <sl-button type="submit" variant="default" size="small">Keep</sl-button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    @if (!p.Open)
+    {
+        <div class="card mt-md">
+            <h3 style="margin-top:0;">Closed</h3>
+            @foreach (var bridge in p.Bridges)
+            {
+                <sl-alert variant="warning" open style="margin-bottom:8px;"><sl-icon slot="icon" name="exclamation-triangle"></sl-icon>@bridge <a href="/Admin/DekRotation">Master key page</a></sl-alert>
+            }
+            <ul>
+                @foreach (var reminder in p.Reminders)
+                {
+                    <li>@reminder</li>
+                }
+            </ul>
+        </div>
+    }
+    <p class="mt-md"><a href="/Admin/Offboarding">All removals</a></p>
+}
+else
+{
+    <div class="card mt-md">
+        @if (Model.Processes.Count == 0)
+        {
+            <p class="text-muted" style="margin:0;">Nobody is being removed. To take a superadmin's rights away, use the shield button of their row on the <a href="/Users">Users</a> page.</p>
+        }
+        else
+        {
+            <table class="data-table">
+                <thead><tr><th>Person</th><th>State</th><th>Started</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var item in Model.Processes)
+                    {
+                        <tr>
+                            <td>@item.Person</td>
+                            <td><sl-badge variant="@(item.Open ? "warning" : "neutral")" pill>@item.Status</sl-badge></td>
+                            <td class="text-muted text-sm">@item.StartedAt.ToLocalTime().ToString("g")</td>
+                            <td style="text-align:right;"><a href="@BeeMemoryBank.Web.Pages.Admin.AdminRoutes.OffboardingOf(item.ProcessId)">Open</a></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+}

@@ -45,7 +45,7 @@ public sealed class BlindSeedOffsetException(long received)
 }
 
 /// <summary>
-/// Why a seed is refused: one code per check that can fail (BMB-306/307 fix round 2, M3/P4). The sender is told, and this node's log says, the FIXED sentence of
+/// Why a seed is refused: one code per check that can fail (BMB-306/307). The sender is told, and this node's log says, the FIXED sentence of
 /// the code (<see cref="BlindSeedRefusals.Sentence"/>) - never a path, an address, a key, a pair code, a number the sender chose, or the text of a parser or an I/O
 /// error. What went wrong underneath travels as the exception's inner exception, of which only the type is written down (see the endpoint).
 /// </summary>
@@ -347,7 +347,7 @@ public sealed partial class BlindSeedService(
             // The pair code is checked again here, under the gate every part and the switch run
             // under: the endpoint checked the proof before waiting for the gate, and an upload with the
             // same proof that got the gate first may have seeded and spent the code meanwhile. Only the
-            // first one switches the database and grants authority (review l-root2 #1).
+            // first one switches the database and grants authority.
             if (authority is BlindSeedAuthority.PairingSecret pairing)
             {
                 using var scope = scopeFactory.CreateScope();
@@ -368,7 +368,7 @@ public sealed partial class BlindSeedService(
 
             // At the recorded offset, not at the end of the file: a part that failed half-way (a dropped
             // connection, a cancel) left bytes on disk that were never counted, and its retry comes
-            // again from upload.Received. Appending would put it after them (review L-merge #1).
+            // again from upload.Received. Appending would put it after them.
             await using (var file = new FileStream(upload.Path, FileMode.OpenOrCreate, FileAccess.Write))
             {
                 file.SetLength(upload.Received);
@@ -520,14 +520,14 @@ public sealed partial class BlindSeedService(
         // Stage everything the switch needs, and check it, before anything live is touched.
         var cutover = new BlindSeedCutover(dataPath);
         cutover.Prepare();
-        // The producer's standing on this node is never its own claim in the manifest (review L-merge
-        // round 2 #1): a reseed comes from a peer this node ALREADY holds as superadmin, which it stays;
+        // The producer's standing on this node is never its own claim in the manifest
+        // A reseed comes from a peer this node ALREADY holds as superadmin, which it stays;
         // a first seed's producer gets no row here at all — the pair code makes it superadmin after the
-        // switch, on top of the signed whitelist events about it (manifest.Standing; review r1-merge #3).
+        // switch, on top of the signed whitelist events about it (manifest.Standing).
         var producerStanding = upload.Authority is BlindSeedAuthority.SuperadminPeer;
         await BuildDatabaseAsync(cutover.StagedDbPath, package, manifest, self, await liveEvents.GetMaxSequenceAsync(), producerStanding);
         // A first seed's grant is versioned after everything the package brought; a package whose
-        // times leave no room after them is refused here, before the switch (review l-root3).
+        // times leave no room after them is refused here, before the switch.
         long? grantAt = null;
         if (upload.Authority is BlindSeedAuthority.PairingSecret)
             using (var staged = new DbConnectionFactory(cutover.StagedDbPath))
@@ -568,7 +568,7 @@ public sealed partial class BlindSeedService(
                 if (manifest.ProducerNodeId != seeder.SeederNodeId)
                     throw new BlindSeedRejectedException(BlindSeedRefusal.NotBuiltByPairedNode);
                 // The seeder becomes this node's superadmin: only a full node can be one. A blind node
-                // holds no key and authors nothing, and this node cannot seed itself (review l-root4 #2).
+                // holds no key and authors nothing, and this node cannot seed itself.
                 if (BlindNodeId.IsBlind(seeder.SeederNodeId))
                     throw new BlindSeedRejectedException(BlindSeedRefusal.BlindCannotSeed);
                 if ((await services.GetRequiredService<INodeIdentityRepository>().GetAsync())?.NodeId == seeder.SeederNodeId)
@@ -689,7 +689,7 @@ public sealed partial class BlindSeedService(
     }
 
     /// <summary>
-    /// The switch (review L-stage1 #4). Event writes are held off and the ones running drained first
+    /// The switch. Event writes are held off and the ones running drained first
     /// (EventWriteGate), requests answer 503, and only then is the final tail read — so no event can
     /// arrive between reading it and moving the file. The old database stays whole beside the new one
     /// until the replay has succeeded; a replay that cannot finish (the event may apply later, e.g. its
@@ -711,14 +711,14 @@ public sealed partial class BlindSeedService(
             try
             {
                 // The media tree this cutover is about to rename aside, move into and later delete is
-                // also what a restic backup reads (Codex round 2, security #7): block new jobs and wait
+                // also what a restic backup reads: block new jobs and wait
                 // for the one running, so no reader holds files in it while the directories move — on
                 // Windows the rename fails under an open handle, on Linux the reader captures a
                 // half-moved tree. Taken with the wipe's own gate, so a wipe and a cutover serialize.
                 using var exclusive = await jobs.TryBeginExclusiveAsync(_cutoverDrainWait)
                     ?? throw new BlindSeedRejectedException(BlindSeedRefusal.DrainTimeout);
 
-                // Every connection to the live database takes part in the switch (review l-root4 #1):
+                // Every connection to the live database takes part in the switch:
                 // new ones wait, open ones are waited for, and the switch goes ahead only once none is
                 // left, so no reader or writer keeps the moved file open. This flow's own connections
                 // are the exception — they are the switch. A connection still open after the wait makes
@@ -753,7 +753,7 @@ public sealed partial class BlindSeedService(
 
                 cutover.WriteMarker(manifest.SeedId, BlindSeedCutover.Switching);
                 // From here until "done", ANY failure puts the old database and media back before the
-                // gate opens again (review L-stage1 round 2 #3); if even that fails, the marker stays
+                // gate opens again; if even that fails, the marker stays
                 // "switching" and the next start rolls back (and no new seed discards it meanwhile).
                 try
                 {
@@ -806,7 +806,7 @@ public sealed partial class BlindSeedService(
     /// <summary>
     /// The DEK-exposure alarm (BlindState.DekExposureKey) is cleared by an operator only. A reseed
     /// replaces the database, not the fact that copies of the old one hold an envelope for this node's
-    /// key — so the alarm goes into the new database (review L-stage1 round 2 #2).
+    /// key — so the alarm goes into the new database.
     /// </summary>
     private async Task CarryExposureAsync(string stagedDbPath)
     {
@@ -848,14 +848,14 @@ public sealed partial class BlindSeedService(
     /// stops the replay and is returned — the caller rolls back rather than drop it.
     /// </summary>
     /// <summary>
-    /// A first seed's producer is this node's authority because the operator made it so (review r1-merge
-    /// #3): the pair code was issued at this node's console for the device that uses it to manage this
+    /// A first seed's producer is this node's authority because the operator made it so
+    /// The pair code was issued at this node's console for the device that uses it to manage this
     /// node (<see cref="BlindPairing.AuthorityNotice"/>), and the seeder proof showed that this producer,
     /// with the key it signs with, used it. So it becomes superadmin here, bound to that key, whatever its
     /// manifest says about itself or about its network.
     ///
     /// <para>The whitelist events about it that the manifest carries — its admission, later updates and
-    /// revokes, in order (review L-merge round 3 #1, #2) — still go through the ordinary applier first.
+    /// revokes, in order — still go through the ordinary applier first.
     /// Each counts only if its author is superadmin here and its signature holds; an admission for another
     /// key than the paired one is not applied. They leave the row at the version the network last signed
     /// for it, and the grant keeps that version, never one from the manifest: from here on only a signed
@@ -863,11 +863,11 @@ public sealed partial class BlindSeedService(
     /// same applier.</para>
     ///
     /// <para>The grant is a decision this node takes at the switch, and the row carries it as its version
-    /// (review l-root2 #2): <paramref name="grantAt"/>, the Lamport time right after everything this node
+    /// <paramref name="grantAt"/>, the Lamport time right after everything this node
     /// holds once the package is in — every versioned row the package brought (a package's log starts
     /// empty, its rows do not) and the standing stream (<see cref="GrantTime"/>) — stamped with this
     /// node's id. It is taken from the raw maximum, not through the Lamport clock, whose update caps a
-    /// jump (review l-root3); the clock is not moved: this node authors no events. A signed event about the producer that the
+    /// jump; the clock is not moved: this node authors no events. A signed event about the producer that the
     /// package did not carry and that is not newer than what the package reflected (a demotion no reachable
     /// peer had passed on) loses against it; a newer one wins, as everywhere. Lamport time cannot tell
     /// "issued before the code" from "issued after" by a node that has seen none of the producer's recent
@@ -1043,6 +1043,11 @@ public sealed partial class BlindSeedService(
         var applier = scope.ServiceProvider.GetRequiredService<EventApplier>();
         var quarantine = scope.ServiceProvider.GetRequiredService<ISyncQuarantineRepository>();
         var scopeHolder = scope.ServiceProvider.GetRequiredService<CallerScopeHolder>();
+        var self = await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync();
+        var selfContext = self is null ? null : new ApplyContext(
+            Originators: id => id == self.NodeId
+                ? new OriginatorInfo(self.Ed25519PublicKey, IsSuperadmin: false)
+                : null);
 
         // The replay is a sync apply and runs under the system scope, exactly as the batch handler's
         // is (SyncEndpoints: RunAsSystemAsync around its apply loop). Without it the apply runs under
@@ -1057,7 +1062,12 @@ public sealed partial class BlindSeedService(
             {
                 try
                 {
-                    await applier.ApplyAsync(evt);
+                    // This blind node may have authored its own node_state during the cutover window;
+                    // a node never whitelists itself, so provide its own public key for self node_state replay.
+                    var ctx = selfContext is not null && evt.NodeId == self!.NodeId && evt.EventType == EventTypes.NodeState
+                        ? selfContext
+                        : null;
+                    await applier.ApplyAsync(evt, ctx);
                 }
                 catch (Exception ex) when (SyncFailureClassifier.Classify(ex) == SyncFailureKind.Permanent)
                 {

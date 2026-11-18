@@ -43,59 +43,103 @@ public partial class DekRotationService
     /// instead, a refusal had nowhere to go: the task only logged it, the caller had already
     /// answered 202, and /progress kept showing the previous accept's result forever. The window
     /// is real — a failed accept publishes Failed before it releases the lock, so a retry clicked
-    /// the moment Failed appears lands in it. Returns null, starting nothing, when the lock is busy.
+    /// the moment Failed appears lands in it. The node-local key-operation lock (an offline re-key,
+    /// an identity re-key) is taken here too, for the same reason. Returns null, starting
+    /// nothing, when either is busy; <paramref name="refusal"/> is then the sentence to answer with.
     /// </summary>
-    public Task? TryStartAcceptCommit(string commitEventId, string masterPassword, int? initiatorUserId)
+    public Task? TryStartAcceptCommit(string commitEventId, string masterPassword, int? initiatorUserId, out string? refusal)
     {
         if (!_executeLock.Wait(TimeSpan.Zero))
+        {
+            refusal = AnotherRotationRefusal;
             return null;
-        return Task.Run(() => AcceptCommitHoldingLockAsync(commitEventId, masterPassword, initiatorUserId));
+        }
+        var keyOperation = TryEnterKeyOperation(out refusal);
+        if (keyOperation is null)
+        {
+            _executeLock.Release();
+            return null;
+        }
+        return Task.Run(() => AcceptCommitHoldingLockAsync(commitEventId, masterPassword, initiatorUserId, keyOperation));
     }
 
-    /// <summary>Runs the accept; the caller has claimed <c>_executeLock</c>, which this releases.</summary>
-    private async Task AcceptCommitHoldingLockAsync(string commitEventId, string masterPassword, int? initiatorUserId)
+    /// <summary>The refusal of an accept while another rotation runs on this node.</summary>
+    public const string AnotherRotationRefusal = "Another rotation is in progress.";
+
+    /// <summary>
+    /// Runs the accept; the caller has claimed <c>_executeLock</c>, which this releases, and may have taken the key-operation lock already
+    /// (<paramref name="heldKeyOperation"/>, released here too).
+    /// </summary>
+    private async Task AcceptCommitHoldingLockAsync(string commitEventId, string masterPassword, int? initiatorUserId, IDisposable? heldKeyOperation = null)
     {
         try
         {
-            await HeavyOperationLock.Instance.WaitAsync();
+            // The node-local key-operation lock (2.12): no rotation while an identity re-key runs here or an offline re-key holds its lock.
+            string? refusal = null;
             bool runPostCompaction = false;
-            try
+            using (var keyOperation = heldKeyOperation ?? TryEnterKeyOperation(out refusal))
             {
-                _maintenance.Enter("DEK rotation in progress\u2026");
+                if (keyOperation is null)
+                {
+                    _progress.Update(DekRotationFlowStep.Failed, err: refusal, msg: refusal);
+                    throw new ConflictException(refusal!);
+                }
+                await HeavyOperationLock.Instance.WaitAsync();
                 try
                 {
-                    // False: the DEK is swapped but the new metadata key is not published yet (spec 4.4). The rotation is not
-                    // complete then: no Completed, no completion record, no compaction until the publication holds.
-                    runPostCompaction = await AcceptCommitCoreAsync(commitEventId, masterPassword, initiatorUserId);
+                    _maintenance.Enter("DEK rotation in progress\u2026");
+                    try
+                    {
+                        // False: the DEK is swapped but the new metadata key is not published yet (spec 4.4). The rotation is not
+                        // complete then: no Completed, no completion record, no compaction until the publication holds.
+                        runPostCompaction = await AcceptCommitCoreAsync(commitEventId, masterPassword, initiatorUserId);
+                    }
+                    finally
+                    {
+                        _maintenance.Exit();
+                    }
                 }
                 finally
                 {
-                    _maintenance.Exit();
+                    HeavyOperationLock.Instance.Release();
                 }
-            }
-            finally
-            {
-                HeavyOperationLock.Instance.Release();
+
+                if (runPostCompaction)
+                    PublishCompleted();
+
+                // SemaphoreSlim is non-reentrant; otherwise compaction silently no-ops and we lose
+                // the post-rotation log compaction. Rotation tx already committed; DB is consistent
+                // for normal use even though we are now out of maintenance mode.
+                if (runPostCompaction)
+                {
+                    try
+                    {
+                        using var compactionScope = _scopeFactory.CreateScope();
+                        var compactionService = compactionScope.ServiceProvider.GetRequiredService<CompactionService>();
+                        await compactionService.ExecuteAsync(reason: "dek-rotation");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "DEK rotation: post-rotation compaction failed (non-fatal)");
+                    }
+                }
             }
 
             if (runPostCompaction)
-                PublishCompleted();
-
-            // SemaphoreSlim is non-reentrant; otherwise compaction silently no-ops and we lose
-            // the post-rotation log compaction. Rotation tx already committed; DB is consistent
-            // for normal use even though we are now out of maintenance mode.
-            if (runPostCompaction)
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    using var compactionScope = _scopeFactory.CreateScope();
-                    var compactionService = compactionScope.ServiceProvider.GetRequiredService<CompactionService>();
-                    await compactionService.ExecuteAsync(reason: "dek-rotation");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "DEK rotation: post-rotation compaction failed (non-fatal)");
-                }
+                    try
+                    {
+                        using var s = _scopeFactory.CreateScope();
+                        if (s.ServiceProvider.GetService<ISharedDoorsApplier>() is { } doorsApplier)
+                            await doorsApplier.ApplyPendingAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "DEK rotation: post-rotation shared-doors apply failed (non-fatal)");
+                    }
+                });
             }
         }
         finally
@@ -105,6 +149,29 @@ public partial class DekRotationService
     }
 
     private int _publishSubscribed;
+
+    /// <summary>
+    /// Takes the node-local key-operation lock for a rotation (2.12, plan WS-A6), or refuses with a <see cref="ConflictException"/> that names
+    /// what holds it: an identity re-key on this node, or an offline re-key whose on-disk lock is held.
+    /// </summary>
+    private IDisposable EnterKeyOperation() =>
+        TryEnterKeyOperation(out var refusal) ?? throw new ConflictException(refusal!);
+
+    /// <summary>The lock, or null with <paramref name="refusal"/> saying what holds it.</summary>
+    private IDisposable? TryEnterKeyOperation(out string? refusal)
+    {
+        refusal = null;
+        if (BeeMemoryBank.AppPaths.RekeyLock.IsHeld(_dataPath))
+        {
+            refusal = "A key rotation cannot start now: an offline re-key of this vault is running. Try again when it has finished.";
+            return null;
+        }
+        var held = KeyOperationLock.TryEnter(_connFactory.DatabaseId, KeyOperationName);
+        if (held is null) refusal = KeyOperationLock.Busy(_connFactory.DatabaseId, "A key rotation");
+        return held;
+    }
+
+    private const string KeyOperationName = "a key rotation";
 
     /// <summary>
     /// Step A (docs/design/step-a-spec.md 4.4): the rotation's transaction created the next metadata key generation (under the
@@ -145,8 +212,21 @@ public partial class DekRotationService
     /// publication. Idempotent and never throws: a failed finish keeps the record and is tried again; a rotation that has nothing
     /// left, or whose key is not published yet, does nothing.
     /// </summary>
+    /// <summary>Test seam only: runs where the completion record is read (a slow read of the record).</summary>
+    internal Func<Task>? BeforeCompletionRecordReadForTests { get; set; }
+
     public async Task FinishPendingCompletionAsync()
     {
+        // Nothing to finish (the usual case, asked at every unlock): answered without the rotation's lock, so a propose or an accept that
+        // comes meanwhile is not refused "Another rotation is in progress." A record an accept is writing right now is that accept's to
+        // finish, or the timer's and the publication's (they read the record again). A read that fails goes on to the locked path, which logs.
+        if (BeforeCompletionRecordReadForTests is { } slowRead) await slowRead();
+        try
+        {
+            if (DekRotationCompletionRecord.Read(_connFactory) is null) return;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { }
+
         var compact = false;
         if (!await _executeLock.WaitAsync(TimeSpan.FromSeconds(30)))
             return; // an accept is running; it finishes inline or leaves the record for the next try
@@ -290,8 +370,9 @@ public partial class DekRotationService
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
 
-        var sigPayload = EventSignature.BuildPayload(commitEvent);
-        if (!Ed25519Signer.Verify(identity.Ed25519PublicKey, sigPayload, commitEvent.Signature))
+        // This node's own commit: its current key, or the one it retired if it re-keyed after proposing (plan WS-D D3, own events).
+        if (!await BeeMemoryBank.Sync.NodeEventVerifier.VerifyAsync(_connFactory, commitEvent, identity.Ed25519PublicKey,
+                BeeMemoryBank.Sync.NodeKeyMode.Package))
             throw new InvalidOperationException("Commit event signature verification failed.");
 
         // A commit this node already applied (or cancelled, or rejected) must not be run again:
@@ -388,7 +469,7 @@ public partial class DekRotationService
             byte[] verifyDek;
             try
             {
-                verifyDek = MasterKeyManager.UnwrapMasterDek(initiatorSlot.EncryptedMasterDek, initiatorSlot.IV, localKek);
+                verifyDek = Doors.OpenSlot(initiatorSlot, localKek);
             }
             catch (CryptographicException)
             {
@@ -446,7 +527,18 @@ public partial class DekRotationService
 
         try
         {
-            var (newEncDek, newIv) = MasterKeyManager.WrapMasterDek(newDek, localKek);
+            // The initiator's own door holds the new DEK as a sealed (v2) door (ADR 0012); the legacy single slot keeps a v1 wrap.
+            byte[] newEncDek, newIv;
+            byte[]? newDoorPublicKey = null;
+            if (initiatorSlot.SlotType == KeySlotTypes.Password)
+            {
+                (newEncDek, newIv) = MasterKeyManager.WrapMasterDek(newDek, localKek);
+            }
+            else
+            {
+                var door = Doors.Seal(initiatorSlot.SlotType, localKek, initiatorSlot.Salt, newDek);
+                (newEncDek, newIv, newDoorPublicKey) = (door.Box, door.Iv, door.PublicKey);
+            }
 
             // The initiator stores the chain material too. Its own slot is re-wrapped right here
             // so it never needs the chain itself — but a user who logs in on THIS node for the
@@ -464,7 +556,8 @@ public partial class DekRotationService
                 chainEncryptedNewDekB64: chainEncB64,
                 chainIvB64: chainIvB64,
                 createNextMetadataKey: createNextMetadataKey,
-                completionRecord: done);
+                completionRecord: done,
+                newSlotDoorPublicKey: newDoorPublicKey);
             rewrapped = true;
             done = done with { AgentsDeleted = agentsDeleted };
 

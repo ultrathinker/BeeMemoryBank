@@ -87,7 +87,7 @@ internal sealed class IosFixRig : IDisposable
 }
 
 /// <summary>
-/// Fix round 1 for the iPhone head (review revios): one background round at a time for the whole device, no account's name or fate in another account's log, failures told by their kind and
+/// For the iPhone head: one background round at a time for the whole device, no account's name or fate in another account's log, failures told by their kind and
 /// never by their message, the account that took a computer's answer named by the host, the shared records bound as they are, the daily silence reminder that repeats, and no wake for accounts
 /// that are paused for good.
 /// </summary>

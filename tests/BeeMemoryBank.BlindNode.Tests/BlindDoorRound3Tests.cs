@@ -17,7 +17,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The third round on the node's door (srvfix8, RV6-01, RV6-02): a body that three routes read before they know who is asking, and a request that outlives its reservation.
+/// The third round on the node's door: a body that three routes read before they know who is asking, and a request that outlives its reservation.
 /// </summary>
 public sealed class BlindDoorRound3Tests : IDisposable
 {
@@ -35,7 +35,7 @@ public sealed class BlindDoorRound3Tests : IDisposable
         if (Directory.Exists(_dataPath)) Directory.Delete(_dataPath, recursive: true);
     }
 
-    // ── RV6-01: no route reads an unbounded body before the credential is accepted ──
+    // ── No route reads an unbounded body before the credential is accepted ──
 
     /// <summary>A body that does not announce its length (a chunked request): the server cannot refuse it by the header, only by what it reads.</summary>
     private sealed class UnannouncedBody(long length) : HttpContent
@@ -149,7 +149,7 @@ public sealed class BlindDoorRound3Tests : IDisposable
         refused.StatusCode.Should().Be(HttpStatusCode.BadRequest, "2001 hashes are still the handler's own 400, not the limit's");
     }
 
-    // ── RV6-02: a request that outlives its reservation does not go on unmetered ──
+    // ── A request that outlives its reservation does not go on unmetered ──
 
     private readonly ManualTimeProvider _clock = new(new DateTimeOffset(2026, 10, 21, 12, 0, 0, TimeSpan.Zero));
 

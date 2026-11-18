@@ -1,7 +1,7 @@
 namespace BeeMemoryBank.AppPaths;
 
 /// <summary>
-/// The first thing every entry point of a data folder does (BMB-306 fix round 5, J1): ONE inventory of what must not be a link and ONE check of it, made from the directory
+/// The first thing every entry point of a data folder does (BMB-306): ONE inventory of what must not be a link and ONE check of it, made from the directory
 /// entries themselves (<see cref="LinkEntry"/>) before any question that looks through a link ("does it exist", "is a marker pending", "is it a sealed pair"), any read, any
 /// probe, any swap, move or wipe. A link, to something or to nothing, is refused by name and nothing is opened, read, written or removed through it.
 /// <para>

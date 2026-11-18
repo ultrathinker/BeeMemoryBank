@@ -426,7 +426,7 @@ public class McpToolsTests : IAsyncLifetime
     [Fact]
     public async Task BeeGetTree_NoArgs_HasOnlyPathsKey_LegacyShapePreserved()
     {
-        // Regression guard (WP-19 self-check #4): omitting the new parameters must reproduce the
+        // Regression guard: omitting the new parameters must reproduce the
         // exact pre-existing response shape — a single top-level "paths" key and NONE of the new
         // pagination metadata keys.
         await _articleService.CreateAsync("Legacy node", "/Legacy/Child", [], "text");
@@ -465,7 +465,7 @@ public class McpToolsTests : IAsyncLifetime
     [Fact]
     public async Task BeeGetTree_Depth_BoundsDescentOnLargeSubtree()
     {
-        // Concretely-observed WP-19 pain point: a large subtree must return a bounded response.
+        // Concretely-observed pain point: a large subtree must return a bounded response.
         // Create 300 child folders under /Bounded and confirm depth caps the result.
         var folderRepo = new BeeMemoryBank.Storage.Sqlite.FolderRepository(_factory, new CallerScopeHolder());
         for (var i = 0; i < 300; i++)

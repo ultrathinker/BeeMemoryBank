@@ -11,7 +11,7 @@ namespace BeeMemoryBank.Api.Endpoints;
 /// (after the blind role's early return in ApiPipeline).
 ///
 /// <para>This file only maps the routes; each handler lives in the partial file of the package that fills it, with
-/// the signature fixed here: <c>DreamEndpoints.Status.cs</c> and <c>.Runs.cs</c> and <c>.Advice.cs</c> (P0b),
+/// the signature fixed here: <c>DreamEndpoints.Status.cs</c> and <c>.Runs.cs</c> and <c>.Advice.cs</c>,
 /// <c>.Actions.cs</c> (A1), <c>.Compare.cs</c> (C1). A handler may take more services as parameters, but keeps its
 /// route, its body parameter (or none) and its <c>Task&lt;IResult&gt;</c> return: those decide the route metadata
 /// pinned in docs/full-node/ROUTES.golden.txt. A handler never takes <c>HttpContext</c> alone: that signature binds as a
@@ -29,12 +29,12 @@ public static partial class DreamEndpoints
         var group = app.MapGroup("/api/dream").WithTags("Dream")
             .RequireInternalKey().RequireSuperadmin().RequireNonAgent();
 
-        // State and settings (P0b)
+        // State and settings
         group.MapGet("/status", GetStatusAsync);
         group.MapGet("/settings", GetSettingsAsync);
         group.MapPut("/settings", PutSettingsAsync).RequireUnlockedVault();
 
-        // Runs (P0b)
+        // Runs
         group.MapPost("/runs", StartRunAsync).RequireUnlockedVault();
         group.MapPost("/runs/{id:guid}/stop", StopRunAsync);
         group.MapGet("/runs", ListRunsAsync);
@@ -42,7 +42,7 @@ public static partial class DreamEndpoints
         group.MapGet("/runs/{id:guid}/advice", GetRunAdviceAsync);
         group.MapGet("/runs/{id:guid}/events", GetRunEventsAsync);
 
-        // Advice lists (P0b)
+        // Advice lists
         group.MapGet("/advice", ListAdviceAsync);
         group.MapGet("/advice/{id:guid}", GetAdviceAsync);
 

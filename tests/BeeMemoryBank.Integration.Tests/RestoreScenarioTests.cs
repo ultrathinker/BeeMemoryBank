@@ -218,7 +218,7 @@ public sealed class RestoreSourceFixture : IAsyncLifetime
 
     /// <summary>
     /// Each strong box as it was before the rotation that superseded it. A superseded box keeps no key material
-    /// in the database (F7), so a tamperer who wants the old boxes back needs a copy made before: this is it.
+    /// in the database, so a tamperer who wants the old boxes back needs a copy made before: this is it.
     /// </summary>
     public List<OldBox> OldStrongBoxes { get; } = [];
 
@@ -478,7 +478,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
         await AssertEverythingOpensAsync(target);
     }
 
-    // ─── Review release-a2 A2-a: the restore tail ───────────────────────────────────────────────────────────
+    // ─── The restore tail ───────────────────────────────────────────────────────────
 
     /// <summary>
     /// A restore cut right after the peers are written (a kill, a power cut). It used to write every peer the source
@@ -593,9 +593,10 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             {
                 var wrapped = SecureRandom.GetBytes(49);
                 wrapped[0] = 0x01;
-                return new RecoverySetBox($"00000000-0000-0000-0000-{i:D12}", "device", Guid.NewGuid().ToString(), source.CurrentFingerprint, 9,
+                // Above every real epoch: since 2.12 the newest epoch is tried first, so junk hides the real box only from above.
+                return new RecoverySetBox($"00000000-0000-0000-0000-{i:D12}", "device", Guid.NewGuid().ToString(), source.CurrentFingerprint, 1_000_000,
                     "d64t3", Convert.ToBase64String(SecureRandom.GetBytes(32)), Convert.ToBase64String(wrapped),
-                    Convert.ToBase64String(SecureRandom.GetBytes(12)), DateTime.UtcNow.ToString("O"), 9, null);
+                    Convert.ToBase64String(SecureRandom.GetBytes(12)), DateTime.UtcNow.ToString("O"), 1_000_000, null);
             }));
         });
         return folder;
@@ -779,8 +780,8 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
     /// A restore that died in the bootstrap leaves rows behind, and <c>IsInitializedAsync</c> then says
     /// exactly the right thing: this node is not initialized, restore it again. The retry therefore has
     /// to be re-entrant — one identity row, one admin, and the identity that is persisted is the one the
-    /// restore returns, the one that signs and the one the blind node's claim trusts (review release-a2
-    /// spec#1, agy#3, sec#4).
+    /// restore returns, the one that signs and the one the blind node's claim trusts.
+    ///
     /// </summary>
     [Fact]
     public async Task ARestoreRetriedAfterATornBootstrap_KeepsOneIdentity_ThatIsTheOneThatSignsAndClaims()
@@ -914,7 +915,7 @@ public class RestoreScenarioTests(RestoreSourceFixture source, ITestOutputHelper
             new { Me = result.NodeId.ToString(), Fp = source.CurrentFingerprint })).Should().Be(1);
     }
 
-    // ── RV7 (srvfix9): the restored device's name has a product-level maximum, so the claim that follows the commit can never be too large for the blind node ──
+    // ── RV7: the restored device's name has a product-level maximum, so the claim that follows the commit can never be too large for the blind node ──
 
     [Fact]
     public async Task OverTheNetwork_ADisplayNameOverTheLimit_IsRefusedBeforeAnythingStarts()

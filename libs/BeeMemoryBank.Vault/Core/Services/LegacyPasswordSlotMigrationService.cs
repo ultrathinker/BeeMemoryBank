@@ -1,6 +1,7 @@
 using System.Data;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Storage.Sqlite;
 
 namespace BeeMemoryBank.Core.Services;
 
@@ -77,25 +78,30 @@ public class LegacyPasswordSlotMigrationService(
                     var primary = passwordSlots[0];
                     syntheticUsername = await PickUniqueAdminNameAsync();
 
+                    int syntheticUserId;
                     using (var insCmd = conn.CreateCommand())
                     {
                         insCmd.Transaction = tx;
                         insCmd.CommandText = @"
-                            INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, is_active, created_at, last_login_at)
-                            VALUES (@u, @dn, '', 'superadmin', @slot, 1, @ts, NULL);
+                            INSERT INTO tbl_user (person_id, username, display_name, password_hash, role, key_slot_id, is_active, created_at, last_login_at)
+                            VALUES (@pid, @u, @dn, '', 'superadmin', @slot, 1, @ts, NULL);
                             SELECT last_insert_rowid();";
+                        AddParam(insCmd, "pid", Guid.NewGuid().ToString("D"));
                         AddParam(insCmd, "u", syntheticUsername);
                         AddParam(insCmd, "dn", "Migrated Admin");
                         AddParam(insCmd, "slot", primary.SlotId);
                         AddParam(insCmd, "ts", DateTime.UtcNow.ToString("O"));
-                        Convert.ToInt32(insCmd.ExecuteScalar());
+                        syntheticUserId = Convert.ToInt32(insCmd.ExecuteScalar());
                     }
 
+                    // The migrated account owns the slot (migration 046): the trigger on tbl_user ran while the slot was still the legacy type.
+                    // The door itself stays the v1 wrap here; the unlock that runs this migration seals it again as a v2 door right after.
                     using (var updCmd = conn.CreateCommand())
                     {
                         updCmd.Transaction = tx;
-                        updCmd.CommandText = "UPDATE tbl_key_slot SET slot_type = 'user' WHERE slot_id = @id";
+                        updCmd.CommandText = "UPDATE tbl_key_slot SET slot_type = 'user', owner_user_id = @owner WHERE slot_id = @id";
                         AddParam(updCmd, "id", primary.SlotId);
+                        AddParam(updCmd, "owner", syntheticUserId);
                         updCmd.ExecuteNonQuery();
                     }
 
@@ -110,6 +116,10 @@ public class LegacyPasswordSlotMigrationService(
                 }
 
                 WriteMarker(conn, tx);
+
+                // The legacy slots go past KeySlotRepository.DeleteAsync, so the end of the bridge it would run is run here: when
+                // they were the node's last v1 doors, no chain row may stay from which an old master key yields the current one.
+                DekBridge.EndIfUnused(conn, tx);
 
                 tx.Commit();
             }

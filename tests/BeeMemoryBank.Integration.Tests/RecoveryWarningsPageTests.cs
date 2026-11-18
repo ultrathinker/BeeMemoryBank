@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using BeeMemoryBank.Api.Services.Recovery;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Storage.Sqlite;
@@ -23,6 +24,10 @@ public sealed class RecoveryWarningsPageTests : IAsyncLifetime
     {
         await _api.InitializeNodeAsync(password: Password);
         await _api.Services.GetRequiredService<SessionService>().UnlockAsync(Password);
+        // The page is read right after a superadmin sign-in, and that sign-in starts the recovery work in the background: it publishes this node's
+        // device box for the current key, which covers the key and (rightly) ends the warning these tests plant their boxes for. Whether it lands
+        // before the page reads the status is a race (CI run 44238143253); these tests are about the page, so the work is held off.
+        _api.Services.GetRequiredService<RecoveryTriggers>().PauseBackground = true;
         _web.RouteOutboundHttpThrough(_api.Server.CreateHandler());
     }
 

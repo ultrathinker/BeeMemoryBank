@@ -126,7 +126,7 @@ public class BootStoreTests : IDisposable
         {
             (await boot.QueryAsync<string>("SELECT name FROM sqlite_schema WHERE name = 'tbl_migration'")).Should().BeEmpty(
                 "the boot store has its own ledger and the vault's runner never wrote into it");
-            (await boot.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_boot_migration")).Should().Be(2, "B001 and B002");
+            (await boot.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_boot_migration")).Should().Be(4, "B001, B002, B003 and B004");
             (await boot.ExecuteScalarAsync<string>("SELECT filename FROM tbl_boot_migration WHERE version = 1"))
                 .Should().Be(BootMigrationRunner.ResourcePrefix + "B001_boot_store.sql");
             (await boot.ExecuteScalarAsync<long>("PRAGMA application_id")).Should().Be(0x424D4253);
@@ -159,7 +159,10 @@ public class BootStoreTests : IDisposable
 
         using var after = store.Connections.Open();
         (await after.QueryAsync<(long Version, string Filename)>("SELECT version, filename FROM tbl_boot_migration ORDER BY version")).Should().Equal(
-            (1L, BootMigrationRunner.ResourcePrefix + "B001_boot_store.sql"), (2L, BootMigrationRunner.ResourcePrefix + "B002_whitelist_concern_versions.sql"));
+            (1L, BootMigrationRunner.ResourcePrefix + "B001_boot_store.sql"),
+            (2L, BootMigrationRunner.ResourcePrefix + "B002_whitelist_concern_versions.sql"),
+            (3L, BootMigrationRunner.ResourcePrefix + "B003_sealed_doors.sql"),
+            (4L, BootMigrationRunner.ResourcePrefix + "B004_whitelist_ownership.sql"));
         (await after.QueryAsync<string>("SELECT name FROM sqlite_schema WHERE name = 'tbl_relay_report'")).Should().ContainSingle("the ghost rule re-applied the idempotent file");
     }
 

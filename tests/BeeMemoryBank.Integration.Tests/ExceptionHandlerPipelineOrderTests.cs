@@ -23,10 +23,18 @@ public class ExceptionHandlerPipelineOrderTests
         using var factory = new ExplodingScopeFactory();
         var client = factory.CreateClient();
         // A non-superadmin web caller is what sends CallerScopeMiddleware into
-        // FolderAccessService.GetFullAccessInfoAsync — the dependency this test replaces.
+        // FolderAccessService.GetFullAccessInfoAsync — the dependency this test replaces. The API reads the caller's role from
+        // its own table, so the caller is a real ordinary user.
+        // Straight into the table: the user routes would resolve the very service this factory makes explode.
+        int userId;
+        using (var scope = factory.Services.CreateScope())
+            userId = await scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.IUserRepository>().CreateAsync(new BeeMemoryBank.Core.Models.User
+            {
+                Username = "scoped", DisplayName = "Scoped", Role = BeeMemoryBank.Core.Models.UserRoles.User, IsActive = true, CreatedAt = DateTime.UtcNow,
+            });
         client.DefaultRequestHeaders.Remove("X-User-Role");
         client.DefaultRequestHeaders.Add("X-User-Role", "user");
-        client.DefaultRequestHeaders.Add("X-User-Id", "2");
+        client.DefaultRequestHeaders.Add("X-User-Id", userId.ToString());
 
         var resp = await client.GetAsync("/api/articles");
 

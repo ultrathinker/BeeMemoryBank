@@ -634,7 +634,7 @@ public sealed class KeyedFactoryTests : IDisposable
         var keys = new InMemoryVaultKeySource();
         using var factory = new DbConnectionFactory(_dir, keys);
         using (var c = factory.CreateConnection()) Run(c, "CREATE TABLE t (x INTEGER)");
-        // Another flow (a restore, a file switch) holds the barrier of this factory when the close arrives (review round 1, H4).
+        // Another flow (a restore, a file switch) holds the barrier of this factory when the close arrives.
         var switching = await Task.Run(() => factory.BeginQuiesce());
 
         bool clean;

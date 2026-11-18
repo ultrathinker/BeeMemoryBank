@@ -73,7 +73,7 @@ public class WhitelistApiTests : IAsyncLifetime
         await AddPeerAsync(nodeId);
         var before = await (await _client.GetAsync($"/api/whitelist/{nodeId}")).Content.ReadFromJsonAsync<JsonElement>(JsonOpts);
 
-        // BMB-307 fix round: the generic update used to take an address with no password, no check of what answers there and no validation. It says no, loudly,
+        // BMB-307: the generic update used to take an address with no password, no check of what answers there and no validation. It says no, loudly,
         // and points at /address (master password, the policy, the check of what answers, the audit line).
         var putResp = await _client.PutAsJsonAsync($"/api/whitelist/{nodeId}", new { apiAddress = "https://peer.example.com" });
         putResp.StatusCode.Should().Be(HttpStatusCode.BadRequest);

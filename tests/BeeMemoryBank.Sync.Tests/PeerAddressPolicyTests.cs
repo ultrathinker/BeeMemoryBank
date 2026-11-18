@@ -5,7 +5,7 @@ using Xunit;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// BMB-307 fix round (F5, F6): the one policy for a peer's address. What is stored is canonical, what is refused is refused with a sentence that does not
+/// BMB-307: the one policy for a peer's address. What is stored is canonical, what is refused is refused with a sentence that does not
 /// quote the input (a pasted address may carry a secret), and loopback and LAN addresses are NOT refused: this product's nodes live on LANs.
 /// </summary>
 public class PeerAddressPolicyTests

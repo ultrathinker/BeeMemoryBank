@@ -4,7 +4,7 @@ using BeeMemoryBank.Rekey;
 namespace BeeMemoryBank.Rekey.Tests;
 
 /// <summary>
-/// Review release-b R1-5 (sec#2). The journal and the directory renames are made durable: each journal write and each
+/// The journal and the directory renames are made durable: each journal write and each
 /// rename flushes the parent directory, write-through on Windows. A power cut that loses the journal's directory entry
 /// anyway still leaves a startable D: the resolver recognises the swap from the siblings.
 /// </summary>

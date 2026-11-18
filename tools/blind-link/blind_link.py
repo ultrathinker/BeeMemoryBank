@@ -187,7 +187,7 @@ def main():
                     links.add(c)
                     added += 1
         # Deliberately NO 'interface -> every implementing class' rule: the compiler cannot tell which implementation a container
-        # picks, so such a rule linked classes nothing names (Codex review B). The compositions (BlindComposition, BlindNodeServices,
+        # picks, so such a rule linked classes nothing names. The compositions (BlindComposition, BlindNodeServices,
         # BlindMobileServices) name every implementation they register; hosted services nothing names are listed in seeds.txt.
         for f in list(links):   # a partial class is linked whole or not at all
             for n in PART_RE.findall(text[f]):

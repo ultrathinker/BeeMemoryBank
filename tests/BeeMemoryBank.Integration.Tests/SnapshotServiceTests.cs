@@ -240,8 +240,8 @@ public class SnapshotServiceTests : IAsyncLifetime
         manifest.RootElement.TryGetProperty("producerNodeId", out var pnid).Should().BeTrue();
         pnid.GetString().Should().Be(_testNodeId.ToString());
         manifest.RootElement.TryGetProperty("migrationVersion", out var mv).Should().BeTrue();
-        mv.GetInt32().Should().Be(MigrationRunner.BaselineVersion + 5,
-            "the number says which schema the snapshot has: the baseline is migration 40, as the last migration of 2.6.1 was, so a 2.6.1 node and a 2.6.2 node write and read the same number; 041 and 042 (2.7), 043 (2.7.5), 044 (LAN sync) and 045 (whitelist versions per concern) are the ones after it");
+        mv.GetInt32().Should().Be(MigrationRunner.BaselineVersion + 11,
+            "the number says which schema the snapshot has: the baseline is migration 40, as the last migration of 2.6.1 was, so a 2.6.1 node and a 2.6.2 node write and read the same number; 041 and 042 (2.7), 043 (2.7.5), 044 (LAN sync), 045 (whitelist versions per concern), 046 (sealed doors, 2.12), 047 (ownership and node_state, 2.12), 049 (node key history, 2.12; 048 is not used) 050 (shared doors, 2.12) and 051 (the removal of a superadmin, 2.12) are the ones after it");
     }
 
     [Fact]
@@ -271,7 +271,7 @@ public class SnapshotServiceTests : IAsyncLifetime
         manifest.RootElement.TryGetProperty("migrationVersion", out _).Should().BeFalse();
     }
 
-    // ─── Review release-a #1: the working copy of the database is staged in the data folder ───
+    // ─── the working copy of the database is staged in the data folder ───
 
     [Fact]
     public async Task CreateAsync_StagesInsideTheDataFolder_NotInTheOsTempFolder_AndRemovesTheCopy()
@@ -339,7 +339,7 @@ public class SnapshotServiceTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review release-a #2: a restore commits the database, then swaps media.staging into media. A kill between the two
+    /// A restore commits the database, then swaps media.staging into media. A kill between the two
     /// left the restored legacy media in media.staging, where nothing reads it, and the next start's orphan sweep then
     /// removed the replaced state's files. The startup resume moves in what the committed tbl_media names, never
     /// overwriting, and leaves the rest where it is.

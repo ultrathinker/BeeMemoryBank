@@ -445,7 +445,7 @@ public sealed class VaultGateTests : IAsyncLifetime
         await hold.DisposeAsync();
     }
 
-    // ---- review round 1, H4: Closed only after the key-bearing generation is ended -----------------------------------------------------
+    // ---- Closed only after the key-bearing generation is ended -----------------------------------------------------
 
     /// <summary>The vault factory behind a recorder: what the gate asked, and the gate's state when it asked.</summary>
     private sealed class RecordingConnections(ISealableConnections inner, Func<VaultState> state) : ISealableConnections
@@ -577,7 +577,7 @@ public sealed class VaultGateTests : IAsyncLifetime
         (await _node.CountUsersAsync()).Should().Be(1);
     }
 
-    // ---- review round 1, H1: no open over a readable plain leftover ----------------------------------------------------------------------
+    // ---- no open over a readable plain leftover ----------------------------------------------------------------------
 
     [Fact]
     public async Task An_open_is_refused_while_a_plain_leftover_is_on_the_disk_and_nothing_is_opened()

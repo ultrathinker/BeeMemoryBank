@@ -6,7 +6,7 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
-/// WP-14: correctness tests for <see cref="EmbeddingVectorCache"/> and its wiring into
+/// Correctness tests for <see cref="EmbeddingVectorCache"/> and its wiring into
 /// <see cref="ArticleRepository.SearchByEmbeddingAsync"/> — a differential test against an
 /// independent reference cosine implementation, an invalidation test (a fresh write must be
 /// picked up without a process restart), and a concurrency stress test (concurrent readers must
@@ -89,7 +89,7 @@ public class EmbeddingVectorCacheTests : IAsyncLifetime
             vectors[id] = vec;
         }
         // One article with no embedding at all, and one with a mismatched dimension — both must
-        // score 0 / never crash, matching pre-WP-14 behavior exactly.
+        // score 0 / never crash, matching the earlier behavior exactly.
         await InsertArticleAsync("No embedding", null);
         var mismatchId = await InsertArticleAsync("Mismatched dim", [1f, 2f, 3f]);
 

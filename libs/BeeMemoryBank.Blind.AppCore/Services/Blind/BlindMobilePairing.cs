@@ -311,7 +311,8 @@ public sealed class BlindMobilePairing(
 
     private void CleanupOrphanedSecretIfCommitted()
     {
-        if (state.CallCode is not { } callCode) return;
+        // The code as paired: its MAC is over the pairing's key, not a key the hub moved to since (plan WS-D D4).
+        if (state.PairedCallCode is not { } callCode) return;
         var secret = keys.LoadPairingSecret();
         if (secret is null) return;
         try

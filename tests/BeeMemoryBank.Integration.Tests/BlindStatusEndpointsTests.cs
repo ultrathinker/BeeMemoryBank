@@ -204,7 +204,7 @@ public class BlindStatusEndpointsTests : IAsyncLifetime
         }
     }
 
-    /// <summary>Stands in for the recovery contributor (Opus-R1) that will fill "anchor" later.</summary>
+    /// <summary>Stands in for the recovery contributor that will fill "anchor" later.</summary>
     private sealed class FakeAnchorContributor : IBlindStatusContributor
     {
         public Task ContributeAsync(BlindStatusBuilder b, CancellationToken ct)

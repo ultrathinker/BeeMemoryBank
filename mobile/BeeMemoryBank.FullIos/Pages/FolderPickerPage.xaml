@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- The folder picker in the design's shape (the Android FolderPickerPage's behaviour): search,
+     new folder, the folder tree with expand/collapse, one selected destination, Select at the
+     bottom. Back cancels. Used by the editor (choose folder) and by Move. -->
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
+             x:Class="BeeMemoryBank.FullIos.Pages.FolderPickerPage"
+             Title="Choose folder">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Padding="16,8,16,16" RowSpacing="10">
+        <!-- The title lives in the page, like the note and the editor: the header stays empty
+             rather than cutting the caption at a large system font. -->
+        <Label x:Name="HeadingLabel" FontSize="22" Style="{StaticResource TitleLabel}"
+               LineBreakMode="WordWrap" AutomationId="PickerTitle" />
+        <Entry Grid.Row="1" x:Name="SearchEntry" Placeholder="{loc:Translate SearchFoldersPlaceholder}"
+               TextChanged="OnSearchTextChanged" AutomationId="FolderPickerSearch" />
+        <Button Grid.Row="2" Text="{loc:Translate NewFolder}" Style="{StaticResource SecondaryButton}"
+                Clicked="OnNewFolderClicked" AutomationId="PickerNewFolder" />
+        <CollectionView Grid.Row="3" x:Name="FolderList" SelectionMode="None">
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                            Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                            StrokeThickness="1" StrokeShape="RoundRectangle 12"
+                            Padding="12,10" Margin="{Binding DepthMargin}">
+                        <Border.Triggers>
+                            <DataTrigger TargetType="Border" Binding="{Binding IsSelected}" Value="True">
+                                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}" />
+                                <Setter Property="Stroke" Value="{AppThemeBinding Light={StaticResource BmbAccentBorderLight}, Dark={StaticResource BmbAccentBorder}}" />
+                            </DataTrigger>
+                        </Border.Triggers>
+                        <Border.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnFolderTapped" />
+                        </Border.GestureRecognizers>
+                        <HorizontalStackLayout Spacing="10">
+                            <Image Source="{AppThemeBinding Light=icon_row_folder_light.png, Dark=icon_row_folder_dark.png}"
+                                   WidthRequest="18" HeightRequest="18" VerticalOptions="Center">
+                                <Image.Triggers>
+                                    <!-- The root row wears the home icon the breadcrumb uses. -->
+                                    <DataTrigger TargetType="Image" Binding="{Binding IsRoot}" Value="True">
+                                        <Setter Property="Source" Value="{AppThemeBinding Light=icon_row_home_light.png, Dark=icon_row_home_dark.png}" />
+                                    </DataTrigger>
+                                </Image.Triggers>
+                            </Image>
+                            <Label Text="{Binding Name}" FontSize="14" VerticalOptions="Center"
+                                   TextColor="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}"
+                                   LineBreakMode="TailTruncation" />
+                        </HorizontalStackLayout>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+        <VerticalStackLayout Grid.Row="4" Spacing="10">
+            <Label x:Name="SelectedPathLabel" Style="{StaticResource ItemMeta}" />
+            <Button x:Name="SelectButton" Text="{loc:Translate SelectFolder}" Style="{StaticResource PrimaryButton}"
+                    IsEnabled="False" Clicked="OnSelectClicked" AutomationId="PickerSelect" />
+        </VerticalStackLayout>
+    </Grid>
+</ContentPage>

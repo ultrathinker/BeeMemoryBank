@@ -8,7 +8,7 @@ namespace BeeMemoryBank.FullIos.Services;
 /// fails ("No route to host") while that question is on the screen. A join sends the master password in its first request, so before the
 /// join the app waits until the node on the local network can be reached at all: a plain TCP connection, opened and closed, nothing sent
 /// over it - the person answers the question in the meantime. Seen on the iPhone with the blind app, whose first load failed exactly so
-/// while the prompt was open (reports/ios-device.md).
+/// while the prompt was open.
 /// </summary>
 public static class LocalNetwork
 {

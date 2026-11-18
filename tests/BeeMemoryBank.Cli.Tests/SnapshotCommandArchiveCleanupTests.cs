@@ -8,7 +8,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Cli.Tests;
 
 /// <summary>
-/// BMB-304 fix round, finding 5: <c>bmb snapshot create</c> writes the archive under a temp name and gives it its name only when it is whole. A full volume
+/// BMB-304: <c>bmb snapshot create</c> writes the archive under a temp name and gives it its name only when it is whole. A full volume
 /// or a cancellation while it is written leaves no half-written <c>*.tar.gz</c> (nothing can list or restore one) and no temp file, and the command says it
 /// failed; a snapshot that was made is a single complete archive.
 /// </summary>

@@ -15,7 +15,7 @@ public sealed class ContainerRunFactAttribute : FactAttribute
 }
 
 /// <summary>
-/// BMB-304 fix2 (a): the memory budget against a REAL cgroup limit. It is not part of the normal run (a unit test cannot put itself in a container): the T480 run that
+/// BMB-304: the memory budget against a REAL cgroup limit. It is not part of the normal run (a unit test cannot put itself in a container): the container run that
 /// records it starts it with <c>docker run --memory=...</c>, optionally with a tmpfs that a sibling process of the container fills (what the resident set of ONE
 /// process does not see and the cgroup charges: the Node, the Api and the Web are three processes in one container).
 /// <list type="bullet">

@@ -4,7 +4,7 @@ using BeeMemoryBank.Search.Segment;
 namespace BeeMemoryBank.Search.Tests.Indexing;
 
 /// <summary>
-/// The load-bearing correctness test for WP-12's <see cref="IndexBuilder.SearchRanked"/>: BM25
+/// The load-bearing correctness test for <see cref="IndexBuilder.SearchRanked"/>: BM25
 /// ranking, implicit-AND multi-term semantics, tombstone respect, hot-buffer/sealed-segment
 /// tier-correctness, and <c>topK</c> truncation.
 ///
@@ -15,7 +15,7 @@ namespace BeeMemoryBank.Search.Tests.Indexing;
 /// constructs and therefore knows exactly (document count, term frequencies, document lengths) --
 /// not by reading them back out of the builder under test. This is the same
 /// independent-oracle spirit as <see cref="IndexBuilderOracleTests"/>, scaled down to
-/// individually hand-verifiable cases per the WP-12 brief's requirement for "a few concrete,
+/// individually hand-verifiable cases per the requirement for "a few concrete,
 /// hand-checkable cases, not just 'it returns something in some order'".
 /// </para>
 /// </summary>
@@ -207,7 +207,7 @@ public class IndexBuilderSearchRankedTests
     [Fact]
     public void SearchRanked_AfterAdoptingPersistedSegment_AvgDocLengthAccountsForAdoptedContent()
     {
-        // Regression test for a review finding: AdoptPersistedSegment (WP-11's warm-start path,
+        // Regression test for a review finding: AdoptPersistedSegment (the warm-start path,
         // which folds a segment reloaded from disk back into a live IndexBuilder) must contribute
         // its live documents' total length to the same running total SealLocked/MergeLocked
         // maintain for SearchRanked's avgdl approximation. Without that, avgdl computed right after
@@ -341,7 +341,7 @@ public class IndexBuilderSearchRankedTests
     [Fact]
     public void SearchRanked_CorpusOfSizeOne_AverageDocumentLengthEqualsThatDocumentsLength_NoNaN()
     {
-        // Self-check #5 from the brief: corpus of size one must yield avgdl == that document's own
+        // Self-check #5: corpus of size one must yield avgdl == that document's own
         // length (so lengthRatio == 1 exactly), and the arithmetic must never NaN.
         var builder = new IndexBuilder(hotBufferSealThreshold: 1000);
         string term = Stem("zzzsolo");
@@ -364,7 +364,7 @@ public class IndexBuilderSearchRankedTests
     [Fact]
     public void SearchRanked_DocumentWithZeroTerms_DoesNotCrash_AndNeverMatches()
     {
-        // Self-check #5 from the brief: a document with zero terms (should not happen in practice,
+        // Self-check #5: a document with zero terms (should not happen in practice,
         // but must not crash the length-normalization arithmetic) alongside a normal document.
         var builder = new IndexBuilder(hotBufferSealThreshold: 1000);
         Guid emptyDoc = Guid.NewGuid();

@@ -196,7 +196,7 @@ public class SegmentRoundtripTests
         reader.GetPostings("日本語").Should().Equal((0, 1));
     }
 
-    // ── WP-11 Gap 1: EnumerateTerms ─────────────────────────────────────────────────
+    // ── Gap 1: EnumerateTerms ─────────────────────────────────────────────────
 
     [Fact]
     public void EnumerateTerms_EmptySegment_ReturnsEmpty()
@@ -226,7 +226,7 @@ public class SegmentRoundtripTests
     [Fact]
     public void EnumerateTerms_EveryEnumeratedTermHasNonEmptyPostings()
     {
-        // Self-check #3 from wp-11.md: EnumerateTerms() must round-trip correctly against the
+        // Self-check #3: EnumerateTerms() must round-trip correctly against the
         // segment's own postings -- every enumerated term must resolve to at least one posting via
         // GetPostings, since a term only ever ends up in the dictionary because some document
         // contained it.

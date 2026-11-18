@@ -9,8 +9,8 @@ The product decodes every picture a user uploads (and every picture the AI chat 
 re-encodes it as JPEG and scales it. That was `SixLabors.ImageSharp` 3.1.12, behind `IImageTranscoder` (`libs/BeeMemoryBank.Media`).
 
 ImageSharp 3.1.12 has published advisories whose fix exists only in 4.x: GHSA-jjfr-hcj7-qf5w, GHSA-j9gm-c75j-xc9q and GHSA-j3p4-wp97-rph4
-(high) and two moderate ones. ImageSharp 4.x needs a paid Six Labors licence for every non-Debug build (an earlier agent verified that a Release
-build fails without it, `reports/week-fix-fixsrv.md`). The owner decided to replace the library with a free, small, reputable one.
+(high) and two moderate ones. ImageSharp 4.x needs a paid Six Labors licence for every non-Debug build (verified: a Release
+build fails without it). It was decided to replace the library with a free, small, reputable one.
 
 What the product needs from the library, and what the tests pin (`SkiaImageTranscoderTests`, `MediaServiceImageTests`):
 

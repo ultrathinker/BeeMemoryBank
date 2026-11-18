@@ -15,7 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// A0 wire hygiene (brief P1-A0): the sync envelope fields no receiver of any version reads —
+/// Wire hygiene: the sync envelope fields no receiver of any version reads —
 /// actorType, actorName, viaAgentName and the derived entity_id — never leave the node. They are
 /// not covered by the event signature (EventSignature.BuildPayload signs eight fields, not these),
 /// every receiver overwrites or re-derives them on apply, and the only readers of the stored

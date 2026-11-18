@@ -99,6 +99,25 @@ public class AgentAuthMiddlewareAccessTrackingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task InvokeAsync_RefusesAnAgentWhoseOwnerIsBeingRemoved()
+    {
+        using (var conn = _factory.CreateConnection())
+            await Dapper.SqlMapper.ExecuteAsync(conn, "UPDATE tbl_user SET account_state = 'offboarding' WHERE id = 1");
+        var reached = false;
+        var middleware = new AgentAuthMiddleware(
+            next: _ => { reached = true; return Task.CompletedTask; },
+            logger: NullLogger<AgentAuthMiddleware>.Instance);
+
+        var ctx = new DefaultHttpContext();
+        ctx.Request.Headers.Authorization = $"Bearer {_apiKey}";
+        await middleware.InvokeAsync(ctx, _agentRepo, _userRepo, _session, _remoteTokenRepo);
+
+        ctx.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized, "an agent of a person being removed opens nothing");
+        reached.Should().BeFalse();
+        ctx.Items.ContainsKey("AuthAgent").Should().BeFalse();
+    }
+
+    [Fact]
     public async Task InvokeAsync_CalledTwice_IncrementsRequestCountEachTime()
     {
         var middleware = new AgentAuthMiddleware(

@@ -447,7 +447,7 @@ public class SyncBlindCheckpointTests : IAsyncLifetime
             Entries.Add((logLevel, formatter(state, exception) + (exception is null ? "" : " [" + exception + "]")));
     }
 
-    // ---------------------------------------------------------------------------- two syncs at once (Codex, fix 4)
+    // ---------------------------------------------------------------------------- two syncs at once
 
     /// <summary>
     /// The scheduler's cycle and a reseed's pull from the Blind nodes page do not share a lock. Both read "no cursor" and,

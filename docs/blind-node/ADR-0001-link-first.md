@@ -46,7 +46,7 @@ embedded.
   blind app and the Linux node share one small core; the phone's own client adds 16 more files in `Blind.PhoneClient`.
 * The closure is computed by the compiler plus two rules that are deliberately conservative about *adding*: a namespace that only a
   `using` names gets one file, and a partial class is linked whole. There is NO rule "an interface linked means all its
-  implementations are linked" (an earlier version had one, and Codex review B showed it pulled in the peer DEK-rotation classes and the
+  implementations are linked" (an earlier version had one, and a review showed it pulled in the peer DEK-rotation classes and the
   phone's pull client); every stand-in file is tried out again at the end and dropped when nothing needs it.
 * Partial classes are linked whole; DI wiring files and global statics (`DapperConfig`, `EventWriteGate`) are not
   visible to a compile closure and are covered by tests instead.

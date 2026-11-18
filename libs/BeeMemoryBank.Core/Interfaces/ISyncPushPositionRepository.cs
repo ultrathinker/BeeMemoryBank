@@ -21,8 +21,8 @@ public interface ISyncPushPositionRepository
     /// Records how far the peer says it has read our log, in its own words
     /// (<c>POST /api/sync/report-position</c>). Kept apart from
     /// <see cref="UpdatePositionAsync"/>'s delivery watermark, which moves when a page is merely
-    /// served: only an acknowledged position may be used to delete events (Codex round 2, security
-    /// #3). Never moves backwards.
+    /// served: only an acknowledged position may be used to delete events
+    /// Never moves backwards.
     /// </summary>
     Task RecordReportedPositionAsync(Guid remoteNodeId, long reportedSeq);
 

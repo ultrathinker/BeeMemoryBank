@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- The design tokens of the approved mock-up (design/index.html, :root and [data-theme="light"]),
+     one key per CSS variable. Alpha values are the CSS rgba() alphas rounded to 8 bits.
+     Every key resolves through AppThemeBinding, so the whole app follows the chosen appearance. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+
+    <!-- Backgrounds and surfaces -->
+    <Color x:Key="BmbBackground">#0E1015</Color>
+    <Color x:Key="BmbBackgroundLight">#F6F7FA</Color>
+    <Color x:Key="BmbSurface">#161922</Color>
+    <Color x:Key="BmbSurfaceLight">#FFFFFF</Color>
+    <Color x:Key="BmbSurfaceHigh">#1E222E</Color>
+    <Color x:Key="BmbSurfaceHighLight">#ECEEF4</Color>
+    <Color x:Key="BmbSurfaceHover">#262B3A</Color>
+    <Color x:Key="BmbSurfaceHoverLight">#E2E5EE</Color>
+
+    <!-- Borders: rgba(255,255,255,.10/.22) dark, rgba(20,23,31,.10/.22) light -->
+    <Color x:Key="BmbBorder">#1AFFFFFF</Color>
+    <Color x:Key="BmbBorderLight">#1A14171F</Color>
+    <Color x:Key="BmbBorderStrong">#38FFFFFF</Color>
+    <Color x:Key="BmbBorderStrongLight">#3814171F</Color>
+
+    <!-- Accent (the bee yellow) -->
+    <Color x:Key="BmbAccent">#FFC800</Color>
+    <Color x:Key="BmbAccentHover">#FFD633</Color>
+    <Color x:Key="BmbAccentHoverLight">#F5BF00</Color>
+    <Color x:Key="BmbAccentActive">#E6B400</Color>
+    <Color x:Key="BmbAccentActiveLight">#E0AE00</Color>
+    <Color x:Key="BmbAccentForeground">#0E1015</Color>
+    <Color x:Key="BmbAccentForegroundLight">#14171F</Color>
+    <Color x:Key="BmbAccentText">#FFC800</Color>
+    <Color x:Key="BmbAccentTextLight">#8A6000</Color>
+    <!-- rgba(255,200,0,.14) dark / .22 light; border rgba(255,200,0,.36) / rgba(180,128,0,.40) -->
+    <Color x:Key="BmbAccentSoft">#24FFC800</Color>
+    <Color x:Key="BmbAccentSoftLight">#38FFC800</Color>
+    <Color x:Key="BmbAccentBorder">#5CFFC800</Color>
+    <Color x:Key="BmbAccentBorderLight">#66B48000</Color>
+
+    <!-- Text -->
+    <Color x:Key="BmbText">#F3F5F8</Color>
+    <Color x:Key="BmbTextLight">#14171F</Color>
+    <Color x:Key="BmbTextSecondary">#A1A8B8</Color>
+    <Color x:Key="BmbTextSecondaryLight">#485063</Color>
+    <Color x:Key="BmbTextMuted">#848C9E</Color>
+    <Color x:Key="BmbTextMutedLight">#61697D</Color>
+
+    <!-- Error -->
+    <Color x:Key="BmbError">#FF7575</Color>
+    <Color x:Key="BmbErrorLight">#C62828</Color>
+    <Color x:Key="BmbErrorBackground">#1FFF7575</Color>
+    <Color x:Key="BmbErrorBackgroundLight">#14C62828</Color>
+    <Color x:Key="BmbErrorBorder">#61FF7575</Color>
+    <Color x:Key="BmbErrorBorderLight">#4DC62828</Color>
+
+    <!-- Success -->
+    <Color x:Key="BmbSuccess">#3DD68C</Color>
+    <Color x:Key="BmbSuccessLight">#0F7B47</Color>
+    <Color x:Key="BmbSuccessBackground">#1F3DD68C</Color>
+    <Color x:Key="BmbSuccessBackgroundLight">#1A0F7B47</Color>
+    <Color x:Key="BmbSuccessBorder">#573DD68C</Color>
+    <Color x:Key="BmbSuccessBorderLight">#4D0F7B47</Color>
+
+    <!-- Warning -->
+    <Color x:Key="BmbWarning">#FFB84D</Color>
+    <Color x:Key="BmbWarningLight">#9A5B00</Color>
+    <Color x:Key="BmbWarningBackground">#1FFFB84D</Color>
+    <Color x:Key="BmbWarningBackgroundLight">#1FD98200</Color>
+    <Color x:Key="BmbWarningBorder">#5CFFB84D</Color>
+    <Color x:Key="BmbWarningBorderLight">#59D98200</Color>
+
+    <!-- Modal scrim: rgba(6,8,12,.72) dark, rgba(15,18,26,.45) light -->
+    <Color x:Key="BmbScrim">#B806080C</Color>
+    <Color x:Key="BmbScrimLight">#730F121A</Color>
+
+    <!-- The styles and pages pick a pair with {AppThemeBinding Light=...Light, Dark=...};
+         the code-behind picks the same pair through ThemeManager.Token. -->
+
+    <!-- Geometry of the mock-up (CSS px = MAUI device-independent units) -->
+    <x:Double x:Key="RadiusSmall">12</x:Double>
+    <x:Double x:Key="RadiusMedium">16</x:Double>
+    <x:Double x:Key="RadiusLarge">24</x:Double>
+    <x:Double x:Key="RadiusSheet">26</x:Double>
+    <x:Double x:Key="RadiusPill">999</x:Double>
+
+    <!-- Font aliases registered in MauiProgram (Resources/Fonts, SIL OFL).
+         Plus Jakarta Sans carries no Cyrillic, so it is only used for the Latin brand name;
+         every localized title uses Noto Sans, exactly what the mock-up's font stack falls back to. -->
+    <x:String x:Key="FontBody">NotoSans</x:String>
+    <x:String x:Key="FontBodyMedium">NotoSansMedium</x:String>
+    <x:String x:Key="FontBodySemibold">NotoSansSemibold</x:String>
+    <x:String x:Key="FontBodyBold">NotoSansBold</x:String>
+    <x:String x:Key="FontDisplaySemibold">JakartaSemibold</x:String>
+    <x:String x:Key="FontDisplayBold">JakartaBold</x:String>
+
+</ResourceDictionary>

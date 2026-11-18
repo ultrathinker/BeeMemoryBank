@@ -20,9 +20,10 @@ namespace BeeMemoryBank.Integration.Tests;
 /// that is not a superadmin, an agent, or a wrong master password are each refused here — and a
 /// refused request changes nothing.
 ///
-/// The three modes: <c>standalone</c> (this node only, becomes a new node), <c>keep-identity</c> (the
-/// snapshot replaces the database as it is; what an older client asked for with
-/// <c>standaloneMode: false</c>), and <c>network</c> (its own route).
+/// The modes: <c>standalone</c> (this node only, becomes a new node) and <c>network</c> (its own route).
+/// <c>keep-identity</c> (the snapshot replaced the database as it was, identity key included; what an
+/// older client asked for with <c>standaloneMode: false</c>) is refused since release 2.12 (plan R2):
+/// it would put back an identity key this node may have retired.
 /// </summary>
 [Collection(HeavyOperationCollection.Name)]
 public class SnapshotRestoreModeTests : IAsyncLifetime
@@ -61,6 +62,7 @@ public class SnapshotRestoreModeTests : IAsyncLifetime
     [Theory]
     [InlineData("network", "restore-network")]   // served by its own route, with its own checks
     [InlineData("everything", "Unknown restore mode")]
+    [InlineData("keep-identity", "no longer offered")]   // release 2.12, plan R2: it would bring back a retired identity key
     [InlineData("STANDALONE ", null)]            // case and padding are forgiven, not a refusal
     public async Task TheModeOfARestoreRequest_IsCheckedByTheServer(string mode, string? refusalMentions)
     {
@@ -83,13 +85,13 @@ public class SnapshotRestoreModeTests : IAsyncLifetime
         refusal.Should().ContainSingle("the refusal is on the record").Which.Details.Should().Contain($"Mode={mode}");
     }
 
-    /// <summary>Review revsrv F10: the restore extracts the whole backup database (key slots, password hashes) while it works.</summary>
+    /// <summary>The restore extracts the whole backup database (key slots, password hashes) while it works.</summary>
     [Fact]
     public async Task ARestore_WorksInTheDataFoldersStagingFolder_NotTheOsTempFolder_AndLeavesNothingThere()
     {
         var fileName = await CreateSnapshotAsync();
 
-        var resp = await PostRestoreAsync(_client, new { fileName, masterPassword = Password, createBackupFirst = false, mode = "keep-identity" });
+        var resp = await PostRestoreAsync(_client, new { fileName, masterPassword = Password, createBackupFirst = false, mode = "standalone" });
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
         var staging = BeeMemoryBank.Core.IO.SnapshotStaging.DirIn(_node.DataPath);
@@ -134,20 +136,29 @@ public class SnapshotRestoreModeTests : IAsyncLifetime
         details.Should().ContainSingle().Which.Should().Contain("Mode=standalone").And.Contain("backupFirst=True");
     }
 
-    [Fact]
-    public async Task AnOlderClientThatSaysStandaloneFalse_GetsTheKeepIdentityMode_AndKeepsItsIdentity()
+    /// <summary>
+    /// Release 2.12, plan R2: an older client that says <c>standaloneMode: false</c> (or names no mode at all) asked for the
+    /// keep-identity restore, which is gone. It is refused before the password is looked at, and nothing changes.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnOlderClientThatSaysStandaloneFalse_OrNamesNoMode_IsRefused_AndKeepsItsIdentity(bool saysStandaloneFalse)
     {
         var fileName = await CreateSnapshotAsync();
         var before = await IdentityAsync();
 
-        var resp = await PostRestoreAsync(_client, new { fileName, masterPassword = Password, createBackupFirst = false, standaloneMode = false });
+        var resp = saysStandaloneFalse
+            ? await PostRestoreAsync(_client, new { fileName, masterPassword = Password, createBackupFirst = false, standaloneMode = false })
+            : await PostRestoreAsync(_client, new { fileName, masterPassword = Password, createBackupFirst = false });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("mode").GetString().Should().Be("keep-identity");
-        body.GetProperty("newNodeId").ValueKind.Should().Be(JsonValueKind.Null);
-        (await IdentityAsync()).NodeId.Should().Be(before.NodeId, "this mode restores the snapshot's own identity, which is this node's");
-        (await AuditAsync()).Should().Contain(a => a.Action == "snapshot_restored" && a.Details.Contains("Mode=keep-identity"));
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        var text = await resp.Content.ReadAsStringAsync();
+        text.Should().Contain("no longer offered").And.Contain("standalone");
+        (await IdentityAsync()).NodeId.Should().Be(before.NodeId, "a refused request changes nothing");
+        _node.Services.GetRequiredService<SessionService>().IsUnlocked.Should().BeTrue();
+        (await AuditAsync()).Should().Contain(a => a.Action == "snapshot_restore_refused" && a.Details.Contains("no longer offered"));
+        (await AuditAsync()).Should().NotContain(a => a.Action == "snapshot_restored");
     }
 
     [Fact]

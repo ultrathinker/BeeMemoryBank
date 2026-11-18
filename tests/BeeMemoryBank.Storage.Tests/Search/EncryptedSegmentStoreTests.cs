@@ -9,7 +9,7 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Tests.Search;
 
 /// <summary>
-/// Covers WP-09's Definition of Done: byte-for-byte roundtrip through a real SegmentReader, all
+/// Covers the acceptance criteria: byte-for-byte roundtrip through a real SegmentReader, all
 /// five documented "load should signal rebuild-needed, not throw" cases, and the tamper/block-swap
 /// tests proving the per-block AAD binding is doing real cryptographic work (not just present in
 /// code but inert).
@@ -364,7 +364,7 @@ public class EncryptedSegmentStoreTests : IAsyncLifetime
         aad0.Should().NotEqual(aadOtherSegment);
     }
 
-    // ── WP-11: SegmentManifestRepository.GetAllManifestsAsync/DeleteAllManifestsAsync ──
+    // ── SegmentManifestRepository.GetAllManifestsAsync/DeleteAllManifestsAsync ──
 
     [Fact]
     public async Task GetAllManifestsAsync_NoSegmentsStored_ReturnsEmpty()

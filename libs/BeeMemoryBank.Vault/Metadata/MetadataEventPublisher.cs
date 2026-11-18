@@ -59,6 +59,12 @@ public sealed class MetadataEventPublisher(
 
     private async Task<SyncEvent> PublishAsync(NodeIdentity identity, string eventType, object payload)
     {
+        // An own event is signed and logged inside the event-write gate, so an identity re-key (which quiesces it) never finds one signed by the old
+        // key between its list of the node's own events and its commit.
+        using var writeGate = await EventWriteGate.Instance.EnterAsync();
+        using var ownerFlow = EventWriteGate.EnterOwnerFlow();
+        identity = await nodeRepo.GetAsync() ?? identity;   // the key of this moment, read inside the gate
+
         var payloadJson = JsonSerializer.Serialize(payload, payload.GetType());
         var evt = new SyncEvent
         {

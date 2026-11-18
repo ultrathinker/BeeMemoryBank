@@ -541,7 +541,7 @@ public sealed class BlindDeviceSchedulerTests
         scheduler.IsRunning.Should().BeFalse();
     }
 
-    // ---- one account that hangs, and a stop that takes long (fix round 2) -----------------------------------------------------------------
+    // ---- one account that hangs, and a stop that takes long -----------------------------------------------------------------
 
     private static readonly BlindDeviceSchedulerOptions Quick = new()
     {

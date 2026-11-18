@@ -22,7 +22,7 @@ namespace BeeMemoryBank.Api.Services;
 /// State machine:
 ///   Idle → Checking → UpdateAvailable(v) → Downloading(pct) → ReadyToApply → Applying → (Completed | Failed)
 ///
-/// Key design decisions (per task brief):
+/// Key design decisions:
 ///   - Manifest signature is verified against two hardcoded Ed25519 public keys (rotation support).
 ///   - Artifact download is abstracted behind IUpdateArtifactSource (no real HTTP in this task).
 ///   - Post-apply health check is abstracted behind IUpdateHealthCheck (no real process restart).
@@ -529,7 +529,7 @@ public sealed class UpdateService
 
     /// <summary>
     /// The path where the pre-update backup/snapshot was placed (null until Apply runs).
-    /// Exposed for test assertions (DoD: confirm backup is present and points at real snapshot).
+    /// Exposed for test assertions (confirm backup is present and points at real snapshot).
     /// </summary>
     public string? PreUpdateSnapshotPath => _preUpdateSnapshotPath;
 

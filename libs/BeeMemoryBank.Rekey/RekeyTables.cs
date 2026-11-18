@@ -52,9 +52,14 @@ public static class RekeyTables
         // may join, and a re-keyed node revokes every peer; a redeemed one also holds the device's backup key sealed under the OLD master key, which nothing
         // can open any more (and the D1 check would find it). The owner invites again.
         (TableFate.Cleared, ["tbl_blind_invite"]),
-        // PeerRevokeStep (L): what the peers announced about themselves and this node's ways to reach them (migration 044, LAN sync). Every peer is
-        // revoked by a re-key; nothing in them is sealed, and nothing of it holds for the re-keyed node.
-        (TableFate.Cleared, ["tbl_peer_endpoint", "tbl_peer_channel"]),
+        // PeerRevokeStep (L): what the peers announced about themselves and this node's ways to reach them (migration 044, LAN sync), and
+        // the self-announced runtime state table (migration 047). Every peer is revoked by a re-key; stale DEK fingerprints or revoked peer
+        // state must not survive a re-key.
+        (TableFate.Cleared, ["tbl_peer_endpoint", "tbl_peer_channel", "tbl_node_state"]),
+        // PeerRevokeStep (L): the retired identity keys of the nodes (migration 049, release 2.12 plan WS-D) and the identity conflicts this node saw. They
+        // verify old events and packages of peers that are all revoked now, with the event log they belonged to cleared; the re-keyed node starts alone.
+        // The node's own rows stay: its identity seed is kept, and its next rotation continues the counter its old peers hold.
+        (TableFate.Cleared, ["tbl_node_key_history", "tbl_node_key_conflict"]),
         // KeyMaterialStep (L): the sentinel and identity key, the owner's slot (others removed), agents' wrapped
         // DEKs, node data keys (retired-master-dek:* removed; chat re-wrapped by ChatRekeyStep), rotation chain columns.
         (TableFate.KeyMaterial,
@@ -71,11 +76,18 @@ public static class RekeyTables
             "tbl_folder", "tbl_article", "tbl_concept_tag", "tbl_article_concept_tag", "tbl_concept_tag_edge",
             "tbl_tombstone",
             "tbl_user", "tbl_role", "tbl_role_folder_acl_entry", "tbl_folder_acl_entry",
+            // The removal of a superadmin (migration 051): closed processes and their per-node waits (a re-key is refused while one is open), and the
+            // tombstones of removed people, which must outlive every key change.
+            "tbl_offboarding", "tbl_offboarding_node", "tbl_removed_person",
             "tbl_favorite", "tbl_remote_api_token", "tbl_remote_subscription",
             "tbl_audit_log", "tbl_hard_delete_audit", "tbl_compaction_log",
             "tbl_whitelist", "tbl_blind_state", "tbl_blind_restore_code",
-            // The activation record (migration 037): ids only; the vault stays activated after a re-key.
-            "tbl_metadata_activation",
+            // The activation record (migration 037) and accounts-home designation (migration 050): plaintext settings kept across offline re-key.
+            "tbl_metadata_activation", "tbl_accounts_home",
+            // The shared-doors state (migration 050): its LAST ISSUED list version is a counter, not key material, and stays: node
+            // ids survive a re-key, so a re-keyed accounts node that started its lists at 1 again would see every shared node drop them as old, with
+            // no error anywhere. What it received and applied from peers goes with the peers (PeerRevokeStep resets those columns).
+            "tbl_shared_doors_state",
             // The full-text index of titles, paths and tag names (plaintext columns) and its shadow tables.
             "fts_article", "fts_article_config", "fts_article_data", "fts_article_docsize", "fts_article_idx",
             "fts_folder", "fts_folder_config", "fts_folder_data", "fts_folder_docsize", "fts_folder_idx",

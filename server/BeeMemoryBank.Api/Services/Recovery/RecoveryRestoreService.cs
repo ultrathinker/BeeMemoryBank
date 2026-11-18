@@ -159,7 +159,7 @@ public partial class RecoveryRestoreService(
                 throw new InvalidOperationException("This node is already initialized; restore needs a fresh node.");
 
             // A restore ends encrypted or not at all, and the marker that makes a cut restore safe is written before the first write: a host composed without
-            // the sealing services (no marker, nothing to encrypt with) refuses here, before any key is recovered or anything is written (BMB-306 fix round 2).
+            // the sealing services (no marker, nothing to encrypt with) refuses here, before any key is recovered or anything is written (BMB-306).
             if (sp.GetService<BeeMemoryBank.Vault.Sealed.ISealIntents>() is not { } intents
                 || sp.GetService<BeeMemoryBank.Vault.Sealed.FreshNodeSealing>() is null)
                 throw new RestoreRefusedException(RestoreRefusedException.CannotEncryptMessage);
@@ -202,9 +202,9 @@ public partial class RecoveryRestoreService(
             // refused. From here the bootstrap writes, so it raises the marker that says "this node
             // is halfway through a restore": without it, a crash in the middle of the bootstrap
             // leaves an identity row that IsInitializedAsync reads as a finished node, and the
-            // operator's next attempt is refused with "restore needs a fresh node" (review
-            // release-a2 batch 2; the marker is lowered with the last write of the restore,
-            // see step 8).
+            // operator's next attempt is refused with "restore needs a fresh node".
+            // The marker is lowered with the last write of the restore,
+            // see step 8.
             await sp.GetRequiredService<RestoreBootstrapMarker>().SetAsync(ct);
 
             // 2. The replicated state.
@@ -216,7 +216,7 @@ public partial class RecoveryRestoreService(
             // and IsInitializedAsync then reports the node as NOT initialized, which is exactly the
             // instruction the operator needs: restore again. So the retry has to be re-entrant, and
             // the two things it must never do are add a SECOND identity row and insert the admin a
-            // second time (review release-a2 spec#1, agy#3, sec#4):
+            // second time:
             //
             //   * tbl_node_identity is read with an unordered LIMIT 1 by GetAsync AND by
             //     StoreSentinelAsync, so two rows make "this node's identity" ambiguous — the id
@@ -294,13 +294,10 @@ public partial class RecoveryRestoreService(
             MasterKeyStore slot;
             try
             {
-                var (encDek, iv) = MasterKeyManager.WrapMasterDek(keys.Current, kek);
-                slot = new MasterKeyStore
-                {
-                    SlotType = "user", EncryptedMasterDek = encDek, IV = iv, Salt = salt,
-                    ArgonMemory = CryptoConstants.DefaultArgonMemory, ArgonIterations = CryptoConstants.DefaultArgonIterations,
-                    ArgonParallelism = CryptoConstants.DefaultArgonParallelism, CreatedAt = existingSlot?.CreatedAt ?? now
-                };
+                // A sealed (v2) door, as every new door (ADR 0012).
+                slot = Doors.NewPasswordSlot(KeySlotTypes.User, kek, salt, CryptoConstants.DefaultArgonMemory,
+                    CryptoConstants.DefaultArgonIterations, CryptoConstants.DefaultArgonParallelism, keys.Current);
+                slot.CreatedAt = existingSlot?.CreatedAt ?? now;
             }
             finally
             {
@@ -311,7 +308,7 @@ public partial class RecoveryRestoreService(
             if (existingSlot is not null)
             {
                 slot.SlotId = existingSlot.SlotId;
-                await keySlotRepo.UpdateSlotKeyAsync(existingSlot.SlotId, slot.EncryptedMasterDek, slot.IV);
+                await keySlotRepo.ReplaceDoorAsync(slot, expectedEncryptedMasterDek: null);
             }
             else
             {
@@ -352,7 +349,7 @@ public partial class RecoveryRestoreService(
                 // The last writes of the bootstrap, together. The marker stays up past them: it is lowered only
                 // when the whole restore is done (step 8) - the peers, the clock floor and this device's box
                 // included - so that a cut anywhere before that is a restore to run again, never a node that
-                // reports itself finished over a half-done one (review release-a2 A2-a).
+                // reports itself finished over a half-done one.
                 using var tx = conn.BeginTransaction();
                 await conn.ExecuteAsync(
                     "INSERT OR IGNORE INTO tbl_migration_marker (key, value, set_at) VALUES ('legacy_password_unified', '1', @T)",
@@ -409,7 +406,17 @@ public partial class RecoveryRestoreService(
 
             // 7. This device's box, like every other slot change - before the marker comes down, so a restore cut
             // before the box is out is run again (the box is published again; the newer one supersedes).
-            await sp.GetRequiredService<IRecoveryBoxPublisher>().PublishDeviceBoxAsync(slot, keys.Current);
+            // The password is in hand: while a peer cannot open a v2 box (2.12, door-box-v1), the old shape goes out from its KEK
+            // (derived again here rather than kept in memory since the slot was written).
+            var boxKek = KeyDerivation.DeriveKek(who.Password, slot.Salt!);
+            try
+            {
+                await sp.GetRequiredService<IRecoveryBoxPublisher>().PublishDeviceBoxAsync(slot, keys.Current, boxKek);
+            }
+            finally
+            {
+                Array.Clear(boxKek);
+            }
             await StepAsync("before-marker-lowered");
 
             // 8. Done: the initial sync marked and the marker lowered, together.
@@ -477,7 +484,7 @@ public partial class RecoveryRestoreService(
     /// returns, and its stored seed really signs as the returned public key.
     ///
     /// <para>The reviewers' failure mode was exactly the gap between those three facts: a retry
-    /// could leave two rows, report one id and have the other one sign (release-a2 spec#1), and a
+    /// could leave two rows, report one id and have the other one sign, and a
     /// node whose returned identity is not its signing identity cannot pair, claim a blind node or
     /// authenticate anywhere — while the restore says it succeeded. This turns that into a failed
     /// restore instead.</para>

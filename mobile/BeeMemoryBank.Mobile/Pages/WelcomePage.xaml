@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- The mock-up's Welcome screen, first thing on a fresh install. It shows the connect path only:
+     "create a new vault" (a new vault plus a recovery key) is not something the phone does today, so
+     there is no create button here (a deliberate decision is needed first). -->
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
+             x:Class="BeeMemoryBank.Mobile.Pages.WelcomePage"
+             Title="Welcome"
+             Shell.FlyoutBehavior="Disabled"
+             Shell.NavBarIsVisible="False">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="32" Spacing="20"
+                             MaximumWidthRequest="400"
+                             HorizontalOptions="Center" VerticalOptions="Center">
+
+            <Label Text="{loc:Translate AppTitle}"
+                   Style="{StaticResource BrandTitle}"
+                   HorizontalOptions="Center" />
+
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="14">
+                    <Label Text="{loc:Translate WelcomeTitle}" Style="{StaticResource CardTitle}"
+                           HorizontalTextAlignment="Center" />
+                    <Label Text="{loc:Translate WelcomeDesc}" Style="{StaticResource DialogBody}"
+                           HorizontalTextAlignment="Center" />
+                    <Button x:Name="ConnectButton" AutomationId="WelcomeConnectButton"
+                            Text="{loc:Translate WelcomeConnect}" Style="{StaticResource PrimaryButton}"
+                            Clicked="OnConnectClicked" />
+                </VerticalStackLayout>
+            </Border>
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

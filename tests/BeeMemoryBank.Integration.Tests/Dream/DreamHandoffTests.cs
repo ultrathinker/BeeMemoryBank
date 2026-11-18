@@ -109,7 +109,7 @@ public class DreamHandoffTests
             "an_edited_text_whose_stream_breaks_is_kept_in_the_warning_and_not_linked_again",
             // the review: a closed advice seen by the load gets the notice; the composer cap is only for the task
             "an_advice_closed_between_the_two_answers_of_the_load_gets_the_notice_not_a_draft", "the_composer_is_capped_only_while_it_holds_the_task",
-            // the re-review: which answers that are not a stream are refusals
+            // which answers that are not a stream are refusals
             "an_error_answer_the_node_gives_before_saving_is_a_refusal", "a_non_stream_answer_with_a_success_status_is_not_a_refusal",
             "the_sign_in_redirect_is_a_refusal", "a_bare_502_of_the_passthrough_is_not_a_refusal", "a_500_of_a_turn_with_images_is_not_a_refusal_and_one_without_is",
         })

@@ -40,6 +40,34 @@ public static class RecoveryBoxKdf
     private const int WrappedV1Size = WrappedV0Size + 1;
     private const byte WrappedV1 = 0x01;
 
+    /// <summary>
+    /// A device box of a sealed (v2) door (ADR 0012): <c>0x02 || door_pk(32) || box(93)</c>, 126 bytes, beside the slot's unchanged salt and
+    /// preset. The password derives the KEK, the KEK the door key, and the door key opens the box; only a device box has this shape.
+    /// </summary>
+    public const int WrappedDoorV2Size = 1 + DoorBox.PublicKeySize + DoorBox.BoxSize;
+    public const byte WrappedDoorV2 = 0x02;
+
+    /// <summary>The door kind a v2 device box is sealed for: the <c>user</c> slot it is a copy of.</summary>
+    public const string DeviceDoorKind = "user";
+
+    /// <summary>True when <paramref name="wrapped"/> has the shape of a v2 device box (outer and inner version bytes, length).</summary>
+    public static bool IsDoorV2(byte[]? wrapped) =>
+        wrapped is { Length: WrappedDoorV2Size } && wrapped[0] == WrappedDoorV2 && DoorBox.IsWellFormed(wrapped.AsSpan(1 + DoorBox.PublicKeySize));
+
+    /// <summary>The <c>wrapped</c> of a v2 device box: the door's public key and its box.</summary>
+    public static byte[] DoorV2Wrapped(byte[] doorPublicKey, byte[] box)
+    {
+        ArgumentNullException.ThrowIfNull(doorPublicKey);
+        ArgumentNullException.ThrowIfNull(box);
+        if (doorPublicKey.Length != DoorBox.PublicKeySize || !DoorBox.IsWellFormed(box))
+            throw new ArgumentException("Not a v2 door.");
+        var wrapped = new byte[WrappedDoorV2Size];
+        wrapped[0] = WrappedDoorV2;
+        doorPublicKey.CopyTo(wrapped, 1);
+        box.CopyTo(wrapped, 1 + DoorBox.PublicKeySize);
+        return wrapped;
+    }
+
     private static readonly Dictionary<string, RecoveryBoxPreset> Presets = new(StringComparer.Ordinal)
     {
         [Device64] = new(Device64, CryptoConstants.DefaultArgonMemory, CryptoConstants.DefaultArgonIterations, CryptoConstants.DefaultArgonParallelism),
@@ -80,10 +108,12 @@ public static class RecoveryBoxKdf
     /// <summary>
     /// <see cref="IsWellFormed(byte[], byte[], byte[])"/> for a box of <paramref name="kind"/>. A strong box
     /// is only ever written by this code, always in the versioned format; only a device box — a byte
-    /// copy of a key slot — may still carry the legacy unversioned wrap.
+    /// copy of a key slot — may still carry the legacy unversioned wrap, and only a device box may be the
+    /// copy of a sealed (v2) door (<see cref="IsDoorV2"/>).
     /// </summary>
     public static bool IsWellFormed(string? kind, byte[]? salt, byte[]? wrapped, byte[]? iv) =>
-        IsWellFormed(salt, wrapped, iv) && (kind != KindStrong || wrapped!.Length == WrappedV1Size);
+        (IsWellFormed(salt, wrapped, iv) && (kind != KindStrong || wrapped!.Length == WrappedV1Size))
+        || (kind == KindDevice && salt is { Length: SaltSize } && iv is { Length: IvSize } && IsDoorV2(wrapped));
 
     /// <summary>
     /// The preset a key slot's own parameters correspond to, or null when they match none — such a

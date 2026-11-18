@@ -52,12 +52,12 @@ Throwaway .NET-приложение `BmbProbeApp` (win-x64, self-contained), у�
 «удалить только известные файлы пакета». `myrootmarker.txt`, переживший update (P1), полностью
 уничтожен вместе со всей папкой при uninstall.
 
-**Вывод — подтверждает решение §2.1 в пользу FABLE:** сиблинг-подход CODEX
-(`%LOCALAPPDATA%\BeeMemoryBank\data` рядом с `current\`) был бы безопасен при ОБНОВЛЕНИИ (P1),
-но гарантированно уничтожен при ДЕИНСТАЛЛЯЦИИ (P2) — то есть нарушал бы прямое требование
-самого СУПЕРПЛАНа «деинсталляция: data-каталог остаётся». Только полностью отдельный корень
-(`%LOCALAPPDATA%\BeeMemoryBankData`, вне `%LOCALAPPDATA%\BeeMemoryBank`) безопасен в обоих
-сценариях одновременно.
+**Conclusion — confirms the §2.1 decision:** the sibling approach
+(`%LOCALAPPDATA%\BeeMemoryBank\data` next to `current\`) would be safe on UPDATE (P1),
+but is guaranteed destroyed on UNINSTALL (P2) — violating the direct requirement
+of the plan itself, 'uninstall: the data directory stays'. Only a fully separate root
+(`%LOCALAPPDATA%\BeeMemoryBankData`, outside `%LOCALAPPDATA%\BeeMemoryBank`) is safe in both
+scenarios at once.
 
 ## P3 — проба repair / установки поверх
 
@@ -135,5 +135,5 @@ Throwaway .NET-приложение `BmbProbeApp` (win-x64, self-contained), у�
 - **Исправлено:** добавлена проверка `_isStopping` внутри цикла (`NodeOrchestrator.cs`, `WaitForAllReadyOrFailureAsync`) — если остановка уже начата, цикл бросает `OperationCanceledException` вместо бесконечного ожидания. В `Program.cs`: внешний `catch` теперь распознаёт этот случай и возвращает результат из `tcs` (корректный exit code штатной остановки), а не считает это ошибкой запуска (`return 3`).
 - **Дополнительно:** `Environment.Exit(exitCode)` в конце `Main` как защитный пояс-и-подтяжки (наблюдалось, что возврат из `Main` не всегда надёжно завершает сам OS-процесс).
 - **Результат после первого фикса:** резко возросшая надёжность (было near-0% при повторных прогонах подряд → стало ~80-90%).
-- **Второй баг гонки (найден узким Codex-ревью Этапов 0+1, тоже исправлен):** `StopAsync()` отменял `_lifecycleCts` **ДО** закрытия stdin детей — child-lifecycle-петля (`RunChildLifecycleAsync`'s `await exitTask` = `WaitForExitAsync(process, stoppingToken)`) видела отмену токена и **немедленно хардкиллила** процесс, опережая собственную graceful-последовality `StopAsync`'а (закрыть stdin → подождать 5с → kill-фолбэк). Именно эта гонка почти наверняка была источником оставшейся ~1-из-5-8 нестабильности. **Исправлено:** `cts.Cancel()` перенесён на конец `StopAsync()` — ПОСЛЕ `await Task.WhenAll(stopTasks)` (после того как дети уже гарантированно остановлены штатно или через kill-фолбэк). Живая проверка: **10/10** повторных прогонов `E2E_GracefulStop_ViaStdinLifeline` подряд, стабильно ~600-900мс каждый — race полностью устранена.
+- **Second race bug (found by a focused review of stages 0+1, also fixed):** `StopAsync()` cancelled `_lifecycleCts` **BEFORE** closing the children's stdin — the child-lifecycle loop (`RunChildLifecycleAsync`'s `await exitTask` = `WaitForExitAsync(process, stoppingToken)`) saw the token cancellation and **hard-killed** the process immediately, beating `StopAsync`'s own graceful sequence (close stdin → wait 5 s → kill fallback). This race was almost certainly the source of the remaining ~1-in-5-to-8 instability. **Fixed:** `cts.Cancel()` moved to the end of `StopAsync()` — AFTER `await Task.WhenAll(stopTasks)` (after the children are already guaranteed stopped, gracefully or via the kill fallback). Live check: **10/10** consecutive runs of `E2E_GracefulStop_ViaStdinLifeline`, steadily ~600-900 ms each — the race is fully gone.
 - **Важно — что этот фикс НЕ покрывает:** реальный путь выхода Desktop-оболочки (`MainWindow.axaml.cs`, `StopNodeProcess`) до сих пор запускает `bmbd` с `RedirectStandardInput = false` и останавливает его голым `Process.Kill(entireProcessTree: true)` — stdin-lifeline вообще не используется на этом пути. Это **не регрессия и не пробел Этапов 0/1** — интеграция graceful-stop в реальный Desktop-жизненный цикл явно запланирована как часть Этапа 4 (`_СУПЕРПЛАН-МУЛЬТИАККАУНТ.md` §4.3, `NodeLifecycleService`: «Graceful-останов вместо голого Kill… Это чинит и сегодняшний Exit»). До Этапа 4 реальный UX выхода из трея остаётся хардкилльным, как и был.

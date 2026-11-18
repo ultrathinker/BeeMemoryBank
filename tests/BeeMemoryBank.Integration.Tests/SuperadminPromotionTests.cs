@@ -115,6 +115,6 @@ public class SuperadminPromotionTests : IAsyncLifetime
 
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("error").GetString().Should().Contain("last superadmin");
+        body.GetProperty("error").GetString().Should().Contain("Removing a superadmin is a process", "a superadmin loses rights only through the removal process (2.12), and never without the administrator's password");
     }
 }

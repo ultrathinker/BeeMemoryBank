@@ -5,7 +5,7 @@ using BeeMemoryBank.Core.Models;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Fix round 1, MAJOR-3 to MAJOR-6. Every parse of an invitation text has an owner that wipes the secret on every way out; a removal of an account ends what the account asks of the hub and
+/// Every parse of an invitation text has an owner that wipes the secret on every way out; a removal of an account ends what the account asks of the hub and
 /// lets go of its secret BEFORE anything of it is cleared (a pending 503 retry, a redeem in flight, an add that is still setting it up); the whole add and every ask of the hub are operations
 /// of the host, so that a disposal waits for them (and cancels them) before it closes anything under them; and the account is never made again behind its removal.
 /// </summary>
@@ -294,7 +294,7 @@ public sealed class BlindInvitationGateTests
         NothingOfTheAccountIsLeft(rig, host, entry);
     }
 
-    // ---- a removal whose first registry write fails (review D2) ------------------------------------------------------------------------------
+    // ---- a removal whose first registry write fails ------------------------------------------------------------------------------
 
     [Fact]
     public async Task ARemovalWhoseMarkFailsOnce_IsTriedAgain_AndTheAddItStoppedLeavesNothingBehind()

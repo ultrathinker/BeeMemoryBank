@@ -115,12 +115,18 @@ public partial class SnapshotService
     }
 
     /// <summary>
-    /// Replaces this node's database with the snapshot's. <paramref name="standaloneMode"/> makes this a new node (new id, new key
-    /// pair, no peers); <paramref name="masterPassword"/> is the password the restore was confirmed with, used to find the master
-    /// key of the snapshot's database when the session's own key does not open it.
+    /// Replaces this node's database with the snapshot's, and this node becomes a new node (new id, new key pair, no peers);
+    /// <paramref name="masterPassword"/> is the password the restore was confirmed with, used to find the master key of the
+    /// snapshot's database when the session's own key does not open it.
+    /// <para>
+    /// Release 2.12 (plan R2): there is no longer a restore that puts the snapshot's database in place as it is, identity
+    /// included. That would bring back an identity key this node may have retired (a re-key), and with it a key somebody who
+    /// kept an old backup can sign with. A restore that keeps this node's identity is the network restore
+    /// (<see cref="RestoreForJoinAsync"/>), which keeps the CURRENT key and merges the key history.
+    /// </para>
     /// </summary>
     public async Task<SnapshotRestoreOutcome> RestoreAsync(
-        string fileName, bool standaloneMode = false, string? masterPassword = null, CancellationToken ct = default)
+        string fileName, string? masterPassword = null, CancellationToken ct = default)
     {
         var safeName = Path.GetFileName(fileName);
         if (!safeName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase))
@@ -138,7 +144,7 @@ public partial class SnapshotService
         // poisoned $TMPDIR) cannot leak the semaphore.
         await HeavyOperationLock.Instance.WaitAsync();
         string? tempDir = null;
-        var outcome = new SnapshotRestoreOutcome(standaloneMode, null, null);
+        var outcome = new SnapshotRestoreOutcome(true, null, null);
         try
         {
             // In the data folder and owner-only, not the OS temp folder: the extracted database is the vault in clear.
@@ -179,239 +185,184 @@ public partial class SnapshotService
             // node starts, so it is refused here, before anything is replaced.
             if (DatabaseRefusalOf(extractedDb) is { } databaseRefusal) throw databaseRefusal;
 
-            if (standaloneMode)
+            // Atomic standalone restore: do everything (copy + identity regen + wipe) in a
+            // staging file first, then atomic rename. If the process crashes anywhere before
+            // the rename, the live DB is untouched and the staging file is cleaned up by
+            // the startup recovery sweep (see Program.cs). This closes the identity-injection
+            // window where an admin-triggered crash could leave us running with the snapshot
+            // originator's Ed25519 private key.
+            var stagingPath = dbPath + ".standalone-staging";
+            if (File.Exists(stagingPath)) File.Delete(stagingPath);
+            File.Copy(extractedDb, stagingPath, overwrite: true);
+
+            var newNodeId = Guid.NewGuid();
+            var (pubKey, privKey) = Ed25519Signer.GenerateKeyPair();
+
+            // The new private key is stored the way initialization stores it: wrapped under the
+            // master DEK of THIS database (the one its key slots will hand out at the next
+            // unlock), with the new node id as AAD. A bare seed in a row that says "wrapped"
+            // leaves the node unable to sign — sync authentication, pairing, every signed event —
+            // while the restore itself reports success. Sealed before the write transaction
+            // below opens, because it reads the staged file through its own connection.
+            byte[] wrappedPrivKey, privKeyIv;
+            int privKeyVersion;
+            try
             {
-                // Atomic standalone restore: do everything (copy + identity regen + wipe) in a
-                // staging file first, then atomic rename. If the process crashes anywhere before
-                // the rename, the live DB is untouched and the staging file is cleaned up by
-                // the startup recovery sweep (see Program.cs). This closes the identity-injection
-                // window where an admin-triggered crash could leave us running with the snapshot
-                // originator's Ed25519 private key.
-                var stagingPath = dbPath + ".standalone-staging";
-                if (File.Exists(stagingPath)) File.Delete(stagingPath);
-                File.Copy(extractedDb, stagingPath, overwrite: true);
+                if (_keys is null)
+                    throw new InvalidOperationException(
+                        "A standalone restore needs the node's key operations to store its new identity key.");
+                (wrappedPrivKey, privKeyIv, privKeyVersion) = _connFactory.IsSealed
+                    ? _keys.SealIdentitySeedForRestore(stagingPath, newNodeId, privKey, masterPassword, p => OpenStaged(p))
+                    : _keys.SealIdentitySeedForRestore(stagingPath, newNodeId, privKey, masterPassword);
+            }
+            catch
+            {
+                // Nothing has been replaced yet; do not leave a half-prepared copy of the
+                // snapshot's database next to the live one.
+                try { File.Delete(stagingPath); } catch { }
+                throw;
+            }
+            finally
+            {
+                Array.Clear(privKey);
+            }
 
-                var newNodeId = Guid.NewGuid();
-                var (pubKey, privKey) = Ed25519Signer.GenerateKeyPair();
-
-                // The new private key is stored the way initialization stores it: wrapped under the
-                // master DEK of THIS database (the one its key slots will hand out at the next
-                // unlock), with the new node id as AAD. A bare seed in a row that says "wrapped"
-                // leaves the node unable to sign — sync authentication, pairing, every signed event —
-                // while the restore itself reports success. Sealed before the write transaction
-                // below opens, because it reads the staged file through its own connection.
-                byte[] wrappedPrivKey, privKeyIv;
-                int privKeyVersion;
+            // Not pooled — same reason as FilterSecretsFrom: the staging file is moved or
+            // deleted right after this block, and a pooled handle would keep it locked on
+            // Windows long after Dispose.
+            using (var stagingConn = OpenStaged(stagingPath))
+            {
+                using var tx = stagingConn.BeginTransaction();
                 try
                 {
-                    if (_keys is null)
-                        throw new InvalidOperationException(
-                            "A standalone restore needs the node's key operations to store its new identity key.");
-                    (wrappedPrivKey, privKeyIv, privKeyVersion) = _connFactory.IsSealed
-                        ? _keys.SealIdentitySeedForRestore(stagingPath, newNodeId, privKey, masterPassword, p => OpenStaged(p))
-                        : _keys.SealIdentitySeedForRestore(stagingPath, newNodeId, privKey, masterPassword);
-                }
+                    // One statement per table, skipping the ones this archive does not have.
+                    // The staging database carries the ARCHIVE's schema, not ours, and
+                    // migrations have not run on it yet — tbl_sync_quarantine arrived in
+                    // migration 013, so a pre-013 backup simply has no such table. A single
+                    // batched DELETE aborts the whole transaction on the first "no such
+                    // table" and would make every older backup unrestorable; the quarantine
+                    // wipe already carried its own try/catch for exactly this reason, and
+                    // every table in this list is subject to the same schema-age problem.
+                    RemoveServerAutoUnlockSlots(stagingConn, tx);
+                    foreach (var table in NetworkStateTablesToWipe)
+                    {
+                        if (!archiveTables.Contains(table)) continue;
+                        using var wipeCmd = stagingConn.CreateCommand();
+                        wipeCmd.Transaction = tx;
+                        wipeCmd.CommandText = $"DELETE FROM {table}";
+                        wipeCmd.ExecuteNonQuery();
+                    }
+
+                    using var identityCmd = stagingConn.CreateCommand();
+                    identityCmd.Transaction = tx;
+                    identityCmd.CommandText = @"
+                        UPDATE tbl_node_identity
+                        SET node_id = @newNodeId,
+                            ed25519_private_key = @newPrivKey,
+                            ed25519_private_key_iv = @newPrivKeyIv,
+                            ed25519_private_key_v = @newPrivKeyV,
+                            ed25519_public_key = @newPubKey";
+
+                    var p1 = identityCmd.CreateParameter();
+                    p1.ParameterName = "newNodeId";
+                    p1.Value = newNodeId.ToString();
+                    identityCmd.Parameters.Add(p1);
+
+                    var p2 = identityCmd.CreateParameter();
+                    p2.ParameterName = "newPrivKey";
+                    p2.Value = wrappedPrivKey;
+                    identityCmd.Parameters.Add(p2);
+
+                    var p3 = identityCmd.CreateParameter();
+                    p3.ParameterName = "newPubKey";
+                    p3.Value = pubKey;
+                    identityCmd.Parameters.Add(p3);
+
+                    var p4 = identityCmd.CreateParameter();
+                    p4.ParameterName = "newPrivKeyIv";
+                    p4.Value = privKeyIv;
+                    identityCmd.Parameters.Add(p4);
+
+                    var p5 = identityCmd.CreateParameter();
+                    p5.ParameterName = "newPrivKeyV";
+                    p5.Value = privKeyVersion;
+                    identityCmd.Parameters.Add(p5);
+
+                     identityCmd.ExecuteNonQuery();
+
+                     using var nameCmd = stagingConn.CreateCommand();
+                     nameCmd.Transaction = tx;
+                     nameCmd.CommandText = "SELECT display_name FROM tbl_node_identity LIMIT 1";
+                     outcome = outcome with { NewNodeId = newNodeId, NodeDisplayName = nameCmd.ExecuteScalar() as string };
+
+                     tx.Commit();
+                 }
                 catch
                 {
-                    // Nothing has been replaced yet; do not leave a half-prepared copy of the
-                    // snapshot's database next to the live one.
-                    try { File.Delete(stagingPath); } catch { }
+                    tx.Rollback();
                     throw;
                 }
-                finally
+            }
+
+            // Stage media files before DB swap
+            var mediaStagingDirR = Path.Combine(_dataPath, "media.staging");
+            if (Directory.Exists(mediaStagingDirR))
+            {
+                try { Directory.Delete(mediaStagingDirR, true); } catch { }
+            }
+            Directory.CreateDirectory(mediaStagingDirR);
+            var extractedMediaStaging = Path.Combine(tempDir, "media");
+            if (Directory.Exists(extractedMediaStaging))
+            {
+                foreach (var f in Directory.GetFiles(extractedMediaStaging, "*.enc"))
+                    File.Copy(f, Path.Combine(mediaStagingDirR, Path.GetFileName(f)), overwrite: true);
+            }
+
+            // Now stagingPath has the fully-prepared DB (snapshot data + new local identity).
+            // On an encrypted node the boot store learns the restored doors first and is rewritten after the swap (spec 8.4).
+            await using var sealedSwap = await BeginSealedSwapAsync(stagingPath, masterPassword);
+            // Atomically replace the live DB behind the connection barrier, retrying past transient pooled-handle
+            // locks — see ReplaceLiveDatabaseAsync and SwapDbFileWithRetryAsync.
+            await ReplaceLiveDatabaseAsync(() => File.Move(stagingPath, dbPath, overwrite: true));
+
+            // Atomic media swap after DB swap
+            var mediaDirR = Path.Combine(_dataPath, "media");
+            var mediaOldDirR = Path.Combine(_dataPath, "media.old");
+            if (Directory.Exists(mediaStagingDirR) && Directory.GetFiles(mediaStagingDirR, "*.enc").Length > 0)
+            {
+                if (Directory.Exists(mediaOldDirR))
                 {
-                    Array.Clear(privKey);
+                    try { Directory.Delete(mediaOldDirR, true); } catch { }
                 }
-
-                // Not pooled — same reason as FilterSecretsFrom: the staging file is moved or
-                // deleted right after this block, and a pooled handle would keep it locked on
-                // Windows long after Dispose.
-                using (var stagingConn = OpenStaged(stagingPath))
+                if (Directory.Exists(mediaDirR))
                 {
-                    using var tx = stagingConn.BeginTransaction();
-                    try
-                    {
-                        // One statement per table, skipping the ones this archive does not have.
-                        // The staging database carries the ARCHIVE's schema, not ours, and
-                        // migrations have not run on it yet — tbl_sync_quarantine arrived in
-                        // migration 013, so a pre-013 backup simply has no such table. A single
-                        // batched DELETE aborts the whole transaction on the first "no such
-                        // table" and would make every older backup unrestorable; the quarantine
-                        // wipe already carried its own try/catch for exactly this reason, and
-                        // every table in this list is subject to the same schema-age problem.
-                        RemoveServerAutoUnlockSlots(stagingConn, tx);
-                        foreach (var table in NetworkStateTablesToWipe)
-                        {
-                            if (!archiveTables.Contains(table)) continue;
-                            using var wipeCmd = stagingConn.CreateCommand();
-                            wipeCmd.Transaction = tx;
-                            wipeCmd.CommandText = $"DELETE FROM {table}";
-                            wipeCmd.ExecuteNonQuery();
-                        }
-
-                        using var identityCmd = stagingConn.CreateCommand();
-                        identityCmd.Transaction = tx;
-                        identityCmd.CommandText = @"
-                            UPDATE tbl_node_identity
-                            SET node_id = @newNodeId,
-                                ed25519_private_key = @newPrivKey,
-                                ed25519_private_key_iv = @newPrivKeyIv,
-                                ed25519_private_key_v = @newPrivKeyV,
-                                ed25519_public_key = @newPubKey";
-
-                        var p1 = identityCmd.CreateParameter();
-                        p1.ParameterName = "newNodeId";
-                        p1.Value = newNodeId.ToString();
-                        identityCmd.Parameters.Add(p1);
-
-                        var p2 = identityCmd.CreateParameter();
-                        p2.ParameterName = "newPrivKey";
-                        p2.Value = wrappedPrivKey;
-                        identityCmd.Parameters.Add(p2);
-
-                        var p3 = identityCmd.CreateParameter();
-                        p3.ParameterName = "newPubKey";
-                        p3.Value = pubKey;
-                        identityCmd.Parameters.Add(p3);
-
-                        var p4 = identityCmd.CreateParameter();
-                        p4.ParameterName = "newPrivKeyIv";
-                        p4.Value = privKeyIv;
-                        identityCmd.Parameters.Add(p4);
-
-                        var p5 = identityCmd.CreateParameter();
-                        p5.ParameterName = "newPrivKeyV";
-                        p5.Value = privKeyVersion;
-                        identityCmd.Parameters.Add(p5);
-
-                         identityCmd.ExecuteNonQuery();
-
-                         using var nameCmd = stagingConn.CreateCommand();
-                         nameCmd.Transaction = tx;
-                         nameCmd.CommandText = "SELECT display_name FROM tbl_node_identity LIMIT 1";
-                         outcome = outcome with { NewNodeId = newNodeId, NodeDisplayName = nameCmd.ExecuteScalar() as string };
-
-                         tx.Commit();
-                     }
-                    catch
-                    {
-                        tx.Rollback();
-                        throw;
-                    }
+                    try { Directory.Move(mediaDirR, mediaOldDirR); } catch { }
                 }
-
-                // Stage media files before DB swap
-                var mediaStagingDirR = Path.Combine(_dataPath, "media.staging");
+                Directory.Move(mediaStagingDirR, mediaDirR);
+                if (Directory.Exists(mediaOldDirR))
+                {
+                    try { Directory.Delete(mediaOldDirR, true); } catch (Exception ex) { _logger?.LogWarning(ex, "Failed to sweep media.old/ after atomic swap"); }
+                }
+            }
+            else
+            {
                 if (Directory.Exists(mediaStagingDirR))
                 {
                     try { Directory.Delete(mediaStagingDirR, true); } catch { }
                 }
-                Directory.CreateDirectory(mediaStagingDirR);
-                var extractedMediaStaging = Path.Combine(tempDir, "media");
-                if (Directory.Exists(extractedMediaStaging))
-                {
-                    foreach (var f in Directory.GetFiles(extractedMediaStaging, "*.enc"))
-                        File.Copy(f, Path.Combine(mediaStagingDirR, Path.GetFileName(f)), overwrite: true);
-                }
-
-                // Now stagingPath has the fully-prepared DB (snapshot data + new local identity).
-                // On an encrypted node the boot store learns the restored doors first and is rewritten after the swap (spec 8.4).
-                await using var sealedSwap = await BeginSealedSwapAsync(stagingPath, masterPassword);
-                // Atomically replace the live DB behind the connection barrier, retrying past transient pooled-handle
-                // locks — see ReplaceLiveDatabaseAsync and SwapDbFileWithRetryAsync.
-                await ReplaceLiveDatabaseAsync(() => File.Move(stagingPath, dbPath, overwrite: true));
-
-                // Atomic media swap after DB swap
-                var mediaDirR = Path.Combine(_dataPath, "media");
-                var mediaOldDirR = Path.Combine(_dataPath, "media.old");
-                if (Directory.Exists(mediaStagingDirR) && Directory.GetFiles(mediaStagingDirR, "*.enc").Length > 0)
-                {
-                    if (Directory.Exists(mediaOldDirR))
-                    {
-                        try { Directory.Delete(mediaOldDirR, true); } catch { }
-                    }
-                    if (Directory.Exists(mediaDirR))
-                    {
-                        try { Directory.Move(mediaDirR, mediaOldDirR); } catch { }
-                    }
-                    Directory.Move(mediaStagingDirR, mediaDirR);
-                    if (Directory.Exists(mediaOldDirR))
-                    {
-                        try { Directory.Delete(mediaOldDirR, true); } catch (Exception ex) { _logger?.LogWarning(ex, "Failed to sweep media.old/ after atomic swap"); }
-                    }
-                }
-                else
-                {
-                    if (Directory.Exists(mediaStagingDirR))
-                    {
-                        try { Directory.Delete(mediaStagingDirR, true); } catch { }
-                    }
-                }
-
-                _logger?.LogInformation("Standalone restore: identity regenerated. New node_id: {NodeId}. Network connections wiped. Event log sanitized.", newNodeId);
             }
-            else
-            {
-                // Non-standalone (legacy) restore
-                // Stage media files before DB swap
-                var mediaStagingDirNs = Path.Combine(_dataPath, "media.staging");
-                if (Directory.Exists(mediaStagingDirNs))
-                {
-                    try { Directory.Delete(mediaStagingDirNs, true); } catch { }
-                }
-                Directory.CreateDirectory(mediaStagingDirNs);
-                var extractedMediaNs = Path.Combine(tempDir, "media");
-                if (Directory.Exists(extractedMediaNs))
-                {
-                    foreach (var f in Directory.GetFiles(extractedMediaNs, "*.enc"))
-                        File.Copy(f, Path.Combine(mediaStagingDirNs, Path.GetFileName(f)), overwrite: true);
-                }
 
-                using (var extractedConn = OpenStaged(extractedDb))
-                    RemoveServerAutoUnlockSlots(extractedConn, tx: null);
-                await using var sealedSwapNs = await BeginSealedSwapAsync(extractedDb, masterPassword);
-                await ReplaceLiveDatabaseAsync(() => File.Copy(extractedDb, dbPath, overwrite: true));
-
-                var mediaDirNs = Path.Combine(_dataPath, "media");
-                var mediaOldDirNs = Path.Combine(_dataPath, "media.old");
-                if (Directory.Exists(mediaStagingDirNs) && Directory.GetFiles(mediaStagingDirNs, "*.enc").Length > 0)
-                {
-                    if (Directory.Exists(mediaOldDirNs))
-                    {
-                        try { Directory.Delete(mediaOldDirNs, true); } catch { }
-                    }
-                    if (Directory.Exists(mediaDirNs))
-                    {
-                        try { Directory.Move(mediaDirNs, mediaOldDirNs); } catch { }
-                    }
-                    Directory.Move(mediaStagingDirNs, mediaDirNs);
-                    if (Directory.Exists(mediaOldDirNs))
-                    {
-                        try { Directory.Delete(mediaOldDirNs, true); } catch (Exception ex) { _logger?.LogWarning(ex, "Failed to sweep media.old/"); }
-                    }
-                }
-                else
-                {
-                    if (Directory.Exists(mediaStagingDirNs))
-                    {
-                        try { Directory.Delete(mediaStagingDirNs, true); } catch { }
-                    }
-                }
-
-                if (archiveTables.Contains("tbl_sync_push_position"))
-                {
-                    using var conn = _connFactory.CreateConnection();
-                    using var cmd = conn.CreateCommand();
-                    cmd.CommandText = "DELETE FROM tbl_sync_push_position";
-                    cmd.ExecuteNonQuery();
-                }
-            }
+            _logger?.LogInformation("Standalone restore: identity regenerated. New node_id: {NodeId}. Network connections wiped. Event log sanitized.", newNodeId);
 
             // The database was replaced under an unchanged path, so the folder-ACL cache is now
             // describing users that no longer exist — and user ids restart at 1, so the entries
             // would be handed to whoever occupies those ids in the restored data. No restart
             // follows a restore, so nothing else clears it.
             BeeMemoryBank.Core.Services.FolderAccessService.InvalidateAll();
+            // And what the API believes a forwarded user id is (its role): a cookie that named a superadmin of the old table must not stay one for the cache's time-to-live.
+            BeeMemoryBank.Core.Services.CallerStateCache.InvalidateAll();
+            // The tombstones the restored database holds (and those this node kept) close the accounts they name before anybody signs in (plan R1).
+            await RunAfterRestoreAsync();
             return outcome;
         }
         finally

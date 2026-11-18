@@ -75,9 +75,19 @@ public class SnapshotTablesCoverageTests
         // This node's own ways to reach each peer and how each went (migration 044, LAN sync): another node's view of the network is its own.
         "tbl_peer_channel",
 
+        // Which of two competing identity keys of a node this node saw (migration 049, plan WS-D D2): this node's own judgement until a confirm
+        // settles it; a joiner learns the settled key from the whitelist and the key history.
+        "tbl_node_key_conflict",
+
         // The invitations this full node made to blind copies (migration 041): bearer-secret hashes, the redeeming device's keys and, until the owner
         // decides, its backup key under this node's DEK. About this one node; a join snapshot or a package empties it (FilterSecretsFrom).
-        "tbl_blind_invite"
+        "tbl_blind_invite",
+
+        // Node-local state of shared-node doors on this node (migration 050): self-ownership, publisher digest/version, pending/applied payload and errors.
+        "tbl_shared_doors_state",
+        // The removal processes this node drives or follows and what each step waits for (migration 051): the target role and folders of a demotion
+        // live only here; other nodes learn the process from its offboarding_state events, never from a snapshot.
+        "tbl_offboarding", "tbl_offboarding_node"
     ];
 
     [Fact]
@@ -142,6 +152,8 @@ public class SnapshotTablesCoverageTests
         {
             "tbl_metadata_key", "tbl_metadata_activation",
             "tbl_recovery_box", "tbl_dek_retired_link", "tbl_state_anchor", "tbl_sealed_secret",
+            // The retired identity keys (migration 049, plan WS-D D4): public keys, counters, event ids and signatures, nothing human-authored.
+            "tbl_node_key_history",
         });
         SnapshotTables.Replicated.Should().Contain(SnapshotTables.Control);
     }

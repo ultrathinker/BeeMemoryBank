@@ -21,6 +21,11 @@ public class MigrationRaceTests : SquashTestBase
         (43, "BeeMemoryBank.Storage.Migrations.043_password_hint.sql"),
         (44, "BeeMemoryBank.Storage.Migrations.044_peer_channels.sql"),
         (45, "BeeMemoryBank.Storage.Migrations.045_whitelist_concern_versions.sql"),
+        (46, "BeeMemoryBank.Storage.Migrations.046_sealed_doors.sql"),
+        (47, "BeeMemoryBank.Storage.Migrations.047_ownership_and_node_state.sql"),
+        (49, "BeeMemoryBank.Storage.Migrations.049_node_key_history.sql"),
+        (50, "BeeMemoryBank.Storage.Migrations.050_shared_doors.sql"),
+        (51, "BeeMemoryBank.Storage.Migrations.051_offboarding.sql"),
     ];
 
     /// <summary>A database of the current schema whose ledger stops where a database of release 2.6.x or a node that was killed after the baseline does.</summary>
@@ -57,7 +62,7 @@ public class MigrationRaceTests : SquashTestBase
     /// <summary>The runners are held at the gap between "I read the ledger" and "I open my transaction" until all of them are there.</summary>
     private static async Task RunTogetherAsync(string path, int runners)
     {
-        var gates = new Dictionary<int, Barrier> { [41] = new(runners), [42] = new(runners), [43] = new(runners), [44] = new(runners), [45] = new(runners) };
+        var gates = new Dictionary<int, Barrier> { [41] = new(runners), [42] = new(runners), [43] = new(runners), [44] = new(runners), [45] = new(runners), [46] = new(runners), [47] = new(runners), [49] = new(runners), [50] = new(runners), [51] = new(runners) };
         void Gate(int version)
         {
             if (gates.TryGetValue(version, out var gate)) gate.SignalAndWait(TimeSpan.FromSeconds(20));
@@ -123,7 +128,7 @@ public class MigrationRaceTests : SquashTestBase
             catch (SqliteException ex) { failures.Add($"iteration {i}: {ex.Message}"); }
             finally { factories.ForEach(f => f.Dispose()); }
             SqliteConnection.ClearAllPools();
-            if (!FullLedger(path).SequenceEqual(Expected)) failures.Add($"iteration {i}: the ledger is not 40, 41, 42, 43, 44, 45");
+            if (!FullLedger(path).SequenceEqual(Expected)) failures.Add($"iteration {i}: the ledger is not 40, 41, 42, 43, 44, 45, 46, 47, 49, 50, 51");
         }
         Assert.True(failures.Count == 0, $"every runner of every one of the {iterations} iterations must start; {failures.Count} iterations did not: {string.Join(" | ", failures.Take(5))}");
     }

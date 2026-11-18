@@ -462,7 +462,7 @@ public class AnonymousInternetCallerTests : IAsyncLifetime
     /// The exact anonymous-call answer per PublicSurface entry. Built from a one-off probe (see
     /// PublicSurfaceProbeTests) and pinned here as a deliberate contract: a future change that
     /// shifts the answer (e.g. locking /api/snapshots/restore/progress behind auth) must update
-    /// this table AND the brief that justifies the change.
+    /// this table AND the rationale that justifies the change.
     /// </summary>
     private static readonly (string Method, string Pattern, HttpStatusCode Status)[] DocumentedAnonymousStatuses =
     {

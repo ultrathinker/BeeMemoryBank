@@ -4,15 +4,19 @@
 
 @* Diagnostic / repair tool an admin rarely needs. *@
 @section About {
-    <p>
-        The system keeps a fast lookup of <strong>which tags appear together in your articles</strong>. That lookup powers the Graph view, the related-tags suggestions and tag search. It is updated
-        automatically whenever you tag or untag an article, including changes that arrive from another node by sync, and after a snapshot is restored.
-    </p>
-    <p>
-        <strong>Pressing the button is always safe.</strong> If everything is in sync (the normal case), it only verifies and returns in milliseconds. If something is off, it rebuilds the lookup
-        from scratch; no article or tag is changed. You usually never need to press it. Reasons you might: the Graph view shows fewer connections than you expect, you edited the database by hand,
-        or you simply want to confirm that everything is consistent.
-    </p>
+    <p>The tag graph behind the Graph view and related tags. Rebuild it if it looks wrong.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            The system keeps a fast lookup of <strong>which tags appear together in your articles</strong>. That lookup powers the Graph view, the related-tags suggestions and tag search. It is updated
+            automatically whenever you tag or untag an article, including changes that arrive from another node by sync, and after a snapshot is restored.
+        </p>
+        <p>
+            <strong>Pressing the button is always safe.</strong> If everything is in sync (the normal case), it only verifies and returns in milliseconds. If something is off, it rebuilds the lookup
+            from scratch; no article or tag is changed. You usually never need to press it. Reasons you might: the Graph view shows fewer connections than you expect, you edited the database by hand,
+            or you simply want to confirm that everything is consistent.
+        </p>
+    </details>
 }
 
 <div style="max-width:640px;">

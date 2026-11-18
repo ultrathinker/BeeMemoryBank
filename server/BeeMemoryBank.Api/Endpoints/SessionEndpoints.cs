@@ -2,6 +2,7 @@ using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
 using BeeMemoryBank.Api.Services;
 using BeeMemoryBank.Api.Services.Recovery;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -49,13 +50,16 @@ public static class SessionEndpoints
 
         var group = app.MapGroup("/api/session").WithTags("Session").RequireInternalKey();
 
-        group.MapPost("/unlock", async (UnlockRequest req, SessionService session, [FromServices] IVaultGate? gate) =>
+        group.MapPost("/unlock", async (UnlockRequest req, SessionService session, [FromServices] IVaultGate? gate, [FromServices] BeeMemoryBank.Api.Services.AutoSealService? autoSeal) =>
         {
             // A closed database held for a file copy is not unlocked, not even to look at the password (spec 5.10).
             if (gate is { IsHeld: true }) return BusyAnswer();
             var success = await session.UnlockAsync(req.Password);
             if (!success)
                 return Results.Json(new ErrorResponse("Invalid password"), statusCode: 401);
+
+            // An old plain database encrypts itself after the unlock; one attempt per unlock, in the background.
+            autoSeal?.Trigger();
 
             var migratedSynthetic = session.LastMigrationResult?.Migrated == true
                 ? session.LastMigrationResult!.SyntheticAdminUsername
@@ -64,7 +68,8 @@ public static class SessionEndpoints
         }).RequireNonAgent().WithMetadata(new SkipInternalKey());
 
         group.MapPost("/login", async (LoginRequest req, SessionService session, UserService userService, IUserRepository userRepo, RecoveryTriggers recovery,
-            RecoveryAccessState recoveryAccess, IWhitelistRepository whitelistRepo, IEventLogger eventLogger, [FromServices] IVaultGate? gate) =>
+            RecoveryAccessState recoveryAccess, IWhitelistRepository whitelistRepo, IEventLogger eventLogger, [FromServices] IVaultGate? gate,
+            [FromServices] BeeMemoryBank.Api.Services.AutoSealService? autoSeal) =>
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.Json(new ErrorResponse("Username and password are required"), statusCode: 400);
@@ -72,11 +77,14 @@ public static class SessionEndpoints
             // A sealed node whose database is closed has no user table to read (docs/design/step-b-spec.md 4.5): the password alone opens it,
             // and the user name is checked afterwards. A wrong password, a non-superadmin's password and an unknown user all get the same answer.
             var openedByThisLogin = false;
+            int? openedSlotId = null;
             if (gate is { IsSealed: true, IsUsable: false })
             {
                 if (gate.IsHeld) return BusyAnswer();
-                if (!await session.UnlockAsync(req.Password)) return SealedLoginRefusal();
+                var openResult = await session.OpenSessionForLoginAsync(req.Password);
+                if (!openResult.Unlocked) return SealedLoginRefusal();
                 openedByThisLogin = true;
+                openedSlotId = openResult.OpenedSlotId;
             }
 
             var allUsers = await userRepo.ListActiveAsync();
@@ -97,71 +105,130 @@ public static class SessionEndpoints
                 {
                     var synthUser = await userRepo.GetByUsernameAsync(migration.SyntheticAdminUsername);
                     if (synthUser != null)
+                    {
+                        autoSeal?.Trigger();
                         return Results.Ok(new LoginResponse(
                             synthUser.Id, synthUser.Username, synthUser.DisplayName,
                             synthUser.Role, true, migration.SyntheticAdminUsername, synthUser.SecurityStamp));
+                    }
                 }
                 // Defensive: unlock succeeded but no user was created — fresh post-Setup nodes
                 // never reach here (Setup creates a user), so this is the bare-disk-no-init case.
                 return Results.Json(new ErrorResponse("Node not initialized. Complete setup first."), statusCode: 400);
             }
 
-            var user = await userService.AuthenticateAsync(req.Username, req.Password);
-            if (user == null)
+            User? user;
+            byte[]? verifiedDoorDek = null;
+            try
             {
-                // The password opened the database, but it is not this user's: closed again, and the answer is the one a wrong password gets.
                 if (openedByThisLogin)
                 {
-                    session.Lock();
-                    return SealedLoginRefusal();
-                }
-                return Results.Json(new ErrorResponse("Invalid username or password"), statusCode: 401);
-            }
-
-            bool isUnlocked = session.IsUnlocked;
-
-            if (user.Role == UserRoles.Superadmin)
-            {
-                if (!isUnlocked)
-                {
-                    isUnlocked = await session.UnlockAsync(req.Password);
-                }
-
-                // A user promoted to superadmin has no key slot yet — building one needs the
-                // plaintext password, which the promoting admin never had. This login is the
-                // first moment it is available, so provision the slot now. No-op once they
-                // have one; skipped while the vault is locked (no master DEK to wrap), in
-                // which case the next login retries.
-                if (isUnlocked)
-                {
-                    // A password reset with a recovery key done while the vault was locked could not
-                    // be announced to the mesh then (the event is signed with a key under the master
-                    // key). Now the vault is open and this very sign-in proves the new password.
-                    if (recoveryAccess.TakePendingAnnouncement() is { } pendingChange)
+                    var candidate = await userRepo.GetByUsernameAsync(req.Username);
+                    if (candidate is { Replicated: true })
                     {
-                        if (!await RecoveryAccessState.TryAnnounceAsync(pendingChange, session, whitelistRepo, eventLogger))
-                            recoveryAccess.MarkAnnouncementPending(pendingChange);
+                        // A person a removal holds is refused here too (release 2.12.0): their mirror door may still open a shared node until S2.
+                        if (openedSlotId is not null && candidate.KeySlotId == openedSlotId && !candidate.IsBeingRemoved)
+                        {
+                            await userService.RecordLoginAsync(candidate.Id);
+                            user = candidate;
+                        }
+                        else
+                        {
+                            user = null;
+                        }
+                    }
+                    else if (candidate == null)
+                    {
+                        // Sealed unlock already ran Argon2; don't burn a second KDF pass.
+                        user = null;
+                    }
+                    else
+                    {
+                        user = await userService.AuthenticateAsync(req.Username, req.Password);
+                    }
+                }
+                else
+                {
+                    (user, verifiedDoorDek) = await userService.AuthenticateWithDekAsync(req.Username, req.Password);
+                }
+
+                if (user == null)
+                {
+                    // The password opened the database, but it is not this user's: closed again, and the answer is the one a wrong password gets.
+                    if (openedByThisLogin)
+                    {
+                        session.Lock();
+                        return SealedLoginRefusal();
+                    }
+                    return Results.Json(new ErrorResponse("Invalid username or password"), statusCode: 401);
+                }
+
+                bool isUnlocked = session.IsUnlocked;
+
+                if (user.Role == UserRoles.Superadmin)
+                {
+                    if (!isUnlocked)
+                    {
+                        if (verifiedDoorDek is not null)
+                        {
+                            session.UnlockWithDek(verifiedDoorDek);
+                            verifiedDoorDek = null;
+                            isUnlocked = session.IsUnlocked;
+                        }
+                        else
+                        {
+                            isUnlocked = await session.UnlockAsync(req.Password);
+                        }
                     }
 
-                    await userService.ProvisionMissingKeySlotAsync(user, req.Password);
-                    // The password is in memory: strong recovery box for the current key if this
-                    // node has none, then cleanup of covered device boxes (plan 6.3). Background.
-                    _ = recovery.OnSuperadminLogin(user, req.Password);
+                    // A user promoted to superadmin has no key slot yet — building one needs the
+                    // plaintext password, which the promoting admin never had. This login is the
+                    // first moment it is available, so provision the slot now. No-op once they
+                    // have one; skipped while the vault is locked (no master DEK to wrap), in
+                    // which case the next login retries.
+                    if (isUnlocked)
+                    {
+                        // A password reset with a recovery key done while the vault was locked could not
+                        // be announced to the mesh then (the event is signed with a key under the master
+                        // key). Now the vault is open and this very sign-in proves the new password.
+                        if (recoveryAccess.TakePendingAnnouncement() is { } pendingChange)
+                        {
+                            if (!await RecoveryAccessState.TryAnnounceAsync(pendingChange, session, whitelistRepo, eventLogger))
+                                recoveryAccess.MarkAnnouncementPending(pendingChange);
+                        }
+
+                        if (!user.Replicated)
+                        {
+                            await userService.ProvisionMissingKeySlotAsync(user, req.Password);
+                            // ADR 0012: a v1 door of this superadmin becomes a sealed door at the first sign-in that proves its password.
+                            await userService.UpgradeKeySlotDoorAsync(user, req.Password);
+                        }
+                        // The password is in memory: strong recovery box for the current key if this
+                        // node has none, then cleanup of covered device boxes (plan 6.3). Background.
+                        _ = recovery.OnSuperadminLogin(user, req.Password);
+                    }
                 }
+                else
+                {
+                    if (!isUnlocked)
+                        return Results.Json(
+                            new ErrorResponse("Server is locked. Contact administrator.", ErrorCodes.SessionLocked),
+                            statusCode: 403);
+                }
+
+                var migratedSynthetic = session.LastMigrationResult?.Migrated == true
+                    ? session.LastMigrationResult!.SyntheticAdminUsername
+                    : null;
+
+                // An old plain database encrypts itself after the unlock; one attempt per unlock, in the background.
+                if (isUnlocked) autoSeal?.Trigger();
+                return Results.Ok(new LoginResponse(user.Id, user.Username, user.DisplayName, user.Role, isUnlocked, migratedSynthetic, user.SecurityStamp));
             }
-            else
+            finally
             {
-                if (!isUnlocked)
-                    return Results.Json(
-                        new ErrorResponse("Server is locked. Contact administrator.", ErrorCodes.SessionLocked),
-                        statusCode: 403);
+                if (verifiedDoorDek is not null)
+                    Array.Clear(verifiedDoorDek);
             }
-
-            var migratedSynthetic = session.LastMigrationResult?.Migrated == true
-                ? session.LastMigrationResult!.SyntheticAdminUsername
-                : null;
-
-            return Results.Ok(new LoginResponse(user.Id, user.Username, user.DisplayName, user.Role, isUnlocked, migratedSynthetic, user.SecurityStamp));
         }).WithMetadata(new SkipInternalKey());
 
         // POST /api/session/recover-access - "Forgot your password? Use a recovery key". The one way
@@ -234,6 +301,14 @@ public static class SessionEndpoints
 
             if (!result.Succeeded)
             {
+                if (result.Outcome == RecoveryResetOutcome.ReplicatedUser)
+                {
+                    var refusal = ReplicatedUserException.ForReplicatedUser(result.AccountsHomeName, result.AccountsHomeNodeId);
+                    await auditRepo.LogAsync("user", result.UserId?.ToString() ?? "-", "user_password_recovery_refused", "web",
+                        $"Password reset with a recovery key refused from {ip} (replicated)");
+                    return Results.Json(new ErrorResponse(refusal.Message, "replicated_user"), statusCode: 409);
+                }
+
                 // Audit what the caller is not told, and never what they typed: no key, no password, and
                 // no username that does not belong to an account. A closed database has no audit table to write: the log says it instead.
                 var reason = result.Outcome == RecoveryResetOutcome.WrongKey ? "key" : "account";

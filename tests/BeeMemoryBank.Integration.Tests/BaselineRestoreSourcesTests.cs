@@ -274,6 +274,35 @@ public class BaselineRestoreSourcesTests(BaselineRestoreFixture src) : IDisposab
         (await HasIdentityAsync(target)).Should().BeFalse();
     }
 
+    /// <summary>
+    /// a format-2 backup whose vouching anchor was signed by a key its author has retired since. The package
+    /// names that node with its new key; the key history the package carries (control.db) leads from the retired key to it, as the format-1 path
+    /// reads it from the package's database.
+    /// </summary>
+    [Fact]
+    public async Task An_anchor_signed_by_a_key_its_author_retired_since_still_vouches_through_the_carried_key_history()
+    {
+        var anchors = src.Deltas.Where(d => d.EventType == BeeMemoryBank.Sync.EventTypes.StateAnchor && d.NodeId == src.SourceNodeId).ToList();
+        anchors.Should().NotBeEmpty("the fixture publishes an anchor last");
+        var (newKey, newSeed) = Ed25519Signer.GenerateKeyPair();
+        byte[] oldKey, byOld;
+        using (var scope = src.Source.Services.CreateScope())
+        {
+            var me = (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
+            oldKey = me.Ed25519PublicKey;
+            byOld = scope.ServiceProvider.GetRequiredService<INodeAuthSigner>().SignChallenge(me, NodeKeyTransition.Statement(me.NodeId, oldKey, newKey, 1));
+        }
+        var link = new NodeKeyHistoryEntry(src.SourceNodeId, 1, oldKey, newKey, long.MaxValue, Guid.NewGuid(), 0, "", byOld,
+            Ed25519Signer.Sign(newSeed, NodeKeyTransition.Statement(src.SourceNodeId, oldKey, newKey, 1)));
+        var named = new Dictionary<Guid, byte[]> { [src.SourceNodeId] = newKey };
+        var dek = src.Source.Services.GetRequiredService<SessionService>().GetMasterDek();
+
+        AndroidBackupRestoreSource.AnchorVouchesFor(anchors, named, dek, src.SourceNodeId, []).Should().BeFalse("nothing says the retired key was its");
+        AndroidBackupRestoreSource.AnchorVouchesFor(anchors, named, dek, src.SourceNodeId, [link]).Should().BeTrue(
+            "the carried history leads from the key that signed the anchor, and that the anchor's trust section names, to the key the package names");
+        AndroidBackupRestoreSource.AnchorVouchesFor(anchors, named, dek, Guid.NewGuid(), [link]).Should().BeFalse("it vouches for nobody else");
+    }
+
     // ---------------------------------------------------------------- builders
 
     /// <summary>The phone's backup file: the archive, its signature and the phone's events as the body; the pairing record sealed under the current key.</summary>

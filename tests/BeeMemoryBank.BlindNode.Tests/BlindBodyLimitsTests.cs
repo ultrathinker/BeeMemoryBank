@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The edges of the one way the three small-body routes read their JSON (srvfix9, the coverage the review listed): a body of exactly the limit is accepted and one byte more is not,
+/// The edges of the one way the three small-body routes read their JSON: a body of exactly the limit is accepted and one byte more is not,
 /// a Content-Length that lies low does not widen the limit, a body that is not valid UTF-8 or not JSON is the documented 400, and a body that is not declared JSON is 415 and is not read.
 /// </summary>
 public sealed class BlindBodyLimitsTests

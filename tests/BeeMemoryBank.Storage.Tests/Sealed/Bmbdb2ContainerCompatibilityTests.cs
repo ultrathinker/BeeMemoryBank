@@ -4,7 +4,7 @@ using BeeMemoryBank.Storage.Sealed;
 namespace BeeMemoryBank.Storage.Tests.Sealed;
 
 /// <summary>
-/// BMB-304 fix2 (c): old-reader compatibility of the snapshot container. The container is encrypted in place now (one buffer), but its bytes are the format every
+/// BMB-304: old-reader compatibility of the snapshot container. The container is encrypted in place now (one buffer), but its bytes are the format every
 /// 2.5/2.6 node reads: a container the CURRENT code writes opens with the reader of the tag v2.6.1 (<see cref="Bmbdb2ContainerV261"/>, a frozen copy of that release),
 /// and the other way round. A change of the layout, the key derivation or the AAD fails here before a snapshot made by this version meets an older node.
 /// </summary>

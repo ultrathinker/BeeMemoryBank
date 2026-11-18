@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Core.Models;
 /// records for the other — one rule for all four join paths (the host's <c>/api/join</c>, the Web
 /// <c>/api/init/join</c>, <c>bmb join</c> and the phone's setup), so they cannot drift apart (BMB-42).
 ///
-/// <para>Owner's decision: whoever knows the master password is a superadmin. The master password
+/// <para>Whoever knows the master password is a superadmin. The master password
 /// already hands over the DEK, which is strictly more than anything a superadmin-only event can do,
 /// so withholding the flag protected nothing — it only made such a node apply its own hard delete or
 /// password-change notice locally while every peer refused it, and the mesh diverged for good.</para>

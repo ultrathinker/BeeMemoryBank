@@ -5,7 +5,7 @@ using Xunit;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// BMB-307 fix round (F7): an address change that ARRIVES from another node resets what the loop learned about that peer, exactly as one made here does - the
+/// BMB-307: an address change that ARRIVES from another node resets what the loop learned about that peer, exactly as one made here does - the
 /// failure streak, the pause, the closed window and the contact record of the old address are not the new address's (the applier tells the loop,
 /// <see cref="IPeerStateResetter"/>), and a rename or a repeat of the same address does not.
 /// </summary>

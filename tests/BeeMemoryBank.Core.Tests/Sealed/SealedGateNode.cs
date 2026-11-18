@@ -138,15 +138,17 @@ internal sealed class SealedGateNode : IAsyncDisposable
     public byte[] ChatPageKey { get; private set; } = null!;
     public Guid NodeId { get; private set; }
 
+    /// <param name="services">More services for the session's scopes (a lazy rewrap, a mirror), added after the default ones.</param>
     public static async Task<SealedGateNode> CreateAsync(TimeSpan? drainTimeout = null, bool withChat = true,
-        Func<DbConnectionFactory, Task>? seedPlain = null, VaultStoreMode mode = VaultStoreMode.Sealed)
+        Func<DbConnectionFactory, Task>? seedPlain = null, VaultStoreMode mode = VaultStoreMode.Sealed, Action<ServiceCollection, SealedGateNode>? services = null)
     {
         var node = new SealedGateNode();
-        await node.BuildAsync(drainTimeout, withChat, seedPlain, mode);
+        await node.BuildAsync(drainTimeout, withChat, seedPlain, mode, services);
         return node;
     }
 
-    private async Task BuildAsync(TimeSpan? drainTimeout, bool withChat, Func<DbConnectionFactory, Task>? seedPlain, VaultStoreMode mode)
+    private async Task BuildAsync(TimeSpan? drainTimeout, bool withChat, Func<DbConnectionFactory, Task>? seedPlain, VaultStoreMode mode,
+        Action<ServiceCollection, SealedGateNode>? moreServices)
     {
         DapperConfig.Configure();
         Directory.CreateDirectory(Dir);
@@ -215,6 +217,7 @@ internal sealed class SealedGateNode : IAsyncDisposable
         services.AddScoped<IUserRepository>(_ => new UserRepository(Vault));
         services.AddScoped<IAgentRepository>(_ => new AgentRepository(Vault));
         services.AddScoped<LegacyPasswordSlotMigrationService>();
+        moreServices?.Invoke(services, this);
         Services = services.BuildServiceProvider();
         Session = new SessionService(Services.GetRequiredService<IKeySlotRepository>(), Services.GetRequiredService<IServiceScopeFactory>(), null, Gate, Doors, Gate, SessionLog);
     }

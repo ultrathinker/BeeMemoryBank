@@ -3,7 +3,7 @@ using BeeMemoryBank.AppPaths;
 namespace BeeMemoryBank.Rekey.Tests;
 
 /// <summary>
-/// Review release-b R1-6 (sec#3): the journal is untrusted. Nothing it names is moved unless it is exactly the sibling
+/// The journal is untrusted. Nothing it names is moved unless it is exactly the sibling
 /// the swap itself creates. A directory that is a link is no vault. A journal that does not parse is decided like a lost
 /// one, so D stays startable and nothing outside the vault's siblings is ever touched.
 /// </summary>

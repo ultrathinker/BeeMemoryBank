@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- The iPhone-only parts of the design, on top of the shared Colors.xaml and Styles.xaml
+     (linked from the Android app: one source of the design on both phones). The navigation
+     bar, the pickers and the pull-to-refresh follow the same tokens; the round action button
+     of the tree keeps its place where the thumb is, in the accent. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+
+    <Style TargetType="NavigationPage">
+        <Setter Property="BarBackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbBackgroundLight}, Dark={StaticResource BmbBackground}}" />
+        <Setter Property="BarTextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+    </Style>
+
+    <!-- The two auto-lock choices stay pickers until the Settings stage gives them the app field
+         and the sheet; they already wear the design's surface and text. -->
+    <Style TargetType="Picker">
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="TitleColor" Value="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+        <Setter Property="MinimumHeightRequest" Value="50" />
+    </Style>
+
+    <Style TargetType="RefreshView">
+        <Setter Property="RefreshColor" Value="{StaticResource BmbAccent}" />
+    </Style>
+
+    <!-- The tree's round action button: the accent where the thumb is. -->
+    <Style TargetType="Button" x:Key="FabButton">
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+        <Setter Property="BackgroundColor" Value="{StaticResource BmbAccent}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbAccentForegroundLight}, Dark={StaticResource BmbAccentForeground}}" />
+        <Setter Property="CornerRadius" Value="30" />
+        <Setter Property="WidthRequest" Value="60" />
+        <Setter Property="HeightRequest" Value="60" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="VisualStateManager.VisualStateGroups">
+            <VisualStateGroupList>
+                <VisualStateGroup x:Name="CommonStates">
+                    <VisualState x:Name="Normal" />
+                    <VisualState x:Name="Pressed">
+                        <VisualState.Setters>
+                            <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentActiveLight}, Dark={StaticResource BmbAccentActive}}" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="Disabled">
+                        <VisualState.Setters>
+                            <Setter Property="Opacity" Value="0.45" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateGroupList>
+        </Setter>
+    </Style>
+
+</ResourceDictionary>

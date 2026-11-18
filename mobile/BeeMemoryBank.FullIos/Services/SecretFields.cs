@@ -1,7 +1,7 @@
 namespace BeeMemoryBank.FullIos.Services;
 
 /// <summary>
-/// What a screen does with a password or passphrase it has read from a field (review revios F3): the field is emptied on every way out of
+/// What a screen does with a password or passphrase it has read from a field: the field is emptied on every way out of
 /// the operation that used it — success, a wrong password, any exception, a cancellation — not just the success path, so the secret does
 /// not stay in the native text control (an app-switcher screenshot, a shoulder, a later navigation state) after nothing needs it any more.
 /// The screens' own try/catch stays around this, to show the error.

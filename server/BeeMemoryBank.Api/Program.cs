@@ -46,7 +46,7 @@ var dataPath = builder.Configuration["BeeMemoryBank:DataPath"]
     ?? Environment.GetEnvironmentVariable("BMB_DATA_PATH")
     ?? Path.Combine(Directory.GetCurrentDirectory(), "data");
 // An offline re-key's swap is finished (or rolled back) before anything creates or opens D.
-// The vault gate (review release-b R1-1): refused while a re-key runs, an interrupted swap finished or rolled back, and
+// The vault gate: refused while a re-key runs, an interrupted swap finished or rolled back, and
 // vault.lease held shared for the life of the process, so the re-key refuses while this Api runs (standalone, Docker,
 // or a node's child alike).
 var (rekeySwap, vaultLease) = BeeMemoryBank.AppPaths.VaultStartup.Enter(dataPath);

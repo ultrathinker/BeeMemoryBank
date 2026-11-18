@@ -68,7 +68,7 @@ public abstract class AdminPageModel(ApiClient api) : PageModel
     {
         var ok = await Api.DismissRecoveryKeyNoticeAsync();
         return ok
-            ? Back(msg: "Recovery-key notice dismissed. It will not be shown again on this node; issue a key at any time from Admin -> Recovery key.")
+            ? Back(msg: "Recovery-key notice dismissed. It will not be shown again on this node; issue a key at any time from Admin -> Recovery keys.")
             : Back(err: "Failed to dismiss the recovery-key notice.");
     }
 

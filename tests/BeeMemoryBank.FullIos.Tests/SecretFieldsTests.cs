@@ -2,7 +2,7 @@ using BeeMemoryBank.FullIos.Services;
 
 namespace BeeMemoryBank.FullIos.Tests;
 
-/// <summary>The password and passphrase fields of the full iPhone app are emptied on every way out of the operation that used them (review revios F3).</summary>
+/// <summary>The password and passphrase fields of the full iPhone app are emptied on every way out of the operation that used them.</summary>
 public class SecretFieldsTests
 {
     private sealed class Field(string text)

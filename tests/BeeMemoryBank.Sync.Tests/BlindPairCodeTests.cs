@@ -38,7 +38,7 @@ public class BlindPairCodeTests
     [InlineData("https://[fe80::1]:5610")]
     public void AnAddressThePolicyRefuses_IsRefusedBeforeAnyRequestIsBuilt_AndIsNotQuoted(string address)
     {
-        // BMB-306/307 fix round 2 (T3): the code is pasted text; its address goes through the one policy for a peer's address.
+        // BMB-306/307: the code is pasted text; its address goes through the one policy for a peer's address.
         var thrown = FluentActions.Invoking(() => BlindPairCode.Parse(Valid(address: address).ToString())).Should().Throw<FormatException>().Which;
 
         thrown.Message.Should().Contain("cannot be a device").And.NotContain("pw").And.NotContain("169.254.169.254").And.NotContain("fe80::1").And.NotContain("x=1");

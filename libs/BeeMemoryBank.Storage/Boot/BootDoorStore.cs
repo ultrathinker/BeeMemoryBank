@@ -11,12 +11,14 @@ namespace BeeMemoryBank.Storage.Boot;
 /// LP(slot_type or "") LP(key_hash or "") LP(kdf_version or "") LP(argon_memory or "") LP(argon_iterations or "")
 /// LP(argon_parallelism or "") LB(salt or empty) LB(encrypted_master_dek) LB(iv)</c>, where <c>LP(s)</c> is the int32 little-endian
 /// byte length of UTF-8(s) followed by the bytes and <c>LB(b)</c> the same for raw bytes. The same formula is the <c>slot_sha256</c>
-/// of the server auto-unlock enable record (spec 11.2).
+/// of the server auto-unlock enable record (spec 11.2). A sealed (v2) door appends <c>LP("2") LB(door_public_key)</c>; the hash of a v1
+/// door is the hash of every release before, so the boot stores and enable records already written stay valid.
 /// </summary>
 public static class BootDoorHash
 {
     public static string Of(string kind, long sourceId, string? slotType, string? keyHash, int? kdfVersion, int? argonMemory,
-        int? argonIterations, int? argonParallelism, byte[]? salt, byte[] encryptedMasterDek, byte[] iv)
+        int? argonIterations, int? argonParallelism, byte[]? salt, byte[] encryptedMasterDek, byte[] iv, int doorVersion = 1,
+        byte[]? doorPublicKey = null)
     {
         using var ms = new MemoryStream();
         WriteText(ms, kind);
@@ -30,17 +32,28 @@ public static class BootDoorHash
         WriteBytes(ms, salt ?? []);
         WriteBytes(ms, encryptedMasterDek);
         WriteBytes(ms, iv);
+        if (doorVersion != 1)
+        {
+            WriteText(ms, doorVersion.ToString(CultureInfo.InvariantCulture));
+            WriteBytes(ms, doorPublicKey ?? []);
+        }
         return Convert.ToHexStringLower(SHA256.HashData(ms.ToArray()));
     }
 
     /// <summary>The hash of the key slot row <paramref name="slotId"/> (a door of kind <c>slot</c>).</summary>
     public static string OfSlot(long slotId, string slotType, byte[] encryptedMasterDek, byte[] iv, byte[]? salt, int? argonMemory,
-        int? argonIterations, int? argonParallelism) =>
-        Of(BootDoorKinds.Slot, slotId, slotType, null, null, argonMemory, argonIterations, argonParallelism, salt, encryptedMasterDek, iv);
+        int? argonIterations, int? argonParallelism, int doorVersion = 1, byte[]? doorPublicKey = null) =>
+        Of(BootDoorKinds.Slot, slotId, slotType, null, null, argonMemory, argonIterations, argonParallelism, salt, encryptedMasterDek, iv,
+            doorVersion, doorPublicKey);
 
     /// <summary>The hash of an auto-unlock agent row (a door of kind <c>agent</c>).</summary>
-    public static string OfAgent(long agentId, string keyHash, int? kdfVersion, byte[]? salt, byte[] encryptedMasterDek, byte[] iv) =>
-        Of(BootDoorKinds.Agent, agentId, null, keyHash, kdfVersion, null, null, null, salt, encryptedMasterDek, iv);
+    public static string OfAgent(long agentId, string keyHash, int? kdfVersion, byte[]? salt, byte[] encryptedMasterDek, byte[] iv,
+        byte[]? doorPublicKey = null) =>
+        Of(BootDoorKinds.Agent, agentId, null, keyHash, kdfVersion, null, null, null, salt, encryptedMasterDek, iv,
+            AgentDoorVersion(kdfVersion), doorPublicKey);
+
+    /// <summary>The door format of an agent row: kdf_version 2 is a sealed door, every other value a wrap.</summary>
+    public static int AgentDoorVersion(int? kdfVersion) => kdfVersion == 2 ? 2 : 1;
 
     private static void WriteText(MemoryStream ms, string s) => WriteBytes(ms, Encoding.UTF8.GetBytes(s));
 
@@ -59,7 +72,8 @@ public sealed class BootDoorStore(BootStoreConnectionFactory factory) : IBootDoo
     internal const string Columns =
         "door_id AS DoorId, kind AS Kind, source_id AS SourceId, slot_type AS SlotType, encrypted_master_dek AS EncryptedMasterDek, iv AS Iv, " +
         "salt AS Salt, argon_memory AS ArgonMemory, argon_iterations AS ArgonIterations, argon_parallelism AS ArgonParallelism, " +
-        "key_hash AS KeyHash, kdf_version AS KdfVersion, content_sha256 AS ContentSha256, dek_fp AS DekFingerprint, pending AS Pending";
+        "key_hash AS KeyHash, kdf_version AS KdfVersion, content_sha256 AS ContentSha256, dek_fp AS DekFingerprint, pending AS Pending, " +
+        "door_version AS DoorVersion, door_public_key AS DoorPublicKey";
 
     public async Task<IReadOnlyList<BootDoor>> ListAsync(CancellationToken ct = default)
     {
@@ -89,9 +103,11 @@ public sealed class BootDoorStore(BootStoreConnectionFactory factory) : IBootDoo
         public string ContentSha256 { get; set; } = "";
         public string? DekFingerprint { get; set; }
         public long Pending { get; set; }
+        public long DoorVersion { get; set; } = 1;
+        public byte[]? DoorPublicKey { get; set; }
 
         public BootDoor ToDoor() => new(DoorId, Kind, SourceId, SlotType, EncryptedMasterDek, Iv, Salt, (int?)ArgonMemory, (int?)ArgonIterations,
-            (int?)ArgonParallelism, KeyHash, (int?)KdfVersion, ContentSha256, DekFingerprint, Pending != 0);
+            (int?)ArgonParallelism, KeyHash, (int?)KdfVersion, ContentSha256, DekFingerprint, Pending != 0, (int)DoorVersion, DoorPublicKey);
     }
 
     public async Task<IReadOnlyList<BootDoor>> FindAgentAsync(string keyHash, CancellationToken ct = default)
@@ -118,13 +134,14 @@ public sealed class BootDoorStore(BootStoreConnectionFactory factory) : IBootDoo
         await connection.ExecuteAsync(
             @"INSERT OR IGNORE INTO tbl_boot_door
                 (kind, source_id, slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, key_hash,
-                 kdf_version, content_sha256, dek_fp, pending, written_at)
+                 kdf_version, content_sha256, dek_fp, pending, written_at, door_version, door_public_key)
               VALUES (@Kind, @SourceId, @SlotType, @EncryptedMasterDek, @Iv, @Salt, @ArgonMemory, @ArgonIterations, @ArgonParallelism, @KeyHash,
-                      @KdfVersion, @ContentSha256, @DekFingerprint, 1, @now)",
+                      @KdfVersion, @ContentSha256, @DekFingerprint, 1, @now, @DoorVersion, @DoorPublicKey)",
             new
             {
                 door.Kind, door.SourceId, door.SlotType, door.EncryptedMasterDek, door.Iv, door.Salt, door.ArgonMemory, door.ArgonIterations,
                 door.ArgonParallelism, door.KeyHash, door.KdfVersion, door.ContentSha256, door.DekFingerprint, now = DateTime.UtcNow.ToString("o"),
+                door.DoorVersion, door.DoorPublicKey,
             });
         return await connection.ExecuteScalarAsync<long>(
             "SELECT door_id FROM tbl_boot_door WHERE kind = @Kind AND source_id = @SourceId AND content_sha256 = @ContentSha256",

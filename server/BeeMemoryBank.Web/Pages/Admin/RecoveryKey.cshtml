@@ -1,32 +1,130 @@
 @page
 @model BeeMemoryBank.Web.Pages.Admin.RecoveryKeyModel
+@using BeeMemoryBank.Web.Services
+
+@{
+    var keys = Model.RecoveryKeys ?? [];
+    var unknownCount = keys.Count(k => k.OwnerUserId == null);
+    string OwnerName(RecoveryKeyListItemDto k) => k.OwnerDisplayName ?? k.OwnerUsername ?? ("user #" + k.OwnerUserId);
+    bool IsMine(RecoveryKeyListItemDto k) => k.OwnerUserId != null && k.OwnerUserId.ToString() == Model.CurrentUserId;
+}
 
 @section About {
-    <p>
-        A <strong>recovery key</strong> is a second way into the vault, for the day the administrator password is lost. It is issued by a superadmin, shown <strong>once</strong>, and
-        kept <strong>offline</strong>: on paper or on a card in a safe place, not in the vault it protects. Only a key derived from it is stored on the node, never the key itself, so
-        nobody, including this page, can show it to you again.
-    </p>
-    <p>
-        With a recovery key, the Sign In page's <em>Forgot your password? Use a recovery key</em> sets a new password for a superadmin account (the <code>bmb</code> command line can
-        do the same). It changes that one account's password and nothing else, and it does not open the vault by itself.
-    </p>
-    <p>
-        Issuing a new key does not invalidate your passwords or your other recovery keys: make a new one if a copy was lost or seen by someone else, and keep the old ones until you are
-        sure you no longer need them. <strong>A data-key rotation invalidates all recovery keys</strong>, so issue a new one right after it
-        (<a href="/Admin/DekRotation">DEK Rotation</a>).
-    </p>
+    <p>Spare keys that get a superadmin back in if they forget their password. Each key belongs to the person who issued it. Keep them on paper, in a safe place.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            A <strong>recovery key</strong> is a second way into the vault, for the day a superadmin's password is lost. It is issued by a superadmin
+            <strong>for themself</strong>, shown <strong>once</strong>, and kept <strong>offline</strong>: on paper or on a card in a safe place, not in the vault it
+            protects. Only a key derived from it is stored on the node, never the key itself, so nobody, including this page, can show it to you again.
+        </p>
+        <p>
+            A recovery key is <strong>personal</strong>: it resets only its owner's password (Sign In page → <em>Forgot your password? Use a recovery key</em>, or the
+            <code>bmb</code> command line). A key issued since 2.12 names its owner below; a key issued <strong>before 2.12</strong> has no owner on record and can
+            still reset any superadmin's password, so treat it as shared and revoke it if you cannot say whose it is.
+        </p>
+        <p>
+            <strong>Revoking</strong> a key stops it working at once — it can no longer reset a password or open the vault — and cannot be undone. The node refuses to
+            revoke a key if it is the last door a person can open. Issuing a new key does not invalidate your passwords or your other keys.
+            <strong>A data-key rotation invalidates all recovery keys</strong>, so issue a new one right after it (<a href="/Admin/DekRotation">DEK Rotation</a>).
+        </p>
+    </details>
 }
 
 <partial name="_RecoveryKeyNotice" model="Model.RecoveryKeyStatus" />
 
 <div class="card mt-md" style="max-width:640px;">
-    <sl-button id="issue-recovery-key-btn" variant="primary" size="small">
-        <sl-icon slot="prefix" name="key"></sl-icon>
-        Issue new recovery key
-    </sl-button>
-    <div class="text-muted text-sm" style="margin-top:8px;">The key is shown in a window you have to close. Copy it before you do.</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <sl-input id="recovery-key-label" size="small" placeholder="Label (optional) — e.g. the card in the safe" maxlength="120" style="flex:1;min-width:220px;"></sl-input>
+        <sl-button id="issue-recovery-key-btn" variant="primary" size="small">
+            <sl-icon slot="prefix" name="key"></sl-icon>
+            Issue new recovery key
+        </sl-button>
+    </div>
+    <div class="text-muted text-sm" style="margin-top:8px;">The key is shown in a window you have to close. Copy it before you do. It will belong to you.</div>
 </div>
+
+@if (keys.Count > 0)
+{
+    <div class="card mt-md" style="padding:0;overflow:hidden;">
+        <table class="version-table admin-stack">
+            <thead>
+                <tr>
+                    <th class="col-name">Owner</th>
+                    <th class="hide-lt-1060">Issued</th>
+                    <th class="col-desc">Label</th>
+                    <th class="col-actions">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var k in keys)
+                {
+                    var confirm = k.OwnerUserId == null
+                        ? "Revoke this recovery key issued before 2.12 (owner unknown)? It stops working at once and cannot be restored."
+                        : IsMine(k)
+                            ? "Revoke your recovery key? It stops working at once and cannot be restored."
+                            : "Revoke the recovery key of {name}? They will no longer be able to use it to reset their password. It stops working at once.";
+                    <tr>
+                        <td class="col-name">
+                            @if (k.OwnerUserId == null)
+                            {
+                                <sl-badge variant="warning" pill>Owner unknown</sl-badge>
+                                <span class="text-muted text-sm" title="Issued before 2.12, so nobody can say whose it is">issued before 2.12</span>
+                            }
+                            else
+                            {
+                                <strong>@OwnerName(k)</strong>
+                                @if (IsMine(k))
+                                {
+                                    <sl-badge variant="neutral" pill>you</sl-badge>
+                                }
+                            }
+                        </td>
+                        <td class="hide-lt-1060 text-muted text-sm">@k.CreatedAt.ToString("g")</td>
+                        <td class="col-desc text-muted text-sm" data-label="Label">@(string.IsNullOrEmpty(k.Label) ? "—" : k.Label)</td>
+                        <td class="col-actions">
+                            <div class="row-actions">
+                                <form data-busy="short" method="post" asp-page-handler="RevokeKey" style="display:inline;">
+                                    <input type="hidden" name="slotId" value="@k.SlotId" />
+                                    <sl-icon-button name="trash" label="Revoke"
+                                        class="btn-confirm-submit"
+                                        data-confirm-pattern="@confirm"
+                                        data-name="@(k.OwnerUserId == null ? "" : OwnerName(k))">
+                                    </sl-icon-button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (unknownCount > 0)
+    {
+        <div class="card mt-md" style="max-width:640px;">
+            <p class="text-sm" style="margin:0 0 8px 0;">
+                @unknownCount key(s) were issued before 2.12 and have <strong>no owner on record</strong>. Anyone holding one can reset any superadmin's password.
+                Revoke them unless you can say whose they are.
+            </p>
+            <form data-busy="short" method="post" asp-page-handler="RevokeUnknownKeys">
+                <sl-button type="submit" variant="danger" size="small"
+                    class="btn-confirm-submit"
+                    data-confirm-pattern="Revoke all @unknownCount recovery key(s) with no owner? They stop working at once and cannot be restored.">
+                    <sl-icon slot="prefix" name="trash"></sl-icon>
+                    Revoke all keys with unknown owner
+                </sl-button>
+            </form>
+        </div>
+    }
+}
+else
+{
+    <div class="card mt-md" style="text-align:center;padding:40px;max-width:640px;">
+        <sl-icon name="life-preserver" style="font-size:2rem;color:var(--text-secondary);display:block;margin-bottom:12px;"></sl-icon>
+        <p class="text-muted">No recovery keys have been issued on this node.</p>
+    </div>
+}
 
 <sl-dialog id="recovery-key-dialog" label="Your new recovery key" style="--width:560px;">
     <sl-alert variant="warning" open style="margin-bottom:12px;">

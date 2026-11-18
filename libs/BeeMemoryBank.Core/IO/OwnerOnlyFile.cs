@@ -10,7 +10,7 @@ namespace BeeMemoryBank.Core.IO;
 /// Files that hold a secret in clear (the blind node's TLS key, its identity seed, backup credentials): created for
 /// their owner only from the first byte, and written so that the final name never exists half-written.
 ///
-/// <para>"Owner only" per platform. Linux and macOS: mode 0600, set at creation. Windows (review release-a #7): a
+/// <para>"Owner only" per platform. Linux and macOS: mode 0600, set at creation. Windows: a
 /// protected DACL - nothing inherited from the folder - without the entries that let every account of the machine in
 /// (Everyone, Users, Authenticated Users, Interactive, Guests and the like), with the current account and SYSTEM given
 /// full control. Entries for named accounts and Administrators are kept: a folder an operator granted to a service

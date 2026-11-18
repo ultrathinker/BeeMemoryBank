@@ -3,9 +3,9 @@ using BeeMemoryBank.Embeddings;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// WP-15: <see cref="ArticleChunker"/> splits article text into overlapping ~256-token chunks so a
+/// <see cref="ArticleChunker"/> splits article text into overlapping ~256-token chunks so a
 /// "needle" placed past <see cref="OnnxEmbeddingGenerator.MaxSequenceLength"/> tokens into a long
-/// article — invisible to the pre-WP-15 single-embedding-per-article search — ends up inside at
+/// article — invisible to the earlier single-embedding-per-article search — ends up inside at
 /// least one chunk.
 /// </summary>
 public class ArticleChunkerTests
@@ -80,7 +80,7 @@ public class ArticleChunkerTests
     [Fact]
     public void Chunk_NeedleNearEndOfLongArticle_AppearsInSomeChunk()
     {
-        // Simulates the exact scenario WP-15 exists for: a distinctive term placed well past the
+        // Simulates the exact scenario the chunker exists for: a distinctive term placed well past the
         // 256-token point a single OnnxEmbeddingGenerator.Generate() call would have truncated at.
         var filler = string.Join(' ', Enumerable.Range(0, 1500).Select(i => $"filler{i}"));
         var text = $"{filler} needlemarker9f3a {filler}";

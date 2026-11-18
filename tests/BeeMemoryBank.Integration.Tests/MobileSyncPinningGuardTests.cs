@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-stage1 #6: the phone cannot be started in this test run, so its composition is checked
+/// The phone cannot be started in this test run, so its composition is checked
 /// at the source. The default client — what every mobile SyncWithAsync caller takes from the
 /// factory — is composed with the pinned handler, and no mobile sync caller builds a client of its
 /// own that would bypass it. (The composition itself is covered by PinnedSyncClientCompositionTests.)

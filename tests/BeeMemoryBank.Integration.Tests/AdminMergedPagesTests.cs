@@ -213,7 +213,7 @@ public sealed class AdminMergedPagesTests : IAsyncLifetime
         var peer = await AddPlainPeerAsync();
         var html = await (await _admin.GetAsync("/Admin/Devices")).Content.ReadAsStringAsync();
         var page = WebUtility.HtmlDecode(html);
-        page.Should().Contain("id=\"promote-password-peers\"").And.Contain("device(s) joined with the master password are not superadmins yet.")
+        page.Should().Contain("id=\"promote-password-peers\"").And.Contain("device(s) need full rights so that all copies stay the same.")
             .And.Contain("Whoever knows the master password is a superadmin.").And.Contain("If you demoted one of these devices on purpose, untick it. Blind nodes never appear here.")
             .And.Contain($"value=\"{peer}\"").And.Contain("Grant superadmin to the ticked devices").And.Contain("handler=PromotePasswordPeers");
         page.Should().NotContain("href=\"/PromotePasswordPeers\"", "the button to the second page is gone");

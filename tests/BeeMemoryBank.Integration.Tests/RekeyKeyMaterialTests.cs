@@ -64,7 +64,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
             adminId = (await sp.GetRequiredService<IUserRepository>().GetByUsernameAsync("admin"))!.Id;
             await sp.GetRequiredService<UserService>().CreateUserAsync("admin2", "Admin Two", Admin2Password, "superadmin");
             await sp.GetRequiredService<UserService>().CreateUserAsync("reader", "Reader", ReaderPassword, "user");
-            _recoveryCode = await sp.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
+            _recoveryCode = await sp.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync(adminId);
             await sp.GetRequiredService<ArticleService>().CreateAsync("Kept", "/Notes", [], "body");
             var whitelist = sp.GetRequiredService<IWhitelistRepository>();
             _fullPeer = Guid.NewGuid();
@@ -174,6 +174,35 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
     /// The invitations to blind copies (migration 041) go with the peers they would have added, and a redeemed one holds the device's backup key sealed
     /// under the OLD master key: nothing may be left that the old key opened.
     /// </summary>
+    /// <summary>
+    /// the key history of the revoked peers goes with them, but the node's own rows stay. The identity seed
+    /// is kept, so its chain is still true; its next identity re-key continues the counter its old peers hold, and a node that joins later gets the
+    /// rows in the join archive and takes that counter as the next one (a node-local floor alone would look like a gap there).
+    /// </summary>
+    [Fact]
+    public async Task TheKeyHistoryOfThePeers_IsCleared_AndTheNodesOwnRows_AreKept()
+    {
+        using (var conn = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Pooling=False"))
+        {
+            conn.Open();
+            foreach (var (node, counter) in new[] { (_nodeId, 1L), (_nodeId, 2L), (_nodeId, 3L), (_fullPeer, 5L) })
+                conn.Execute(@"INSERT INTO tbl_node_key_history (node_id, counter, public_key, new_public_key, valid_until_lamport, rotation_event_id,
+                                   old_key_proof, new_key_proof, created_at)
+                               VALUES (@n, @c, randomblob(32), randomblob(32), @c, @r, zeroblob(64), zeroblob(64), 'now')",
+                    new { n = node.ToString("D"), c = counter, r = Guid.NewGuid().ToString("D") });
+        }
+
+        var outcome = await RunAsync();
+
+        outcome.Exit.Should().Be(RekeyExit.Done, outcome.Message);
+        using var after = new SqliteConnection($"Data Source={Path.Combine(_d, RekeyRunner.MainDb)};Mode=ReadOnly;Pooling=False");
+        after.Open();
+        after.ExecuteScalar<long>("SELECT COUNT(*) FROM tbl_node_key_history WHERE node_id <> @n", new { n = _nodeId.ToString("D") })
+            .Should().Be(0, "it verified the old log of revoked peers");
+        NodeKeyHistoryStore.CounterAsync(after, null, _nodeId).GetAwaiter().GetResult().Should().Be(3,
+            "the next re-key of this node continues after its third rotation, which its old peers hold");
+    }
+
     [Fact]
     public async Task TheInvitationsToBlindCopies_AreClearedWithTheirPeers_NoneIsLeftHoldingAKeyOfTheOldVault()
     {
@@ -404,7 +433,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
             var row = await conn.QuerySingleAsync<(byte[] Pk, byte[] Iv)>("SELECT ed25519_private_key, ed25519_private_key_iv FROM tbl_node_identity");
             var dekRow = await conn.QuerySingleAsync<(byte[] W, byte[] Iv, byte[] Salt, long Mem, long It, long Par)>(
                 "SELECT encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot WHERE slot_type = 'user' ORDER BY slot_id LIMIT 1");
-            var dek = MasterKeyManager.UnwrapMasterDek(dekRow.W, dekRow.Iv, KeyDerivation.DeriveKek(Password, dekRow.Salt, (int)dekRow.Mem, (int)dekRow.It, (int)dekRow.Par));
+            var dek = BeeMemoryBank.Crypto.Doors.OpenByShape("user", dekRow.W, dekRow.Iv, KeyDerivation.DeriveKek(Password, dekRow.Salt, (int)dekRow.Mem, (int)dekRow.It, (int)dekRow.Par), dekRow.Salt);
             var seed = NodeIdentityVault.GetDecryptedPrivateKey(row.Pk, row.Iv, 1, _nodeId, dek);
             await conn.ExecuteAsync("UPDATE tbl_node_identity SET ed25519_private_key = @seed, ed25519_private_key_iv = NULL, ed25519_private_key_v = 0", new { seed });
         });
@@ -418,7 +447,7 @@ public sealed class RekeyKeyMaterialTests : IAsyncLifetime
         id.V.Should().Be(1, "the seed is no longer stored in the clear");
         var slot = conn2.QuerySingle<(byte[] W, byte[] Iv, byte[] Salt, long Mem, long It, long Par)>(
             "SELECT encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot");
-        var dc = MasterKeyManager.UnwrapMasterDek(slot.W, slot.Iv, KeyDerivation.DeriveKek(Password, slot.Salt, (int)slot.Mem, (int)slot.It, (int)slot.Par));
+        var dc = BeeMemoryBank.Crypto.Doors.OpenByShape("user", slot.W, slot.Iv, KeyDerivation.DeriveKek(Password, slot.Salt, (int)slot.Mem, (int)slot.It, (int)slot.Par), slot.Salt);
         NodeIdentityCrypto.PublicKeyOf(NodeIdentityVault.GetDecryptedPrivateKey(id.Pk, id.Iv, 1, _nodeId, dc)).Should().Equal(_publicKey);
     }
 

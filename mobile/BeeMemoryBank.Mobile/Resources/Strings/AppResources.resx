@@ -1,0 +1,1368 @@
+<?xml version='1.0' encoding='utf-8'?>
+<root xmlns:ns1="urn:schemas-microsoft-com:xml-msdata" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:schema id="root">
+    <xs:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xs:element name="root" ns1:IsDataSet="true">
+      <xs:complexType>
+        <xs:choice maxOccurs="unbounded">
+          <xs:element name="metadata">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="value" type="xsd:string" minOccurs="0" />
+              </xs:sequence>
+              <xs:attribute name="name" use="required" type="xsd:string" />
+              <xs:attribute name="type" type="xsd:string" />
+              <xs:attribute name="mimetype" type="xsd:string" />
+              <xs:attribute ref="xml:space" />
+            </xs:complexType>
+          </xs:element>
+          <xs:element name="assembly">
+            <xs:complexType>
+              <xs:attribute name="alias" type="xsd:string" />
+              <xs:attribute name="name" type="xsd:string" />
+            </xs:complexType>
+          </xs:element>
+          <xs:element name="data">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="value" type="xsd:string" minOccurs="0" ns1:Ordinal="1" />
+                <xs:element name="comment" type="xsd:string" minOccurs="0" ns1:Ordinal="2" />
+              </xs:sequence>
+              <xs:attribute name="name" type="xsd:string" use="required" ns1:Ordinal="1" />
+              <xs:attribute name="type" type="xsd:string" ns1:Ordinal="3" />
+              <xs:attribute name="mimetype" type="xsd:string" ns1:Ordinal="4" />
+              <xs:attribute ref="xml:space" />
+            </xs:complexType>
+          </xs:element>
+          <xs:element name="resheader">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="value" type="xsd:string" minOccurs="0" ns1:Ordinal="1" />
+              </xs:sequence>
+              <xs:attribute name="name" type="xsd:string" use="required" />
+            </xs:complexType>
+          </xs:element>
+        </xs:choice>
+      </xs:complexType>
+    </xs:element>
+  </xs:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="AppTitle" xml:space="preserve">
+    <value>BeeMemoryBank</value>
+  </data>
+  <data name="TabTree" xml:space="preserve">
+    <value>Tree</value>
+  </data>
+  <data name="TabSearch" xml:space="preserve">
+    <value>Search</value>
+  </data>
+  <data name="TabSync" xml:space="preserve">
+    <value>Sync</value>
+  </data>
+  <data name="TabSettings" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="SyncBadgeSynced" xml:space="preserve">
+    <value>Synced</value>
+  </data>
+  <data name="SyncBadgeSyncing" xml:space="preserve">
+    <value>Syncing…</value>
+  </data>
+  <data name="SyncBadgeOffline" xml:space="preserve">
+    <value>Offline</value>
+  </data>
+  <data name="SyncBadgeError" xml:space="preserve">
+    <value>Error</value>
+  </data>
+  <data name="SyncBadgePending" xml:space="preserve">
+    <value>Waiting for approval</value>
+  </data>
+  <data name="SyncBadgeInvisible" xml:space="preserve">
+    <value>Invisible</value>
+  </data>
+  <data name="SyncBadgeAccessibility" xml:space="preserve">
+    <value>Sync status: {0}</value>
+  </data>
+  <data name="Ok" xml:space="preserve">
+    <value>OK</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="Save" xml:space="preserve">
+    <value>Save</value>
+  </data>
+  <data name="Delete" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="Back" xml:space="preserve">
+    <value>Back</value>
+  </data>
+  <data name="Retry" xml:space="preserve">
+    <value>Retry</value>
+  </data>
+  <data name="Close" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="ShowPassword" xml:space="preserve">
+    <value>Show password</value>
+  </data>
+  <data name="HidePassword" xml:space="preserve">
+    <value>Hide password</value>
+  </data>
+  <data name="LockNow" xml:space="preserve">
+    <value>Lock now</value>
+  </data>
+  <data name="Tags" xml:space="preserve">
+    <value>Tags</value>
+  </data>
+  <data name="Appearance" xml:space="preserve">
+    <value>Appearance</value>
+  </data>
+  <data name="ThemeSystem" xml:space="preserve">
+    <value>System</value>
+  </data>
+  <data name="ThemeDark" xml:space="preserve">
+    <value>Dark</value>
+  </data>
+  <data name="ThemeLight" xml:space="preserve">
+    <value>Light</value>
+  </data>
+  <data name="Rename" xml:space="preserve">
+    <value>Rename</value>
+  </data>
+  <data name="Move" xml:space="preserve">
+    <value>Move</value>
+  </data>
+  <data name="MoveTitle" xml:space="preserve">
+    <value>Move</value>
+  </data>
+  <data name="MoveRoot" xml:space="preserve">
+    <value>/ (Root)</value>
+  </data>
+  <data name="Create" xml:space="preserve">
+    <value>Create</value>
+  </data>
+  <data name="ErrorTitle" xml:space="preserve">
+    <value>Error</value>
+  </data>
+  <data name="TreeRoot" xml:space="preserve">
+    <value>Root</value>
+  </data>
+  <data name="ItemCountOne" xml:space="preserve">
+    <value>{0} item</value>
+  </data>
+  <data name="ItemCountFew" xml:space="preserve">
+    <value>{0} items</value>
+  </data>
+  <data name="ItemCountMany" xml:space="preserve">
+    <value>{0} items</value>
+  </data>
+  <data name="ItemCountOther" xml:space="preserve">
+    <value>{0} items</value>
+  </data>
+  <data name="Unlock" xml:space="preserve">
+    <value>Unlock</value>
+  </data>
+  <data name="TreeFoldersFormat" xml:space="preserve">
+    <value>Folders ({0})</value>
+  </data>
+  <data name="TreeArticlesFormat" xml:space="preserve">
+    <value>Articles ({0})</value>
+  </data>
+  <data name="TreeEmptyTitle" xml:space="preserve">
+    <value>This folder is empty</value>
+  </data>
+  <data name="TreeEmptyDesc" xml:space="preserve">
+    <value>Create a new article or a subfolder here.</value>
+  </data>
+  <data name="NewFolder" xml:space="preserve">
+    <value>New folder</value>
+  </data>
+  <data name="NewArticle" xml:space="preserve">
+    <value>New article</value>
+  </data>
+  <data name="NewFolderParentRoot" xml:space="preserve">
+    <value>Will be created in the root section</value>
+  </data>
+  <data name="NewFolderParentFormat" xml:space="preserve">
+    <value>Inside folder “{0}”</value>
+  </data>
+  <data name="FolderNameLabel" xml:space="preserve">
+    <value>Folder name</value>
+  </data>
+  <data name="FolderNamePlaceholder" xml:space="preserve">
+    <value>For example: Notes</value>
+  </data>
+  <data name="FolderNameRequired" xml:space="preserve">
+    <value>Enter a folder name.</value>
+  </data>
+  <data name="RenameTitle" xml:space="preserve">
+    <value>Rename</value>
+  </data>
+  <data name="NewNameLabel" xml:space="preserve">
+    <value>New name</value>
+  </data>
+  <data name="DeleteFolderTitle" xml:space="preserve">
+    <value>Delete folder?</value>
+  </data>
+  <data name="DeleteFolderDesc" xml:space="preserve">
+    <value>The folder and its subfolders will be deleted on all your devices. The articles inside will be moved to the root.</value>
+  </data>
+  <data name="DeleteArticleTitle" xml:space="preserve">
+    <value>Delete article?</value>
+  </data>
+  <data name="DeleteArticleDesc" xml:space="preserve">
+    <value>The article will be deleted on all your devices. You can restore it from the trash.</value>
+  </data>
+  <data name="ArticleProtectedMeta" xml:space="preserve">
+    <value>Protected article</value>
+  </data>
+  <data name="EmptyArticlePreview" xml:space="preserve">
+    <value>Empty article</value>
+  </data>
+  <data name="FolderActions" xml:space="preserve">
+    <value>Folder actions</value>
+  </data>
+  <data name="ArticleActions" xml:space="preserve">
+    <value>Article actions</value>
+  </data>
+  <data name="SearchPlaceholder" xml:space="preserve">
+    <value>Find an article…</value>
+  </data>
+  <data name="SearchInText" xml:space="preserve">
+    <value>Also search in article text</value>
+  </data>
+  <data name="AllTags" xml:space="preserve">
+    <value>All tags</value>
+  </data>
+  <data name="Recent" xml:space="preserve">
+    <value>Recent</value>
+  </data>
+  <data name="FoundFormat" xml:space="preserve">
+    <value>Found ({0})</value>
+  </data>
+  <data name="NothingFoundTitle" xml:space="preserve">
+    <value>Nothing found</value>
+  </data>
+  <data name="NothingFoundDesc" xml:space="preserve">
+    <value>Try a different query or choose another tag.</value>
+  </data>
+  <data name="Reset" xml:space="preserve">
+    <value>Reset</value>
+  </data>
+  <data name="ClearSearch" xml:space="preserve">
+    <value>Clear search</value>
+  </data>
+  <data name="SearchArticlesLabel" xml:space="preserve">
+    <value>Search articles</value>
+  </data>
+  <data name="ArticleTitle" xml:space="preserve">
+    <value>Article</value>
+  </data>
+  <data name="Edit" xml:space="preserve">
+    <value>Edit</value>
+  </data>
+  <data name="More" xml:space="preserve">
+    <value>More</value>
+  </data>
+  <data name="ShowRaw" xml:space="preserve">
+    <value>Show source text</value>
+  </data>
+  <data name="ShowRendered" xml:space="preserve">
+    <value>Show rendered</value>
+  </data>
+  <data name="SetPassword" xml:space="preserve">
+    <value>Set a password</value>
+  </data>
+  <data name="RemovePassword" xml:space="preserve">
+    <value>Remove password</value>
+  </data>
+  <data name="ProtectedTitle" xml:space="preserve">
+    <value>This article is protected by a password</value>
+  </data>
+  <data name="ProtectedHintFormat" xml:space="preserve">
+    <value>Hint: {0}</value>
+  </data>
+  <data name="EnterArticlePassword" xml:space="preserve">
+    <value>Enter the article password</value>
+  </data>
+  <data name="ArticlePasswordLabel" xml:space="preserve">
+    <value>Article password</value>
+  </data>
+  <data name="OpenArticle" xml:space="preserve">
+    <value>Open article</value>
+  </data>
+  <data name="WrongArticlePassword" xml:space="preserve">
+    <value>Wrong article password.</value>
+  </data>
+  <data name="RelatedTitle" xml:space="preserve">
+    <value>Related articles</value>
+  </data>
+  <data name="ShowMore" xml:space="preserve">
+    <value>Show more</value>
+  </data>
+  <data name="ShowAll" xml:space="preserve">
+    <value>Show all</value>
+  </data>
+  <data name="ShowLess" xml:space="preserve">
+    <value>Show less</value>
+  </data>
+  <data name="CommentsFormat" xml:space="preserve">
+    <value>Comments ({0})</value>
+  </data>
+  <data name="NoComments" xml:space="preserve">
+    <value>No comments yet.</value>
+  </data>
+  <data name="AddCommentPlaceholder" xml:space="preserve">
+    <value>Add a comment…</value>
+  </data>
+  <data name="Send" xml:space="preserve">
+    <value>Send</value>
+  </data>
+  <data name="DeleteCommentTitle" xml:space="preserve">
+    <value>Delete comment?</value>
+  </data>
+  <data name="DeleteCommentDesc" xml:space="preserve">
+    <value>Delete this comment?</value>
+  </data>
+  <data name="ArticleNotFound" xml:space="preserve">
+    <value>Article not found.</value>
+  </data>
+  <data name="RemovePasswordTitle" xml:space="preserve">
+    <value>Remove password</value>
+  </data>
+  <data name="RemovePasswordDesc" xml:space="preserve">
+    <value>Enter the article password to remove its protection. The article will become readable without a password.</value>
+  </data>
+  <data name="Remove" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="WrongPasswordTitle" xml:space="preserve">
+    <value>Wrong password</value>
+  </data>
+  <data name="WrongPasswordDesc" xml:space="preserve">
+    <value>The password is incorrect.</value>
+  </data>
+  <data name="ImageUnavailableFormat" xml:space="preserve">
+    <value>[Image unavailable: {0}]</value>
+  </data>
+  <data name="ExternalImageRemoved" xml:space="preserve">
+    <value>[external image removed]</value>
+  </data>
+  <data name="ErrorLoadingContent" xml:space="preserve">
+    <value>Error loading content</value>
+  </data>
+  <data name="NewArticleTitle" xml:space="preserve">
+    <value>New article</value>
+  </data>
+  <data name="EditArticleTitle" xml:space="preserve">
+    <value>Edit article</value>
+  </data>
+  <data name="TitleLabel" xml:space="preserve">
+    <value>Article title</value>
+  </data>
+  <data name="TitlePlaceholder" xml:space="preserve">
+    <value>For example: Trip plan</value>
+  </data>
+  <data name="TitleRequired" xml:space="preserve">
+    <value>Enter the article title.</value>
+  </data>
+  <data name="FolderLabel" xml:space="preserve">
+    <value>Folder</value>
+  </data>
+  <data name="TagsLabel" xml:space="preserve">
+    <value>Tags</value>
+  </data>
+  <data name="NewTagPlaceholder" xml:space="preserve">
+    <value>New tag</value>
+  </data>
+  <data name="AddTag" xml:space="preserve">
+    <value>Add</value>
+  </data>
+  <data name="ContentLabel" xml:space="preserve">
+    <value>Article text</value>
+  </data>
+  <data name="ModeText" xml:space="preserve">
+    <value>Text</value>
+  </data>
+  <data name="ModePreview" xml:space="preserve">
+    <value>Preview</value>
+  </data>
+  <data name="ToolbarHeading" xml:space="preserve">
+    <value>Heading</value>
+  </data>
+  <data name="ToolbarBold" xml:space="preserve">
+    <value>Bold</value>
+  </data>
+  <data name="ToolbarList" xml:space="preserve">
+    <value>List</value>
+  </data>
+  <data name="ToolbarLink" xml:space="preserve">
+    <value>Link</value>
+  </data>
+  <data name="ToolbarImage" xml:space="preserve">
+    <value>Image</value>
+  </data>
+  <data name="SnippetHeading" xml:space="preserve">
+    <value>
+## Heading
+</value>
+  </data>
+  <data name="SnippetBold" xml:space="preserve">
+    <value>**bold text**</value>
+  </data>
+  <data name="SnippetList" xml:space="preserve">
+    <value>
+- List item
+</value>
+  </data>
+  <data name="SnippetLink" xml:space="preserve">
+    <value>[name](https://example.com)</value>
+  </data>
+  <data name="ArticlePasswordCardTitle" xml:space="preserve">
+    <value>Password for this article</value>
+  </data>
+  <data name="ArticlePasswordCardMeta" xml:space="preserve">
+    <value>The article opens only with a separate password</value>
+  </data>
+  <data name="ArticlePasswordPlaceholder" xml:space="preserve">
+    <value>Enter a password</value>
+  </data>
+  <data name="RepeatPasswordLabel" xml:space="preserve">
+    <value>Repeat the password</value>
+  </data>
+  <data name="RepeatPasswordPlaceholder" xml:space="preserve">
+    <value>Repeat the password</value>
+  </data>
+  <data name="HintLabel" xml:space="preserve">
+    <value>Hint</value>
+  </data>
+  <data name="HintPlaceholder" xml:space="preserve">
+    <value>A hint for the article password</value>
+  </data>
+  <data name="PasswordWarning" xml:space="preserve">
+    <value>If you forget the article password, the article cannot be opened.</value>
+  </data>
+  <data name="PasswordMismatch" xml:space="preserve">
+    <value>The password and the repeat must match.</value>
+  </data>
+  <data name="PasswordTooShort" xml:space="preserve">
+    <value>Password must be at least 4 characters.</value>
+  </data>
+  <data name="SaveArticle" xml:space="preserve">
+    <value>Save article</value>
+  </data>
+  <data name="UnsavedTitle" xml:space="preserve">
+    <value>Save changes?</value>
+  </data>
+  <data name="UnsavedDesc" xml:space="preserve">
+    <value>The article has unsaved edits.</value>
+  </data>
+  <data name="DontSave" xml:space="preserve">
+    <value>Don't save</value>
+  </data>
+  <data name="StillLoading" xml:space="preserve">
+    <value>Still loading — please wait a moment and try again.</value>
+  </data>
+  <data name="UnlockFirst" xml:space="preserve">
+    <value>Unlock the article first.</value>
+  </data>
+  <data name="AddImageTitle" xml:space="preserve">
+    <value>Add image</value>
+  </data>
+  <data name="PhotoLibrary" xml:space="preserve">
+    <value>Photo library</value>
+  </data>
+  <data name="TakePhoto" xml:space="preserve">
+    <value>Take photo</value>
+  </data>
+  <data name="ChooseFolder" xml:space="preserve">
+    <value>Choose folder</value>
+  </data>
+  <data name="EmptyNotePreview" xml:space="preserve">
+    <value>Empty note.</value>
+  </data>
+  <data name="EditGateTitle" xml:space="preserve">
+    <value>Enter the password to edit this article</value>
+  </data>
+  <data name="ProtectWithPassword" xml:space="preserve">
+    <value>Protect with a password</value>
+  </data>
+  <data name="ChooseFolderTitle" xml:space="preserve">
+    <value>Choose folder</value>
+  </data>
+  <data name="SearchFoldersPlaceholder" xml:space="preserve">
+    <value>Search folders…</value>
+  </data>
+  <data name="Select" xml:space="preserve">
+    <value>Select</value>
+  </data>
+  <data name="NewFolderExample" xml:space="preserve">
+    <value>e.g. MyFolder</value>
+  </data>
+  <data name="LockPill" xml:space="preserve">
+    <value>Password</value>
+  </data>
+  <data name="CommentDecryptError" xml:space="preserve">
+    <value>[cannot decrypt this comment]</value>
+  </data>
+  <data name="TreeDepthFormat" xml:space="preserve">
+    <value>Tree [{0}]</value>
+  </data>
+  <data name="EditorBodyPlaceholder" xml:space="preserve">
+    <value>## Heading
+
+Note text…</value>
+  </data>
+  <data name="SyncPendingTitle" xml:space="preserve">
+    <value>Device waits for approval</value>
+  </data>
+  <data name="SyncPendingDesc" xml:space="preserve">
+    <value>Approve this device on your computer or in the server's admin page.</value>
+  </data>
+  <data name="SyncThisDevice" xml:space="preserve">
+    <value>This device</value>
+  </data>
+  <data name="SyncDeviceIdLabel" xml:space="preserve">
+    <value>Identifier</value>
+  </data>
+  <data name="SyncCheckAgain" xml:space="preserve">
+    <value>Check again</value>
+  </data>
+  <data name="SyncOfflineTitle" xml:space="preserve">
+    <value>No network</value>
+  </data>
+  <data name="SyncOfflineDesc" xml:space="preserve">
+    <value>Changes are saved on the phone and will be sent when a connection appears.</value>
+  </data>
+  <data name="SyncErrorTitle" xml:space="preserve">
+    <value>Sync error</value>
+  </data>
+  <data name="SyncBgOffTitle" xml:space="preserve">
+    <value>Background sync is not active</value>
+  </data>
+  <data name="SyncBgOffDesc" xml:space="preserve">
+    <value>This device can't receive updates while locked yet. Lock and unlock the app once to activate background sync.</value>
+  </data>
+  <data name="SyncStateCard" xml:space="preserve">
+    <value>State</value>
+  </data>
+  <data name="SyncStateReady" xml:space="preserve">
+    <value>Ready</value>
+  </data>
+  <data name="SyncStateError" xml:space="preserve">
+    <value>Error</value>
+  </data>
+  <data name="SyncStateInvisible" xml:space="preserve">
+    <value>Invisible mode</value>
+  </data>
+  <data name="SyncLastSync" xml:space="preserve">
+    <value>Last sync</value>
+  </data>
+  <data name="SyncLastSuccessSync" xml:space="preserve">
+    <value>Last successful sync</value>
+  </data>
+  <data name="SyncNever" xml:space="preserve">
+    <value>Never</value>
+  </data>
+  <data name="SyncNow" xml:space="preserve">
+    <value>Sync now</value>
+  </data>
+  <data name="SyncBgLabel" xml:space="preserve">
+    <value>Background sync</value>
+  </data>
+  <data name="SyncBgNever" xml:space="preserve">
+    <value>Has not run yet</value>
+  </data>
+  <data name="SyncBgLastRunFormat" xml:space="preserve">
+    <value>Last run {0}</value>
+  </data>
+  <data name="SyncInvisibleTitle" xml:space="preserve">
+    <value>Invisible mode</value>
+  </data>
+  <data name="SyncInvisibleDesc" xml:space="preserve">
+    <value>Other devices won't see you, sync is paused.</value>
+  </data>
+  <data name="SyncInvisibleTurnOff" xml:space="preserve">
+    <value>Turn off invisible mode to sync.</value>
+  </data>
+  <data name="SyncDevicesCard" xml:space="preserve">
+    <value>Devices</value>
+  </data>
+  <data name="SyncAddAddress" xml:space="preserve">
+    <value>+ Add address</value>
+  </data>
+  <data name="SyncNoDevices" xml:space="preserve">
+    <value>No devices added.</value>
+  </data>
+  <data name="SyncEventsCard" xml:space="preserve">
+    <value>Recent events</value>
+  </data>
+  <data name="SyncNoEvents" xml:space="preserve">
+    <value>No recent events.</value>
+  </data>
+  <data name="DeviceChangeAddress" xml:space="preserve">
+    <value>Change address</value>
+  </data>
+  <data name="DeviceRemoveAddress" xml:space="preserve">
+    <value>Remove address</value>
+  </data>
+  <data name="DeviceRemoveDevice" xml:space="preserve">
+    <value>Remove device</value>
+  </data>
+  <data name="ChangeAddressPromptFormat" xml:space="preserve">
+    <value>Enter the new address for {0}.</value>
+  </data>
+  <data name="AddressPlaceholder" xml:space="preserve">
+    <value>192.168.1.42 or a server address</value>
+  </data>
+  <data name="AddAddressTitle" xml:space="preserve">
+    <value>Add address</value>
+  </data>
+  <data name="AddAddressPromptFormat" xml:space="preserve">
+    <value>Enter an address where {0} can be reached. It is kept on this phone only.</value>
+  </data>
+  <data name="WarningTitle" xml:space="preserve">
+    <value>Warning</value>
+  </data>
+  <data name="SaveAnyway" xml:space="preserve">
+    <value>Save anyway</value>
+  </data>
+  <data name="NotSavedTitle" xml:space="preserve">
+    <value>Not saved</value>
+  </data>
+  <data name="AddressUpdatedFormat" xml:space="preserve">
+    <value>The address of {0} is updated.</value>
+  </data>
+  <data name="NothingToChangeTitle" xml:space="preserve">
+    <value>Nothing to change</value>
+  </data>
+  <data name="AddressAddedTitle" xml:space="preserve">
+    <value>Address added</value>
+  </data>
+  <data name="RemoveAddressDesc" xml:space="preserve">
+    <value>Remove this address? Only this phone forgets it; the device and its other addresses stay.</value>
+  </data>
+  <data name="RemoveDeviceDescFormat" xml:space="preserve">
+    <value>Remove "{0}" from your devices? They will no longer sync with this phone.</value>
+  </data>
+  <data name="NoLocalAddressTitle" xml:space="preserve">
+    <value>No address to remove</value>
+  </data>
+  <data name="NoLocalAddressDesc" xml:space="preserve">
+    <value>This device has no address added on this phone. Its other addresses are not this phone's to remove.</value>
+  </data>
+  <data name="PickAddressTitle" xml:space="preserve">
+    <value>Choose an address to remove</value>
+  </data>
+  <data name="PickDeviceTitle" xml:space="preserve">
+    <value>Choose a device</value>
+  </data>
+  <data name="FailedToUpdateTitle" xml:space="preserve">
+    <value>Failed to update</value>
+  </data>
+  <data name="FailedToAddAddressTitle" xml:space="preserve">
+    <value>Failed to add the address</value>
+  </data>
+  <data name="FailedToRemoveAddressTitle" xml:space="preserve">
+    <value>Failed to remove the address</value>
+  </data>
+  <data name="SyncingTitle" xml:space="preserve">
+    <value>Syncing</value>
+  </data>
+  <data name="SyncingMessage" xml:space="preserve">
+    <value>Please wait while this phone syncs with its devices. This can take a while on a slow connection.</value>
+  </data>
+  <data name="SyncFailedTitle" xml:space="preserve">
+    <value>The sync did not work</value>
+  </data>
+  <data name="EventArticleCreated" xml:space="preserve">
+    <value>Article created</value>
+  </data>
+  <data name="EventArticleUpdated" xml:space="preserve">
+    <value>Article updated</value>
+  </data>
+  <data name="EventArticleDeleted" xml:space="preserve">
+    <value>Article deleted</value>
+  </data>
+  <data name="EventCommentAdded" xml:space="preserve">
+    <value>Comment added</value>
+  </data>
+  <data name="EventCommentDeleted" xml:space="preserve">
+    <value>Comment deleted</value>
+  </data>
+  <data name="EventDeviceAdded" xml:space="preserve">
+    <value>Device added</value>
+  </data>
+  <data name="EventDeviceRemoved" xml:space="preserve">
+    <value>Device removed</value>
+  </data>
+  <data name="TimeJustNow" xml:space="preserve">
+    <value>just now</value>
+  </data>
+  <data name="TimeMinutesAgoFormat" xml:space="preserve">
+    <value>{0}m ago</value>
+  </data>
+  <data name="TimeHoursAgoFormat" xml:space="preserve">
+    <value>{0}h ago</value>
+  </data>
+  <data name="TimeDaysAgoFormat" xml:space="preserve">
+    <value>{0}d ago</value>
+  </data>
+  <data name="SettingsSignIn" xml:space="preserve">
+    <value>Sign-in</value>
+  </data>
+  <data name="SettingsFingerprint" xml:space="preserve">
+    <value>Fingerprint sign-in</value>
+  </data>
+  <data name="SettingsFingerprintDesc" xml:space="preserve">
+    <value>Open the app with the phone's biometrics</value>
+  </data>
+  <data name="SettingsChangeMaster" xml:space="preserve">
+    <value>Change master password</value>
+  </data>
+  <data name="SettingsLock" xml:space="preserve">
+    <value>Lock</value>
+  </data>
+  <data name="SettingsLockOnLeave" xml:space="preserve">
+    <value>Lock when I leave the app</value>
+  </data>
+  <data name="SettingsLockIdle" xml:space="preserve">
+    <value>Lock when idle</value>
+  </data>
+  <data name="LockIdle1" xml:space="preserve">
+    <value>After 1 minute</value>
+  </data>
+  <data name="LockIdle5" xml:space="preserve">
+    <value>After 5 minutes</value>
+  </data>
+  <data name="LockIdle15" xml:space="preserve">
+    <value>After 15 minutes</value>
+  </data>
+  <data name="LockIdleNever" xml:space="preserve">
+    <value>Don't lock</value>
+  </data>
+  <data name="SettingsRecovery" xml:space="preserve">
+    <value>Recovery</value>
+  </data>
+  <data name="SettingsRecoveryDesc" xml:space="preserve">
+    <value>A key lets you set a new master password if you forget the current one.</value>
+  </data>
+  <data name="SettingsNewRecovery" xml:space="preserve">
+    <value>Create a new recovery key</value>
+  </data>
+  <data name="SettingsTrash" xml:space="preserve">
+    <value>Trash</value>
+  </data>
+  <data name="SettingsTrashCountFormat" xml:space="preserve">
+    <value>Deleted articles: {0}</value>
+  </data>
+  <data name="SettingsOpen" xml:space="preserve">
+    <value>Open</value>
+  </data>
+  <data name="SettingsAbout" xml:space="preserve">
+    <value>About this device</value>
+  </data>
+  <data name="SettingsDeviceName" xml:space="preserve">
+    <value>Device name</value>
+  </data>
+  <data name="SettingsDeviceId" xml:space="preserve">
+    <value>Identifier</value>
+  </data>
+  <data name="SettingsDeviceKey" xml:space="preserve">
+    <value>Device key</value>
+  </data>
+  <data name="SettingsAppVersion" xml:space="preserve">
+    <value>App version</value>
+  </data>
+  <data name="SettingsDangerZone" xml:space="preserve">
+    <value>Danger zone</value>
+  </data>
+  <data name="SettingsWipe" xml:space="preserve">
+    <value>Delete data from this phone</value>
+  </data>
+  <data name="IdCopied" xml:space="preserve">
+    <value>Identifier copied</value>
+  </data>
+  <data name="KeyCopied" xml:space="preserve">
+    <value>Device key copied</value>
+  </data>
+  <data name="ChangeMasterTitle" xml:space="preserve">
+    <value>Change master password</value>
+  </data>
+  <data name="CurrentPasswordLabel" xml:space="preserve">
+    <value>Current password</value>
+  </data>
+  <data name="CurrentPasswordPlaceholder" xml:space="preserve">
+    <value>Enter the current password</value>
+  </data>
+  <data name="NewPasswordLabel" xml:space="preserve">
+    <value>New password</value>
+  </data>
+  <data name="NewPasswordPlaceholder" xml:space="preserve">
+    <value>At least 8 characters</value>
+  </data>
+  <data name="RepeatNewPasswordLabel" xml:space="preserve">
+    <value>Repeat the new password</value>
+  </data>
+  <data name="RepeatNewPasswordPlaceholder" xml:space="preserve">
+    <value>Repeat the new password</value>
+  </data>
+  <data name="MasterHintPlaceholder" xml:space="preserve">
+    <value>Must not contain the password itself</value>
+  </data>
+  <data name="ChangeMasterErrorMismatch" xml:space="preserve">
+    <value>The new passwords must match and be at least 8 characters.</value>
+  </data>
+  <data name="ChangeMasterErrorHint" xml:space="preserve">
+    <value>Write a hint that does not contain the password.</value>
+  </data>
+  <data name="ChangeMasterErrorFill" xml:space="preserve">
+    <value>Fill in all the fields.</value>
+  </data>
+  <data name="PasswordChanged" xml:space="preserve">
+    <value>Master password changed</value>
+  </data>
+  <data name="ChangingPasswordTitle" xml:space="preserve">
+    <value>Changing the password</value>
+  </data>
+  <data name="ChangingPasswordMessage" xml:space="preserve">
+    <value>Please wait. The new password is being applied to the keys of this phone.</value>
+  </data>
+  <data name="FingerprintEnablePrompt" xml:space="preserve">
+    <value>Enter your master password to turn on fingerprint sign-in.</value>
+  </data>
+  <data name="FingerprintWrongPassword" xml:space="preserve">
+    <value>That master password is not correct.</value>
+  </data>
+  <data name="FingerprintStoreFailed" xml:space="preserve">
+    <value>Could not save the fingerprint. You can try again later.</value>
+  </data>
+  <data name="FingerprintNotAvailable" xml:space="preserve">
+    <value>Fingerprint is not set up on this phone.</value>
+  </data>
+  <data name="RecoveryStep1Title" xml:space="preserve">
+    <value>Confirm the master password</value>
+  </data>
+  <data name="RecoveryStep1Desc" xml:space="preserve">
+    <value>To create a new recovery key, enter the current master password.</value>
+  </data>
+  <data name="MasterPasswordLabel" xml:space="preserve">
+    <value>Master password</value>
+  </data>
+  <data name="MasterPasswordPlaceholder" xml:space="preserve">
+    <value>Enter the master password</value>
+  </data>
+  <data name="RecoveryPasswordError" xml:space="preserve">
+    <value>Enter a valid master password (at least 8 characters).</value>
+  </data>
+  <data name="RecoveryContinue" xml:space="preserve">
+    <value>Continue</value>
+  </data>
+  <data name="RecoveryStep2Title" xml:space="preserve">
+    <value>A new key, alongside your others</value>
+  </data>
+  <data name="RecoveryStep2Desc" xml:space="preserve">
+    <value>The new recovery key works together with your existing passwords and recovery keys. To make all old recovery keys stop working, rotate the data key in the server's admin page.</value>
+  </data>
+  <data name="RecoveryStep2Note" xml:space="preserve">
+    <value>Make sure you save the new key in a safe place right after it is created.</value>
+  </data>
+  <data name="RecoveryCreateKey" xml:space="preserve">
+    <value>Create the new key</value>
+  </data>
+  <data name="RecoveryStep3Title" xml:space="preserve">
+    <value>New recovery key</value>
+  </data>
+  <data name="RecoveryStep3Desc" xml:space="preserve">
+    <value>Save this key. It works together with your other keys.</value>
+  </data>
+  <data name="RecoveryCopy" xml:space="preserve">
+    <value>Copy</value>
+  </data>
+  <data name="RecoverySaveFile" xml:space="preserve">
+    <value>Save to a file</value>
+  </data>
+  <data name="RecoverySavedCheck" xml:space="preserve">
+    <value>I saved the new key in a safe place</value>
+  </data>
+  <data name="RecoveryDone" xml:space="preserve">
+    <value>Done</value>
+  </data>
+  <data name="RecoveryKeyCopied" xml:space="preserve">
+    <value>Recovery key copied</value>
+  </data>
+  <data name="RecoveryKeyFileSaved" xml:space="preserve">
+    <value>The key file was saved</value>
+  </data>
+  <data name="RecoveryKeyFileContent" xml:space="preserve">
+    <value>BeeMemoryBank — recovery key:
+{0}
+</value>
+  </data>
+  <data name="RecoveryKeyFileName" xml:space="preserve">
+    <value>BeeMemoryBank-recovery-key.txt</value>
+  </data>
+  <data name="RecoveryCreatingTitle" xml:space="preserve">
+    <value>Creating the recovery key</value>
+  </data>
+  <data name="RecoveryCreatingMessage" xml:space="preserve">
+    <value>Please wait. The new key is being created.</value>
+  </data>
+  <data name="EncryptPageDesc" xml:space="preserve">
+    <value>Articles are already stored encrypted. This encrypts the database file whole: titles, folders and tags will also be hidden in the phone's storage.</value>
+  </data>
+  <data name="EncryptWarningTitle" xml:space="preserve">
+    <value>Do not close the app</value>
+  </data>
+  <data name="EncryptWarningDesc" xml:space="preserve">
+    <value>Whole-database encryption takes time. During the process you must not close the app or restart the phone.</value>
+  </data>
+  <data name="EncryptConfirm" xml:space="preserve">
+    <value>Encrypt</value>
+  </data>
+  <data name="EncryptOnlyCopy" xml:space="preserve">
+    <value>This phone holds the only copy of these notes; encrypting cannot be undone</value>
+  </data>
+  <data name="TrashEmptyTitle" xml:space="preserve">
+    <value>The trash is empty</value>
+  </data>
+  <data name="TrashEmptyDesc" xml:space="preserve">
+    <value>Deleted articles will come here so they can be restored.</value>
+  </data>
+  <data name="TrashDeletedAtFormat" xml:space="preserve">
+    <value>Deleted: {0}</value>
+  </data>
+  <data name="TrashRestore" xml:space="preserve">
+    <value>Restore</value>
+  </data>
+  <data name="TrashRestoredTitle" xml:space="preserve">
+    <value>Restored</value>
+  </data>
+  <data name="TrashRestoredFormat" xml:space="preserve">
+    <value>"[RESTORED] {0}" is at the top of your notes.</value>
+  </data>
+  <data name="WipeTitle" xml:space="preserve">
+    <value>Delete data from this phone?</value>
+  </data>
+  <data name="WipeDesc" xml:space="preserve">
+    <value>The local copy of the storage and the settings on this phone will be deleted. The data on your other devices is kept.</value>
+  </data>
+  <data name="WipingTitle" xml:space="preserve">
+    <value>Deleting the data on this phone</value>
+  </data>
+  <data name="WipingMessage" xml:space="preserve">
+    <value>Please wait. The local data is being removed and the app restarts by itself.</value>
+  </data>
+  <data name="WipeFailedTitle" xml:space="preserve">
+    <value>The delete did not work</value>
+  </data>
+  <data name="SlotsTitle" xml:space="preserve">
+    <value>Password slots</value>
+  </data>
+  <data name="SlotsDesc" xml:space="preserve">
+    <value>Each slot is an independent password that unlocks the same data.</value>
+  </data>
+  <data name="SlotsEmpty" xml:space="preserve">
+    <value>No slots found.</value>
+  </data>
+  <data name="SlotMain" xml:space="preserve">
+    <value>Main password</value>
+  </data>
+  <data name="SlotUser" xml:space="preserve">
+    <value>User password</value>
+  </data>
+  <data name="SlotDev" xml:space="preserve">
+    <value>Dev password</value>
+  </data>
+  <data name="SlotRecovery" xml:space="preserve">
+    <value>Recovery key</value>
+  </data>
+  <data name="SlotCreatedFormat" xml:space="preserve">
+    <value>Created {0}</value>
+  </data>
+  <data name="DeleteSlotTitle" xml:space="preserve">
+    <value>Delete slot</value>
+  </data>
+  <data name="DeleteSlotDescFormat" xml:space="preserve">
+    <value>Remove "{0}"? This password will no longer work.</value>
+  </data>
+  <data name="AddDevTitle" xml:space="preserve">
+    <value>Add dev password</value>
+  </data>
+  <data name="AddDevDesc" xml:space="preserve">
+    <value>A secondary password for testing. Can be deleted at any time.</value>
+  </data>
+  <data name="DevPasswordPlaceholder" xml:space="preserve">
+    <value>New dev password</value>
+  </data>
+  <data name="DevPasswordConfirmPlaceholder" xml:space="preserve">
+    <value>Confirm dev password</value>
+  </data>
+  <data name="DevPasswordEmpty" xml:space="preserve">
+    <value>Enter a dev password.</value>
+  </data>
+  <data name="DevPasswordAdded" xml:space="preserve">
+    <value>Dev password added.</value>
+  </data>
+  <data name="WelcomeTitle" xml:space="preserve">
+    <value>Welcome</value>
+  </data>
+  <data name="WelcomeDesc" xml:space="preserve">
+    <value>A personal encrypted knowledge base on your phone and your other devices.</value>
+  </data>
+  <data name="WelcomeConnect" xml:space="preserve">
+    <value>Connect to your vault</value>
+  </data>
+  <data name="ConnectTitle" xml:space="preserve">
+    <value>Connect to your vault</value>
+  </data>
+  <data name="ConnectDeviceNameLabel" xml:space="preserve">
+    <value>This device's name</value>
+  </data>
+  <data name="ConnectDeviceNamePlaceholder" xml:space="preserve">
+    <value>My phone</value>
+  </data>
+  <data name="ConnectAddrLabel" xml:space="preserve">
+    <value>Server address or join code</value>
+  </data>
+  <data name="ConnectAddrPlaceholder" xml:space="preserve">
+    <value>https://vault.example.com or a code</value>
+  </data>
+  <data name="ConnectAddrMeta" xml:space="preserve">
+    <value>Connect to an existing server, or paste the join code from your computer. Leave empty to create a standalone offline device.</value>
+  </data>
+  <data name="ConnectPasswordPlaceholder" xml:space="preserve">
+    <value>Your vault's password</value>
+  </data>
+  <data name="ConnectHintLabel" xml:space="preserve">
+    <value>Password hint (required)</value>
+  </data>
+  <data name="ConnectHintMeta" xml:space="preserve">
+    <value>It must not contain the password itself. Anyone who can read this device's data folder can read the hint, so never write anything secret in it.</value>
+  </data>
+  <data name="ConnectStart" xml:space="preserve">
+    <value>Connect</value>
+  </data>
+  <data name="SetupNameRequired" xml:space="preserve">
+    <value>Enter the device name.</value>
+  </data>
+  <data name="JoinCodeDamaged" xml:space="preserve">
+    <value>This join code is damaged. Copy it again from your computer.</value>
+  </data>
+  <data name="StandaloneTitle" xml:space="preserve">
+    <value>No server</value>
+  </data>
+  <data name="StandaloneDesc" xml:space="preserve">
+    <value>No server address was given. This device will not sync with any server; your notes will not be available on your other devices. Continue?</value>
+  </data>
+  <data name="StandaloneConfirm" xml:space="preserve">
+    <value>Create standalone</value>
+  </data>
+  <data name="JoiningTitle" xml:space="preserve">
+    <value>Joining the network</value>
+  </data>
+  <data name="CreatingTitle" xml:space="preserve">
+    <value>Creating your device</value>
+  </data>
+  <data name="SetupLongMessage" xml:space="preserve">
+    <value>Please wait. This can take several minutes on a slow connection. Do not close the app.</value>
+  </data>
+  <data name="SetupStatusContacting" xml:space="preserve">
+    <value>Contacting the server…</value>
+  </data>
+  <data name="SetupStatusVerifying" xml:space="preserve">
+    <value>Verifying your password…</value>
+  </data>
+  <data name="SetupStatusKeys" xml:space="preserve">
+    <value>Exchanging encryption keys…</value>
+  </data>
+  <data name="SetupStatusDownloading" xml:space="preserve">
+    <value>Downloading your library…</value>
+  </data>
+  <data name="SetupStatusImporting" xml:space="preserve">
+    <value>Importing articles…</value>
+  </data>
+  <data name="SetupStatusAlmost" xml:space="preserve">
+    <value>Almost done…</value>
+  </data>
+  <data name="SetupStatusCreating" xml:space="preserve">
+    <value>Creating your device…</value>
+  </data>
+  <data name="SetupStatusEncryption" xml:space="preserve">
+    <value>Setting up encryption…</value>
+  </data>
+  <data name="SetupErrorFormat" xml:space="preserve">
+    <value>Error: {0}</value>
+  </data>
+  <data name="ResetLocalTitle" xml:space="preserve">
+    <value>Reset local data</value>
+  </data>
+  <data name="ResetLocalDesc" xml:space="preserve">
+    <value>This deletes all local data on this device and lets you set up again. Are you sure?</value>
+  </data>
+  <data name="ResetLocalButton" xml:space="preserve">
+    <value>Reset local data</value>
+  </data>
+  <data name="ResettingPhoneTitle" xml:space="preserve">
+    <value>Resetting this phone</value>
+  </data>
+  <data name="ResettingPhoneMessage" xml:space="preserve">
+    <value>Please wait. The local data is being removed and the app restarts by itself.</value>
+  </data>
+  <data name="InitialSyncTitle" xml:space="preserve">
+    <value>Downloading your data</value>
+  </data>
+  <data name="InitialSyncDesc" xml:space="preserve">
+    <value>This has to finish before you can use the app.</value>
+  </data>
+  <data name="InitialSyncConnecting" xml:space="preserve">
+    <value>Connecting…</value>
+  </data>
+  <data name="InitialSyncDownloadingFormat" xml:space="preserve">
+    <value>Downloading from {0}… ({1} events)</value>
+  </data>
+  <data name="InitialSyncDownloadedFormat" xml:space="preserve">
+    <value>Downloaded {0} events</value>
+  </data>
+  <data name="InitialSyncFailedFormat" xml:space="preserve">
+    <value>Sync failed: {0}</value>
+  </data>
+  <data name="InitialSyncBeforeErrorFormat" xml:space="preserve">
+    <value>{0} events downloaded before the error</value>
+  </data>
+  <data name="InitialSyncCancel" xml:space="preserve">
+    <value>Cancel and delete data from this phone</value>
+  </data>
+  <data name="CancelDeleteTitle" xml:space="preserve">
+    <value>Cancel and delete</value>
+  </data>
+  <data name="CancelDeleteDesc" xml:space="preserve">
+    <value>This will delete this device and all data downloaded so far. You'll have to set up again. Continue?</value>
+  </data>
+  <data name="CancelDeleteKeep" xml:space="preserve">
+    <value>Keep trying</value>
+  </data>
+  <data name="DeletingDeviceTitle" xml:space="preserve">
+    <value>Deleting this device</value>
+  </data>
+  <data name="DeletingDeviceMessage" xml:space="preserve">
+    <value>Please wait. The data downloaded so far is being removed and the app restarts by itself.</value>
+  </data>
+  <data name="UnlockSubtitle" xml:space="preserve">
+    <value>Open your vault</value>
+  </data>
+  <data name="UnlockButton" xml:space="preserve">
+    <value>Open vault</value>
+  </data>
+  <data name="UnlockPasswordPlaceholder" xml:space="preserve">
+    <value>Enter your password</value>
+  </data>
+  <data name="UnlockEmpty" xml:space="preserve">
+    <value>Enter your password.</value>
+  </data>
+  <data name="UnlockWrong" xml:space="preserve">
+    <value>Wrong password.</value>
+  </data>
+  <data name="UnlockFingerprint" xml:space="preserve">
+    <value>Unlock with fingerprint</value>
+  </data>
+  <data name="UnlockOr" xml:space="preserve">
+    <value>or</value>
+  </data>
+  <data name="UnlockFingerprintOutdated" xml:space="preserve">
+    <value>Fingerprint data is outdated. Enter your password.</value>
+  </data>
+  <data name="EnableFingerprintTitle" xml:space="preserve">
+    <value>Enable fingerprint</value>
+  </data>
+  <data name="EnableFingerprintDesc" xml:space="preserve">
+    <value>Use fingerprint to unlock next time instead of typing your password?</value>
+  </data>
+  <data name="EnableFingerprintYes" xml:space="preserve">
+    <value>Enable</value>
+  </data>
+  <data name="EnableFingerprintSkip" xml:space="preserve">
+    <value>Skip</value>
+  </data>
+  <data name="SearchTagsPlaceholder" xml:space="preserve">
+    <value>Search tags…</value>
+  </data>
+  <data name="TagsEmptyTitle" xml:space="preserve">
+    <value>No tags yet</value>
+  </data>
+  <data name="TagsEmptyDesc" xml:space="preserve">
+    <value>Tags you add to articles will appear here.</value>
+  </data>
+  <data name="DeleteTagTitle" xml:space="preserve">
+    <value>Delete tag</value>
+  </data>
+  <data name="DeleteTagDescFormat" xml:space="preserve">
+    <value>Delete tag "{0}" from all articles?</value>
+  </data>
+  <data name="TagArticlesEmptyTitle" xml:space="preserve">
+    <value>No articles</value>
+  </data>
+  <data name="TagArticlesEmptyDesc" xml:space="preserve">
+    <value>No articles have this tag.</value>
+  </data>
+  <data name="TagActions" xml:space="preserve">
+    <value>Tag actions</value>
+  </data>
+  <data name="ShowAllTags" xml:space="preserve">
+    <value>Show all tags</value>
+  </data>
+  <data name="TagsCountFormat" xml:space="preserve">
+    <value>Tags ({0})</value>
+  </data>
+  <data name="ArticleCountOne" xml:space="preserve">
+    <value>{0} article</value>
+  </data>
+  <data name="ArticleCountFew" xml:space="preserve">
+    <value>{0} articles</value>
+  </data>
+  <data name="ArticleCountMany" xml:space="preserve">
+    <value>{0} articles</value>
+  </data>
+  <data name="ArticleCountOther" xml:space="preserve">
+    <value>{0} articles</value>
+  </data>
+  <data name="DateToday" xml:space="preserve">
+    <value>today</value>
+  </data>
+  <data name="DateYesterday" xml:space="preserve">
+    <value>yesterday</value>
+  </data>
+  <data name="ExpandAll" xml:space="preserve">
+    <value>Expand all</value>
+  </data>
+  <data name="CollapseAll" xml:space="preserve">
+    <value>Collapse all</value>
+  </data>
+  <data name="SelectedFolderFormat" xml:space="preserve">
+    <value>Selected folder: {0}</value>
+  </data>
+  <data name="EncryptShortTitle" xml:space="preserve">
+    <value>Encryption</value>
+  </data>
+  <data name="SetupModeJoin" xml:space="preserve">
+    <value>Connect</value>
+  </data>
+  <data name="SetupModeCreate" xml:space="preserve">
+    <value>Create</value>
+  </data>
+  <data name="JoinPaste" xml:space="preserve">
+    <value>Paste</value>
+  </data>
+  <data name="JoinMore" xml:space="preserve">
+    <value>More</value>
+  </data>
+  <data name="JoinPasswordMeta" xml:space="preserve">
+    <value>The master password from the computer you are connecting to.</value>
+  </data>
+  <data name="JoinCodeRequired" xml:space="preserve">
+    <value>Paste the join code from the computer's Connect page.</value>
+  </data>
+  <data name="SetupCreateButton" xml:space="preserve">
+    <value>Create vault</value>
+  </data>
+  <data name="AutoEncryptTitle" xml:space="preserve">
+    <value>Encrypting the database on this phone</value>
+  </data>
+  <data name="AutoEncryptMessage" xml:space="preserve">
+    <value>This takes a few seconds. Keep the app open.</value>
+  </data>
+  <data name="AutoEncryptFailed" xml:space="preserve">
+    <value>The database on this phone could not be encrypted: {0}.</value>
+  </data>
+  <data name="AutoEncryptOldNetwork" xml:space="preserve">
+    <value>The database on this phone cannot be encrypted: your network still uses the old sync format. Update Bee Memory Bank on the computer, switch the new format on there, and connect this phone again.</value>
+  </data>
+  <data name="AutoEncryptFailedReason" xml:space="preserve">
+    <value>an unexpected error occurred; your notes are safe and the app keeps working</value>
+  </data>
+  <data name="ReadListError" xml:space="preserve">
+    <value>This list could not be read. Close the app and try again.</value>
+  </data>
+  <data name="SyncUnreachableFormat" xml:space="preserve">
+    <value>Computer {0} is not reachable for now.</value>
+  </data>
+  <data name="SyncUnreachableTitle" xml:space="preserve">
+    <value>Not reachable for now</value>
+  </data>
+  <data name="SyncBadgeUnreachable" xml:space="preserve">
+    <value>Not reachable</value>
+  </data>
+  <data name="SyncStateUnreachable" xml:space="preserve">
+    <value>Not reachable</value>
+  </data>
+  <data name="SyncProblemWrongKey" xml:space="preserve">
+    <value>A computer answered with a different key than the one this phone pinned when it joined; nothing was sent.</value>
+  </data>
+  <data name="SyncProblemRefused" xml:space="preserve">
+    <value>A computer no longer accepts this phone (was it removed from the network?).</value>
+  </data>
+  <data name="SyncProblemBusy" xml:space="preserve">
+    <value>A computer is busy or under maintenance; next round.</value>
+  </data>
+  <data name="SyncProblemSnapshot" xml:space="preserve">
+    <value>This copy is too far behind a computer to catch up by syncing; join again to start fresh.</value>
+  </data>
+  <data name="SyncProblemOther" xml:space="preserve">
+    <value>A sync attempt failed.</value>
+  </data>
+  <data name="SyncReachDirectLan" xml:space="preserve">
+    <value>Direct, on this network</value>
+  </data>
+  <data name="SyncReachDirectInternet" xml:space="preserve">
+    <value>Direct, over the internet</value>
+  </data>
+  <data name="SyncReachAway" xml:space="preserve">
+    <value>Not on this network</value>
+  </data>
+  <data name="SyncReachOldVersion" xml:space="preserve">
+    <value>Direct sync on this network needs an update on {0}</value>
+  </data>
+  <data name="SyncReachViaRelay" xml:space="preserve">
+    <value>Not on this network; its changes arrive through another device</value>
+  </data>
+  <data name="JoinScanQr" xml:space="preserve">
+    <value>Scan QR code</value>
+  </data>
+  <data name="QrScannerUnavailable" xml:space="preserve">
+    <value>The QR scanner of Google Play services is not available on this phone. Paste the code instead.</value>
+  </data>
+  <data name="SyncProblemDisconnected" xml:space="preserve">
+    <value>An administrator disconnected this device from the bank. What is already on it stays readable here; it no longer receives changes.</value>
+  </data>
+  <data name="SyncDisconnectedTitle" xml:space="preserve">
+    <value>Disconnected from the bank</value>
+  </data>
+  <data name="SyncStateDisconnected" xml:space="preserve">
+    <value>Disconnected</value>
+  </data>
+  <data name="SlotRecoveryOwnerFormat" xml:space="preserve">
+    <value>Recovery key of {0}</value>
+  </data>
+  <data name="SlotRecoveryNoOwner" xml:space="preserve">
+    <value>Recovery key (owner unknown)</value>
+  </data>
+  <data name="SettingsDeviceOwner" xml:space="preserve">
+    <value>Belongs to</value>
+  </data>
+  <data name="SettingsDeviceShared" xml:space="preserve">
+    <value>The organisation (a shared device)</value>
+  </data>
+</root>

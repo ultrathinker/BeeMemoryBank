@@ -3,7 +3,7 @@ using BeeMemoryBank.TestSupport;
 namespace BeeMemoryBank.AppPaths.Tests;
 
 /// <summary>
-/// BMB-306 fix round 5 (J1): the link check is the FIRST thing every entry point does, before any "does it exist" question, any probe, any read and any swap or wipe, and it
+/// BMB-306: the link check is the FIRST thing every entry point does, before any "does it exist" question, any probe, any read and any swap or wipe, and it
 /// covers the data folder itself and every reserved name inside it (the databases, their sidecars, the boot store, the marker, the folder id, their temp files, the working
 /// folder). A link - to something or to nothing - is refused by name, and nothing is read, written, moved or wiped through it.
 /// <para>

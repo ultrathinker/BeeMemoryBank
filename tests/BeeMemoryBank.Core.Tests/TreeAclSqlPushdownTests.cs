@@ -3,7 +3,7 @@ using BeeMemoryBank.Core.Services;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// Covers the WP that pushes ACL filtering for <see cref="Services.TreeService.GetTreePathsAsync"/>
+/// Covers the change that pushes ACL filtering for <see cref="Services.TreeService.GetTreePathsAsync"/>
 /// (the <c>bee_get_tree</c> MCP tool's backing method) into
 /// <c>ArticleRepository.ListAsync</c>/<c>FolderRepository.GetAllActiveAsync</c>'s SQL WHERE
 /// clauses, instead of loading the whole vault and filtering with

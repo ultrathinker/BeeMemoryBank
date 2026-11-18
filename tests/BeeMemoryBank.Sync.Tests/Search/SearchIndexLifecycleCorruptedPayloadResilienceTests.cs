@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace BeeMemoryBank.Sync.Tests.Search;
 
 /// <summary>
-/// Finding from an independent adversarial review (2026-08-12, via an AGY/Gemini agent, of the
+/// Finding from an independent adversarial review of the
 /// warm-start fix in <see cref="SearchIndexLifecycleFormatVersionResilienceTests"/>): that fix only
 /// wrapped <c>new SegmentReader(bytes)</c> in a try/catch. <see cref="SegmentReader"/>'s
 /// constructor validates only the fixed-size header (magic bytes, format version, declared doc/

@@ -1,18 +1,17 @@
 appId: com.beememorybank.mobile
 ---
+# The Settings tab: its first card is sign-in (the password slots are a Debug build only now).
 - runFlow: _go_home.yaml
-- tapOn:
-    text: "Open navigation drawer"
 - extendedWaitUntil:
     visible:
-      text: "Security"
+      text: "Settings"
     timeout: 3000
 - tapOn:
-    text: "Security"
+    point: "87%,95%"
 - extendedWaitUntil:
     visible:
-      text: "Security"
+      text: "Sign-in"
     timeout: 10000
 - assertVisible:
-    text: "Security"
+    text: "Sign-in"
 - takeScreenshot: security_page

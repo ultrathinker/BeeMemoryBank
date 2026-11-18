@@ -1,3 +1,5 @@
+using BeeMemoryBank.Sync;
+
 namespace BeeMemoryBank.Api.Models;
 
 /// <summary>Returned in response to /api/sync/challenge.</summary>
@@ -14,8 +16,14 @@ public record SyncChallengeResponse(string Challenge, Guid ServerNodeId);
 /// <param name="AppVersion">The caller's application version; absent from 2.5 builds.</param>
 /// <param name="Platform">What the caller runs on (<see cref="BeeMemoryBank.Sync.Metadata.NodePlatform"/>), for the network map; absent from builds before 2.6.4. Read through <c>NodePlatform.Normalize</c>.</param>
 /// <param name="InContainer">The caller runs in a container; absent from builds before 2.6.4.</param>
+/// <param name="KeyChain">
+/// The caller's key transition chain (release 2.12, plan WS-D D4; newest 16 links): a caller that re-keyed signs with its new key, and a node that has
+/// not learned the re-key yet lets it in when the chain leads from the key on record to the key that signed (<see cref="PeerKey.Follow"/>). Older
+/// callers send none.
+/// </param>
 public record SyncAuthRequest(Guid NodeId, string ChallengeB64, string SignatureB64, int? ProtocolVersion = null,
-    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null, string? Platform = null, bool? InContainer = null);
+    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null, string? Platform = null, bool? InContainer = null,
+    IReadOnlyList<NodeKeyLinkDto>? KeyChain = null);
 
 /// <summary>Response after successful authentication.</summary>
 public record SyncAuthResponse(string Token);
@@ -26,7 +34,8 @@ public record SyncAuthResponse(string Token);
 /// <param name="Platform">What this node runs on (<c>windows</c>, <c>macos</c>, <c>linux</c>, <c>android</c>, <c>ios</c>), for the network map of the node that asks; older nodes ignore it.</param>
 /// <param name="InContainer">This node runs in a container.</param>
 public record SyncIdentityResponse(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion,
-    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null, string? Platform = null, bool? InContainer = null);
+    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null, string? Platform = null, bool? InContainer = null,
+    IReadOnlyList<NodeKeyLinkDto>? KeyChain = null);
 
 /// <summary>Result of applying events.</summary>
 /// <param name="Applied">Count of events successfully persisted via ApplyAsync.</param>
@@ -129,7 +138,7 @@ public static class PeerContactView
     public const string Unknown = "unknown";
     /// <summary>
     /// Its calls fail, but that is not a problem of this node or of the peer: it is not on this network (and maybe reachable through another peer), or
-    /// it runs a version without LAN sync on this network. Shown in words (<see cref="DeliveryNodeStatus.ReachabilityText"/>), never "not answering" (G5).
+    /// it runs a version without LAN sync on this network. Shown in words (<see cref="DeliveryNodeStatus.ReachabilityText"/>), never "not answering".
     /// </summary>
     public const string Away = "away";
 
@@ -220,7 +229,7 @@ public static class PeerContactView
         // the next cycle or the next check says (never an invented "answering").
         var checkedHere = memory.OutboundOkAt is not null || memory.OutboundFailingSince is not null;
         var state = notSince is not null ? NotAnswering : !canBeCalled ? CallsUs : last is null || !checkedHere ? Unknown : Answering;
-        // A peer that is elsewhere, reachable through another peer, or on this network with a version without LAN sync, is not "not answering" (G5).
+        // A peer that is elsewhere, reachable through another peer, or on this network with a version without LAN sync, is not "not answering".
         if (state == NotAnswering && lan?.State is BeeMemoryBank.Sync.Channels.ReachabilityStates.Away
                 or BeeMemoryBank.Sync.Channels.ReachabilityStates.ViaRelay or BeeMemoryBank.Sync.Channels.ReachabilityStates.OldVersion)
         {

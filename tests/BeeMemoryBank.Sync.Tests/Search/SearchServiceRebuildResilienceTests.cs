@@ -14,17 +14,17 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace BeeMemoryBank.Sync.Tests.Search;
 
 /// <summary>
-/// WP-13 Task 3: concurrent search load through the actual public entry point
+/// Concurrent search load through the actual public entry point
 /// (<see cref="SearchService.SearchIndexedContentAsync"/>) while a full index rebuild is in
 /// progress, triggered the same way <see cref="SearchIndexLifecycleService.TriggerFullRebuildAsync"/>
 /// is triggered in production -- a corrupted segment discovered during warm-start.
 ///
 /// <para>
 /// <b>Checked before writing this</b> to confirm this combination is genuinely new coverage:
-/// IndexBuilderConcurrencyTests.cs (WP-10) stresses concurrent readers directly against
+/// IndexBuilderConcurrencyTests.cs stresses concurrent readers directly against
 /// <see cref="IndexBuilder.GetSealedSegments"/>/<c>Lookup</c> while a writer thread churns
 /// add/update/remove/seal/merge -- it never touches persistence, warm-start, or a rebuild trigger
-/// at all. SearchIndexLifecycleIntegrationTests.cs (WP-11) exercises the corrupted-segment ->
+/// at all. SearchIndexLifecycleIntegrationTests.cs exercises the corrupted-segment ->
 /// full-rebuild trigger in isolation, sequentially, with no concurrent readers during the rebuild
 /// window. Neither test calls <see cref="SearchService"/> at all -- both go directly through
 /// <see cref="IndexBuilder"/>/<see cref="SearchIndexLifecycleService"/>. This test is the first to
@@ -39,7 +39,7 @@ namespace BeeMemoryBank.Sync.Tests.Search;
 /// (while re-flagged articles are still being reprocessed) or fully correct (once reprocessing
 /// catches up), never partial/wrong data for an article that IS returned. This matches the design:
 /// <see cref="IndexBuilder"/>'s copy-on-write sealed-segment list and per-call locking (verified
-/// safe under concurrent churn by WP-10's own test) are exactly what
+/// safe under concurrent churn by its own test) are exactly what
 /// <see cref="IndexBuilder.SearchRanked"/> reads from, and <see cref="SearchService.SearchIndexedContentAsync"/>
 /// adds nothing on top beyond a DB hydrate + ACL filter that cannot itself corrupt data (worst case
 /// it returns a stale, since-rebuilt article's OLD ranked position, never a wrong article
@@ -161,7 +161,7 @@ public class SearchServiceRebuildResilienceTests : IAsyncLifetime
 
         // Drive warm-start (discovers corruption -> full rebuild) and the catch-up reindex cycles
         // concurrently with the reader loops above -- this is the actual "search fired while a
-        // rebuild is in progress" window the brief asks for, not just before/after it.
+        // rebuild is in progress" window, not just before/after it.
         Exception? writerException = null;
         try
         {

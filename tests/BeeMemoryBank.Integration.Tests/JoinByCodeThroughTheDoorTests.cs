@@ -10,6 +10,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Infrastructure.Network;
 using BeeMemoryBank.Node;
 using BeeMemoryBank.TestSupport;
 using Microsoft.AspNetCore.Builder;
@@ -19,7 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Task P7: a computer that joins another one with the join code its "Connect a device" card shows. The other computer is a real Api
+/// a computer that joins another one with the join code its "Connect a device" card shows. The other computer is a real Api
 /// on Kestrel behind the real <see cref="LanJoinListener"/> (the temporary door, TLS with a certificate no one trusts), and the joiner is
 /// a real node's <c>POST /api/init/join</c> (what the Setup page calls). Covers: success, wrong token, wrong pin, expired door,
 /// wrong password, and what the person is told in each case.
@@ -38,6 +39,9 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     private LanJoinListener _door = null!;
     private int _doorPort;
     private Guid _nodeAId;
+    private NodeNetworkSettingsStore _networkStore = null!;
+    private LanNetworkSwitch _networkSwitch = null!;
+    private LanListener _switchListener = null!;
 
     public async Task InitializeAsync()
     {
@@ -74,13 +78,20 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
         // The door in front of it: TLS with a certificate from nobody's CA, pinned by the code.
         _cert = CreateServerCertificate();
         _door = NewDoor();
+        // The node's network switch, as the front wires it: a completed join turns "Show this node to devices in my
+        // network" on by itself. Its listener is a second one on a port the system picks.
+        _networkStore = new NodeNetworkSettingsStore(_dataDirA);
+        _switchListener = new LanListener(_nodeA.Urls.First(u => u.StartsWith("http://127.0.0.1")), () => null,
+            () => _cert, new FixedBindPlanner(IPAddress.Loopback), 0);
+        _networkSwitch = new LanNetworkSwitch(_networkStore, _switchListener, _door, new NetworkExposure(false, NetworkExposureSource.Off));
     }
 
     private LanJoinListener NewDoor()
     {
         _doorPort = PortBinding.PickFreePort();
         return new LanJoinListener(_nodeA.Urls.First(u => u.StartsWith("http://127.0.0.1")), () => _cert,
-            new IPEndPoint(IPAddress.Loopback, _doorPort), _clock);
+            new IPEndPoint(IPAddress.Loopback, _doorPort), _clock,
+            finished: () => { if (_networkSwitch is { } sw) _ = sw.TurnOnForJoinAsync(_ => { }); });
     }
 
     /// <summary>Opens the door. Its port was picked before it is bound, so another socket of the machine can take it in between ("address
@@ -103,6 +114,7 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
     {
         foreach (var j in _joiners) j.Dispose();
         await _door.DisposeAsync();
+        await _switchListener.DisposeAsync();
         await _nodeA.StopAsync();
         await _nodeA.DisposeAsync();
         _cert.Dispose();
@@ -128,6 +140,52 @@ public class JoinByCodeThroughTheDoorTests : IAsyncLifetime
 
         (await EventuallyAsync(() => _door.Current == null)).Should().BeTrue(
             "the door turns itself off once the joined device has its snapshot");
+    }
+
+    [Fact]
+    public async Task ASuccessfulJoin_TurnsShowThisNodeToDevicesOn_ByItself()
+    {
+        // the first device joining this computer shows it on the network, with no button.
+        _networkStore.Load().DevicesOnMyNetwork.Should().BeFalse();
+        var session = await EnableDoorAsync();
+        var b = NewJoiner();
+
+        var (status, body) = await JoinAsync(b, CodeFor(session));
+        status.Should().Be(HttpStatusCode.OK, body);
+
+        (await EventuallyAsync(() => _networkStore.Load().DevicesOnMyNetwork)).Should().BeTrue(
+            "the completed join turns the setting on through the same switch the Network settings page uses");
+        _switchListener.WebOn.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ARefusedJoin_LeavesTheSettingOff()
+    {
+        var session = await EnableDoorAsync();
+        var b = NewJoiner();
+
+        // A well-formed but wrong password: the host refuses it (401), the joiner says so as a bad gateway.
+        var (status, _) = await JoinAsync(b, CodeFor(session), "doorJoinPassword124");
+        status.Should().Be(HttpStatusCode.BadGateway);
+
+        _networkStore.Load().DevicesOnMyNetwork.Should().BeFalse("a refused join changes nothing");
+        _switchListener.WebOn.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TheDoorClosingAfterAJoin_LeavesTheSettingOn()
+    {
+        var session = await EnableDoorAsync();
+        var b = NewJoiner();
+        var (status, body) = await JoinAsync(b, CodeFor(session));
+        status.Should().Be(HttpStatusCode.OK, body);
+        (await EventuallyAsync(() => _networkStore.Load().DevicesOnMyNetwork)).Should().BeTrue();
+
+        // The on-demand door closes after the join (by itself, or by its Stop button): the setting stays on.
+        await _door.DisableAsync();
+
+        _networkStore.Load().DevicesOnMyNetwork.Should().BeTrue();
+        _switchListener.WebOn.Should().BeTrue();
     }
 
     [Fact]

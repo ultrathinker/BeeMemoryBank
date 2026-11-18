@@ -56,7 +56,10 @@ public sealed class AgentCommandSealedTests : IDisposable
         door.Pending.Should().BeFalse("the rewrite after the creation made it current");
         door.DekFingerprint.Should().NotBeNull();
         door.KeyHash.Should().NotBeNullOrEmpty();
-        door.KdfVersion.Should().Be(1);
+        door.KdfVersion.Should().Be(2, "a new agent door is a sealed (v2) door");
+        door.DoorVersion.Should().Be(2);
+        door.DoorPublicKey.Should().HaveCount(32);
+        door.EncryptedMasterDek.Should().HaveCount(93, "the box of ADR 0012");
         (await doors.FindAgentAsync(door.KeyHash!)).Should().ContainSingle();
 
         var apiKey = output.ToString().Split('\n').Select(l => l.Trim()).Single(l => l.StartsWith("bee_", StringComparison.Ordinal));

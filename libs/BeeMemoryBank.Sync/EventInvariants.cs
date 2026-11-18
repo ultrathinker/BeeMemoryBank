@@ -14,14 +14,49 @@ namespace BeeMemoryBank.Sync;
 /// </summary>
 public static class EventInvariants
 {
-    /// <returns>Why the event is refused, or null when it breaks neither rule.</returns>
+    /// <returns>Why the event is refused, or null when it breaks no invariant.</returns>
     public static string? Violation(Guid originator, string eventType, string? payload)
     {
-        if (BlindNodeId.IsBlind(originator))
+        if (BlindNodeId.IsBlind(originator) && eventType != EventTypes.NodeState)
             return $"Node {originator} is a blind node; blind nodes never author events.";
+        if (eventType == EventTypes.NodeState)
+            return NodeStateViolation(originator, payload);
         if (BlindEnvelopeRecipient(eventType, payload) is { } blind)
-            return $"The rotation seals the master DEK for blind node {blind}; blind nodes never receive the DEK.";
+            return eventType == EventTypes.SuperadminDoorsSet
+                ? $"The superadmin doors event seals the list key for blind node {blind}; blind nodes never receive it."
+                : $"The rotation seals the master DEK for blind node {blind}; blind nodes never receive the DEK.";
         return null;
+    }
+
+    private static string? NodeStateViolation(Guid originator, string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return "node_state payload must not be empty.";
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return "node_state payload must be a JSON object.";
+            if (!doc.RootElement.TryGetProperty("node_id", out var nodeIdEl)
+                || nodeIdEl.ValueKind != JsonValueKind.String
+                || !Guid.TryParseExact(nodeIdEl.GetString(), "D", out var subject)
+                || subject != originator)
+            {
+                return $"node_state subject must equal its author {originator}.";
+            }
+            if (BlindNodeId.IsBlind(originator)
+                && doc.RootElement.TryGetProperty("dek_fp", out var dekFpEl)
+                && dekFpEl.ValueKind != JsonValueKind.Null
+                && !string.IsNullOrEmpty(dekFpEl.GetString()))
+            {
+                return $"Blind node {originator} must not declare dek_fp in node_state.";
+            }
+            return null;
+        }
+        catch (JsonException)
+        {
+            return "node_state payload is not valid JSON.";
+        }
     }
 
     public static string? Violation(SyncEvent evt) => Violation(evt.NodeId, evt.EventType, evt.Payload);
@@ -33,13 +68,18 @@ public static class EventInvariants
     /// </summary>
     public static string? BlindEnvelopeRecipient(string eventType, string? payload)
     {
-        if (eventType is not (EventTypes.DekRotationProposed or EventTypes.DekRotationCommit)
-            || string.IsNullOrEmpty(payload)) return null;
+        var envelopeField = eventType switch
+        {
+            EventTypes.DekRotationProposed or EventTypes.DekRotationCommit => "dek_envelopes",
+            EventTypes.SuperadminDoorsSet => "list_envelopes",
+            _ => null,
+        };
+        if (envelopeField is null || string.IsNullOrEmpty(payload)) return null;
         try
         {
             using var doc = JsonDocument.Parse(payload);
             if (doc.RootElement.ValueKind != JsonValueKind.Object
-                || !doc.RootElement.TryGetProperty("dek_envelopes", out var envelopes)
+                || !doc.RootElement.TryGetProperty(envelopeField, out var envelopes)
                 || envelopes.ValueKind != JsonValueKind.Object
                 || !envelopes.TryGetProperty("peers", out var peers)
                 || peers.ValueKind != JsonValueKind.Object)

@@ -145,7 +145,7 @@ public class RekeyPreflightTests : RekeyVaultTestBase
         (await RunAsync()).Blocking.Should().ContainSingle(p => p.Table == "tbl_media");
     }
 
-    /// <summary>R2-1: the re-seal fails on a row whose ciphertext is gone, so the pre-flight refuses it — before the
+    /// <summary>The re-seal fails on a row whose ciphertext is gone, so the pre-flight refuses it — before the
     /// copy, where a refusal leaves nothing behind.</summary>
     [Fact]
     public async Task CiphertextThatIsGone_Blocks_BeforeTheCopy()
@@ -177,7 +177,7 @@ public class RekeyPreflightTests : RekeyVaultTestBase
             && p.Problem.Contains("neither"));
     }
 
-    /// <summary>R1-7 on the pre-flight's side: a media directory that is a junction is never read through, and the
+    /// <summary>On the pre-flight's side: a media directory that is a junction is never read through, and the
     /// medium it would have served blocks early (the re-seal refuses it too). Windows: a junction needs no privilege.</summary>
     [Fact]
     public async Task AMediumWhoseEncFileIsBehindAJunction_Blocks_AndIsNotRead()
@@ -212,7 +212,7 @@ public class RekeyPreflightTests : RekeyVaultTestBase
         }
     }
 
-    /// <summary>R2-2: comment_id is TEXT. A NULL or non-GUID one is a legacy comment sealed without an AAD; the product
+    /// <summary>comment_id is TEXT. A NULL or non-GUID one is a legacy comment sealed without an AAD; the product
     /// and the re-seal open it, so the pre-flight must too — and never throw on it.</summary>
     [Theory]
     [InlineData(null)]
@@ -295,10 +295,32 @@ public class RekeyPreflightTests : RekeyVaultTestBase
     }
 
     [Fact]
+    public async Task ARotationAppliedButNotCompleted_Refuses_AndIsNamed()
+    {
+        Mutate("INSERT INTO tbl_migration_marker (key, value, set_at) VALUES ('dek_rotation_completion_pending', '{\"commitEventId\":\"c-77\"}', 'now')");
+
+        (await RunAsync()).Blocking.Should().ContainSingle(p => p.Table == "tbl_migration_marker").Which.RowKey.Should().Be("c-77");
+    }
+
+    [Fact]
     public async Task AFinishedRotation_DoesNotRefuse()
     {
         Mutate("INSERT INTO tbl_dek_rotation_state (event_id, state, rotation_ts, created_at, updated_at) VALUES ('r1', 'APPLIED', 'now', 'now', 'now')");
 
+        (await RunAsync()).Blocking.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AnOpenRemovalOfASuperadmin_Refuses_AndAClosedOneDoesNot()
+    {
+        // Plan A6 (release 2.12.0): a re-key while a removal is open would re-seal under a key the removal's own rotation is about to replace,
+        // and the process's state would have to survive an offline copy of the vault. It is refused, named, until the removal is closed.
+        Mutate(@"INSERT INTO tbl_offboarding (process_id, person_id, user_id, accounts_node_id, driver_node_id, target, step, started_by, started_at, updated_at)
+                 VALUES ('p-1', 'person-1', 1, 'n', 'n', 'delete', 2, 'admin', 'now', 'now')");
+
+        (await RunAsync()).Blocking.Should().ContainSingle(p => p.Table == "tbl_offboarding").Which.Problem.Should().Contain("removal");
+
+        Mutate("UPDATE tbl_offboarding SET closed_at = 'now', outcome = 'deleted', step = 6");
         (await RunAsync()).Blocking.Should().BeEmpty();
     }
 

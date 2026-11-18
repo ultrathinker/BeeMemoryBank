@@ -70,4 +70,13 @@ public sealed class BlindInviteRecord
 
     public DateTime? DecidedAt { get; set; }
     public string? DecidedBy { get; set; }
+
+    /// <summary>Device ownership chosen by the invitation maker: <c>shared</c> (default) or <c>personal</c> (migration 047).</summary>
+    public string Ownership { get; set; } = OwnershipKinds.Shared;
+
+    /// <summary>Owner's <c>tbl_user.person_id</c> when <see cref="Ownership"/> is <c>personal</c>.</summary>
+    public Guid? OwnerPersonId { get; set; }
+
+    /// <summary>Owner's display name when <see cref="Ownership"/> is <c>personal</c>.</summary>
+    public string? OwnerLabel { get; set; }
 }

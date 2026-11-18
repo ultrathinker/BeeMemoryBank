@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-11-07, the owner approved the plan and its recommendations D1 to D9, with one change: the LAN port is
+Accepted (2026-11-07; the plan and its recommendations D1 to D9 were approved with one change: the LAN port is
 a setting). Released in 2.8.0. The design and its implementation notes are in
 [docs/design/lan-peer-sync.md](../design/lan-peer-sync.md).
 

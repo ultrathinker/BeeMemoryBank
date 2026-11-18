@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Fix round 2: ONE failure-text rule at every place where the shared core shows or stores an exception. An adversarial exception (a path, a key alias, a request address with a token, a library's
+/// ONE failure-text rule at every place where the shared core shows or stores an exception. An adversarial exception (a path, a key alias, a request address with a token, a library's
 /// words, a canary) is pushed through the real controller, and nothing a head can show may hold any of it: the sentence a run returns, every string of the status and of the home view, the job's
 /// outcome, the log, and the files the run leaves behind. A text written by 2.6.4 (the raw message) is cleaned when it is read.
 /// (Part of <see cref="BlindAppControllerBehaviorTests"/>: the heavy job's one-at-a-time lock is static, so every test that runs it lives in that one class.)
@@ -115,7 +115,7 @@ public sealed partial class BlindAppControllerBehaviorTests
 
     // ---- what 2.6.4 stored: the raw message of an exception, written into the log file ----------------------------------------------------------
 
-    /// <summary>A line as 2.6.4 wrote it: the entry of that version had no stamp (fix round 3: what is shown of a line is decided by that stamp).</summary>
+    /// <summary>A line as 2.6.4 wrote it: the entry of that version had no stamp (what is shown of a line is decided by that stamp).</summary>
     private static string RawLine(string at, string kind, string message) => JsonSerializer.Serialize(new { At = DateTimeOffset.Parse(at), Kind = kind, Message = message });
 
     [Fact]

@@ -160,7 +160,7 @@ public sealed class RowResealStep : IRekeyStep
             // survives only in the event log, which the re-key clears. Re-sealing it under a key stored nowhere would
             // destroy it anyway, and keeping it under the old key would leave it to the old keys (D1). It is dropped
             // from the copy and listed, without content, in the report; the old vault keeps it until the owner deletes
-            // it. A plaintext one goes the same way (review release-b R1-9): there is no key left to seal it under, and
+            // it. A plaintext one goes the same way: there is no key left to seal it under, and
             // kept, its text would sit in the clear in a vault that promises none.
             var withBody = bodies.Select(b => b.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var orphans in comments.Where(g => !withBody.Contains(g.Key)))
@@ -282,7 +282,7 @@ public sealed class RowResealStep : IRekeyStep
                 if (oldCt == null && MediaFile(ctx.SourceDir, m.Id) is { } linked && File.Exists(linked)
                     && (NoFollow.IsLink(linked) || NoFollow.IsLink(Path.GetDirectoryName(linked)!)))
                 {
-                    // Never read through a link (review release-b R1-7): it could name any file outside the vault.
+                    // Never read through a link: it could name any file outside the vault.
                     Problems.Add(new(Media, m.Id, "its .enc file is a link (or inside a linked media directory); not followed"));
                     continue;
                 }

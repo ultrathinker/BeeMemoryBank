@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Night-mode counterpart of values-v35/styles.xml: the Shell app bar background in the DARK
+         appearance (BmbBackground), for API 35+ where the transparent status bar shows it. See the
+         note in values-v35. -->
+    <style name="MauiAppBarLayout" parent="ThemeOverlay.AppCompat.Dark.ActionBar">
+        <item name="android:background">#0E1015</item>
+    </style>
+</resources>

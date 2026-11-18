@@ -36,7 +36,7 @@ public sealed class SwitchableNodeSigner(INodeAuthSigner real, Func<string> mode
     }
 }
 
-/// <summary>A hub of its own for the tests of what is signed (fix round 1, BLOCKER-1: the hub ALWAYS signs an invitation, and says so when it cannot).</summary>
+/// <summary>A hub of its own for the tests of what is signed (the hub ALWAYS signs an invitation, and says so when it cannot).</summary>
 public sealed class BlindInviteSigningWorld : IAsyncLifetime
 {
     public const string Password = "blindInviteSigningPassword1";

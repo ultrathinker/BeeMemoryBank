@@ -36,6 +36,18 @@ public static class NodeIdentityCrypto
         }
     }
 
+    /// <summary>
+    /// True when <paramref name="seed"/> is the seed of <paramref name="publicKey"/> (constant-time compare); false for a seed or key of the wrong size.
+    /// The Android ingest key store enrols the node's seed again when the enrolled one is not the seed of the node's current key (a re-key, release 2.12
+    /// plan WS-D D4).
+    /// </summary>
+    public static bool IsSeedOf(byte[]? seed, byte[]? publicKey)
+    {
+        if (seed is not { Length: 32 } || publicKey is not { Length: 32 }) return false;
+        var derived = PublicKeyOf(seed);
+        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(derived, publicKey);
+    }
+
     /// <summary>The Ed25519 public key of a 32-byte seed.</summary>
     public static byte[] PublicKeyOf(byte[] seed) =>
         new Org.BouncyCastle.Crypto.Parameters.Ed25519PrivateKeyParameters(seed).GeneratePublicKey().GetEncoded();

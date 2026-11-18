@@ -32,7 +32,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Windows-ACL facts and helpers (review release-a #7): one source in tests/shared. -->
+    <!-- A gate and a key holder that answer only what the boot-store mirror asks (the doors apply on a sealed shared node). -->
+    <Compile Include="..\shared\SealedTestFakes.cs" Link="Shared\SealedTestFakes.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Windows-ACL facts and helpers: one source in tests/shared. -->
     <Compile Include="..\shared\WindowsAcl.cs" Link="Shared\WindowsAcl.cs" />
   </ItemGroup>
 

@@ -156,6 +156,8 @@ public sealed class BlindQrScannerSwitchTests
         scanner.Should().Contain("Task<string?> ScanAsync(");
         scanner.Should().NotContain("AddFromInvitationAsync").And.NotContain("AddAsync").And.NotContain("RequestPermissions").And.NotContain("Permission.Camera");
         scanner.Should().Contain("SetBarcodeFormats(Barcode.FormatQrCode)", "only QR codes are looked for");
+        scanner.Should().NotContain("AsAsync<", "that wrapper crashes the app when the person closes the scanner (16.11)")
+            .And.Contain("AddOnCanceledListener", "closing the scanner is an answer of its own: nothing was read");
         Text("Pages", "BlindAddPage.xaml.cs").Should().Contain("TakeIntoBox(await BlindInviteInput.FromScannerAsync(_scanner));", "what the scanner read goes through the length gate into the box and gets the usual preview");
     }
 }

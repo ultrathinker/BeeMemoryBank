@@ -22,7 +22,7 @@ namespace BeeMemoryBank.Desktop.Tests;
 /// <see cref="NodeLifecycleServiceTests"/> + BeeMemoryBank.Node.Tests; here we substitute a
 /// fake <see cref="INodeLifecycleService"/> so the orchestration logic (guard, stop→start
 /// ordering, revert-to-A, lastUsed invariant, cookie hygiene) is exercised deterministically
-/// and fast, as the brief explicitly permits ("сфабрикованный сбойный NodeLifecycleService").
+/// and fast, using a fabricated failing NodeLifecycleService.
 /// </summary>
 public class ProfileSwitchServiceTests : IDisposable
 {
@@ -369,7 +369,7 @@ public class ProfileSwitchServiceTests : IDisposable
     // ── Scenario 8: lastUsed is PERSISTED to disk — a restart after a switch reopens the right profile ──
 
     /// <summary>
-    /// Этап 6, §6 пункт 2.3: after a REAL switch via <see cref="ProfileSwitchService.SwitchToAsync"/>
+    /// After a REAL switch via <see cref="ProfileSwitchService.SwitchToAsync"/>
     /// (not a direct <see cref="ProfileService.SetLastUsed"/> call), the <c>lastUsedProfileId</c>
     /// must be physically persisted to <c>profiles.json</c> on disk — so that if the process is
     /// killed immediately after the switch, the next launch still reopens the switched-to profile.

@@ -4,7 +4,7 @@ using BeeMemoryBank.Search.Indexing;
 namespace BeeMemoryBank.Search.Tests.Indexing;
 
 /// <summary>
-/// Exercises the concurrency requirement from the WP-10 brief: a reader thread must be able to
+/// Exercises the concurrency requirement: a reader thread must be able to
 /// safely enumerate <see cref="IndexBuilder.GetSealedSegments"/>'s current snapshot while a
 /// background writer thread concurrently adds/updates/removes documents (forcing seals and merges),
 /// without ever observing a torn/inconsistent state or throwing.
@@ -22,8 +22,8 @@ namespace BeeMemoryBank.Search.Tests.Indexing;
 public class IndexBuilderConcurrencyTests
 {
     // Deterministic operation counts (not wall-clock sleeps) so the test's runtime and the amount
-    // of churn it applies are stable across slow/fast machines -- important since the brief asks
-    // for this test to be run several times back-to-back to check for flakiness.
+    // of churn it applies are stable across slow/fast machines -- important since this test is meant
+    // to be run several times back-to-back to check for flakiness.
     private const int WriterArticleCount = 60;
     private const int WriterRoundCount = 40; // 40 rounds x 60 articles = 2400 write operations.
     private const int ReaderThreadCount = 4;

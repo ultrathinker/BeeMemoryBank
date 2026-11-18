@@ -48,7 +48,7 @@ public class BlindServingTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-merge #3: an Android blind node replicating from this one — its only hub — can dial it
+    /// An Android blind node replicating from this one — its only hub — can dial it
     /// and pins its certificate: the producer row carries the address and the pin.
     /// </summary>
     [Fact]
@@ -103,7 +103,7 @@ public class BlindServingTests : IAsyncLifetime
                 await applier.ApplyAsync(Signed(author, key.privateKey, lamport));
         }
         var pushed = _blind.Services.GetRequiredService<ISyncPushPositionRepository>();
-        // Reported, not delivered (Codex round 2, security #3): the trimmer cuts at what a peer
+        // Reported, not delivered: the trimmer cuts at what a peer
         // acknowledged, so these are the numbers it reads — and the author was served further than
         // it reported, which must not count for anything.
         await pushed.RecordReportedPositionAsync(author, 2);

@@ -3,7 +3,7 @@ using System.Net;
 namespace BeeMemoryBank.Crypto.Tests;
 
 /// <summary>
-/// BMB-307 fix round 3 (G5): the clients that carry the other computer's join - the one for a typed address, the one pinned by a join code, the pinned handler, and the
+/// BMB-307: the clients that carry the other computer's join - the one for a typed address, the one pinned by a join code, the pinned handler, and the
 /// no-redirect client of a typed address (the Web setup join, the probe relay) - used ordinary handlers, so a NAME that resolves to a link-local or cloud-metadata address
 /// was dialled all the same (only the scheduler and the hub probe had the checked connect). Every one of them now opens its sockets through <see cref="PeerSocketConnector"/>
 /// (at the handler seam, with the test's own resolver) and uses no proxy; loopback and private LAN addresses stay allowed.

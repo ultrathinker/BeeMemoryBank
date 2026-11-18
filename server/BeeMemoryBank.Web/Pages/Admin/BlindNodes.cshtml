@@ -2,42 +2,46 @@
 @model BeeMemoryBank.Web.Pages.Admin.BlindNodesModel
 
 @section About {
-    <p>
-        A <strong>blind node</strong> is a machine that keeps an encrypted copy of this network and of its backups, and cannot read any of it: it never holds the
-        key. It is an off-site safe for your data. If every full node were lost, the blind node still holds what a restore needs; only you can open it, with your master password.
-    </p>
-    <p>
-        Use the actions below to invite a copy or add one. Once added, a blind node is a device of the <a href="/Admin/Devices">Devices</a> list: its status, alarms, reseed and revoke are on its own page.
-        Open <em>Details</em> for how invitations, pair codes and hubs work and what a blind node can see.
-    </p>
-    <details id="blind-node-details">
-        <summary><strong>Details</strong></summary>
-        <div class="admin-notes" style="margin-top:12px;">
-            <p>
-                To let a friend keep a copy on their own device (the <strong>Blind copy</strong> app on a phone, a PC or a Mac), make an <strong>invitation</strong> below:
-                you get one line of text and a QR code that work once, for a few minutes. Send them to your friend by a channel you trust. Their app asks to join and shows a
-                short <strong>match code</strong>; you compare it with the one shown here and confirm with your master password. Until you confirm, no vault content and no usable key of your memory bank is sent to their device.
-                Asking to join already sends this node their device id, public key, name, platform, version and their own backup key; the node keeps that backup key encrypted until you decide. You
-                can withdraw an invitation that has not been used.
-            </p>
-            <p>
-                The older way is the <strong>pair code</strong>, and it is the only way for a blind node on a server (Docker or a service): its own console shows the code, and you paste it in
-                the box below. This PC checks the node's key, checks that every other device already sees this PC as a superadmin and runs a current version, and then sends the
-                node its first copy. A phone in &ldquo;Blind copy&rdquo; mode can still be added the older way too, with the code it shows (the card &ldquo;Add an Android blind copy&rdquo;). Each blind copy's
-                status and alarms are on its page in <a href="/Admin/Devices">Devices</a>, where you can also reseed a blind node (send it a fresh copy) or revoke it.
-            </p>
-            <p>
-                The page also lists the <em>hubs</em> for blind copies: the full nodes a blind copy (on a PC, a Mac or a phone) is allowed to call. You set a hub up on the page of that device in
-                <a href="/Admin/Devices">Devices</a>, with &ldquo;Let blind copies call this node&rdquo;.
-            </p>
-            <p class="text-muted text-sm" id="blind-sees">
-                <strong>What it can see.</strong> With metadata encryption on &mdash; the default for a network set up with 2.6.2 or later &mdash; a blind node sees
-                no titles, no paths, no folder, tag or file names and no shape of your tree: only that something changed (how many changes, how big, when,
-                and which of your devices made them), plus the names and addresses of your devices. On an older network where metadata encryption has not
-                been switched on yet (<a href="/Admin/MetadataEncryption">Metadata Encryption</a>), a blind node can still see titles, paths, tags and file names, but never the text
-                of a note or what is inside a file.
-            </p>
-        </div>
+    <p>A blind node keeps an encrypted backup of your notes on another machine. It can never read them.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            A <strong>blind node</strong> is a machine that keeps an encrypted copy of this network and of its backups, and cannot read any of it: it never holds the
+            key. It is an off-site safe for your data. If every full node were lost, the blind node still holds what a restore needs; only you can open it, with your master password.
+        </p>
+        <p>
+            Use the actions below to invite a copy or add one. Once added, a blind node is a device of the <a href="/Admin/Devices">Devices</a> list: its status, alarms, reseed and revoke are on its own page.
+            Open <em>Details</em> for how invitations, pair codes and hubs work and what a blind node can see.
+        </p>
+        <details id="blind-node-details">
+            <summary><strong>Details</strong></summary>
+            <div class="admin-notes" style="margin-top:12px;">
+                <p>
+                    To let a friend keep a copy on their own device (the <strong>Blind copy</strong> app on a phone, a PC or a Mac), make an <strong>invitation</strong> below:
+                    you get one line of text and a QR code that work once, for a few minutes. Send them to your friend by a channel you trust. Their app asks to join and shows a
+                    short <strong>match code</strong>; you compare it with the one shown here and confirm with your master password. Until you confirm, no vault content and no usable key of your memory bank is sent to their device.
+                    Asking to join already sends this node their device id, public key, name, platform, version and their own backup key; the node keeps that backup key encrypted until you decide. You
+                    can withdraw an invitation that has not been used.
+                </p>
+                <p>
+                    The older way is the <strong>pair code</strong>, and it is the only way for a blind node on a server (Docker or a service): its own console shows the code, and you paste it in
+                    the box below. This PC checks the node's key, checks that every other device already sees this PC as a superadmin and runs a current version, and then sends the
+                    node its first copy. A phone in &ldquo;Blind copy&rdquo; mode can still be added the older way too, with the code it shows (the card &ldquo;Add an Android blind copy&rdquo;). Each blind copy's
+                    status and alarms are on its page in <a href="/Admin/Devices">Devices</a>, where you can also reseed a blind node (send it a fresh copy) or revoke it.
+                </p>
+                <p>
+                    The page also lists the <em>hubs</em> for blind copies: the full nodes a blind copy (on a PC, a Mac or a phone) is allowed to call. You set a hub up on the page of that device in
+                    <a href="/Admin/Devices">Devices</a>, with &ldquo;Let blind copies call this node&rdquo;.
+                </p>
+                <p class="text-muted text-sm" id="blind-sees">
+                    <strong>What it can see.</strong> With metadata encryption on &mdash; the default for a network set up with 2.6.2 or later &mdash; a blind node sees
+                    no titles, no paths, no folder, tag or file names and no shape of your tree: only that something changed (how many changes, how big, when,
+                    and which of your devices made them), plus the names and addresses of your devices. On an older network where metadata encryption has not
+                    been switched on yet (<a href="/Admin/MetadataEncryption">Metadata Encryption</a>), a blind node can still see titles, paths, tags and file names, but never the text
+                    of a note or what is inside a file.
+                </p>
+            </div>
+        </details>
     </details>
 }
 
@@ -48,13 +52,15 @@
 @* Invite a friend's device (release 2.7). One-time invitation: not encrypted, said so. Until the owner confirms below, no vault content and no usable key is sent to the device; asking to join already sends this node the device's own data (id, public key, name, platform, version, its backup key), and the node keeps that key encrypted until the decision. *@
 <h3 style="margin-bottom:12px;"><sl-icon name="envelope-plus"></sl-icon> Invite a blind copy</h3>
 <div class="card" style="margin-bottom:24px;" id="invite">
-    <p class="text-muted text-sm" style="margin-bottom:12px;">
-        Let a friend keep an encrypted copy of your network on their device. You send them one line (or a QR code); their app asks to join,
+    <p class="text-muted text-sm" style="margin-bottom:12px;">Let a friend keep an encrypted copy of your notes. They cannot read it. Send them an invitation, then confirm the code they read out to you.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>Let a friend keep an encrypted copy of your network on their device. You send them one line (or a QR code); their app asks to join,
         shows a short code, and you confirm that code here with your master password. Until you confirm, no vault content and no usable key of your memory bank is sent to their device.
         Their app does send this node its own device id, public key, name, platform, version and its own backup key when it asks to join; this node keeps that backup key encrypted until you decide.
         This is a <strong>one-time invitation</strong>, not an encrypted message: whoever has it while it is valid can ask to join,
-        which is why you confirm against the code your friend reads out to you.
-    </p>
+        which is why you confirm against the code your friend reads out to you.</p>
+    </details>
 
     @if (Model.InviteError is { } inviteError)
     {
@@ -110,6 +116,18 @@
                     }
                 </select>
             </div>
+            <div>
+                <label for="invite-ownership" class="text-sm" style="display:block;margin-bottom:4px;">Ownership</label>
+                <select id="invite-ownership" name="ownerChoice">
+                    <option value="shared" selected="@(Model.InviteOwnerChoice == "shared")">Shared (organisation)</option>
+                    @foreach (var user in (Model.Users ?? []).Where(u => u.PersonId != Guid.Empty))
+                    {
+                        var val = $"personal:{user.PersonId:D}";
+                        var text = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Username : user.DisplayName;
+                        <option value="@val" selected="@(string.Equals(Model.InviteOwnerChoice, val, StringComparison.OrdinalIgnoreCase))">Personal — @text</option>
+                    }
+                </select>
+            </div>
         </div>
         <sl-button type="submit" variant="primary" size="small" style="margin-top:12px;">
             <sl-icon slot="prefix" name="envelope-plus"></sl-icon> Make invitation
@@ -120,6 +138,7 @@
     {
         <div class="article-meta" style="margin-top:10px;">
             <span>Open invitation@(string.IsNullOrEmpty(open.Label) ? "" : " for " + open.Label)</span>
+            <span>@(open.Ownership == "personal" && !string.IsNullOrEmpty(open.OwnerLabel) ? $"Personal ({open.OwnerLabel})" : "Shared")</span>
             <span>valid until @open.ExpiresAt.ToLocalTime().ToString("t")</span>
             <form method="post" asp-page-handler="WithdrawInvite" data-busy="short" style="display:inline;">
                 <input type="hidden" name="inviteId" value="@open.InviteId" />
@@ -141,6 +160,7 @@
                 {
                     <span class="invite-kind-server"><sl-icon name="hdd-network"></sl-icon> Invited (server)</span>
                 }
+                <span>@(waiting.Ownership == "personal" && !string.IsNullOrEmpty(waiting.OwnerLabel) ? $"Personal ({waiting.OwnerLabel})" : "Shared")</span>
                 <span>@(waiting.Kind == "server" ? "Server node" : "Device"): @waiting.DeviceName</span>
                 <span>@(waiting.Platform is { Length: > 0 } platform ? platform : "platform unknown")@(waiting.AppVersion is { Length: > 0 } version ? " " + version : "")</span>
                 <span>From @(waiting.SeenFrom ?? "an unknown address")</span>
@@ -194,11 +214,11 @@
 
 <h3 style="margin-bottom:12px;"><sl-icon name="plus-circle"></sl-icon> Add a blind node</h3>
 <div class="card" style="margin-bottom:24px;" id="add-by-pair-code">
-    <p class="text-muted text-sm" style="margin-bottom:12px;">
-        Paste the pair code from the blind node's console. This PC checks the node's key, checks that
-        every other device already sees this PC as superadmin and runs a current version, then sends
-        the node its first copy.
-    </p>
+    <p class="text-muted text-sm" style="margin-bottom:12px;">Paste the code that the blind node shows.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>Paste the pair code from the blind node's console. This PC checks the node's key, checks that every other device already sees this PC as superadmin and runs a current version, then sends the node its first copy.</p>
+    </details>
     <form data-busy="long" data-busy-title="Adding the blind node" method="post" asp-page-handler="Add">
         <textarea name="code" rows="3" placeholder="BMBBLIND1...." required style="width:100%;font-family:monospace;">@Model.Code</textarea>
         <sl-button type="submit" variant="primary" size="small" style="margin-top:8px;">
@@ -210,11 +230,11 @@
 @* The page "Add an Android blind copy" used to be a page of its own, reached by a link from here; its result (the code that tells the phone where to call) shows in this card. *@
 <h3 style="margin-bottom:12px;"><sl-icon name="phone"></sl-icon> Add an Android blind copy</h3>
 <div class="card" style="margin-bottom:24px;" id="android-blind-copy">
-    <p class="text-muted text-sm" style="margin-bottom:12px;">
-        A phone in "Blind copy" mode keeps an encrypted copy of this network and makes backups, but never
-        holds the master key. It does not listen for connections: it calls a blind node or a hub (a full node
-        set up for it), which must already be in this network.
-    </p>
+    <p class="text-muted text-sm" style="margin-bottom:12px;">A phone can also keep an encrypted copy that it cannot read.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>A phone in "Blind copy" mode keeps an encrypted copy of this network and makes backups, but never holds the master key. It does not listen for connections: it calls a blind node or a hub (a full node set up for it), which must already be in this network.</p>
+    </details>
 
     @if (Model.PhoneError != null)
     {
@@ -239,8 +259,12 @@
     else if (Model.Listeners.Count == 0)
     {
         <sl-alert variant="warning" open>
-            This network has no node a phone can call. Add a blind node first, or set up a hub: on the page of the server a phone should call in
-            <a href="/Admin/Devices">Devices</a>, "Let blind copies call this node". This PC alone cannot serve a phone.
+            A phone cannot connect yet. Add a blind node first.
+            <details class="admin-more">
+                <summary>More details</summary>
+                <p>This network has no node a phone can call. Add a blind node first, or set up a hub: on the page of the server a phone should call in
+            <a href="/Admin/Devices">Devices</a>, "Let blind copies call this node". This PC alone cannot serve a phone.</p>
+            </details>
         </sl-alert>
     }
     else
@@ -266,11 +290,13 @@
 
 <h3 style="margin-bottom:12px;"><sl-icon name="broadcast-pin"></sl-icon> Hubs for blind copies</h3>
 <div class="card" style="margin-bottom:24px;" id="hubs">
-    <p class="text-muted text-sm" style="margin-bottom:12px;">
-        A blind copy (Windows, macOS, Android) calls a node; a full node you set up for it is a hub. Set one up on the page of that device in
+    <p class="text-muted text-sm" style="margin-bottom:12px;">Computers that encrypted copies can connect to.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>A blind copy (Windows, macOS, Android) calls a node; a full node you set up for it is a hub. Set one up on the page of that device in
         <a href="/Admin/Devices">Devices</a>, "Let blind copies call this node". A hub with a normal certificate is trusted by the system's list of
-        authorities; one with a pinned certificate only by its own key.
-    </p>
+        authorities; one with a pinned certificate only by its own key.</p>
+    </details>
     @if (Model.Hubs == null)
     {
         <p class="text-muted">Could not load the hubs. Check the API connection.</p>

@@ -200,7 +200,7 @@ public class SyncSchedulerContactTests : IAsyncLifetime
         }
     }
 
-    // ---- BMB-313 fix round, F2/F4/F5: a peer that is replaced, moved or revoked is not remembered as it was; a check cannot be stacked ----
+    // ---- BMB-313: a peer that is replaced, moved or revoked is not remembered as it was; a check cannot be stacked ----
 
     [Fact]
     public async Task A_peer_moved_to_another_address_starts_again_the_new_address_is_called_at_once_and_the_old_failure_is_not_its_own()

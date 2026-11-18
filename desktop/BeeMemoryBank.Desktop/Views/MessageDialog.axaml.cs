@@ -6,7 +6,7 @@ namespace BeeMemoryBank.Desktop.Views;
 /// <summary>
 /// Generic OK-only message dialog used for surfacing ProfileService exceptions from the
 /// manage window (e.g. "Cannot forget the only remaining profile"). Kept deliberately
-/// small — the brief allows an inline message where possible, but a per-row error needs
+/// small — an inline message is used where possible, but a per-row error needs
 /// somewhere to live without taking row space.
 /// </summary>
 public partial class MessageDialog : Window

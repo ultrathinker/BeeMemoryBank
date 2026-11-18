@@ -4,6 +4,7 @@ using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Storage.Boot;
+using BeeMemoryBank.Vault.Sealed;
 using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Api.Middleware;
@@ -81,7 +82,8 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                 if (record != null && record.ExpiresAt > DateTime.UtcNow)
                 {
                     var owner = await userRepo.GetByIdAsync(record.UserId);
-                    if (owner != null && owner.IsActive)
+                    // An owner being removed (2.12) is nobody here: S0 deletes their tokens, and a token that slips past that answers nothing.
+                    if (owner != null && owner.IsActive && !owner.IsBeingRemoved)
                     {
                         // SECURITY: remote tokens must NEVER carry superadmin
                         // privileges, even if their owning user is a superadmin.
@@ -138,9 +140,11 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                     if (agent.OwnerUserId > 0)
                     {
                         var owner = await userRepo.GetByIdAsync(agent.OwnerUserId);
-                        if (owner == null || !owner.IsActive)
+                        // An owner being removed opens nothing through an agent either (defence in depth: the lock-out
+                        // deletes their agents, this stops one that was missed or made since).
+                        if (owner == null || !owner.IsActive || owner.IsBeingRemoved)
                         {
-                            logger.LogWarning("Agent {AgentId} blocked: owner {OwnerId} is deactivated or missing",
+                            logger.LogWarning("Agent {AgentId} blocked: owner {OwnerId} is deactivated, missing or being removed",
                                 agent.Id, agent.OwnerUserId);
                             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                             return;
@@ -199,18 +203,8 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                     {
                         try
                         {
-                            byte[] masterDek;
-                            if (agent.KdfVersion == 1 && agent.Salt != null)
-                            {
-                                masterDek = AgentKeyHelper.DecryptDekV1(
-                                    apiKey, agent.EncryptedDek!, agent.DekIV!, agent.Salt);
-                            }
-                            else
-                            {
-                                masterDek = AgentKeyHelper.DecryptDek(
-                                    apiKey, agent.EncryptedDek!, agent.DekIV!);
-                            }
-
+                            // Every door format: kdf_version 0 and 1 wraps, 2 a sealed door (ADR 0012).
+                            var masterDek = Doors.OpenAgent(agent, apiKey);
                             session.UnlockWithDek(masterDek);
                         }
                         catch
@@ -219,11 +213,37 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                             // Do not block the request, session will remain locked.
                         }
                     }
+
+                    // ADR 0012: an auto-unlock agent's v0/v1 door becomes a sealed door at its first authenticated request with the node open.
+                    if (agent.CanAutoUnlock && session.IsUnlocked
+                        && (agent.KdfVersion != Agent.SealedDoorKdfVersion || agent.DekFingerprint is null))
+                        await TryUpgradeAgentDoorAsync(context, agent, apiKey, session);
                 }
             }
         }
 
         await next(context);
+    }
+
+    /// <summary>The upgrade of an agent's door (ADR 0012); best effort, never fails the request.</summary>
+    private async Task TryUpgradeAgentDoorAsync(HttpContext context, Agent agent, string apiKey, SessionService session)
+    {
+        var db = context.RequestServices?.GetService<IDbConnectionFactory>();
+        if (db is null) return;
+        byte[]? dek = null;
+        try
+        {
+            dek = session.GetMasterDek();
+            await AgentDoors.UpgradeAsync(db, context.RequestServices!.GetService<IUnlockMaterialMirror>(), agent, apiKey, dek, logger);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("Agent {AgentId}'s door could not be upgraded ({Type}); it is tried again at its next request.", agent.Id, ex.GetType().Name);
+        }
+        finally
+        {
+            if (dek is not null) Array.Clear(dek);
+        }
     }
 
     /// <summary>
@@ -242,9 +262,7 @@ public class AgentAuthMiddleware(RequestDelegate next, ILogger<AgentAuthMiddlewa
                 byte[]? dek = null;
                 try
                 {
-                    dek = door.KdfVersion == 1 && door.Salt != null
-                        ? AgentKeyHelper.DecryptDekV1(apiKey, door.EncryptedMasterDek, door.Iv, door.Salt)
-                        : AgentKeyHelper.DecryptDek(apiKey, door.EncryptedMasterDek, door.Iv);
+                    dek = AgentDoors.OpenBootDoor(door, apiKey);
                     if (await session.TryUnlockWithDekAsync(dek, door, context.RequestAborted)) return;
                 }
                 catch (System.Security.Cryptography.CryptographicException)

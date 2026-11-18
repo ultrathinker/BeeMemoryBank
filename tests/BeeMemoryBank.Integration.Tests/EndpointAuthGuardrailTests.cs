@@ -37,6 +37,8 @@ public class EndpointAuthGuardrailTests : IAsyncLifetime
     [
         "/api/sync/events",
         "/api/sync/report-position",
+        // A fresh rotation envelope for a peer that re-keyed (release 2.12, plan WS-D D4): a peer's sync session, never a user.
+        "/api/sync/dek-envelope/{commitEventId:guid}",
     ];
 
     public async Task InitializeAsync()

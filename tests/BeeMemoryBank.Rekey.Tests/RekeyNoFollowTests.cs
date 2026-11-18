@@ -5,7 +5,7 @@ using BeeMemoryBank.Rekey;
 namespace BeeMemoryBank.Rekey.Tests;
 
 /// <summary>
-/// Review release-b R1-7 (sec#10): the re-key never follows a junction or a symbolic link out of D. A link under a
+/// The re-key never follows a junction or a symbolic link out of D. A link under a
 /// carried-over entry (or the entry itself) is not copied into the new vault and is named instead; deleting a leftover
 /// copy never reaches through a link. Links are created as the platform allows: symbolic links everywhere, a junction
 /// on Windows too. Where the account may not create them, the test has nothing to check and returns.

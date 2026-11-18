@@ -13,7 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The stored-size cap and what a peer stages on the node (srvfix6, R4-04): the seed's staging and the other areas the node writes into for a peer are part of what the cap
+/// The stored-size cap and what a peer stages on the node: the seed's staging and the other areas the node writes into for a peer are part of what the cap
 /// measures, and a seed that would fill the disk beyond it is refused as a pause while it is still arriving.
 /// </summary>
 [Collection(HeavyOperationCollection.Name)]

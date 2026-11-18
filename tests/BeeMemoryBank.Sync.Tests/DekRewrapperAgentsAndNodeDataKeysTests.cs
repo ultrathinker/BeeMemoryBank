@@ -216,7 +216,7 @@ public class DekRewrapperAgentsAndNodeDataKeysTests : SyncTestFixture
         NodeDataKeyEnvelope.TryUnwrap("chat", articleWrap, articleIv, masterDek).Should().BeNull();
     }
 
-    // ───── Fix round 1 ───────────────────────────────────────────────────────────────────────
+    // ───── ───────────────────────────────────────────────────────────────────────
 
     [Fact]
     public void NodeDataKeyEnvelope_MalformedInput_IsUnreadable_NeverAnException()

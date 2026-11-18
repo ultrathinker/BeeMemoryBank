@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Desktop.Views;
 
 /// <summary>
 /// Yes/No confirmation for the "Forget" action. Returns <c>true</c> (confirmed) or
-/// <c>false</c> (cancelled). Body text is the brief's literal: explicitly tells the user
+/// <c>false</c> (cancelled). Body text explicitly tells the user
 /// the data stays on disk and shows the path — matches ProfileService.ForgetProfile's
 /// contract (removes the pointer only).
 /// </summary>

@@ -60,13 +60,13 @@ public sealed class BootStoreWriter(BootStoreConnectionFactory factory)
                 await connection.ExecuteAsync(
                     @"INSERT OR IGNORE INTO tbl_boot_door
                         (kind, source_id, slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, key_hash,
-                         kdf_version, content_sha256, dek_fp, pending, written_at)
+                         kdf_version, content_sha256, dek_fp, pending, written_at, door_version, door_public_key)
                       VALUES (@Kind, @SourceId, @SlotType, @EncryptedMasterDek, @Iv, @Salt, @ArgonMemory, @ArgonIterations, @ArgonParallelism, @KeyHash,
-                              @KdfVersion, @ContentSha256, @fingerprint, 0, @now)",
+                              @KdfVersion, @ContentSha256, @fingerprint, 0, @now, @DoorVersion, @DoorPublicKey)",
                     new
                     {
                         door.Kind, door.SourceId, door.SlotType, door.EncryptedMasterDek, door.Iv, door.Salt, door.ArgonMemory, door.ArgonIterations,
-                        door.ArgonParallelism, door.KeyHash, door.KdfVersion, door.ContentSha256, fingerprint, now,
+                        door.ArgonParallelism, door.KeyHash, door.KdfVersion, door.ContentSha256, fingerprint, now, door.DoorVersion, door.DoorPublicKey,
                     }, transaction);
             }
 

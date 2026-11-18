@@ -293,6 +293,13 @@
                             <sl-input name="joinDisplayName" label="Name of this computer" required
                                       value="@Model.FieldValue("join", Model.PostedDisplayName, SetupModel.SuggestedNodeName)" placeholder="e.g. My Laptop"
                                       help-text="How this computer appears on your other devices."></sl-input>
+                            <sl-input name="joinLogin" label="Username on the other node (optional)"
+                                      value="@Model.FieldValue("join", Model.PostedJoinLogin)" placeholder="Leave blank if unsure"
+                                      autocomplete="off"
+                                      help-text="Only needed if two superadmins on the other node share the same password."></sl-input>
+                            <div style="margin-top:8px;">
+                                <sl-checkbox name="joinShared" value="true" checked="@Model.PostedShared">This is a shared server of the organisation</sl-checkbox>
+                            </div>
                         </div>
                         <div class="form-actions">
                             <sl-button type="submit" variant="primary" style="width:100%;" data-submit-btn>

@@ -79,7 +79,7 @@ public static class CliSealed
             sp.GetService<ILogger<VaultGate>>(),
             VaultStoreMode.Sealed)
         {
-            // The node erases a replaced plain file; this process only refuses to open over one (review round 1, H1).
+            // The node erases a replaced plain file; this process only refuses to open over one.
             PlainLeftovers = () => SealSwapResolver.Leftovers(dataPath),
         });
         services.AddSingleton<IVaultGate>(sp => sp.GetRequiredService<VaultGate>());

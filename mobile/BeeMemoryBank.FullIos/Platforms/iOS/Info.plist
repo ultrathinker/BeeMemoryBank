@@ -2,8 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>ru</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- The editor's image button reads a picture from the photo library to encrypt and store it
+	     in the vault; iOS asks before an app may see the library. Localized in en.lproj / ru.lproj. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Bee Memory Bank reads a picture you choose so it can be encrypted and stored inside your note. Nothing is uploaded anywhere else.</string>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>
@@ -27,6 +38,10 @@
 		<string>_beememorybank._tcp</string>
 	</array>
 	<!-- Face ID releases the Keychain key that opens the vault (QuickUnlock); iOS refuses Face ID to an app without this text. -->
+	<!-- "Scan QR code" on the join page reads the computer's join code with the camera; iOS refuses the camera without this text.
+	     Localized in en.lproj / ru.lproj. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Bee Memory Bank uses the camera only to read the QR code your computer shows when you connect this iPhone. No pictures are saved.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Face ID opens your memory bank without typing the master password. The password itself is never stored.</string>
 	<!-- A computer shows its join code as a QR code of a bmb-join: link: the Camera opens it in this app, which fills in the join page

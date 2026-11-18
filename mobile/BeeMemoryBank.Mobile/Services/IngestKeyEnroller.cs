@@ -34,7 +34,7 @@ public sealed class IngestKeyEnroller(IServiceProvider sp, ILogger<IngestKeyEnro
         try
         {
             var ingest = sp.GetService<IIngestKeyStore>();
-            if (ingest is null || ingest.HasEnrolledKey()) return;
+            if (ingest is null) return;
 
             var session = sp.GetRequiredService<SessionService>();
             if (!session.IsUnlocked) return;
@@ -43,6 +43,27 @@ public sealed class IngestKeyEnroller(IServiceProvider sp, ILogger<IngestKeyEnro
             var nodeRepo = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
             var identity = await nodeRepo.GetAsync();
             if (identity is null) return;
+
+            // An enrolled seed that is not the seed of the node's current key (the node re-keyed, release 2.12 plan WS-D D4) would sign the background
+            // sessions with a key the peers no longer accept: it is enrolled again with the current one.
+            if (ingest.HasEnrolledKey())
+            {
+                byte[]? enrolled = null;
+                try
+                {
+                    enrolled = ingest.UnwrapNodePrivateKey();
+                    if (NodeIdentityCrypto.IsSeedOf(enrolled, identity.Ed25519PublicKey)) return;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "The enrolled ingest key could not be read; enrolling the current one");
+                }
+                finally
+                {
+                    if (enrolled != null) Array.Clear(enrolled);
+                }
+                logger.LogInformation("The enrolled ingest key is not this node's current identity key; enrolling the current one.");
+            }
 
             var dek = session.GetMasterDek();
             byte[]? seed = null;

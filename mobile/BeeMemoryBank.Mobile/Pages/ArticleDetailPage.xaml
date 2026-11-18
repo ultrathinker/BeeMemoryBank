@@ -1,224 +1,209 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- The mock-up's article screen: the headline, the meta bar (path chip, tag pills, date),
+     the markdown body (or the raw text), the lock card of a protected article, the related
+     articles and the comments with their input row. The header carries Edit and the ⋮ menu. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:idk="clr-namespace:Indiko.Maui.Controls.Markdown;assembly=Indiko.Maui.Controls.Markdown"
              xmlns:controls="clr-namespace:BeeMemoryBank.Mobile.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
              x:Class="BeeMemoryBank.Mobile.Pages.ArticleDetailPage"
-             Title="Article"
-             BackgroundColor="{StaticResource BackgroundColor}">
+             Title="Article">
 
     <ContentPage.ToolbarItems>
-        <ToolbarItem Text="Edit" Order="Primary" Clicked="OnEditClicked" AutomationId="EditButton" />
-        <ToolbarItem x:Name="ToggleViewItem" Text="Raw" Order="Primary" Clicked="OnToggleViewClicked" AutomationId="ToggleViewButton" />
-        <ToolbarItem Text="Delete" Order="Secondary" Clicked="OnDeleteClicked" AutomationId="DeleteButton" />
+        <ToolbarItem Text="{loc:Translate Edit}" Order="Primary" Clicked="OnEditClicked" AutomationId="EditButton" />
+        <ToolbarItem x:Name="MoveItem" Text="{loc:Translate Move}" Order="Secondary" Clicked="OnMoveClicked" AutomationId="MoveButton" />
+        <ToolbarItem x:Name="ToggleViewItem" Text="{loc:Translate ShowRaw}" Order="Secondary" Clicked="OnToggleViewClicked" AutomationId="ToggleViewButton" />
+        <ToolbarItem x:Name="PasswordItem" Text="{loc:Translate SetPassword}" Order="Secondary" Clicked="OnPasswordClicked" AutomationId="PasswordButton" />
+        <ToolbarItem Text="{loc:Translate Delete}" Order="Secondary" Clicked="OnDeleteClicked" AutomationId="DeleteButton" />
     </ContentPage.ToolbarItems>
 
     <RefreshView x:Name="PullRefresh" Refreshing="OnRefreshing">
         <ScrollView>
             <VerticalStackLayout Padding="16" Spacing="12">
 
-                <ActivityIndicator x:Name="LoadingIndicator" IsRunning="True" IsVisible="True" Color="{StaticResource PrimaryColor}" />
+                <ActivityIndicator x:Name="LoadingIndicator" IsRunning="True" IsVisible="True" />
 
-            <Label x:Name="TitleLabel"
-                   AutomationId="TitleLabel"
-                   FontSize="22"
-                   FontAttributes="Bold"
-                   IsVisible="False" />
+                <Label x:Name="TitleLabel"
+                       AutomationId="TitleLabel"
+                       FontSize="22"
+                       FontFamily="{StaticResource FontBodyBold}"
+                       LineBreakMode="WordWrap"
+                       IsVisible="False" />
 
-            <FlexLayout x:Name="ConceptTagsLayout"
-                        Wrap="Wrap"
-                        Direction="Row"
-                        IsVisible="False"
-                        Margin="0,0,0,8">
-                <BindableLayout.ItemTemplate>
-                    <DataTemplate>
-                        <Frame BackgroundColor="{StaticResource WarningColor}"
-                               CornerRadius="12"
-                               Padding="8,2"
-                               HasShadow="False"
-                               Margin="0,0,8,8">
-                            <Label Text="{Binding .}"
-                                   TextColor="Black"
-                                   FontSize="12"
-                                   FontAttributes="Bold" />
-                        </Frame>
-                    </DataTemplate>
-                </BindableLayout.ItemTemplate>
-            </FlexLayout>
-
-            <!-- Lock card for password-protected articles: enter the passphrase to decrypt locally.
-                 No server involved — the BMBENC1 body is unwrapped on-device. -->
-            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="LockCard">
-                <VerticalStackLayout Spacing="10">
-                    <Label Text="🔒 Password-protected" FontAttributes="Bold" FontSize="16" />
-                    <Label Text="Enter the password to view this article."
-                           FontSize="13" TextColor="{StaticResource SecondaryTextColor}" />
-                    <Label x:Name="LockHintLabel" IsVisible="False" FontSize="13"
-                           TextColor="{StaticResource SecondaryTextColor}" LineBreakMode="WordWrap" />
-                    <controls:SecretEntry x:Name="UnlockPassEntry" Placeholder="Password"
-                           AutomationId="UnlockPassEntry" Style="{StaticResource BaseEntry}"
-                           IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"
-                           ReturnType="Go" Completed="OnUnlockClicked" />
-                    <Label x:Name="UnlockErrorLabel" IsVisible="False"
-                           TextColor="{StaticResource ErrorColor}" FontSize="13" />
-                    <Button Text="Unlock"
-                            AutomationId="UnlockButton"
-                            Style="{StaticResource PrimaryButton}"
-                            Clicked="OnUnlockClicked" />
+                <!-- .article-meta-bar: the path chip and the date, then the tag pills.
+                     No FlexLayout inside a FlexLayout: the inner one is measured with an unbounded
+                     width and MAUI's FlexLayoutManager throws "something is deeply wrong" on the
+                     first article that has tags (seen on the test phone 14.11). -->
+                <VerticalStackLayout x:Name="MetaCard" IsVisible="False">
+                <FlexLayout Wrap="Wrap" Direction="Row" AlignItems="Center">
+                    <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                            Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                            StrokeThickness="1" StrokeShape="RoundRectangle 10"
+                            Padding="12,6" Margin="0,0,8,8" MinimumHeightRequest="36">
+                        <Border.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnPathChipTapped" />
+                        </Border.GestureRecognizers>
+                        <HorizontalStackLayout Spacing="6">
+                            <Image Source="{AppThemeBinding Light=icon_row_folder_light.svg, Dark=icon_row_folder_dark.svg}"
+                                   WidthRequest="15" HeightRequest="15" VerticalOptions="Center" />
+                            <Label x:Name="PathLabel" FontSize="13"
+                                   FontFamily="{StaticResource FontBodyMedium}"
+                                   TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}"
+                                   VerticalOptions="Center" LineBreakMode="TailTruncation" MaximumWidthRequest="220" />
+                        </HorizontalStackLayout>
+                    </Border>
+                    <Label x:Name="UpdatedLabel" Style="{StaticResource ItemMeta}" Margin="0,0,8,8" VerticalOptions="Center" />
+                </FlexLayout>
+                    <controls:TagLine x:Name="ConceptTagsLayout" IsVisible="False" />
                 </VerticalStackLayout>
-            </Frame>
 
-            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="ContentCard"
-                   Padding="4">
-                <VerticalStackLayout Spacing="0">
-                    <idk:MarkdownView x:Name="ContentMarkdown"
-                                      AutomationId="ContentMarkdown" />
-                    <Label x:Name="ContentRawLabel"
-                           AutomationId="ContentRawLabel"
-                           IsVisible="False"
-                           LineBreakMode="WordWrap"
-                           FontSize="14"
-                           FontFamily="Monospace"
-                           Padding="8"
-                           TextColor="{StaticResource TextColor}" />
-                </VerticalStackLayout>
-            </Frame>
+                <!-- Lock card for password-protected articles: enter the passphrase to decrypt locally.
+                     No server involved — the BMBENC1 body is unwrapped on-device. The field is the
+                     SecretEntry (no eye button: Android must not treat it as a credential field). -->
+                <Border x:Name="LockCard" IsVisible="False"
+                        BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                        Stroke="{AppThemeBinding Light={StaticResource BmbAccentBorderLight}, Dark={StaticResource BmbAccentBorder}}"
+                        StrokeThickness="1" StrokeShape="RoundRectangle 24" Padding="18,22">
+                    <VerticalStackLayout Spacing="14">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                            <Border Grid.Column="0" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                    StrokeShape="RoundRectangle 12"
+                                    BackgroundColor="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}">
+                                <Image Source="{AppThemeBinding Light=icon_row_lock_light.svg, Dark=icon_row_lock_dark.svg}"
+                                       WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center" />
+                            </Border>
+                            <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                <Label Text="{loc:Translate ProtectedTitle}" Style="{StaticResource ItemTitle}" />
+                                <Label x:Name="LockHintLabel" IsVisible="False" Style="{StaticResource ItemMeta}" LineBreakMode="WordWrap" />
+                            </VerticalStackLayout>
+                        </Grid>
+                        <VerticalStackLayout Spacing="6">
+                            <Label Text="{loc:Translate ArticlePasswordLabel}" Style="{StaticResource FieldLabel}" />
+                            <Border Style="{StaticResource InputShell}">
+                                <controls:SecretEntry x:Name="UnlockPassEntry" Placeholder="{loc:Translate EnterArticlePassword}"
+                                       AutomationId="UnlockPassEntry"
+                                       BackgroundColor="Transparent"
+                                       IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"
+                                       ReturnType="Go" Completed="OnUnlockClicked" />
+                            </Border>
+                            <Label x:Name="UnlockErrorLabel" IsVisible="False" Style="{StaticResource FieldError}" />
+                        </VerticalStackLayout>
+                        <Button Text="{loc:Translate OpenArticle}"
+                                AutomationId="UnlockButton"
+                                Style="{StaticResource PrimaryButton}"
+                                Clicked="OnUnlockClicked" />
+                    </VerticalStackLayout>
+                </Border>
 
-            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="RelatedArticlesCard">
-                <VerticalStackLayout Spacing="8">
-                    <Label x:Name="RelatedHeaderLabel" Text="Related Articles" FontAttributes="Bold" FontSize="16" />
-                    <VerticalStackLayout x:Name="RelatedArticlesList"
-                                         AutomationId="RelatedArticlesList"
-                                         Spacing="0">
+                <!-- The body: rendered markdown, or the raw text in the .raw-body card -->
+                <Border x:Name="ContentCard" IsVisible="False"
+                        BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                        Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                        StrokeThickness="1" StrokeShape="RoundRectangle 16" Padding="14">
+                    <VerticalStackLayout Spacing="0">
+                        <idk:MarkdownView x:Name="ContentMarkdown" AutomationId="ContentMarkdown" />
+                        <Label x:Name="ContentRawLabel"
+                               AutomationId="ContentRawLabel"
+                               IsVisible="False"
+                               LineBreakMode="WordWrap"
+                               FontSize="13"
+                               FontFamily="Monospace"
+                               TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <!-- Related articles (.article-footer-section) -->
+                <VerticalStackLayout x:Name="RelatedArticlesCard" IsVisible="False" Spacing="10" Margin="0,10,0,0">
+                    <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" Margin="0,0,0,6" />
+                    <Label x:Name="RelatedHeaderLabel" Style="{StaticResource CardTitle}" />
+                    <VerticalStackLayout x:Name="RelatedArticlesList" AutomationId="RelatedArticlesList" Spacing="6"
+                                        >
                         <BindableLayout.ItemTemplate>
                             <DataTemplate>
-                                <VerticalStackLayout>
-                                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto"
-                                          Padding="0,10"
-                                          ColumnSpacing="8">
-                                        <Grid.GestureRecognizers>
-                                            <TapGestureRecognizer Tapped="OnRelatedArticleTapped" CommandParameter="{Binding Id}" />
-                                        </Grid.GestureRecognizers>
-                                        <Label Grid.Row="0" Grid.Column="0"
-                                               Text="{Binding Title}"
-                                               FontAttributes="Bold"
-                                               FontSize="15"
-                                               TextColor="{StaticResource TextColor}" />
-                                        <Label Grid.Row="1" Grid.Column="0"
-                                               Text="{Binding TreePath}"
-                                               FontSize="12"
-                                               TextColor="{StaticResource SecondaryTextColor}" />
-                                        <Frame Grid.Row="0" Grid.Column="1" Grid.RowSpan="2"
-                                               BackgroundColor="{StaticResource SurfaceSecondaryColor}"
-                                               BorderColor="{StaticResource BorderColor}"
-                                               CornerRadius="6"
-                                               Padding="6,2"
-                                               HasShadow="False"
-                                               VerticalOptions="Center">
-                                            <Label Text="{Binding Strength, StringFormat='[{0}%]'}"
-                                                   FontSize="12"
-                                                   FontAttributes="Bold"
-                                                   TextColor="{StaticResource PrimaryDarkColor}" />
-                                        </Frame>
+                                <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                                        Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                                        StrokeThickness="1" StrokeShape="RoundRectangle 12"
+                                        Padding="12,10" MinimumHeightRequest="46">
+                                    <Border.GestureRecognizers>
+                                        <TapGestureRecognizer Tapped="OnRelatedArticleTapped" CommandParameter="{Binding Id}" />
+                                    </Border.GestureRecognizers>
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                                        <Image Grid.Column="0" Source="{AppThemeBinding Light=icon_row_file_light.svg, Dark=icon_row_file_dark.svg}"
+                                               WidthRequest="18" HeightRequest="18" VerticalOptions="Center" />
+                                        <Label Grid.Column="1" Text="{Binding Title}" FontSize="14"
+                                               FontFamily="{StaticResource FontBodyMedium}"
+                                               LineBreakMode="TailTruncation" VerticalOptions="Center" />
+                                        <Image Grid.Column="2" Source="{AppThemeBinding Light=icon_row_chevron_light.svg, Dark=icon_row_chevron_dark.svg}"
+                                               WidthRequest="16" HeightRequest="16" VerticalOptions="Center" />
                                     </Grid>
-                                    <BoxView HeightRequest="1" Color="{StaticResource BorderColor}" Opacity="0.5" Margin="0,0" />
-                                </VerticalStackLayout>
+                                </Border>
                             </DataTemplate>
                         </BindableLayout.ItemTemplate>
                     </VerticalStackLayout>
-
-                    <HorizontalStackLayout Spacing="20" HorizontalOptions="Center" Margin="0,4,0,0">
-                        <Button x:Name="RelatedShowMoreButton"
-                                AutomationId="RelatedShowMoreButton"
-                                Text="Show more"
-                                IsVisible="False"
-                                BackgroundColor="Transparent"
-                                Padding="0"
-                                TextColor="{StaticResource PrimaryColor}"
-                                Clicked="OnRelatedShowMoreClicked" />
-                        <Button x:Name="RelatedShowAllButton"
-                                AutomationId="RelatedShowAllButton"
-                                Text="Show all"
-                                IsVisible="False"
-                                BackgroundColor="Transparent"
-                                Padding="0"
-                                TextColor="{StaticResource PrimaryColor}"
-                                Clicked="OnRelatedShowAllClicked" />
-                        <Button x:Name="RelatedShowLessButton"
-                                AutomationId="RelatedShowLessButton"
-                                Text="Show less"
-                                IsVisible="False"
-                                BackgroundColor="Transparent"
-                                Padding="0"
-                                TextColor="{StaticResource SecondaryTextColor}"
+                    <HorizontalStackLayout Spacing="12" HorizontalOptions="Center">
+                        <Button x:Name="RelatedShowMoreButton" AutomationId="RelatedShowMoreButton"
+                                Text="{loc:Translate ShowMore}" IsVisible="False"
+                                Style="{StaticResource TextButton}" Clicked="OnRelatedShowMoreClicked" />
+                        <Button x:Name="RelatedShowAllButton" AutomationId="RelatedShowAllButton"
+                                Text="{loc:Translate ShowAll}" IsVisible="False"
+                                Style="{StaticResource TextButton}" Clicked="OnRelatedShowAllClicked" />
+                        <Button x:Name="RelatedShowLessButton" AutomationId="RelatedShowLessButton"
+                                Text="{loc:Translate ShowLess}" IsVisible="False"
+                                Style="{StaticResource TextButton}"
+                                TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}"
                                 Clicked="OnRelatedShowLessClicked" />
                     </HorizontalStackLayout>
                 </VerticalStackLayout>
-            </Frame>
 
-            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="MetaCard">
-                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="6">
-                    <Label Grid.Row="0" Grid.Column="0" Text="Path:" FontAttributes="Bold" />
-                    <Label Grid.Row="0" Grid.Column="1" x:Name="PathLabel" LineBreakMode="WordWrap" />
-
-                    <Label Grid.Row="1" Grid.Column="0" Text="Updated:" FontAttributes="Bold" />
-                    <Label Grid.Row="1" Grid.Column="1" x:Name="UpdatedLabel" />
-                </Grid>
-            </Frame>
-
-            <Frame Style="{StaticResource CardFrame}" IsVisible="False" x:Name="CommentsCard">
-                <VerticalStackLayout Spacing="12">
-                    <Label Text="Comments" FontAttributes="Bold" FontSize="16" />
-
-                    <CollectionView x:Name="CommentsList"
-                                    AutomationId="CommentsList"
-                                    SelectionMode="None"
-                                    EmptyView="No comments yet."
-                                    MaximumHeightRequest="400">
-                        <CollectionView.ItemTemplate>
+                <!-- Comments (.article-footer-section) -->
+                <VerticalStackLayout x:Name="CommentsCard" IsVisible="False" Spacing="10" Margin="0,10,0,0">
+                    <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" Margin="0,0,0,6" />
+                    <Label x:Name="CommentsHeaderLabel" Style="{StaticResource CardTitle}" />
+                    <Label x:Name="NoCommentsLabel" Text="{loc:Translate NoComments}" Style="{StaticResource ItemMeta}" IsVisible="False" />
+                    <VerticalStackLayout x:Name="CommentsList" AutomationId="CommentsList" Spacing="8"
+                                        >
+                        <BindableLayout.ItemTemplate>
                             <DataTemplate>
-                                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto"
-                                      ColumnSpacing="8" RowSpacing="2" Padding="0,6">
-                                    <Label Grid.Row="0" Grid.Column="0"
-                                           Text="{Binding Text}"
-                                           LineBreakMode="WordWrap"
-                                           FontSize="14" />
-                                    <Label Grid.Row="1" Grid.Column="0"
-                                           Text="{Binding CreatedAt, StringFormat='{0:yyyy-MM-dd HH:mm}'}"
-                                           FontSize="12"
-                                           TextColor="{StaticResource SecondaryTextColor}" />
-                                    <Button Grid.Row="0" Grid.Column="1" Grid.RowSpan="2"
-                                            Text="✕"
-                                            FontSize="13"
-                                            WidthRequest="36"
-                                            HeightRequest="36"
-                                            Padding="0"
-                                            BackgroundColor="Transparent"
-                                            TextColor="{StaticResource SecondaryTextColor}"
-                                            AutomationId="DeleteCommentButton"
-                                            Clicked="OnDeleteCommentClicked" />
-                                </Grid>
+                                <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                                        Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                                        StrokeThickness="1" StrokeShape="RoundRectangle 14" Padding="12">
+                                    <VerticalStackLayout Spacing="6">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <Label Grid.Column="0" Text="{Binding CreatedAt, StringFormat='{0:yyyy-MM-dd HH:mm}'}"
+                                                   FontSize="12"
+                                                   TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+                                            <Button Grid.Column="1" Text="{loc:Translate Delete}"
+                                                    Style="{StaticResource TextButton}"
+                                                    FontSize="12" MinimumHeightRequest="28" Padding="6,2"
+                                                    TextColor="{AppThemeBinding Light={StaticResource BmbErrorLight}, Dark={StaticResource BmbError}}"
+                                                    AutomationId="DeleteCommentButton"
+                                                    CommandParameter="{Binding .}"
+                                                    Clicked="OnDeleteCommentClicked" />
+                                        </Grid>
+                                        <Label Text="{Binding Text}" FontSize="14" LineBreakMode="WordWrap" />
+                                    </VerticalStackLayout>
+                                </Border>
                             </DataTemplate>
-                        </CollectionView.ItemTemplate>
-                    </CollectionView>
-
-                    <VerticalStackLayout Spacing="8">
-                        <Editor x:Name="CommentEntry"
-                                AutomationId="CommentEntry"
-                                Placeholder="Add a comment..."
-                                AutoSize="TextChanges"
-                                MinimumHeightRequest="60"
-                                BackgroundColor="Transparent"
-                                Margin="0" />
-                        <Button Text="Add"
+                        </BindableLayout.ItemTemplate>
+                    </VerticalStackLayout>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,4,0,0">
+                        <Border Grid.Column="0" Style="{StaticResource InputShell}">
+                            <Editor x:Name="CommentEntry"
+                                    AutomationId="CommentEntry"
+                                    Placeholder="{loc:Translate AddCommentPlaceholder}"
+                                    AutoSize="TextChanges"
+                                    MinimumHeightRequest="40"
+                                    BackgroundColor="Transparent"
+                                    Margin="0" />
+                        </Border>
+                        <Button Grid.Column="1" Text="{loc:Translate Send}"
                                 AutomationId="AddCommentButton"
                                 Style="{StaticResource PrimaryButton}"
-                                WidthRequest="80"
-                                HorizontalOptions="End"
+                                VerticalOptions="End"
                                 Clicked="OnAddCommentClicked" />
-                    </VerticalStackLayout>
+                    </Grid>
                 </VerticalStackLayout>
-            </Frame>
 
             </VerticalStackLayout>
         </ScrollView>

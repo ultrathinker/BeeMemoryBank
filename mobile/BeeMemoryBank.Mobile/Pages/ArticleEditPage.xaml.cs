@@ -1,7 +1,10 @@
 using System.Text.RegularExpressions;
 using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Mobile.Controls;
+using BeeMemoryBank.Mobile.Localization;
 using BeeMemoryBank.Mobile.Services;
+using Indiko.Maui.Controls.Markdown.Theming;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile.Pages;
@@ -23,6 +26,12 @@ public partial class ArticleEditPage : ContentPage
     // New articles never call LoadAsync, so they start ready.
     private bool _loaded = true;
 
+    private readonly List<string> _tags = [];
+    private string _initialSnapshot = "";
+
+    /// <summary>Set once the way out is confirmed (saved or discarded), so the shell lets the navigation through.</summary>
+    internal bool LeaveConfirmed { get; set; }
+
     public string ArticleId
     {
         set
@@ -30,7 +39,7 @@ public partial class ArticleEditPage : ContentPage
             if (Guid.TryParse(value, out var id))
             {
                 _articleId = id;
-                Title = "Edit Article";
+                Title = AppStrings.Get("EditArticleTitle");
                 _loaded = false; // block Save until the article (and its protected state) is loaded
                 _ = LoadAsync(id);
             }
@@ -50,11 +59,27 @@ public partial class ArticleEditPage : ContentPage
     {
         InitializeComponent();
         _services = services;
-        Title = "New Article";
+        Title = AppStrings.Get("NewArticleTitle");
         PathLabel.Text = "/";
-        // Protect-on-create is offered for NEW articles only; LoadAsync() hides it for existing ones.
+        // The password card is offered for new and existing articles alike (the mock-up's editor).
         ProtectSection.IsVisible = true;
         FolderPickerPage.FolderSelected = path => PathLabel.Text = path;
+
+        ModeSegments.Items = [AppStrings.Get("ModeText"), AppStrings.Get("ModePreview")];
+        ModeSegments.SelectedIndex = 0;
+        ModeSegments.SelectionChanged += (_, index) => SetPreviewMode(index == 1);
+
+        ApplyMarkdownTheme();
+        if (Application.Current is { } app) app.RequestedThemeChanged += OnRequestedThemeChanged;
+        TakeSnapshot();
+    }
+
+    private void OnRequestedThemeChanged(object? sender, AppThemeChangedEventArgs e) => ApplyMarkdownTheme();
+
+    private void ApplyMarkdownTheme()
+    {
+        PreviewMarkdown.Theme = ThemeManager.Effective == AppTheme.Light ? MarkdownThemeDefaults.Light : MarkdownThemeDefaults.Dark;
+        PreviewMarkdown.ApplyAppFonts();
     }
 
     private void OnProtectToggled(object? sender, ToggledEventArgs e)
@@ -62,7 +87,101 @@ public partial class ArticleEditPage : ContentPage
         ProtectFields.IsVisible = e.Value;
     }
 
-    // Edit gate for an existing protected article opened without a fresh read→edit handoff.
+    // ── Tags: the chips with the remove cross, and the add row ───────────────
+
+    private void RebuildTagChips()
+    {
+        TagChipsLayout.Children.Clear();
+        foreach (var tag in _tags.ToList())
+        {
+            var pill = new Border
+            {
+                BackgroundColor = ThemeManager.Token("SurfaceHigh"),
+                Stroke = ThemeManager.Token("Border"),
+                StrokeThickness = 1,
+                StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = new CornerRadius(14) },
+                Padding = new Thickness(10, 4),
+            };
+            var row = new HorizontalStackLayout { Spacing = 6, VerticalOptions = LayoutOptions.Center };
+            string? chipFont = null;
+            if (Application.Current?.Resources.TryGetValue("FontBodySemibold", out var fontRes) == true)
+                chipFont = fontRes as string;
+            row.Children.Add(new Label
+            {
+                Text = "#" + tag,
+                FontSize = 12,
+                FontFamily = chipFont,
+                TextColor = ThemeManager.Token("TextSecondary"),
+                VerticalOptions = LayoutOptions.Center,
+                VerticalTextAlignment = TextAlignment.Center,
+            });
+            // The remove target is a Label with a tap, not a Button: a MaterialButton keeps its own
+            // min height and insets and made the whole chip a tall box. A Label keeps the pill the
+            // same height as the article's TagLine chip.
+            var remove = new Label
+            {
+                Text = "×",
+                FontSize = 14,
+                TextColor = ThemeManager.Token("TextMuted"),
+                Padding = new Thickness(4, 0),
+                VerticalOptions = LayoutOptions.Center,
+                VerticalTextAlignment = TextAlignment.Center,
+            };
+            var captured = tag;
+            var removeTap = new TapGestureRecognizer();
+            removeTap.Tapped += (_, _) =>
+            {
+                _tags.Remove(captured);
+                RebuildTagChips();
+            };
+            remove.GestureRecognizers.Add(removeTap);
+            row.Children.Add(remove);
+            pill.Content = row;
+            TagChipsLayout.Children.Add(pill);
+        }
+    }
+
+    private void OnAddTagClicked(object? sender, EventArgs e)
+    {
+        var tag = (ConceptTagsEntry.Text ?? "").Trim().TrimStart('#').Trim();
+        if (tag.Length > 0 && !_tags.Contains(tag))
+        {
+            _tags.Add(tag);
+            RebuildTagChips();
+        }
+        ConceptTagsEntry.Text = "";
+    }
+
+    // ── Text / Preview and the formatting panel ──────────────────────────────
+
+    private void SetPreviewMode(bool preview)
+    {
+        if (preview)
+        {
+            var body = ContentEditor.Text ?? "";
+            PreviewMarkdown.MarkdownText = ContentFormat.SanitizeMarkdown(
+                body.Trim().Length == 0 ? AppStrings.Get("EmptyNotePreview") : body);
+        }
+        ContentEditorShell.IsVisible = !preview;
+        EditorToolbar.IsVisible = !preview;
+        PreviewBox.IsVisible = preview;
+    }
+
+    private void InsertSnippet(string snippet)
+    {
+        var text = ContentEditor.Text ?? "";
+        var cursor = Math.Clamp(ContentEditor.CursorPosition, 0, text.Length);
+        ContentEditor.Text = text.Insert(cursor, snippet);
+        ContentEditor.Focus();
+    }
+
+    private void OnToolbarHeadingClicked(object? sender, EventArgs e) => InsertSnippet(AppStrings.Get("SnippetHeading"));
+    private void OnToolbarBoldClicked(object? sender, EventArgs e) => InsertSnippet(AppStrings.Get("SnippetBold"));
+    private void OnToolbarListClicked(object? sender, EventArgs e) => InsertSnippet(AppStrings.Get("SnippetList"));
+    private void OnToolbarLinkClicked(object? sender, EventArgs e) => InsertSnippet(AppStrings.Get("SnippetLink"));
+
+    // ── The edit gate of an existing protected article ───────────────────────
+
     private async void OnEditUnlockClicked(object? sender, EventArgs e)
     {
         var pass = EditUnlockPassEntry.Text ?? "";
@@ -85,7 +204,7 @@ public partial class ArticleEditPage : ContentPage
         }
         catch (System.Security.Cryptography.CryptographicException)
         {
-            EditUnlockErrorLabel.Text = "Wrong password.";
+            EditUnlockErrorLabel.Text = AppStrings.Get("WrongArticlePassword");
             EditUnlockErrorLabel.IsVisible = true;
             return;
         }
@@ -94,7 +213,21 @@ public partial class ArticleEditPage : ContentPage
         EditUnlockPassEntry.Text = "";
         ContentEditor.Text = pt;
         EditUnlockGate.IsVisible = false;
-        ContentEditor.IsVisible = true;
+        ContentEditorShell.IsVisible = true;
+        FillProtectionFields(pass, _protectionHint);
+        TakeSnapshot();
+    }
+
+    private string? _protectionHint;
+
+    /// <summary>The password card of an existing protected article: the verified passphrase and the hint.</summary>
+    private void FillProtectionFields(string passphrase, string? hint)
+    {
+        ProtectSwitch.IsToggled = true;
+        ProtectFields.IsVisible = true;
+        ProtectPassEntry.Text = passphrase;
+        ProtectPass2Entry.Text = passphrase;
+        ProtectHintEntry.Text = hint ?? "";
     }
 
     protected override void OnAppearing()
@@ -104,6 +237,7 @@ public partial class ArticleEditPage : ContentPage
         {
             ContentEditor.Text = ShareIntentHandler.PendingText;
             ShareIntentHandler.PendingText = null;
+            TakeSnapshot();
         }
     }
 
@@ -115,6 +249,7 @@ public partial class ArticleEditPage : ContentPage
         _isProtectedArticle = false;
         _editPassphrase = null;
         _protectedBlobForEdit = null;
+        _protectionHint = null;
 
         try
         {
@@ -127,10 +262,12 @@ public partial class ArticleEditPage : ContentPage
 
             TitleEntry.Text = article.Title;
             PathLabel.Text = article.TreePath;
-            ProtectSection.IsVisible = false; // existing article: protect-on-create doesn't apply
+            _protectionHint = article.ProtectionHint;
 
             var conceptTags = await conceptTagSvc.GetByArticleIdAsync(id);
-            ConceptTagsEntry.Text = string.Join(", ", conceptTags);
+            _tags.Clear();
+            _tags.AddRange(conceptTags);
+            RebuildTagChips();
 
             var content = await articleSvc.GetContentAsync(id);
 
@@ -138,6 +275,8 @@ public partial class ArticleEditPage : ContentPage
             {
                 _isProtectedArticle = true;
                 _protectedBlobForEdit = content; // BMBENC1 body; decrypted after unlock/handoff
+                ProtectSwitch.IsToggled = true;
+                ProtectFields.IsVisible = true;
 
                 // Try the read→edit handoff first (passphrase verified moments ago on the detail page).
                 var handoff = _services.GetService<MobileUnlockHolder>()?.Take(id);
@@ -148,6 +287,7 @@ public partial class ArticleEditPage : ContentPage
                         var pt = await Task.Run(() => BeeMemoryBank.Crypto.ProtectedContentCodec.Unwrap(_protectedBlobForEdit, handoff));
                         _editPassphrase = handoff;
                         ContentEditor.Text = pt;
+                        FillProtectionFields(handoff, _protectionHint);
                         return; // unlocked via handoff — no gate needed
                     }
                     catch { /* stale handoff — fall through to the gate */ }
@@ -155,7 +295,7 @@ public partial class ArticleEditPage : ContentPage
 
                 // No (valid) handoff → show the unlock gate; the editor stays hidden until unlocked.
                 EditUnlockGate.IsVisible = true;
-                ContentEditor.IsVisible = false;
+                ContentEditorShell.IsVisible = false;
                 return;
             }
 
@@ -170,37 +310,39 @@ public partial class ArticleEditPage : ContentPage
             _loaded = true; // protected state is now known — Save is safe
             LoadingIndicator.IsRunning = false;
             LoadingIndicator.IsVisible = false;
+            TakeSnapshot();
         }
     }
 
-    private async void OnSaveClicked(object? sender, EventArgs e)
+    // ── Save ─────────────────────────────────────────────────────────────────
+
+    private async void OnSaveClicked(object? sender, EventArgs e) => await TrySaveAsync(sender as BindableObject);
+
+    private async Task TrySaveAsync(BindableObject? target)
     {
         if (!_loaded)
         {
-            ShowError("Still loading — please wait a moment and try again.");
+            ShowError(AppStrings.Get("StillLoading"));
             return;
         }
         var title = TitleEntry.Text?.Trim();
         if (string.IsNullOrEmpty(title))
         {
-            ShowError("Title is required.");
+            TitleErrorLabel.Text = AppStrings.Get("TitleRequired");
+            TitleErrorLabel.IsVisible = true;
             return;
         }
+        TitleErrorLabel.IsVisible = false;
 
         var path = PathLabel.Text?.Trim() ?? "/";
         if (!path.StartsWith('/')) path = "/" + path;
 
-        var conceptTags = (ConceptTagsEntry.Text ?? "")
-            .Split(',', StringSplitOptions.RemoveEmptyEntries)
-            .Select(t => t.Trim())
-            .Where(t => t.Length > 0)
-            .ToList();
-
         var content = ContentEditor.Text ?? "";
 
         ErrorLabel.IsVisible = false;
+        ProtectErrorLabel.IsVisible = false;
         // The one busy helper (BMB-311): the button (or the toolbar entry) is off and spins until the article is saved and the page is left.
-        await BusyAction.RunAsync(sender as BindableObject, () => SaveAsync(title, path, conceptTags, content));
+        await BusyAction.RunAsync(target, () => SaveAsync(title, path, _tags.ToList(), content));
     }
 
     private async Task SaveAsync(string title, string path, List<string> conceptTags, string content)
@@ -212,30 +354,67 @@ public partial class ArticleEditPage : ContentPage
         {
             using var scope = _services.CreateScope();
             var articleSvc = scope.ServiceProvider.GetRequiredService<ArticleService>();
+            var commentSvc = scope.ServiceProvider.GetRequiredService<CommentService>();
 
             if (_articleId.HasValue)
             {
+                var id = _articleId.Value;
                 if (_isProtectedArticle)
                 {
-                    if (_editPassphrase == null) { ShowError("Unlock the article first."); return; }
-                    try
+                    if (_editPassphrase == null) { ShowProtectError(AppStrings.Get("UnlockFirst")); return; }
+
+                    if (ProtectSwitch.IsToggled)
                     {
-                        // Re-wrap the new body under the same passphrase (verifies it first).
-                        await articleSvc.UpdateProtectedContentAsync(_articleId.Value, content, _editPassphrase);
+                        var newPass = ProtectPassEntry.Text ?? "";
+                        var repeat = ProtectPass2Entry.Text ?? "";
+                        var hint = string.IsNullOrWhiteSpace(ProtectHintEntry.Text) ? null : ProtectHintEntry.Text.Trim();
+                        if (newPass.Length < 4) { ShowProtectError(AppStrings.Get("PasswordTooShort")); return; }
+                        if (newPass != repeat) { ShowProtectError(AppStrings.Get("PasswordMismatch")); return; }
+
+                        if (newPass != _editPassphrase)
+                        {
+                            // A new passphrase: the core re-wraps the body and the hint; the comments
+                            // sealed under the old one are re-sealed under the new one too.
+                            await articleSvc.ChangePassphraseAsync(id, _editPassphrase, newPass, hint);
+                            await commentSvc.ReprotectAsync(id, _editPassphrase, newPass);
+                            _editPassphrase = newPass;
+                            _services.GetService<MobileUnlockHolder>()?.Clear();
+                        }
+                        // Re-wrap the new body under the passphrase (verifies it first).
+                        await articleSvc.UpdateProtectedContentAsync(id, content, _editPassphrase);
+                        // Metadata + tags + hint only (no body — keeps it protected).
+                        await articleSvc.UpdateAsync(id, title, path, conceptTags, null, hint, updateHint: true);
                     }
-                    catch (System.Security.Cryptography.CryptographicException)
+                    else
                     {
-                        ShowError("Wrong password.");
-                        return;
+                        // The switch turned off: take the protection off the body and the comments.
+                        await articleSvc.UnprotectAsync(id, _editPassphrase);
+                        await commentSvc.ReprotectAsync(id, _editPassphrase, null);
+                        await articleSvc.UpdateAsync(id, title, path, conceptTags, content);
+                        _isProtectedArticle = false;
+                        _editPassphrase = null;
+                        _services.GetService<MobileUnlockHolder>()?.Clear();
                     }
-                    // Metadata + tags only (no body — keeps it protected).
-                    await articleSvc.UpdateAsync(_articleId.Value, title, path, conceptTags, null);
+                }
+                else if (ProtectSwitch.IsToggled)
+                {
+                    // A plain article gains a password: save the text, then seal it (and the comments).
+                    var pass = ProtectPassEntry.Text ?? "";
+                    var repeat = ProtectPass2Entry.Text ?? "";
+                    var hint = string.IsNullOrWhiteSpace(ProtectHintEntry.Text) ? null : ProtectHintEntry.Text.Trim();
+                    if (pass.Length < 4) { ShowProtectError(AppStrings.Get("PasswordTooShort")); return; }
+                    if (pass != repeat) { ShowProtectError(AppStrings.Get("PasswordMismatch")); return; }
+
+                    await articleSvc.UpdateAsync(id, title, path, conceptTags, content);
+                    await articleSvc.ProtectAsync(id, pass, hint);
+                    await commentSvc.ReprotectAsync(id, null, pass);
                 }
                 else
                 {
-                    await articleSvc.UpdateAsync(_articleId.Value, title, path, conceptTags, content);
+                    await articleSvc.UpdateAsync(id, title, path, conceptTags, content);
                 }
-                await Shell.Current.GoToAsync($"..?created={_articleId.Value}");
+                LeaveConfirmed = true;
+                await Shell.Current.GoToAsync($"..?created={id}");
             }
             else
             {
@@ -243,13 +422,14 @@ public partial class ArticleEditPage : ContentPage
                 if (ProtectSwitch.IsToggled)
                 {
                     var pass = ProtectPassEntry.Text ?? "";
-                    if (pass.Length < 4) { ShowError("Password must be at least 4 characters."); return; }
-                    if (pass != (ProtectPass2Entry.Text ?? "")) { ShowError("Passwords do not match."); return; }
+                    if (pass.Length < 4) { ShowProtectError(AppStrings.Get("PasswordTooShort")); return; }
+                    if (pass != (ProtectPass2Entry.Text ?? "")) { ShowProtectError(AppStrings.Get("PasswordMismatch")); return; }
                     // Wrap locally so the very first CREATE event carries only ciphertext.
                     content = BeeMemoryBank.Crypto.ProtectedContentCodec.Wrap(content, pass);
                     hint = string.IsNullOrWhiteSpace(ProtectHintEntry.Text) ? null : ProtectHintEntry.Text.Trim();
                 }
                 var article = await articleSvc.CreateAsync(title, path, conceptTags, content, hint);
+                LeaveConfirmed = true;
                 await Shell.Current.GoToAsync($"..?created={article.Id}");
             }
         }
@@ -270,6 +450,12 @@ public partial class ArticleEditPage : ContentPage
         ErrorLabel.IsVisible = true;
     }
 
+    private void ShowProtectError(string message)
+    {
+        ProtectErrorLabel.Text = message;
+        ProtectErrorLabel.IsVisible = true;
+    }
+
     private static string GetErrorMessage(Exception ex)
     {
         // Unwrap TargetInvocationException and AggregateException to show the real error
@@ -285,15 +471,68 @@ public partial class ArticleEditPage : ContentPage
         return $"{inner.GetType().Name}: {inner.Message}";
     }
 
+    // ── Unsaved changes (the mock-up's three-answer dialog on the way out) ───
+
+    private string CurrentSnapshot() => string.Join("\u001f",
+        TitleEntry.Text ?? "", PathLabel.Text ?? "", string.Join(",", _tags),
+        ContentEditor.Text ?? "", ProtectSwitch.IsToggled ? "1" : "0",
+        ProtectPassEntry.Text ?? "", ProtectPass2Entry.Text ?? "", ProtectHintEntry.Text ?? "");
+
+    private void TakeSnapshot() => _initialSnapshot = CurrentSnapshot();
+
+    private bool IsDirty() => _loaded && CurrentSnapshot() != _initialSnapshot;
+
+    protected override bool OnBackButtonPressed()
+    {
+        if (IsDirty())
+        {
+            _ = HandleUnsavedAsync();
+            return true;
+        }
+        return false;
+    }
+
+    // busy-exempt: the dialog itself only reads the fields; saving runs behind BusyAction in TrySaveAsync
+    private async Task HandleUnsavedAsync()
+    {
+        if (await RequestLeaveAsync())
+        {
+            LeaveConfirmed = true;
+            await Shell.Current.GoToAsync("..");
+        }
+    }
+
+    /// <summary>
+    /// The unsaved-changes question, also asked by the shell for the toolbar up button (Shell's up
+    /// navigation does not go through OnBackButtonPressed). True when the page may be left now;
+    /// saving navigates on its own, so it answers false.
+    /// </summary>
+    internal async Task<bool> RequestLeaveAsync()
+    {
+        if (!IsDirty()) return true;
+        var choice = await AppDialog.ThreeWayAsync(this,
+            AppStrings.Get("UnsavedTitle"), AppStrings.Get("UnsavedDesc"),
+            AppStrings.Get("Save"), AppStrings.Get("DontSave"), AppStrings.Get("Cancel"));
+        if (choice == 0)
+        {
+            await TrySaveAsync(null);
+            return false;
+        }
+        return choice == 1;
+    }
+
+    // ── Images ───────────────────────────────────────────────────────────────
+
     private async void OnAddImageClicked(object? sender, EventArgs e)
     {
-        var action = await DisplayActionSheet("Add Image", "Cancel", null, "Photo Library", "Take Photo");
-        if (action == "Cancel" || action == null) return;
+        var action = await DisplayActionSheet(AppStrings.Get("AddImageTitle"), AppStrings.Get("Cancel"), null,
+            AppStrings.Get("PhotoLibrary"), AppStrings.Get("TakePhoto"));
+        if (action == AppStrings.Get("Cancel") || action == null) return;
 
         FileResult? photo;
         try
         {
-            photo = action == "Take Photo"
+            photo = action == AppStrings.Get("TakePhoto")
                 ? await MediaPicker.Default.CapturePhotoAsync()
                 : await MediaPicker.Default.PickPhotoAsync();
         }

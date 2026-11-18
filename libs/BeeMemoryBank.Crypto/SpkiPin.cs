@@ -60,7 +60,7 @@ public static class SpkiPin
     ///
     /// <para>It opens its sockets through <see cref="PeerSocketConnector"/> and uses no proxy: a pinned
     /// key says WHO answered, not WHERE the name led, and a name that resolves to a link-local or
-    /// cloud-metadata address is never dialled (BMB-307 fix round 3).</para>
+    /// cloud-metadata address is never dialled (BMB-307).</para>
     /// </summary>
     /// <param name="network">Test seam: how names are resolved and which addresses are allowed.</param>
     public static HttpMessageHandler CreatePinnedHandler(string expectedPin, PeerNetwork? network = null)

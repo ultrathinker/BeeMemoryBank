@@ -38,7 +38,7 @@ public sealed record AnchorVerification(
     /// <summary>
     /// Would this whitelist row - key and superadmin flag as given - be vouched for by the matching anchor's trust section?
     /// The same row check as <see cref="Vouches"/>, decided before the row is written: a restore writes each peer with
-    /// its final status, so no moment exists at which a row the anchor does not vouch for is active (review A2-a).
+    /// its final status, so no moment exists at which a row the anchor does not vouch for is active.
     /// </summary>
     public bool VouchesRow(Guid nodeId, byte[] publicKey, bool superadmin) =>
         MatchesAnchor && Digest != null && StateDigest.TrustProves(Digest, nodeId, publicKey, superadmin);
@@ -140,11 +140,14 @@ public class StateAnchorService(SessionService session, IDbConnectionFactory con
         var anchors = await conn.QueryAsync<(string AnchorId, string CreatedAt)>(
             "SELECT anchor_id, created_at FROM tbl_state_anchor ORDER BY created_at DESC, lamport_ts DESC");
 
+        // The authors' retired keys, carried in the restored database (plan WS-D D4): a package signed before a re-key still verifies.
+        var history = await BeeMemoryBank.Storage.Sqlite.NodeKeyHistoryStore.ListAllAsync(conn);
+
         var unconfirmed = new List<string>();
         var otherFormat = new List<string>();
         foreach (var row in anchors)
         {
-            var signed = SignedAnchor(row.AnchorId, events, publicKeys);
+            var signed = SignedAnchor(row.AnchorId, events, publicKeys, history);
             var a = signed?.Payload;
             if (a == null || a.DekFingerprint != fingerprint
                 || !StateAnchorCrypto.Verify(dek, a.AnchorId, a.DekFingerprint, a.PositionVector, a.Digest, a.CreatedAt, a.Hmac))
@@ -169,7 +172,7 @@ public class StateAnchorService(SessionService session, IDbConnectionFactory con
                 unconfirmed.Add(row.CreatedAt);
                 continue;
             }
-            var unverified = state.BeyondCut.Where(r => !IsBackedBySignedEvent(r, events, publicKeys)).ToList();
+            var unverified = state.BeyondCut.Where(r => !IsBackedBySignedEvent(r, events, publicKeys, history)).ToList();
             return new AnchorVerification(true, a.AnchorId, a.CreatedAt, StateDigest.Matches(a.Digest, state),
                 state.BeyondCut.Count, state.BeyondCut.Count - unverified.Count, state.Unchecked.Count, unverified, unconfirmed, otherFormat,
                 History: StateDigest.CompareHistory(a.Digest, state), Unchecked: state.Unchecked,
@@ -182,7 +185,8 @@ public class StateAnchorService(SessionService session, IDbConnectionFactory con
     // The anchor as its author signed it: a state_anchor event from a known node, with a valid signature.
     // Whether that node may vouch for anything is decided by the anchor's own trust section (VerifyAsync).
     private static (StateAnchorPayload Payload, Guid Signer)? SignedAnchor(
-        string anchorId, IReadOnlyList<SyncEvent> events, IReadOnlyDictionary<Guid, byte[]> publicKeys)
+        string anchorId, IReadOnlyList<SyncEvent> events, IReadOnlyDictionary<Guid, byte[]> publicKeys,
+        IReadOnlyList<BeeMemoryBank.Core.Models.NodeKeyHistoryEntry> history)
     {
         foreach (var evt in events)
         {
@@ -193,7 +197,7 @@ public class StateAnchorService(SessionService session, IDbConnectionFactory con
             catch (JsonException) { continue; }
             if (payload is not { PositionVector: not null } || !string.Equals(payload.AnchorId, anchorId, StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (Ed25519Signer.Verify(key, EventSignature.BuildPayload(evt), evt.Signature))
+            if (NodeEventVerifier.Verify(evt, key, history, NodeKeyMode.Package))
                 return (payload, evt.NodeId);
         }
         return null;
@@ -203,7 +207,8 @@ public class StateAnchorService(SessionService session, IDbConnectionFactory con
     // Lamport time naming the row. The signature binds node, time and payload, so a blind node cannot
     // invent the row, move it to another time, or pin it on another node.
     private static bool IsBackedBySignedEvent(
-        StateDigestEntry row, IReadOnlyList<SyncEvent> events, IReadOnlyDictionary<Guid, byte[]> publicKeys)
+        StateDigestEntry row, IReadOnlyList<SyncEvent> events, IReadOnlyDictionary<Guid, byte[]> publicKeys,
+        IReadOnlyList<BeeMemoryBank.Core.Models.NodeKeyHistoryEntry> history)
     {
         foreach (var evt in events)
         {
@@ -213,7 +218,7 @@ public class StateAnchorService(SessionService session, IDbConnectionFactory con
             var names = string.Equals(evt.ArticleId?.ToString("D"), row.Id, StringComparison.OrdinalIgnoreCase)
                 || evt.Payload.Contains(row.Id, StringComparison.OrdinalIgnoreCase);
             if (names && publicKeys.TryGetValue(evt.NodeId, out var key)
-                && Ed25519Signer.Verify(key, EventSignature.BuildPayload(evt), evt.Signature))
+                && NodeEventVerifier.Verify(evt, key, history, NodeKeyMode.Package))
                 return true;
         }
         return false;

@@ -86,7 +86,7 @@ public sealed partial class BlindSeedService
                 // The baseline files switch and the first adoption rebuilds the database: no backup may read them meanwhile.
                 using var exclusive = await jobs.TryBeginExclusiveAsync(_cutoverDrainWait)
                     ?? throw new BlindSeedRejectedException(BlindSeedRefusal.DrainTimeout);
-                // Order matters (review round): everything that can be refused is decided before this node's live tables change,
+                // Order matters: everything that can be refused is decided before this node's live tables change,
                 // and the serving node's position - the record "everything up to here is stored" - moves last. The blobs come
                 // first because the baseline's adoption needs them here; they are content-addressed and checked against
                 // their names, and a surplus from a refused package is swept after the grace period (9.6). The reader has

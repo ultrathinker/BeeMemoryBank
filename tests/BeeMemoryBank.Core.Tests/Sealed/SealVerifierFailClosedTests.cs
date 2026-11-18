@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Core.Tests.Sealed;
 
 /// <summary>
-/// BMB-304 fix2 (P3): the verification of an encrypted copy fails CLOSED. A table that cannot be counted, or a search that cannot run, on both copies used to compare
+/// BMB-304: the verification of an encrypted copy fails CLOSED. A table that cannot be counted, or a search that cannot run, on both copies used to compare
 /// equal (-1 and -1, "failed" and "failed"), so a copy whose search index nobody could read was marked as verified.
 /// </summary>
 public sealed class SealVerifierFailClosedTests

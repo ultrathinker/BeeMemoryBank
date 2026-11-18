@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Cli.Tests;
 
 /// <summary>
-/// The host builds the whole join snapshot before it sends the first header (review revsrv F8). The 30 seconds <c>bmb join</c> allows a request
+/// The host builds the whole join snapshot before it sends the first header. The 30 seconds <c>bmb join</c> allows a request
 /// of the key exchange must not be the budget of that wait: a big vault takes minutes to build, and a join that failed on it had spent its
 /// one-time code. Verified on the old code with a host that took 32 seconds: "canceled due to the configured HttpClient.Timeout of 30 seconds".
 /// The limit is handed in here (1 second) so the test needs no real half minute.

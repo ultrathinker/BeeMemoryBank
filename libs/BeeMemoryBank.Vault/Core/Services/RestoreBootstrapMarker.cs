@@ -10,7 +10,7 @@ namespace BeeMemoryBank.Core.Services;
 /// there an identity row — because every other answer sends an operator whose vault is perfectly
 /// intact to the setup wizard, and the rehearsal on a real 1.0.11 vault showed how real that is:
 /// its identity row has a NULL sentinel, so any "the row is not enough" test reads a working vault
-/// as an empty one (review release-a2 batch 2). The identity row alone is not enough in exactly one
+/// as an empty one. The identity row alone is not enough in exactly one
 /// situation, and it is a writer's own: the restore bootstrap writes that row first and the slot,
 /// the admin and the sentinel after it, and a crash in between used to leave a node that called
 /// itself initialized, refused the next restore with "restore needs a fresh node" and had no slot
@@ -19,7 +19,7 @@ namespace BeeMemoryBank.Core.Services;
 /// <para>So the bootstrap raises this marker BEFORE its first write and lowers it in the
 /// transaction that ends the whole restore: after the bootstrap (sentinel on disk, identity
 /// verified), the peers with their final status, the clock floor and this device's recovery box
-/// (review release-a2 A2-a). While it is up the node reports not-initialized, which is the
+///. While it is up the node reports not-initialized, which is the
 /// instruction the operator needs — restore again — and the next attempt is allowed in and resumes
 /// instead of repeating (that is <see cref="RecoveryRestoreService"/>'s own re-entry rule). The
 /// marker is not a security boundary: <see cref="InitializationService.IsClaimedAsync"/> is what

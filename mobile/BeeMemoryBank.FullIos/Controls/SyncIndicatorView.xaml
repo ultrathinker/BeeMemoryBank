@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- The design's .sync-badge-btn: a pill in the header with the sync state in words and colour.
+     The states and their colours are the design's (is-synced / is-syncing / is-offline / is-error);
+     the state itself comes from the real FullSync and the phone's connectivity. -->
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="BeeMemoryBank.FullIos.Controls.SyncIndicatorView">
+    <Border x:Name="Badge"
+            AutomationId="SyncBadge"
+            StrokeShape="RoundRectangle 19"
+            StrokeThickness="1"
+            Padding="10,6"
+            MinimumHeightRequest="38"
+            MinimumWidthRequest="38"
+            VerticalOptions="Center">
+        <HorizontalStackLayout Spacing="5" VerticalOptions="Center">
+            <Image x:Name="StateIcon"
+                   WidthRequest="16"
+                   HeightRequest="16"
+                   VerticalOptions="Center" />
+            <Label x:Name="StateLabel"
+                   FontSize="12"
+                   FontFamily="{StaticResource FontBodySemibold}"
+                   VerticalOptions="Center" />
+        </HorizontalStackLayout>
+        <Border.GestureRecognizers>
+            <TapGestureRecognizer Tapped="OnBadgeTapped" />
+        </Border.GestureRecognizers>
+    </Border>
+</ContentView>

@@ -2,7 +2,10 @@ using BeeMemoryBank.Core.Interfaces;
 
 namespace BeeMemoryBank.Vault.Sealed;
 
-/// <summary>A door about to be written to the sealed database (docs/design/step-b-spec.md 4.3 rule 1). Same fields as BootDoor.</summary>
+/// <summary>
+/// A door about to be written to the sealed database (docs/design/step-b-spec.md 4.3 rule 1). Same fields as BootDoor; a sealed (v2) door
+/// carries its format and public key (ADR 0012).
+/// </summary>
 public sealed record PendingDoor(
     string Kind,
     long SourceId,
@@ -15,7 +18,9 @@ public sealed record PendingDoor(
     int? ArgonParallelism,
     string? KeyHash,
     int? KdfVersion,
-    string? DekFingerprint);
+    string? DekFingerprint,
+    int DoorVersion = 1,
+    byte[]? DoorPublicKey = null);
 
 /// <summary>
 /// Keeps the boot store's copies (doors, DBK wrappers, identity and whitelist mirrors) in step with the sealed database (spec 4.3).

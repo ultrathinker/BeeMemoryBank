@@ -205,7 +205,7 @@ public class BlindWipeEndpointsTests : IAsyncLifetime
 
     /// <summary>
     /// The wipe takes one barrier for every other writer before it deletes anything, and it waits
-    /// rather than racing (review release-a2 agy#4, sec#6, spec#3). Each half of the barrier gets its
+    /// rather than racing. Each half of the barrier gets its
     /// own test so each one is provable on its own: an event write in flight holds the wipe at the
     /// gate, and a database connection still open holds it at the drain. Both were holes a pull, an
     /// applier or a reader could walk through while the tables were deleted under them.
@@ -393,7 +393,7 @@ public class BlindConsoleAuthTests : IAsyncLifetime
     /// The endpoint told them apart by re-reading HasPassword() after the failed attempt, which is
     /// true in BOTH cases — so a node with a password answered "wrong password" for a request that
     /// carried none, the CLI's branch never fired, and re-running init on a configured node could
-    /// not reach the settings it was re-run for (review release-a2 agy#1, sec#8).
+    /// not reach the settings it was re-run for.
     /// </summary>
     [Fact]
     public async Task Password_AlreadySetWithoutACurrentOne_IsItsOwnRefusal()

@@ -4,7 +4,7 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 /// <summary>
 /// Every route of the blind node's own subsystems (BMB-54): status, backups, the console's server
-/// side and the wipe. One entry point so the pipeline — Opus-L's file — carries a single hook line.
+/// side and the wipe. One entry point so the pipeline carries a single hook line.
 ///
 /// <para>Backups, the console and the wipe are mapped ONLY in the blind role: on a full node they
 /// are not merely refused, they do not exist (404) — a full node has a vault a regular user can

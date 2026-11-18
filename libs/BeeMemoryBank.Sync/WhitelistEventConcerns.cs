@@ -10,17 +10,30 @@ namespace BeeMemoryBank.Sync;
 /// </summary>
 public static class WhitelistEventConcerns
 {
-    /// <summary>A superadmin flag an update names that no node of this version takes.</summary>
-    public enum Refusal { None, BlindSuperadmin, SelfPromotion }
+    /// <summary>Concerns refused by policy (not written regardless of arrival order).</summary>
+    [Flags]
+    public enum Refusal
+    {
+        None = 0,
+        BlindSuperadmin = 1,
+        SelfPromotion = 2,
+        SelfOwnership = 4,
+    }
 
     public const WhitelistConcerns OfAdd = WhitelistConcerns.All;
     public const WhitelistConcerns OfRevoke = WhitelistConcerns.Membership;
 
     /// <summary>
+    /// Returns the concerns of a local <c>whitelist_add</c> for <paramref name="entry"/>: all concerns when it carries a known ownership,
+    /// otherwise everything except <see cref="WhitelistConcerns.Ownership"/>.
+    /// </summary>
+    public static WhitelistConcerns OfAddFor(WhitelistEntry entry) =>
+        OwnershipKinds.IsKnown(entry.Ownership) ? WhitelistConcerns.All : WhitelistConcerns.All & ~WhitelistConcerns.Ownership;
+
+    /// <summary>
     /// The concerns <paramref name="p"/> writes. <paramref name="storedAddress"/> is its address once through the address policy (null: none,
     /// or refused). The superadmin flag is refused (not written, whatever the row says, so the answer does not depend on the order of arrival)
-    /// when it would make a blind node a superadmin, or when a node raises its own: a node never has its own row, so no node of this version
-    /// ever sends that, and a raise must not come from the node raised.
+    /// when it would make a blind node a superadmin, or when a node raises its own; ownership is refused when a node sets its own.
     /// </summary>
     public static WhitelistConcerns OfUpdate(WhitelistUpdatePayload p, Guid author, string? storedAddress, out Refusal refusal)
     {
@@ -31,9 +44,14 @@ public static class WhitelistEventConcerns
         refusal = Refusal.None;
         if (p.IsSuperadmin is { } flag)
         {
-            if (flag && BlindNodeId.IsBlind(p.NodeId)) refusal = Refusal.BlindSuperadmin;
-            else if (flag && author == p.NodeId) refusal = Refusal.SelfPromotion;
+            if (flag && BlindNodeId.IsBlind(p.NodeId)) refusal |= Refusal.BlindSuperadmin;
+            else if (flag && author == p.NodeId) refusal |= Refusal.SelfPromotion;
             else concerns |= WhitelistConcerns.Superadmin;
+        }
+        if (p.Ownership is not null)
+        {
+            if (author == p.NodeId) refusal |= Refusal.SelfOwnership;
+            else if (OwnershipKinds.NormalizeOrNull(p.Ownership) is not null) concerns |= WhitelistConcerns.Ownership;
         }
         return concerns;
     }
@@ -43,8 +61,9 @@ public static class WhitelistEventConcerns
     /// what the row it writes stamps with the version the event minted.
     /// </summary>
     public static WhitelistConcerns ForLocalUpdate(Guid nodeId, Guid author, string? apiAddress, string? displayName, bool? isSuperadmin = null,
-        string? tlsSpki = null, string? tlsTrust = null) =>
-        OfUpdate(new WhitelistUpdatePayload(nodeId, apiAddress, displayName, isSuperadmin, tlsSpki, tlsTrust), author, StoredAddress(apiAddress), out _);
+        string? tlsSpki = null, string? tlsTrust = null, string? ownership = null, Guid? ownerPersonId = null, string? ownerLabel = null) =>
+        OfUpdate(new WhitelistUpdatePayload(nodeId, apiAddress, displayName, isSuperadmin, tlsSpki, tlsTrust, ownership, ownerPersonId, ownerLabel),
+            author, StoredAddress(apiAddress), out _);
 
     /// <summary>The value of one field concern of <paramref name="from"/> onto <paramref name="to"/> (TLS: the mode and the pin together).</summary>
     public static void CopyField(WhitelistConcerns concern, WhitelistEntry from, WhitelistEntry to)
@@ -55,6 +74,7 @@ public static class WhitelistEventConcerns
             case WhitelistConcerns.Name: to.DisplayName = from.DisplayName; break;
             case WhitelistConcerns.Address: to.ApiAddress = from.ApiAddress; break;
             case WhitelistConcerns.Tls: (to.TlsSpki, to.TlsTrust) = (from.TlsSpki, from.TlsTrust); break;
+            case WhitelistConcerns.Ownership: (to.Ownership, to.OwnerPersonId, to.OwnerLabel, to.NeedsReview) = (from.Ownership, from.OwnerPersonId, from.OwnerLabel, from.NeedsReview); break;
         }
     }
 

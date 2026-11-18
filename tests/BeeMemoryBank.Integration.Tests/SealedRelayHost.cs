@@ -113,15 +113,26 @@ internal sealed class SealedRelayHost : IAsyncDisposable
     }
 
     /// <summary>A peer in the whitelist mirror (status 'A').</summary>
-    public async Task<RelayPeer> AddPeerAsync(bool superadmin = false, string status = "A", Guid? id = null)
+    public async Task<RelayPeer> AddPeerAsync(bool superadmin = false, string status = "A", Guid? id = null,
+        long memberLamportTs = 0, Guid? memberSourceNodeId = null)
     {
         var peer = RelayPeer.New();
         if (id is { } fixedId) peer = peer with { Id = fixedId };
         using var c = Boot.Connections.Open();
         await c.ExecuteAsync(
-            @"INSERT INTO tbl_whitelist (node_id, display_name, ed25519_public_key, status, is_superadmin, created_at, updated_at)
-              VALUES (@id, @name, @pub, @status, @sa, @now, @now)",
-            new { id = peer.Id.ToString("D"), name = "Peer " + peer.Id.ToString("N")[..6], pub = peer.PublicKey, status, sa = superadmin ? 1 : 0, now = DateTime.UtcNow.ToString("o") });
+            @"INSERT INTO tbl_whitelist (node_id, display_name, ed25519_public_key, status, is_superadmin, member_lamport_ts, member_source_node_id, created_at, updated_at)
+              VALUES (@id, @name, @pub, @status, @sa, @memberTs, @memberSrc, @now, @now)",
+            new
+            {
+                id = peer.Id.ToString("D"),
+                name = "Peer " + peer.Id.ToString("N")[..6],
+                pub = peer.PublicKey,
+                status,
+                sa = superadmin ? 1 : 0,
+                memberTs = memberLamportTs,
+                memberSrc = memberSourceNodeId?.ToString("D"),
+                now = DateTime.UtcNow.ToString("o")
+            });
         return peer;
     }
 
@@ -191,10 +202,10 @@ internal sealed class SealedRelayHost : IAsyncDisposable
     }
 
     /// <summary>A control event (a whitelist change) of <paramref name="author"/>, protocol 3 as a 2.6 node writes it.</summary>
-    public static SyncEvent ControlEvent(RelayPeer author, string type, object payload, long originSequence = 1) =>
+    public static SyncEvent ControlEvent(RelayPeer author, string type, object payload, long originSequence = 1, long? lamportTs = null) =>
         Sign(author, new SyncEvent
         {
-            EventId = Guid.NewGuid(), NodeId = author.Id, LamportTs = Interlocked.Increment(ref _lamport), EventType = type,
+            EventId = Guid.NewGuid(), NodeId = author.Id, LamportTs = lamportTs ?? Interlocked.Increment(ref _lamport), EventType = type,
             Payload = System.Text.Json.JsonSerializer.Serialize(payload), ProtocolVersion = SyncProtocolVersion.Current, CreatedAt = DateTime.UtcNow,
             SequenceNum = originSequence,
         });
