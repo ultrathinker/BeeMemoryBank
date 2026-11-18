@@ -55,6 +55,8 @@ public class WhitelistEntry
     public Guid? AddressSourceNodeId { get; set; }
     public long TlsLamportTs { get; set; }
     public Guid? TlsSourceNodeId { get; set; }
+    public long OwnershipLamportTs { get; set; }
+    public Guid? OwnershipSourceNodeId { get; set; }
 
     /// <summary>The version of one concern (a single flag of <see cref="WhitelistConcerns"/>).</summary>
     public RowVersion VersionOf(WhitelistConcerns concern) => concern switch
@@ -64,6 +66,7 @@ public class WhitelistEntry
         WhitelistConcerns.Name => RowVersion.Of(NameLamportTs, NameSourceNodeId),
         WhitelistConcerns.Address => RowVersion.Of(AddressLamportTs, AddressSourceNodeId),
         WhitelistConcerns.Tls => RowVersion.Of(TlsLamportTs, TlsSourceNodeId),
+        WhitelistConcerns.Ownership => RowVersion.Of(OwnershipLamportTs, OwnershipSourceNodeId),
         _ => throw new ArgumentOutOfRangeException(nameof(concern), concern, "one concern at a time"),
     };
 
@@ -76,14 +79,16 @@ public class WhitelistEntry
     /// </summary>
     public WhitelistConcerns UndatedFields { get; set; }
 
-    /// <summary>Whether a field's value has no known writer (<see cref="UndatedFields"/>). Never membership.</summary>
-    public bool IsUndated(WhitelistConcerns concern) => concern != WhitelistConcerns.Membership && (UndatedFields & concern) == concern;
+    /// <summary>Whether a field's value has no known writer (<see cref="UndatedFields"/>). Never membership or ownership (ownership uses <see cref="NeedsReview"/>).</summary>
+    public bool IsUndated(WhitelistConcerns concern) =>
+        concern is not (WhitelistConcerns.Membership or WhitelistConcerns.Ownership) && (UndatedFields & concern) == concern;
 
-    /// <summary>Marks <paramref name="concerns"/> undated (fields only), keeping their versions.</summary>
+    /// <summary>Marks <paramref name="concerns"/> undated (classic fields only), keeping their versions.</summary>
     public void MarkUndated(WhitelistConcerns concerns) => UndatedFields |= concerns & Fields;
 
-    /// <summary>The fields of a row, without membership.</summary>
-    public const WhitelistConcerns Fields = WhitelistConcerns.All & ~WhitelistConcerns.Membership;
+    /// <summary>The classic undated-trackable fields of a row, without membership or ownership.</summary>
+    public const WhitelistConcerns Fields =
+        WhitelistConcerns.Superadmin | WhitelistConcerns.Name | WhitelistConcerns.Address | WhitelistConcerns.Tls;
 
     /// <summary>
     /// Sets the version of every concern in <paramref name="concerns"/> to <paramref name="version"/>, and dates them: the version comes from an
@@ -99,6 +104,7 @@ public class WhitelistEntry
         if (concerns.HasFlag(WhitelistConcerns.Name)) (NameLamportTs, NameSourceNodeId) = (version.LamportTs, source);
         if (concerns.HasFlag(WhitelistConcerns.Address)) (AddressLamportTs, AddressSourceNodeId) = (version.LamportTs, source);
         if (concerns.HasFlag(WhitelistConcerns.Tls)) (TlsLamportTs, TlsSourceNodeId) = (version.LamportTs, source);
+        if (concerns.HasFlag(WhitelistConcerns.Ownership)) (OwnershipLamportTs, OwnershipSourceNodeId) = (version.LamportTs, source);
     }
 
     /// <summary>Sets the row's own version (the applier: the newest of its concerns).</summary>
@@ -157,9 +163,25 @@ public class WhitelistEntry
         // unversioned field (a tombstone's) has no value yet: the first event fills it.
         if (Status != WhitelistStatuses.Revoked)
             foreach (var concern in WhitelistConcernSet.Each)
-                if (concern != WhitelistConcerns.Membership && VersionOf(concern) == new RowVersion(0, Guid.Empty))
+                if (concern is not (WhitelistConcerns.Membership or WhitelistConcerns.Ownership)
+                    && VersionOf(concern) == new RowVersion(0, Guid.Empty))
                     MarkUndated(concern);
     }
+
+    /// <summary>
+    /// Who owns this device: <c>shared</c>, <c>personal</c>, or <c>unknown</c> (<see cref="OwnershipKinds"/>).
+    /// Replicated via <see cref="WhitelistConcerns.Ownership"/>.
+    /// </summary>
+    public string Ownership { get; set; } = OwnershipKinds.Unknown;
+
+    /// <summary>When <see cref="Ownership"/> is <c>personal</c>, the owner's <c>tbl_user.person_id</c>.</summary>
+    public Guid? OwnerPersonId { get; set; }
+
+    /// <summary>When <see cref="Ownership"/> is <c>personal</c>, the owner's display label (display name, never login).</summary>
+    public string? OwnerLabel { get; set; }
+
+    /// <summary>Node-local review flag: true when ownership needs an admin's confirmation (never replicated in events).</summary>
+    public bool NeedsReview { get; set; }
 
     /// <summary>
     /// True if this peer is authorized to issue cluster-state-modifying sync events:

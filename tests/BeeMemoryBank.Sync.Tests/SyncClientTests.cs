@@ -158,7 +158,7 @@ public class SyncClientTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage0 #2: a peer below protocol 3 would accept a blind node's events, so nothing
+    /// A peer below protocol 3 would accept a blind node's events, so nothing
     /// moves either way — not even a pull, whose events could have come from a blind node.
     /// </summary>
     [Theory]
@@ -179,7 +179,7 @@ public class SyncClientTests : IAsyncLifetime
             }), Encoding.UTF8, "application/json")
         });
 
-        // Act: BMB-307 fix round - the session did not happen, and it says so (it used to return 0, which every screen read as "nothing to do")
+        // Act: BMB-307 - the session did not happen, and it says so (it used to return 0, which every screen read as "nothing to do")
         var act = async () => await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
 
         // Assert
@@ -422,7 +422,7 @@ public class SyncClientTests : IAsyncLifetime
         MapIdentity(protocolVersion: 2);
 
         var act = async () => await _client.SyncWithAsync(_http, "http://remote.local", _remoteNodeId);
-        await act.Should().ThrowAsync<PeerIncompatibleException>("the session did not happen (BMB-307 fix round)");
+        await act.Should().ThrowAsync<PeerIncompatibleException>("the session did not happen (BMB-307)");
 
         _mockHandler.CallLog.Should().NotContain(s => s.StartsWith("POST") && s.EndsWith("/api/sync/events"));
         _mockHandler.CallLog.Should().NotContain(s => s.Contains("/api/sync/blobs"));
@@ -712,7 +712,7 @@ public class SyncClientTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Codex round 2, security #2. The node id rides on the wire and is not covered by the signature,
+    /// The node id rides on the wire and is not covered by the signature,
     /// so an event that merely <i>claims</i> to come from this node proves nothing — and the F5 skip
     /// used to take that claim at face value and advance the cursor over it. A peer that fabricates
     /// one with a sequence past the end of what we hold makes us walk past every real event behind it,
@@ -752,7 +752,7 @@ public class SyncClientTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The other half of the same rule, and the reason the skip exists at all (F5): a blind node that
+    /// The other half of the same rule, and the reason the skip exists at all: a blind node that
     /// was reseeded replays the tail it had received onto the package and re-logs it under the new
     /// database's sequences, so a pull brings back events this node authored. An event of ours that IS
     /// proven — here by the signature, with the row a compaction would have taken away already gone —

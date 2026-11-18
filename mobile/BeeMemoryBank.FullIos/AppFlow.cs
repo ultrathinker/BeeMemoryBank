@@ -18,6 +18,7 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
 {
     private const string GraceKey = "lock.grace.seconds";
     private const string IdleKey = "lock.idle.seconds";
+    private const string InvisibleKey = "sync.invisible";
 
     private IDispatcherTimer? _idleTimer;
     private bool _subscribed;
@@ -67,7 +68,8 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
         catch (Exception ex)
         {
             logger.LogError(ex, "Preparing the database failed");
-            (Window?.Page as StartPage)?.ShowProblem("The memory bank on this iPhone could not be opened: " + ex.Message);
+            // Our own calm sentence on the screen; the exception itself is in the log above, never its raw text on the page.
+            (Window?.Page as StartPage)?.ShowProblem(Localization.AppStrings.Get("OpenPrepareError"));
             return;
         }
 
@@ -102,6 +104,92 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
         sync.Start();
     }
 
+    /// <summary>
+    /// The main screen after a new vault or a join, with the phone's database encrypted first (every database is encrypted, no
+    /// button). Behind the "please wait" pop-up, with the screen kept on. A failure is told in a dialog over the notes. An unlock never encrypts:
+    /// a phone that still holds a plain copy from an older build is set up again (delete the app, join again).
+    /// </summary>
+    public async Task EncryptThenShowMainAsync()
+    {
+        var sealing = services.GetRequiredService<PhoneSealing>();
+        if (sealing.IsNeeded)
+        {
+            string? problem = null;
+            await BeeMemoryBank.Busy.BusyAction.RunAsync(null, async busy =>
+            {
+                DeviceDisplay.Current.KeepScreenOn = true;
+                try
+                {
+                    // Right after Face ID iOS may still count the app as not in front, which the encryption's "keep the app open" check refuses.
+                    for (var i = 0; i < 30 && !IsActive; i++) await Task.Delay(100);
+                    var run = sealing.SealAsync(await StartsNetworkAsync());
+                    while (!run.IsCompleted)
+                    {
+                        if (sealing.Progress is { } p) busy.Report(p.Done, p.Step);
+                        await Task.WhenAny(run, Task.Delay(400));
+                    }
+                    await run;
+                }
+                catch (PhoneSealingException ex)
+                {
+                    problem = ex.Code == PhoneSealingException.OldNetwork
+                        ? Localization.AppStrings.Get("AutoEncryptOldNetwork")
+                        : Localization.AppStrings.Format("AutoEncryptFailed", ex.Message);
+                    NoteEncryptionFailure(ex.Code + ": " + ex.Message);
+                }
+                finally
+                {
+                    DeviceDisplay.Current.KeepScreenOn = false;
+                }
+            }, new BeeMemoryBank.Busy.BusyOptions
+            {
+                Long = true,
+                Title = Localization.AppStrings.Get("AutoEncryptTitle"),
+                Message = Localization.AppStrings.Get("AutoEncryptMessage"),
+                Result = (ok, text) =>
+                {
+                    if (ok) return;
+                    // A failure that is NOT a PhoneSealingException with our own text: our own calm sentence in the dialog, the detail in the log file.
+                    problem = Localization.AppStrings.Format("AutoEncryptFailed", Localization.AppStrings.Get("AutoEncryptFailedReason"));
+                    NoteEncryptionFailure(text);
+                },
+            });
+            logger.LogInformation("Phone database encryption at open: {Result}.", problem is null ? "done" : "not done");
+            // The notes first, then the reason on top of them: a dialog over the unlock page went away with it when the main screen replaced it.
+            ShowMain();
+            if (problem is not null && Window?.Page is { } page)
+                await Controls.AppDialog.AlertAsync(page, Localization.AppStrings.Get("AutoEncryptTitle"), problem);
+            return;
+        }
+        ShowMain();
+    }
+
+    /// <summary>
+    /// The last reason the database could not be encrypted, in a small file beside the vault folder (no note text, no key, no password: the
+    /// encryption's own sentence), so that a failure the person only glimpsed can still be read off the phone.
+    /// </summary>
+    private static void NoteEncryptionFailure(string reason)
+    {
+        try
+        {
+            File.WriteAllText(Path.Combine(FileSystem.AppDataDirectory, "encrypt-last-error.txt"),
+                DateTime.UtcNow.ToString("O") + " " + reason + Environment.NewLine);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Only a diagnostic: the dialog has said it already.
+        }
+    }
+
+    /// <summary>A vault alone on this phone (no other device in its list) starts its own network, so it may switch the new sync format on.</summary>
+    private async Task<bool> StartsNetworkAsync()
+    {
+        var self = (await vault.IdentityAsync())?.NodeId;
+        using var scope = services.CreateScope();
+        var peers = await scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.IWhitelistRepository>().GetAllActiveAsync();
+        return peers.All(p => p.NodeId == self);
+    }
+
     /// <summary>A recovery key, once. After a new vault the page replaces the setup pages, so there is no way back to them.</summary>
     public void ShowRecoveryKey(string key, bool firstTime)
     {
@@ -111,19 +199,55 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
         else _ = Window?.Page?.Navigation.PushModalAsync(new NavigationPage(page));
     }
 
-    /// <summary>After the first unlock of a new or joined vault: Face ID / Touch ID instead of typing the password next time?</summary>
+    /// <summary>
+    /// After the first unlock of a new or joined vault, and after a password unlock that followed a Face ID unlock that no longer opened (an older
+    /// quick unlock a key rotation had already replaced): Face ID / Touch ID instead of typing the password next time?
+    /// </summary>
     public async Task OfferQuickUnlockAsync(Page page)
     {
         if (SuppressAutoPrompt || !quick.IsAvailable || quick.IsEnabled || !vault.IsUnlocked) return;
+        await AskQuickUnlockAsync(page);
+    }
+
+    /// <summary>The same question over the main screen the password unlock has just shown, after Face ID had turned itself off.</summary>
+    public async Task OfferQuickUnlockAgainAsync()
+    {
+        if (Window?.Page is { } page) await OfferQuickUnlockAsync(page);
+    }
+
+    /// <summary>The question itself, in the app's own words. The end-to-end check photographs it even on a simulator without biometrics.</summary>
+    internal async Task AskQuickUnlockAsync(Page page)
+    {
         var name = quick.BiometryName;
-        if (!await page.DisplayAlertAsync(name, $"Open your memory bank with {name} instead of typing the master password? The password is not stored.", "Use " + name, "Not now"))
+        if (!await page.DisplayAlertAsync(name, Localization.AppStrings.Format("QuickUnlockQuestion", name),
+                Localization.AppStrings.Format("QuickUnlockUse", name), Localization.AppStrings.Get("QuickUnlockNotNow")))
             return;
-        try { quick.Enable(); }
-        catch (Exception ex) { await page.DisplayAlertAsync(name, ex.Message, "OK"); }
+        try { await quick.EnableAsync(); }
+        // Our own refusal ("Face ID is not set up on this iPhone") is said as it is; any other kind is told calmly, never its raw text.
+        catch (Exception ex) { await page.DisplayAlertAsync(name, BeeMemoryBank.Sync.FailureText.Say(ex), Localization.AppStrings.Get("Ok")); }
     }
 
     /// <summary>The lock button, and every automatic lock.</summary>
     public void LockNow() => vault.Lock();
+
+    /// <summary>
+    /// The danger zone: stop syncing, lock, clear the Face ID secret, then delete ONLY this app's own
+    /// data directory (the database and its -wal/-shm/-journal sidecars, the sealed boot/journal/mirror
+    /// files and the media folder) and show the Welcome gate as a fresh install. Nothing outside the
+    /// app's container is touched. The list of deleted files is SecurityOps.WipeFiles (the same set).
+    /// </summary>
+    public async Task WipeAsync()
+    {
+        await sync.StopAsync();
+        // The folder (the door with it) is deleted next; only the Keychain secret is the app's to clear here.
+        quick.ForgetSecret();
+        // The lock, the delete and the fresh schema (SecurityOps.WipeDataAsync, where the tests run it on a real encrypted vault).
+        // Never show a fresh Welcome over data that is still there: the busy helper says the failure.
+        if (!await new SecurityOps(services).WipeDataAsync(services.GetRequiredService<FullNodePaths>()))
+            throw new IOException(BeeMemoryBank.FullIos.Localization.AppStrings.Get("WipeIncomplete"));
+
+        ShowWelcome();
+    }
 
     /// <summary>A touch the window did not see (typing): the person is still here.</summary>
     public void Activity() => policy.Activity(DateTime.UtcNow);
@@ -145,6 +269,17 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
         {
             policy.IdleTimeout = value;
             Preferences.Default.Set(IdleKey, (int)value.TotalSeconds);
+        }
+    }
+
+    /// <summary>Invisible mode: FullSync skips every round while it is on; the choice is remembered.</summary>
+    public bool Invisible
+    {
+        get => services.GetRequiredService<BeeMemoryBank.Core.Services.InvisibleModeService>().IsInvisible;
+        set
+        {
+            services.GetRequiredService<BeeMemoryBank.Core.Services.InvisibleModeService>().IsInvisible = value;
+            Preferences.Default.Set(InvisibleKey, value);
         }
     }
 
@@ -176,7 +311,7 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
             {
                 await sync.StopAsync();
                 // The round signs the peers' challenges with this node's key, which needs the open vault: before the lock, not after.
-                var round = await sync.RoundAsync(ct);
+                var round = await sync.RoundAsync(ct, automatic: true);
                 logger.LogInformation("Last round before the background: {Applied} applied, {Failed} failed", round.Applied, round.Failed);
 #if DEBUG || BMB_E2E
                 Console.WriteLine($"BMB-E2E event=background-round reached={round.Reached} failed={round.Failed}");
@@ -245,6 +380,7 @@ public sealed class AppFlow(IServiceProvider services, FullVault vault, QuickUnl
     {
         policy.BackgroundGrace = TimeSpan.FromSeconds(Preferences.Default.Get(GraceKey, 0));
         policy.IdleTimeout = TimeSpan.FromSeconds(Preferences.Default.Get(IdleKey, 300));
+        services.GetRequiredService<BeeMemoryBank.Core.Services.InvisibleModeService>().IsInvisible = Preferences.Default.Get(InvisibleKey, false);
     }
 
     private static void SetRoot(Page page)

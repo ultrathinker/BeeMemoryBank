@@ -105,20 +105,31 @@ public static class WhitelistEndpoints
         group.MapGet("/", async (HttpContext ctx, IWhitelistRepository repo) =>
         {
             var entries = await repo.GetAllActiveAsync();
-            return Results.Ok(entries.Select(WhitelistEntryResponse.From));
+            var nodeStates = ctx.RequestServices.GetService<NodeStateStore>();
+            var userRepo = ctx.RequestServices.GetService<IUserRepository>();
+            var states = nodeStates is null
+                ? new Dictionary<Guid, NodeStateRecord>()
+                : (await nodeStates.GetAllAsync()).ToDictionary(s => s.NodeId);
+            var firstSa = userRepo is null ? null : await FindFirstSuperadminAsync(userRepo);
+            return Results.Ok(entries.Select(e =>
+                WhitelistEntryResponse.From(e, states.GetValueOrDefault(e.NodeId), firstSa)));
         });
 
         // GET /api/whitelist/{nodeId} — single entry
         group.MapGet("/{nodeId:guid}", async (Guid nodeId, HttpContext ctx, IWhitelistRepository repo) =>
         {
             var entry = await repo.GetByNodeIdAsync(nodeId, includeDeleted: true);
-            return entry != null
-                ? Results.Ok(WhitelistEntryResponse.From(entry))
-                : Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
+            if (entry == null)
+                return Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
+            var nodeStates = ctx.RequestServices.GetService<NodeStateStore>();
+            var userRepo = ctx.RequestServices.GetService<IUserRepository>();
+            var state = nodeStates is null ? null : await nodeStates.GetAsync(nodeId);
+            var firstSa = userRepo is null ? null : await FindFirstSuperadminAsync(userRepo);
+            return Results.Ok(WhitelistEntryResponse.From(entry, state, firstSa));
         });
 
         // PUT /api/whitelist/{nodeId} — update DisplayName and CanGenerateEmbeddings. NOT the address: that has one door, /address below
-        // (BMB-307 fix round: this route used to take ApiAddress with no password, no check of what answers there and no validation).
+        // (BMB-307: this route used to take ApiAddress with no password, no check of what answers there and no validation).
         group.MapPut("/{nodeId:guid}", async (
             Guid nodeId,
             UpdateWhitelistEntryRequest req,
@@ -209,6 +220,113 @@ public static class WhitelistEndpoints
                 $"Peer {entry.DisplayName} {(req.IsSuperadmin ? "promoted to" : "demoted from")} superadmin by user {actor}");
 
             return Results.Ok(WhitelistEntryResponse.From(entry));
+        }).RequireSuperadmin().RequireNonAgent();
+
+        // PUT /api/whitelist/{nodeId}/ownership — assign or update shared/personal device ownership
+        group.MapPut("/{nodeId:guid}/ownership", async (
+            Guid nodeId,
+            SetPeerOwnershipRequest req,
+            IWhitelistRepository repo,
+            IUserRepository userRepo,
+            INodeIdentityRepository nodeIdentityRepo,
+            IEventLogger eventLogger,
+            SessionService session,
+            IAuditLogRepository auditRepo,
+            HttpContext ctx) =>
+        {
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+
+            var localIdentity = await nodeIdentityRepo.GetAsync();
+            if (localIdentity != null && localIdentity.NodeId == nodeId)
+                return Results.BadRequest(new ErrorResponse("Cannot change ownership of the local node directly"));
+
+            var entry = await repo.GetByNodeIdAsync(nodeId, includeDeleted: true);
+            if (entry == null || entry.Status != "A")
+                return Results.NotFound(new ErrorResponse($"Node {nodeId} not found in whitelist"));
+
+            var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
+            var accountsHomeSvc = ctx.RequestServices.GetService<BeeMemoryBank.Vault.SharedDoors.AccountsHomeService>();
+            var (ok, error, updated) = await ApplyOwnershipChangeAsync(
+                entry, req.Ownership, req.OwnerPersonId, repo, userRepo, eventLogger, auditRepo, actor, accountsHomeSvc);
+            if (!ok)
+                return Results.BadRequest(new ErrorResponse(error!));
+
+            eventLogger.SignalSync();
+            var notifier = ctx.RequestServices.GetService<ISuperadminDoorsNotifier>();
+            if (notifier is not null)
+                await notifier.NotifyChangedAsync(immediate: true);
+            var nodeStates = ctx.RequestServices.GetService<NodeStateStore>();
+            var state = nodeStates is null ? null : await nodeStates.GetAsync(nodeId);
+            var firstSa = await FindFirstSuperadminAsync(userRepo);
+            return Results.Ok(WhitelistEntryResponse.From(updated!, state, firstSa));
+        }).RequireSuperadmin().RequireNonAgent();
+
+        // POST /api/whitelist/review-ownership — confirm suggested ownership in bulk or submit explicit per-device decisions
+        group.MapPost("/review-ownership", async (
+            ReviewOwnershipRequest req,
+            IWhitelistRepository repo,
+            IUserRepository userRepo,
+            INodeIdentityRepository nodeIdentityRepo,
+            IEventLogger eventLogger,
+            SessionService session,
+            IAuditLogRepository auditRepo,
+            HttpContext ctx) =>
+        {
+            if (!session.IsUnlocked)
+                return Results.Json(new ErrorResponse("Session is locked"), statusCode: 403);
+
+            var localIdentity = await nodeIdentityRepo.GetAsync();
+            var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
+            var accountsHomeSvc = ctx.RequestServices.GetService<BeeMemoryBank.Vault.SharedDoors.AccountsHomeService>();
+            var updated = 0;
+            var skipped = new List<ReviewOwnershipSkippedItem>();
+
+            if (req.ConfirmAll)
+            {
+                var nodeStates = ctx.RequestServices.GetService<NodeStateStore>();
+                var firstSa = await FindFirstSuperadminAsync(userRepo);
+                var states = nodeStates is null
+                    ? new Dictionary<Guid, NodeStateRecord>()
+                    : (await nodeStates.GetAllAsync()).ToDictionary(s => s.NodeId);
+                var entries = await repo.GetAllActiveAsync();
+                // The accounts node is shared by definition: "confirm all" does not write a suggested ownership onto its row.
+                var accountsHome = accountsHomeSvc is null ? null : await accountsHomeSvc.GetAccountsHomeNodeIdAsync();
+                foreach (var entry in entries)
+                {
+                    if (!entry.NeedsReview || (localIdentity != null && localIdentity.NodeId == entry.NodeId) || entry.NodeId == accountsHome)
+                        continue;
+                    var (sugOwn, sugPid, _) = WhitelistEntryResponse.SuggestOwnership(entry, states.GetValueOrDefault(entry.NodeId), firstSa);
+                    var (ok, error, _) = await ApplyOwnershipChangeAsync(entry, sugOwn, sugPid, repo, userRepo, eventLogger, auditRepo, actor, accountsHomeSvc);
+                    if (ok) updated++;
+                    else skipped.Add(new ReviewOwnershipSkippedItem(entry.NodeId, error ?? "Ownership could not be confirmed."));
+                }
+            }
+            else if (req.Items is { Count: > 0 })
+            {
+                foreach (var item in req.Items)
+                {
+                    if (localIdentity != null && localIdentity.NodeId == item.NodeId)
+                        return Results.BadRequest(new ErrorResponse("Cannot change ownership of the local node directly"));
+                    var entry = await repo.GetByNodeIdAsync(item.NodeId, includeDeleted: true);
+                    if (entry == null || entry.Status != "A")
+                        return Results.NotFound(new ErrorResponse($"Node {item.NodeId} not found in whitelist"));
+                    var (ok, error, _) = await ApplyOwnershipChangeAsync(
+                        entry, item.Ownership, item.OwnerPersonId, repo, userRepo, eventLogger, auditRepo, actor, accountsHomeSvc);
+                    if (!ok)
+                        return Results.BadRequest(new ErrorResponse(error!));
+                    updated++;
+                }
+            }
+
+            if (updated > 0)
+            {
+                eventLogger.SignalSync();
+                var notifier = ctx.RequestServices.GetService<ISuperadminDoorsNotifier>();
+                if (notifier is not null)
+                    await notifier.NotifyChangedAsync(immediate: true);
+            }
+            return Results.Ok(new { updated, skipped });
         }).RequireSuperadmin().RequireNonAgent();
 
         // PUT /api/whitelist/{nodeId}/address — change node URL with validation. Superadmin (the group), NOT an agent (a local agent key would otherwise
@@ -455,9 +573,95 @@ public static class WhitelistEndpoints
             // and an add issued BEFORE this revoke must lose that comparison.
             var version = await eventLogger.LogWhitelistRevokeAsync(nodeId);
             await repo.RevokeAsync(nodeId, version);
-            peerState?.PeerChanged(nodeId);   // what the sync loop learned about this peer is forgotten (BMB-313)
+            await CleanupRevokedPeerAsync(ctx.RequestServices, nodeId, peerState);
+            if (ctx.RequestServices.GetService<ISuperadminDoorsNotifier>() is { } notifier)
+                await notifier.NotifyChangedAsync(immediate: true);
 
             return Results.NoContent();
         });
+    }
+
+    internal static async Task CleanupRevokedPeerAsync(IServiceProvider sp, Guid nodeId, IPeerStateResetter? peerState = null)
+    {
+        peerState ??= sp.GetService<IPeerStateResetter>();
+        if (peerState is not null)
+            await peerState.PeerRevokedAsync(nodeId);
+        sp.GetService<SyncTokenStore>()?.RevokeNode(nodeId);
+        sp.GetService<PeerContactLog>()?.Forget(nodeId);
+        sp.GetService<BeeMemoryBank.Sync.Channels.PeerReachability>()?.Forget(nodeId);
+        if (sp.GetService<BeeMemoryBank.Sync.Channels.PeerChannelStore>() is { } peerChannels)
+            await peerChannels.DeleteForPeerAsync(nodeId);
+        if (sp.GetService<BeeMemoryBank.Storage.Boot.IRelayInbox>() is { } relayInbox)
+            await relayInbox.DeleteForPeerAsync(nodeId);
+    }
+
+    private static async Task<User?> FindFirstSuperadminAsync(IUserRepository userRepo)
+    {
+        var users = await userRepo.ListActiveAsync();
+        return users
+            .Where(u => u.IsActive && string.Equals(u.Role, UserRoles.Superadmin, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(u => u.Id)
+            .FirstOrDefault();
+    }
+
+    private sealed record ReviewOwnershipSkippedItem(Guid NodeId, string Reason);
+
+    private static async Task<(bool Ok, string? Error, WhitelistEntry? Entry)> ApplyOwnershipChangeAsync(
+        WhitelistEntry entry,
+        string? ownership,
+        Guid? ownerPersonId,
+        IWhitelistRepository repo,
+        IUserRepository userRepo,
+        IEventLogger eventLogger,
+        IAuditLogRepository auditRepo,
+        string actor,
+        BeeMemoryBank.Vault.SharedDoors.AccountsHomeService? accountsHomeSvc = null)
+    {
+        var normalized = OwnershipKinds.NormalizeOrNull(ownership);
+        if (normalized is null || normalized == OwnershipKinds.Unknown)
+            return (false, "Ownership must be 'shared' or 'personal'.", null);
+
+        if (accountsHomeSvc is not null
+            && await accountsHomeSvc.GetAccountsHomeNodeIdAsync() == entry.NodeId
+            && normalized != OwnershipKinds.Shared)
+            return (false, "The accounts node is always shared and cannot be changed to personal.", null);
+
+        Guid? resolvedPersonId = null;
+        string? resolvedLabel = null;
+        if (normalized == OwnershipKinds.Personal)
+        {
+            if (ownerPersonId is not { } pid || pid == Guid.Empty)
+                return (false, "Personal ownership requires an owner user.", null);
+            var users = await userRepo.ListActiveAsync();
+            var owner = users.FirstOrDefault(u => u.IsActive && u.PersonId == pid);
+            if (owner is null)
+                return (false, "Selected owner user was not found or is inactive.", null);
+            resolvedPersonId = owner.PersonId;
+            resolvedLabel = string.IsNullOrWhiteSpace(owner.DisplayName) ? owner.Username : owner.DisplayName;
+        }
+
+        var version = await eventLogger.LogWhitelistUpdateAsync(
+            entry.NodeId,
+            apiAddress: null,
+            displayName: null,
+            isSuperadmin: null,
+            ownership: normalized,
+            ownerPersonId: resolvedPersonId,
+            ownerLabel: resolvedLabel);
+
+        entry.Ownership = normalized;
+        entry.OwnerPersonId = resolvedPersonId;
+        entry.OwnerLabel = resolvedLabel;
+        entry.NeedsReview = false;
+        entry.UpdatedAt = DateTime.UtcNow;
+        entry.StampLocal(version, BeeMemoryBank.Sync.WhitelistEventConcerns.ForLocalUpdate(
+            entry.NodeId, version.SourceNodeId, apiAddress: null, displayName: null, isSuperadmin: null, ownership: normalized));
+        await repo.UpdateAsync(entry);
+
+        await auditRepo.LogAsync("whitelist", entry.NodeId.ToString(),
+            "peer_ownership_updated", "web",
+            $"Device {entry.DisplayName} assigned {normalized} ownership by user {actor}");
+
+        return (true, null, entry);
     }
 }

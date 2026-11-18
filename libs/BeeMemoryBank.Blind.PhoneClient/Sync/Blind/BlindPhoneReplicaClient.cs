@@ -101,6 +101,9 @@ public sealed partial class BlindPhoneReplicaClient(
         Directory.CreateDirectory(workDirectory);
         CleanupExtractionArtifacts(workDirectory);
         await ThrowIfBackingOffAsync(workDirectory, target.NodeId, ct);
+        // A full install (a first load, a reseed) may be the copy's first contact since its pairing: a hub that re-keyed meanwhile signs with a key
+        // the pin does not name, and the copy holds no row to learn it from. The hub's signed key transition chain does.
+        if (!update) target = await FollowedHubKeyAsync(http, target, ct);
         var token = await PeerAuthenticator.AuthenticateAsync(signer, http, target.Address, identity, target.NodeId, ct, DeclaredProtocol());
         var partPath = Path.Combine(workDirectory, "replica.part");
         var metadataPath = Path.Combine(workDirectory, "replica.part.json");
@@ -518,6 +521,29 @@ public sealed partial class BlindPhoneReplicaClient(
             Directory.Delete(directory, recursive: true);
     }
 
+    /// <summary>
+    /// The call code with the hub's current key when the hub answers, through the same pinned client, with a key its signed transition chain
+    /// leads to from the pinned one (<see cref="PeerKey.Follow"/>; at most 16 re-keys); the call code as it is otherwise (an answer that cannot be
+    /// read changes nothing: the download says what is wrong). Used for this install only: the installed copy holds the hub's row and key
+    /// history, and its next round moves the stored pin.
+    /// </summary>
+    private static async Task<BlindCallCode> FollowedHubKeyAsync(HttpClient http, BlindCallCode target, CancellationToken ct)
+    {
+        try
+        {
+            var identity = await SyncAddress.ReadIdentityAsync(http, target.Address, ct);
+            if (identity.NodeId == target.NodeId
+                && PeerKey.Follow(target.NodeId, target.PublicKey, identity.Ed25519PublicKeyB64, identity.KeyChain) is { } current
+                && !CryptographicOperations.FixedTimeEquals(current, target.PublicKey))
+                return target with { PublicKey = current };
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested
+                                   && ex is HttpRequestException or NoSyncServerException or IOException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+        }
+        return target;
+    }
+
     private static async Task VerifyAndExtractAsync(
         string archivePath, string extraction, PackageMetadata metadata, BlindCallCode target, CancellationToken ct)
     {
@@ -525,7 +551,10 @@ public sealed partial class BlindPhoneReplicaClient(
         var manifest = await ReadEntryAsync(archivePath, "manifest.json", ct)
             ?? throw new InvalidDataException("Replica package has no manifest.json.");
         var signaturePayload = await SignaturePayloadAsync(manifest, archivePath, ct);
-        if (!Ed25519Signer.Verify(target.PublicKey, signaturePayload, Convert.FromBase64String(metadata.SignatureB64)))
+        // The detached signature is made when the package is BUILT, with the hub's key of that moment; the hub's package cache rebuilds a package
+        // whose signing key is no longer its current one, so what is served is signed by the hub's current key - the pin,
+        // moved along the hub's signed chain (plan WS-D D4). The helper's current-key check.
+        if (!NodeEventVerifier.SignatureVerifies(target.PublicKey, signaturePayload, Convert.FromBase64String(metadata.SignatureB64)))
             throw new InvalidDataException("Replica detached signature does not verify under the call-code node key.");
 
         await ExtractAsync(archivePath, extraction, ct);

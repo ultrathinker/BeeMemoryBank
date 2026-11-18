@@ -3,14 +3,14 @@ using BeeMemoryBank.Search.Segment;
 namespace BeeMemoryBank.Search.Tests.Segment;
 
 /// <summary>
-/// Verifies collision-handling choice (a) from the design brief: the term dictionary stores each
+/// Verifies collision-handling choice (a): the term dictionary stores each
 /// term's actual UTF-8 text (via termTextOffset/termTextLength) so that when two distinct terms
 /// hash to the same 64-bit value, the reader disambiguates them by exact byte comparison instead
 /// of merging their postings into a single, incorrect result.
 ///
 /// A real XxHash64 collision is not something a unit test can practically produce (finding one
 /// needs on the order of 2^32 hashes, per the birthday bound). Instead these tests inject a
-/// deliberately broken <see cref="TermHasher"/> -- via the same seam the design brief suggests --
+/// deliberately broken <see cref="TermHasher"/> -- via the same seam suggested for it --
 /// that maps several different terms onto identical hash values, and confirm the writer/reader
 /// still behave correctly through that forced collision.
 /// </summary>

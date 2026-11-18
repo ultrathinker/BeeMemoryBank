@@ -166,7 +166,17 @@ public sealed class LanDirectSyncTests : IAsyncLifetime
         var check = await CheckAsync(b, _nodeAId);
 
         check.Answered.Should().BeTrue(check.Reason);
-        check.Applied.Should().BeGreaterThan(0);
+        // The point of the test is that the sighting healed the way to the moved host and the new note came over it.
+        // Assert delivery, not the raw Applied counter: on this path the note is written and the pull cursor advances,
+        // but the applied tally stays 0 (the event is counted apart from Applied), so Applied>0 was a wrong proxy for
+        // "the note came over". Delivery plus the healed channel row is the deterministic, meaningful assertion.
+        using (var after = b.Services.CreateScope())
+        {
+            var articles = await after.ServiceProvider.GetRequiredService<IArticleRepository>().ListAsync();
+            articles.Should().Contain(a => a.Title == "Found again by mDNS", "the article written on A after the move came over the healed address");
+            var rows = await after.ServiceProvider.GetRequiredService<PeerChannelStore>().GetAsync(_nodeAId);
+            rows.Should().Contain(r => r.Address == $"https://127.0.0.1:{newPort}" && r.LastOkAt != null, "the mDNS sighting is the address that worked");
+        }
     }
 
     [Fact]

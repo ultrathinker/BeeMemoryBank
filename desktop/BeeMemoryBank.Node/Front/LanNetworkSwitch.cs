@@ -127,6 +127,26 @@ public sealed class LanNetworkSwitch
         finally { _switchGate.Release(); }
     }
 
+    /// <summary>
+    /// A device has just joined this computer: "Show this node to devices in my network" turns ON by itself,
+    /// through the same switch the Network settings page uses. Only from "off": already on stays on, and <c>BMB_HTTPS_ENABLED=1</c>
+    /// ("environment") is left alone. A listener that could not open is logged and leaves the setting as it was; the join itself
+    /// is never failed for it. Closing the door of "Connect a device" never comes here and never changes the setting.
+    /// </summary>
+    public async Task TurnOnForJoinAsync(Action<string> log)
+    {
+        if (Setting != "off") return;
+        try
+        {
+            await SetAsync(true);
+            log("[Node] A device joined: \"Show this node to devices in my network\" is ON now.");
+        }
+        catch (Exception ex) when (ex is LanNetworkException or InvalidOperationException or IOException or System.Net.Sockets.SocketException)
+        {
+            log($"[Node] A device joined, but the network listener could not be opened ({ex.Message}); the setting stays off.");
+        }
+    }
+
     /// <summary>Switches LAN sync ("Sync with your devices on this network") and saves it.</summary>
     public async Task SetSyncAsync(bool enabled)
     {

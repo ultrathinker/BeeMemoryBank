@@ -244,7 +244,7 @@ public sealed class AccountPanelViewModel : ObservableObject, IDisposable
     /// <summary>
     /// The pop-up follows the job the user asked for by the STATE of the app, the one model of the phones (<see cref="BlindJobWait.Judge"/>): it ends when the job's
     /// own mark appears (the first load is done, the time of the last sync or backup moved) or its failure is recorded, and never by a clock while the job runs
-    /// (BMB-311 fix round) or while it is queued behind another one: a job that is asked for and has not started holds the lock, the pop-up and the commands, for the
+    /// (BMB-311) or while it is queued behind another one: a job that is asked for and has not started holds the lock, the pop-up and the commands, for the
     /// queue's grace (two minutes). Only a job that never started and left no mark for longer than that is reported as such. Another job that runs meanwhile (a
     /// scheduled backup) is NOT the job asked for: it is said to run first, and does not end the wait.
     /// </summary>

@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The timer that drops an abandoned seed upload (srvfix8, review RV6, tests the review named): the callback runs on the node's clock, drops an idle upload, cannot take the process down
+/// The timer that drops an abandoned seed upload: the callback runs on the node's clock, drops an idle upload, cannot take the process down
 /// whatever goes wrong inside it, and does nothing once the service is disposed. No test here sleeps: the sweep's own timer is fired by the test.
 /// </summary>
 public sealed class BlindSeedSweepTimerTests : IDisposable

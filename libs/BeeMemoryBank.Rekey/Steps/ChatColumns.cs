@@ -40,7 +40,7 @@ internal static class ChatColumns
         new("chat_attachment", "blob", "iv", "key_v", "blob", true, _ => "bmb-chat-attachment-blob-v1"u8.ToArray()),
         new("chat_api_key", "ciphertext", "iv", "key_v", null, false, _ => "bmb-openrouter-key-v1"u8.ToArray()),
         // Titles and key prefixes written before they were sealed are still in their plaintext column until the
-        // hosted backfill reaches them; a node stopped before that holds them in the clear (batch review L-3).
+        // hosted backfill reaches them; a node stopped before that holds them in the clear.
         new("chat_api_key", "key_prefix_ciphertext", "key_prefix_iv", "key_prefix_key_v", "key_prefix", false,
             id => Encoding.UTF8.GetBytes($"bmb-chat-api-key-prefix-v1:{Guid.Parse(id):D}"), PlainCleared: "''"),
         new("chat_conversation", "title_ciphertext", "title_iv", "title_key_v", "title", false,

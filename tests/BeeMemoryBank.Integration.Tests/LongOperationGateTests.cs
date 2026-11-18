@@ -152,7 +152,7 @@ public sealed class LongOperationGateTests : IAsyncLifetime
             ["POST /api/init/reset"] = "node-init",
             ["POST /api/keys/change-password"] = "master-password-change",
             ["POST /api/admin/concept-tag-edge/rebuild"] = "graph-rebuild",
-            // BMB-311 fix round: the long operations that had no gate.
+            // BMB-311: the long operations that had no gate.
             ["POST /api/sync/activation"] = "metadata-activation",
             ["POST /api/downloads/prepare"] = "export-folder:{path}|export-all",
             ["POST /api/folders/{id:guid}/copy"] = "copy-folder:{id}",
@@ -179,7 +179,7 @@ public sealed class LongOperationGateTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The routes added by the fix round take their lease from the right thing: the route value, the body, or the caller. Held lease -> 409 with the code; another
+    /// The routes added by the fix take their lease from the right thing: the route value, the body, or the caller. Held lease -> 409 with the code; another
     /// resource, or a request that is not a long one, is not refused.
     /// </summary>
     [Theory]

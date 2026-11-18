@@ -1,89 +1,164 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- The mock-up's Search screen: the search shell with the clear button, the "also search in
+     text" row, the tag filter rail, then the recent articles (empty query) or the highlighted
+     results, and the "nothing found" state with the reset button. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
              x:Class="BeeMemoryBank.Mobile.Pages.ArticlesPage"
              x:Name="PageRoot"
-             Title="Articles"
-             BackgroundColor="{StaticResource BackgroundColor}">
+             Title="{loc:Translate TabSearch}">
 
     <ContentPage.ToolbarItems>
-        <ToolbarItem Text="+" Order="Primary" Clicked="OnNewArticleClicked" AutomationId="NewArticleButton" />
-        <ToolbarItem x:Name="ExpandToggle" IconImageSource="icon_expand.svg" AutomationId="ExpandToggle" Clicked="OnToggleExpandClicked" Order="Primary" />
+        <ToolbarItem Text="{loc:Translate Tags}" Order="Primary" Clicked="OnTagsClicked" AutomationId="TagsButton" />
+        <ToolbarItem IconImageSource="{AppThemeBinding Light=icon_new_article_light.svg, Dark=icon_new_article.svg}" AutomationId="NewArticleButton" Clicked="OnNewArticleClicked" Order="Primary"
+                     AutomationProperties.Name="{loc:Translate NewArticle}" />
+        <ToolbarItem x:Name="ExpandToggle" IconImageSource="{AppThemeBinding Light=icon_expand_light.svg, Dark=icon_expand.svg}" AutomationId="ExpandToggle" Clicked="OnToggleExpandClicked" Order="Primary" />
     </ContentPage.ToolbarItems>
 
-    <Grid RowDefinitions="Auto,Auto,*">
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" Padding="16,10,16,0">
 
         <ActivityIndicator x:Name="LoadingIndicator"
-                           Grid.Row="0" Grid.RowSpan="3"
+                           Grid.Row="0" Grid.RowSpan="5"
                            IsRunning="False"
                            IsVisible="False"
-                           Color="{StaticResource PrimaryColor}"
                            VerticalOptions="Center"
                            HorizontalOptions="Center"
                            ZIndex="10" />
 
-        <SearchBar Grid.Row="0"
-                   x:Name="SearchBar"
-                   AutomationId="SearchBar"
-                   Placeholder="Search articles..."
-                   TextChanged="OnSearchTextChanged"
-                   Style="{StaticResource BaseSearchBar}"
-                   Margin="8,8,8,0" />
+        <!-- .search-shell -->
+        <Border Grid.Row="0"
+                BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                Stroke="{AppThemeBinding Light={StaticResource BmbBorderStrongLight}, Dark={StaticResource BmbBorderStrong}}"
+                StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                Padding="14,4,6,4" MinimumHeightRequest="48" Margin="0,0,0,10">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                <Image Grid.Column="0" WidthRequest="18" HeightRequest="18" VerticalOptions="Center"
+                       Source="{AppThemeBinding Light=icon_row_search_light.svg, Dark=icon_row_search_dark.svg}" />
+                <Entry Grid.Column="1" x:Name="SearchBar"
+                       AutomationId="SearchBar"
+                       Placeholder="{loc:Translate SearchPlaceholder}"
+                       SemanticProperties.Description="{loc:Translate SearchArticlesLabel}"
+                       BackgroundColor="Transparent"
+                       TextChanged="OnSearchTextChanged"
+                       ReturnType="Search" />
+                <Button Grid.Column="2" x:Name="ClearSearchButton"
+                        AutomationId="ClearSearchButton"
+                        Style="{StaticResource IconButton}"
+                        WidthRequest="40" HeightRequest="40"
+                        IsVisible="False"
+                        SemanticProperties.Description="{loc:Translate ClearSearch}"
+                        Clicked="OnClearSearchClicked">
+                    <Button.ImageSource>
+                        <AppThemeBinding Light="icon_row_clear_light.svg" Dark="icon_row_clear_dark.svg" />
+                    </Button.ImageSource>
+                </Button>
+            </Grid>
+        </Border>
 
-        <HorizontalStackLayout Grid.Row="1" Padding="12,4" Spacing="8">
-            <Switch x:Name="ContentSearchSwitch" AutomationId="ContentSearchSwitch" Toggled="OnContentSearchToggled" />
-            <Label Text="Search in content (slower)"
-                   VerticalOptions="Center" FontSize="13"
-                   TextColor="{StaticResource SecondaryTextColor}" />
-        </HorizontalStackLayout>
+        <!-- .search-toggle-row -->
+        <Border Grid.Row="1"
+                BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                StrokeThickness="1" StrokeShape="RoundRectangle 12"
+                Padding="12,6" Margin="0,0,0,10">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                <Label Grid.Column="0" Text="{loc:Translate SearchInText}"
+                       Style="{StaticResource ItemMeta}" VerticalOptions="Center" />
+                <Switch Grid.Column="1" x:Name="ContentSearchSwitch" AutomationId="ContentSearchSwitch"
+                        IsToggled="True" Toggled="OnContentSearchToggled" VerticalOptions="Center" />
+            </Grid>
+        </Border>
 
-        <RefreshView Grid.Row="2" x:Name="RefreshView" Refreshing="OnRefreshing">
+        <!-- .filter-rail: the tag chips are Border + Label pills (like the article's TagLine), so they
+             measure their real height and a large system font never cuts them at the bottom. -->
+        <ScrollView Grid.Row="2" Orientation="Horizontal" VerticalOptions="Start" Margin="0,0,0,10" HorizontalScrollBarVisibility="Never">
+            <HorizontalStackLayout x:Name="TagChipsLayout" Spacing="8" VerticalOptions="Start" />
+        </ScrollView>
+
+        <Label Grid.Row="3" x:Name="ResultsLabel" Style="{StaticResource SectionLabel}" Margin="0,2,0,8" />
+
+        <RefreshView Grid.Row="4" x:Name="RefreshView" Refreshing="OnRefreshing">
             <CollectionView x:Name="ArticlesList"
                             AutomationId="ArticlesList"
-                            SelectionMode="None"
-                            EmptyView="No articles found."
-                            Margin="8,8,8,0">
+                            SelectionMode="None">
+                <CollectionView.EmptyView>
+                    <VerticalStackLayout Padding="20,36" Spacing="12" HorizontalOptions="Center">
+                        <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                                StrokeShape="RoundRectangle 16" WidthRequest="52" HeightRequest="52" HorizontalOptions="Center">
+                            <Image Source="{AppThemeBinding Light=icon_row_file_light.svg, Dark=icon_row_file_dark.svg}"
+                                   WidthRequest="26" HeightRequest="26" HorizontalOptions="Center" VerticalOptions="Center" />
+                        </Border>
+                        <Label Text="{loc:Translate NothingFoundTitle}" Style="{StaticResource EmptyTitle}" />
+                        <Label Text="{loc:Translate NothingFoundDesc}" Style="{StaticResource EmptyDesc}" />
+                        <Button Text="{loc:Translate Reset}" Style="{StaticResource SecondaryButton}"
+                                AutomationId="ResetSearchButton" Clicked="OnResetSearchClicked" HorizontalOptions="Center" />
+                    </VerticalStackLayout>
+                </CollectionView.EmptyView>
                 <CollectionView.ItemTemplate>
                     <DataTemplate>
-                        <Frame Style="{StaticResource CardFrame}" Margin="0,4">
-                            <Frame.GestureRecognizers>
-                                <TapGestureRecognizer Tapped="OnArticleTapped" />
-                            </Frame.GestureRecognizers>
-                            <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="2">
-                                <Label Grid.Row="0" Grid.Column="0"
-                                       Text="🔒"
-                                       FontSize="13"
-                                       IsVisible="{Binding Protected}"
-                                       VerticalOptions="Start" />
-                                <Label Grid.Row="0" Grid.Column="1"
-                                       Text="{Binding Title}"
-                                       FontAttributes="Bold"
-                                       FontSize="15"
-                                       LineBreakMode="{Binding ItemsLineBreakMode, Source={RelativeSource AncestorType={x:Type ContentPage}}}"
-                                       MaxLines="{Binding ItemsMaxLines, Source={RelativeSource AncestorType={x:Type ContentPage}}}" />
-                                <Label Grid.Row="0" Grid.Column="2"
-                                       Text="{Binding UpdatedAt, StringFormat='{0:MM-dd}'}"
-                                       FontSize="12"
-                                       TextColor="{StaticResource SecondaryTextColor}" />
-                                <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
-                                       Text="{Binding TreePath}"
-                                       FontSize="12"
-                                       TextColor="{StaticResource SecondaryTextColor}"
-                                       LineBreakMode="TailTruncation" />
+                        <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                                Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                                StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                                Padding="6,6,6,12" Margin="0,4">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                                <Grid Grid.Column="0" ColumnDefinitions="Auto,*" ColumnSpacing="12"
+                                      Padding="0,4" MinimumHeightRequest="48">
+                                    <Grid.GestureRecognizers>
+                                        <TapGestureRecognizer Tapped="OnArticleTapped" />
+                                    </Grid.GestureRecognizers>
+                                    <Border Grid.Column="0" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                            StrokeShape="RoundRectangle 12"
+                                            BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}">
+                                        <Border.Triggers>
+                                            <DataTrigger TargetType="Border" Binding="{Binding Protected}" Value="True">
+                                                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}" />
+                                            </DataTrigger>
+                                        </Border.Triggers>
+                                        <Image WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center"
+                                               Source="{AppThemeBinding Light=icon_row_file_light.svg, Dark=icon_row_file_dark.svg}">
+                                            <Image.Triggers>
+                                                <DataTrigger TargetType="Image" Binding="{Binding Protected}" Value="True">
+                                                    <Setter Property="Source" Value="{AppThemeBinding Light=icon_row_lock_light.svg, Dark=icon_row_lock_dark.svg}" />
+                                                </DataTrigger>
+                                            </Image.Triggers>
+                                        </Image>
+                                    </Border>
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                            <Label Grid.Column="0"
+                                                   FormattedText="{Binding TitleText}"
+                                                   LineBreakMode="{Binding ItemsLineBreakMode, Source={RelativeSource AncestorType={x:Type ContentPage}}}"
+                                                   MaxLines="{Binding ItemsMaxLines, Source={RelativeSource AncestorType={x:Type ContentPage}}}" />
+                                            <Border Grid.Column="1" IsVisible="{Binding Protected}"
+                                                    BackgroundColor="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}"
+                                                    StrokeThickness="0" StrokeShape="RoundRectangle 11" Padding="8,3" VerticalOptions="Center">
+                                                <Label Text="{loc:Translate LockPill}" FontSize="11"
+                                                       FontFamily="{StaticResource FontBodySemibold}"
+                                                       TextColor="{AppThemeBinding Light={StaticResource BmbAccentTextLight}, Dark={StaticResource BmbAccentText}}" />
+                                            </Border>
+                                        </Grid>
+                                        <Label FormattedText="{Binding MetaText}" LineBreakMode="TailTruncation" />
+                                    </VerticalStackLayout>
+                                </Grid>
+                                <Button Grid.Column="1" Text="⋮" Style="{StaticResource IconButton}"
+                                        AutomationId="RowMenuButton"
+                                        SemanticProperties.Description="{loc:Translate ArticleActions}"
+                                        CommandParameter="{Binding .}"
+                                        Clicked="OnArticleMenuClicked" />
                             </Grid>
-                        </Frame>
+                        </Border>
                     </DataTemplate>
                 </CollectionView.ItemTemplate>
             </CollectionView>
         </RefreshView>
 
         <Grid x:Name="NavBusyOverlay"
-              Grid.Row="0" Grid.RowSpan="3"
+              Grid.Row="0" Grid.RowSpan="5"
               IsVisible="False"
-              BackgroundColor="#99000000"
+              BackgroundColor="{AppThemeBinding Light={StaticResource BmbScrimLight}, Dark={StaticResource BmbScrim}}"
               ZIndex="20">
             <ActivityIndicator IsRunning="True"
-                               Color="{StaticResource PrimaryColor}"
                                WidthRequest="48" HeightRequest="48"
                                VerticalOptions="Center" HorizontalOptions="Center" />
         </Grid>

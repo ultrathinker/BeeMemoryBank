@@ -12,9 +12,26 @@ public static class MauiProgram
         var builder = MauiApp.CreateBuilder();
         builder.UseMauiApp<App>();
 
+        // The design's input shells on the native fields (Controls/IosFieldLook).
+        Controls.IosFieldLook.Apply();
+
+        // The design's faces (Resources/Fonts, linked from the Android app, SIL OFL). Plus Jakarta
+        // Sans carries no Cyrillic, so it is only used for the Latin brand name; every localized
+        // title uses Noto Sans, exactly what the design's font stack falls back to.
+        builder.ConfigureFonts(fonts =>
+        {
+            fonts.AddFont("NotoSans-Regular.ttf", "NotoSans");
+            fonts.AddFont("NotoSans-Medium.ttf", "NotoSansMedium");
+            fonts.AddFont("NotoSans-SemiBold.ttf", "NotoSansSemibold");
+            fonts.AddFont("NotoSans-Bold.ttf", "NotoSansBold");
+            fonts.AddFont("PlusJakartaSans-SemiBold.ttf", "JakartaSemibold");
+            fonts.AddFont("PlusJakartaSans-Bold.ttf", "JakartaBold");
+        });
+
         // The full node, in process: the vault's libraries over the database in the app's container (IosContainer: file protection, no
         // device backup). The app's own container holds this composition's singletons - the session (the open vault's key) among them.
         var container = IosContainer.Prepare();
+        builder.Services.AddSingleton(container);
         builder.Services.AddFullNode(container);
 
         // Step B (docs/design/step-b-spec.md 5.8, 12.2): a phone that may be encrypted, is encrypted, or holds an interrupted encryption starts through
@@ -31,6 +48,8 @@ public static class MauiProgram
         builder.Services.AddSingleton<IUnlockKeyStore, KeychainUnlockKeyStore>();
         builder.Services.AddSingleton<QuickUnlock>();
         builder.Services.AddSingleton<NotesService>();
+        builder.Services.AddSingleton<SecurityOps>();
+        builder.Services.AddSingleton<PhoneSealing>();
         builder.Services.AddSingleton<FullSync>();
         // The phone's discovery of its computers on the Wi-Fi: Network.framework's browse under the platform-free logic (Services/BonjourPeerDiscovery).
         builder.Services.AddSingleton<IBonjourBrowser, NwBonjourBrowser>();
@@ -51,7 +70,9 @@ public static class MauiProgram
         builder.Services.AddTransient<SyncPage>();
         builder.Services.AddTransient<PeerPage>();
         builder.Services.AddTransient<SettingsPage>();
-        builder.Services.AddTransient<EncryptDatabasePage>();
+        builder.Services.AddTransient<FolderPickerPage>();
+        builder.Services.AddTransient<TagsPage>();
+        builder.Services.AddTransient<TagArticlesPage>();
         return builder.Build();
     }
 }

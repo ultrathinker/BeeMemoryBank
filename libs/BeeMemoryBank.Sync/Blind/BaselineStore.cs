@@ -230,8 +230,11 @@ public sealed partial class BaselineStore(
             return "its producer is not an active node here";
         if (!row.IsSuperadmin)
             return "its producer is not a superadmin here";
+        // The producer's current key, or a key it retired, for a baseline it made before its re-key (plan WS-D D3, package rule): the upload
+        // itself came over a session the producer opened with its current key.
         if (files.Signature.Length != 64
-            || !Ed25519Signer.Verify(row.Ed25519PublicKey, BaselineManifest.SignaturePayload(files.ManifestBytes), files.Signature))
+            || !await NodeEventVerifier.VerifyPackageSignatureAsync(factory, files.Manifest.ProducerNodeId, row.Ed25519PublicKey,
+                BaselineManifest.SignaturePayload(files.ManifestBytes), files.Signature, signedAtLamport: null))
             return "its signature does not verify under its producer's key";
         return null;
     }

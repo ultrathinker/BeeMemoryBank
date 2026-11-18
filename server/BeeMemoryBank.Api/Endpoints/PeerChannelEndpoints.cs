@@ -132,7 +132,7 @@ public static class PeerChannelEndpoints
         {
             var identity = await SyncAddress.ReadIdentityAsync(http, address, ct);
             if (identity.NodeId != peer.NodeId) return ChannelFailures.WrongPeer;
-            if (peer.Ed25519PublicKey is { Length: 32 } && !PeerKey.Matches(peer.Ed25519PublicKey, identity.Ed25519PublicKeyB64)) return ChannelFailures.WrongPeer;
+            if (peer.Ed25519PublicKey is { Length: 32 } && !PeerKey.MatchesOrFollows(peer.NodeId, peer.Ed25519PublicKey, identity)) return ChannelFailures.WrongPeer;  // a re-keyed peer: its signed chain leads from the pinned key (plan WS-D D4)
             return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)

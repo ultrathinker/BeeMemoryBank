@@ -48,7 +48,8 @@ public sealed class WhitelistMesh : IAsyncDisposable
             Status = WhitelistStatuses.Active, IsSuperadmin = isSuperadmin, CreatedAt = now, UpdatedAt = now
         };
         var version = await node.EventLogger.LogWhitelistAddAsync(entry);
-        entry.StampLocal(version, WhitelistEventConcerns.OfAdd);
+        entry.NeedsReview = !OwnershipKinds.IsKnown(entry.Ownership);
+        entry.StampLocal(version, WhitelistEventConcerns.OfAddFor(entry));
         if (await node.WhitelistRepo.GetByNodeIdAsync(Phone, includeDeleted: true) is null) await node.WhitelistRepo.CreateAsync(entry);
         else await node.WhitelistRepo.UpdateAsync(entry);
         return await LastAsync(node, EventTypes.WhitelistAdd);

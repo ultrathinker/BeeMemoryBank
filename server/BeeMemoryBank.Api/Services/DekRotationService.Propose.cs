@@ -22,8 +22,14 @@ namespace BeeMemoryBank.Api.Services;
 
 public partial class DekRotationService
 {
-    public async Task<Guid> ProposeRotationAsync(string masterPassword, int? initiatorUserId = null)
+    /// <param name="reason">
+    /// Null, or <c>offboarding:&lt;process id&gt;</c> for the rotation that ends the removal of a person (2.12): every unlocked full node then
+    /// applies it by itself. The API takes it only from a superadmin (the whole group is superadmin-only).
+    /// </param>
+    public async Task<Guid> ProposeRotationAsync(string masterPassword, int? initiatorUserId = null, string? reason = null)
     {
+        if (!DekRotationReasons.IsValid(reason))
+            throw new InvalidOperationException("The reason of a key rotation is either empty or offboarding:<process id>.");
         // ConflictException, not a bare InvalidOperationException: /api/dek-rotation/propose must
         // answer 409 for "already running" and 400 for every other refusal — match on the
         // exception type, never on Message text (one reworded sentence away from a 400).
@@ -34,6 +40,8 @@ public partial class DekRotationService
             if (!_sessionService.IsUnlocked)
                 throw new SessionLockedException("Session is locked. Unlock first.");
 
+            // Refused while an identity re-key runs here or an offline re-key holds its lock (2.12, plan WS-A6).
+            using var keyOperation = EnterKeyOperation();
             using var scope = _scopeFactory.CreateScope();
             var userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
             var keySlotRepo = scope.ServiceProvider.GetRequiredService<IKeySlotRepository>();
@@ -114,7 +122,7 @@ public partial class DekRotationService
             {
                 try
                 {
-                    unwrappedDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, kek);
+                    unwrappedDek = Doors.OpenSlot(slot, kek);
                 }
                 catch (CryptographicException)
                 {
@@ -221,7 +229,8 @@ public partial class DekRotationService
                     RotationTs: DateTime.UtcNow.ToString("O"),
                     ExpiresAt: DateTime.UtcNow.AddHours(24).ToString("O"),
                     OriginatorNodeId: identity.NodeId.ToString(),
-                    DekEnvelopes: dekEnvelopes
+                    DekEnvelopes: dekEnvelopes,
+                    Reason: reason
                 );
 
                 var proposedEventId = Guid.NewGuid();
@@ -274,7 +283,8 @@ public partial class DekRotationService
                     NewDekEpoch: newEpoch,
                     RotationTs: proposedPayload.RotationTs,
                     OriginatorNodeId: identity.NodeId.ToString(),
-                    DekEnvelopes: dekEnvelopes
+                    DekEnvelopes: dekEnvelopes,
+                    Reason: reason
                 );
 
                 var commitLamportTs = clock.Tick();

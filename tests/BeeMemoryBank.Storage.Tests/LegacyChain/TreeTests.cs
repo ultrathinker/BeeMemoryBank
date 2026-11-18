@@ -19,7 +19,7 @@ public class TreeTests
         var dir = Path.Combine(StorageDir(), "Migrations");
 
         Directory.GetFileSystemEntries(dir).Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal).Should().Equal(
-            new[] { "040_baseline.sql", "041_blind_invite.sql", "042_blind_invite_server.sql", "043_password_hint.sql", "044_peer_channels.sql", "045_whitelist_concern_versions.sql" },
+            new[] { "040_baseline.sql", "041_blind_invite.sql", "042_blind_invite_server.sql", "043_password_hint.sql", "044_peer_channels.sql", "045_whitelist_concern_versions.sql", "046_sealed_doors.sql", "047_ownership_and_node_state.sql", "049_node_key_history.sql", "050_shared_doors.sql", "051_offboarding.sql" },
             "a further file in this folder is a new migration: it is named here on purpose, with its number following the last one");
     }
 
@@ -33,7 +33,12 @@ public class TreeTests
         names.OrderBy(n => n, StringComparer.Ordinal).Should().Equal(
             "BeeMemoryBank.Storage.Migrations.040_baseline.sql", "BeeMemoryBank.Storage.Migrations.041_blind_invite.sql",
             "BeeMemoryBank.Storage.Migrations.042_blind_invite_server.sql", "BeeMemoryBank.Storage.Migrations.043_password_hint.sql",
-            "BeeMemoryBank.Storage.Migrations.044_peer_channels.sql", "BeeMemoryBank.Storage.Migrations.045_whitelist_concern_versions.sql");
+            "BeeMemoryBank.Storage.Migrations.044_peer_channels.sql", "BeeMemoryBank.Storage.Migrations.045_whitelist_concern_versions.sql",
+            "BeeMemoryBank.Storage.Migrations.046_sealed_doors.sql",
+            "BeeMemoryBank.Storage.Migrations.047_ownership_and_node_state.sql",
+            "BeeMemoryBank.Storage.Migrations.049_node_key_history.sql",
+            "BeeMemoryBank.Storage.Migrations.050_shared_doors.sql",
+            "BeeMemoryBank.Storage.Migrations.051_offboarding.sql");
     }
 
     [Fact]
@@ -45,7 +50,7 @@ public class TreeTests
             .OrderBy(f => f, StringComparer.Ordinal)
             .ToList();
 
-        sql.Should().Equal(["BootMigrations/B001_boot_store.sql", "BootMigrations/B002_whitelist_concern_versions.sql", "Migrations/040_baseline.sql", "Migrations/041_blind_invite.sql", "Migrations/042_blind_invite_server.sql", "Migrations/043_password_hint.sql", "Migrations/044_peer_channels.sql", "Migrations/045_whitelist_concern_versions.sql"],
-            "the boot store of a sealed node has its own ledger and its own files (B002 follows the whitelist columns of 045); nothing else belongs here");
+        sql.Should().Equal(["BootMigrations/B001_boot_store.sql", "BootMigrations/B002_whitelist_concern_versions.sql", "BootMigrations/B003_sealed_doors.sql", "BootMigrations/B004_whitelist_ownership.sql", "Migrations/040_baseline.sql", "Migrations/041_blind_invite.sql", "Migrations/042_blind_invite_server.sql", "Migrations/043_password_hint.sql", "Migrations/044_peer_channels.sql", "Migrations/045_whitelist_concern_versions.sql", "Migrations/046_sealed_doors.sql", "Migrations/047_ownership_and_node_state.sql", "Migrations/049_node_key_history.sql", "Migrations/050_shared_doors.sql", "Migrations/051_offboarding.sql"],
+            "the boot store of a sealed node has its own ledger and its own files (B002 and B004 follow the whitelist columns of 045 and 047, B003 the doors of 046); nothing else belongs here");
     }
 }

@@ -3,7 +3,7 @@ using BeeMemoryBank.TestSupport;
 namespace BeeMemoryBank.AppPaths.Tests;
 
 /// <summary>
-/// BMB-306 fix round 5 (J1): the inventory of <see cref="LinkGate"/> is the single list the entry points refuse links by, so it must cover every name the wipe inventory, the marker
+/// BMB-306: the inventory of <see cref="LinkGate"/> is the single list the entry points refuse links by, so it must cover every name the wipe inventory, the marker
 /// and the swaps work on, and it must judge the folder itself by its own entry, with or without a trailing separator.
 /// </summary>
 public sealed class LinkGateTests : IClassFixture<SealIntentTests.Corpus>

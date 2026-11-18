@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Cli.Tests;
 
 /// <summary>
-/// BMB-306 fix round 2 (finding N5, with N1): the command line is a host of its own. A <c>bmb init</c> or <c>bmb join</c> that is cut off before the node is
+/// BMB-306: the command line is a host of its own. A <c>bmb init</c> or <c>bmb join</c> that is cut off before the node is
 /// encrypted leaves a seal intent, and the next command (the CLI's own <see cref="CliServiceProvider"/>, the gate every command passes) settles it: what was
 /// written in the open is gone, and the node is the empty node it was. A command that starts while another process still holds the vault - the process that is
 /// running the operation, or one that was cut off while another still runs - is refused by name and wipes nothing.

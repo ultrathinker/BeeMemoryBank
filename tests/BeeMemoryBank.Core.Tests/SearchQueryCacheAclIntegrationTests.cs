@@ -4,11 +4,11 @@ using BeeMemoryBank.Core.Services;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// End-to-end ACL-isolation test for the WP-17 query cache, exercised through the real
+/// End-to-end ACL-isolation test for the query cache, exercised through the real
 /// <see cref="SearchService"/> (which wraps its query methods in <see cref="SearchQueryCache"/>).
 ///
 /// <para>
-/// This is the safety test the brief asks for: two callers with <em>different effective
+/// This is the core safety test: two callers with <em>different effective
 /// visible-result-sets</em> for the same query string must never share a cached result. If the
 /// cache key omitted the caller's read-scope, a privileged caller's result (which includes a
 /// Secret article) would be served to a restricted caller and the assertion below would fail. So

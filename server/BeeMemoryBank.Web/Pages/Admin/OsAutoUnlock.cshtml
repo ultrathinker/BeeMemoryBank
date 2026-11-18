@@ -7,25 +7,30 @@
 }
 
 @section About {
-    <p>
-        Normally a node starts <em>locked</em> and waits for someone to type the master password. OS auto-unlock lets this node unlock <strong>itself</strong> at startup, with no
-        password prompt, using a secret that the operating system keeps for this @os user account (@(isMac ? "the macOS Keychain" : "Windows DPAPI")). It is meant for a server node that
-        runs unattended and has to come back by itself after a restart or a power cut.
-    </p>
-    <p>
-        On a node whose database is encrypted (<a href="/Admin/StorageProtection">Database encryption</a>), auto-unlock still means the computer opens your notes at start without your
-        password. @if (!Model.ServerHasNoSwitch && Model.OsAutoUnlockSupported) { <text>Read the <a href="#os-auto-unlock-risk">warning below</a> before enabling it. Turning it off takes effect at the next start: the vault asks for the password again. </text> }On a server, the way to turn it on is the switch <em>Start unlocked after a restart</em> on <a href="/Admin/StorageProtection">Database encryption</a>, so this page only shows it, and lets you turn it off.
-    </p>
+    <p>Lets this computer unlock your notes by itself when it starts, without typing the password.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            Normally a node starts <em>locked</em> and waits for someone to type the master password. OS auto-unlock lets this node unlock <strong>itself</strong> at startup, with no
+            password prompt, using a secret that the operating system keeps for this @os user account (@(isMac ? "the macOS Keychain" : "Windows DPAPI")). It is meant for a server node that
+            runs unattended and has to come back by itself after a restart or a power cut.
+        </p>
+        <p>
+            On a node whose database is encrypted (<a href="/Admin/StorageProtection">Database encryption</a>), auto-unlock still means the computer opens your notes at start without your
+            password. @if (!Model.ServerHasNoSwitch && Model.OsAutoUnlockSupported) { <text>Read the <a href="#os-auto-unlock-risk">warning below</a> before enabling it. Turning it off takes effect at the next start: the vault asks for the password again. </text> }On a server, the way to turn it on is the switch <em>Start unlocked after a restart</em> on <a href="/Admin/StorageProtection">Database encryption</a>, so this page only shows it, and lets you turn it off.
+        </p>
+    </details>
 }
 
 @* The role is asked first: a Linux server has no secret store either, and it is the server that is told where its switch is. *@
 @if (Model.ServerHasNoSwitch)
 {
     <div class="card mt-md" id="os-auto-unlock-server" style="max-width:640px;">
-        <p class="text-muted text-sm" style="margin:0;">
-            This node is a server: it has no switch here. Whether it opens its vault by itself after a restart is the switch <em>Start unlocked after a restart</em> on
-            <a href="/Admin/StorageProtection">Database encryption</a>. OS auto-unlock is not on now.
-        </p>
+        <p class="text-muted text-sm" style="margin:0;">This node is a server: it has no switch here.</p>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>Whether it opens its vault by itself after a restart is the switch <em>Start unlocked after a restart</em> on <a href="/Admin/StorageProtection">Database encryption</a>. OS auto-unlock is not on now.</p>
+        </details>
     </div>
 }
 else if (!Model.OsAutoUnlockSupported)
@@ -41,16 +46,20 @@ else
     <div class="card mt-md" style="max-width:640px;">
         <sl-alert id="os-auto-unlock-risk" variant="warning" open style="margin-bottom:16px;">
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-            <strong>Anyone with access to this @os user account will be able to open the
-            vault without a password</strong> once this is enabled. The key then sits next to the data, so a stolen disk
-            is only as safe as that account (and as disk encryption, if you use it). Only enable it on a machine
-            you trust and control physically.
-            @if (Model.VaultStatus is { IsSealed: true })
-            {
-                <div id="os-auto-unlock-sealed-warning" style="margin-top:8px;">
-                    Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without your password.
-                </div>
-            }
+            <strong>Whoever can sign in to this @os account opens your notes without a password.</strong> Turn it on only on a computer you trust.
+            <details class="admin-more">
+                <summary>More details</summary>
+                <p><strong>Anyone with access to this @os user account will be able to open the
+                vault without a password</strong> once this is enabled. The key then sits next to the data, so a stolen disk
+                is only as safe as that account (and as disk encryption, if you use it). Only enable it on a machine
+                you trust and control physically.</p>
+                @if (Model.VaultStatus is { IsSealed: true })
+                {
+                    <p id="os-auto-unlock-sealed-warning">
+                        Your notes are encrypted on this computer's disk, but with auto-unlock on, this computer opens them at start without your password.
+                    </p>
+                }
+            </details>
         </sl-alert>
 
         @if (Model.OsAutoUnlockEnabled)

@@ -2,28 +2,32 @@
 @model BeeMemoryBank.Web.Pages.Admin.SnapshotsModel
 
 @section About {
-    <p>
-        A <strong>snapshot</strong> is a complete copy of this node at one moment: its database (articles, folders, tags, comments, versions, users, key slots, the
-        node's identity, the trusted nodes) and its encrypted files, packed into one file and encrypted under the master key. Snapshots are your backups. Make one
-        before anything risky: an update, a restore, a key rotation. You can copy the files out of the data folder whenever you like, even while the node runs, and
-        a file can only be opened by someone who has the master password.
-    </p>
-    <p>
-        From this page you can <strong>create</strong> a snapshot, <strong>download</strong> one to keep elsewhere, <strong>upload</strong> one made by this vault (on
-        this node, or on another node of the same network) and <strong>delete</strong> one you no longer need. <strong>Restore</strong> opens a dialog with two
-        choices, and they are very different:
-    </p>
-    <ul>
-        <li><strong>This node only</strong> replaces everything on this node with the snapshot. The node becomes a <em>new</em> node: new identity, and it forgets the nodes it
-            trusted, its blind copies and its sync history, so the other devices have to be joined to it again. The server is unavailable while it restores, and you sign in afterwards.</li>
-        <li><strong>The whole network</strong> asks every trusted node to restore the same snapshot. This node keeps its identity; each other node applies it when it next
-            syncs, and only if it trusts this node as a superadmin and has Auto-restore switched on for it (on the page of that device in <a href="/Admin/Devices">Devices</a>).</li>
-    </ul>
-    <p>
-        Both ask for the master password. A restore of the whole network always takes a safety backup of this node first; for this node only, the box
-        &ldquo;Create backup before restore&rdquo; is ticked for you. A restore replaces content: it cannot be undone except from another snapshot.
-        <a href="https://github.com/ultrathinker/BeeMemoryBank/blob/main/docs/snapshot-restore.md" target="_blank" rel="noopener noreferrer">What a restore does</a>.
-    </p>
+    <p>A snapshot is a full backup of this computer's notes in one file. Make one, or restore from one.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            A <strong>snapshot</strong> is a complete copy of this node at one moment: its database (articles, folders, tags, comments, versions, users, key slots, the
+            node's identity, the trusted nodes) and its encrypted files, packed into one file and encrypted under the master key. Snapshots are your backups. Make one
+            before anything risky: an update, a restore, a key rotation. You can copy the files out of the data folder whenever you like, even while the node runs, and
+            a file can only be opened by someone who has the master password.
+        </p>
+        <p>
+            From this page you can <strong>create</strong> a snapshot, <strong>download</strong> one to keep elsewhere, <strong>upload</strong> one made by this vault (on
+            this node, or on another node of the same network) and <strong>delete</strong> one you no longer need. <strong>Restore</strong> opens a dialog with two
+            choices, and they are very different:
+        </p>
+        <ul>
+            <li><strong>This node only</strong> replaces everything on this node with the snapshot. The node becomes a <em>new</em> node: new identity, and it forgets the nodes it
+                trusted, its blind copies and its sync history, so the other devices have to be joined to it again. The server is unavailable while it restores, and you sign in afterwards.</li>
+            <li><strong>The whole network</strong> asks every trusted node to restore the same snapshot. This node keeps its identity; each other node applies it when it next
+                syncs, and only if it trusts this node as a superadmin and has Auto-restore switched on for it (on the page of that device in <a href="/Admin/Devices">Devices</a>).</li>
+        </ul>
+        <p>
+            Both ask for the master password. A restore of the whole network always takes a safety backup of this node first; for this node only, the box
+            &ldquo;Create backup before restore&rdquo; is ticked for you. A restore replaces content: it cannot be undone except from another snapshot.
+            <a href="https://github.com/ultrathinker/BeeMemoryBank/blob/main/docs/snapshot-restore.md" target="_blank" rel="noopener noreferrer">What a restore does</a>.
+        </p>
+    </details>
 }
 
 @* The upload, the restore and the network restore are sent by admin.js with this token (no form of the page may be there to carry one: an empty list has none). *@
@@ -112,7 +116,11 @@ else
 <sl-dialog id="dlg-restore-snapshot" label="Restore Snapshot" style="--width: 640px;">
     <input type="hidden" name="fileName" id="restore-file-name" />
     <p style="margin-top:0;">Snapshot: <code id="restore-snapshot-name-display"></code></p>
-    <p class="text-muted text-sm">A snapshot can be restored here only when it was made by this vault: this node, or another node in the same network that shares its master key. A snapshot from a different vault cannot be opened here, whichever password is entered.</p>
+    <p class="text-muted text-sm">Only a snapshot of your own notes can be restored here.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>A snapshot can be restored here only when it was made by this vault: this node, or another node in the same network that shares its master key. A snapshot from a different vault cannot be opened here, whichever password is entered.</p>
+    </details>
 
     <sl-radio-group id="restore-mode" name="restoreMode" label="What should be restored?" value="standalone" style="margin-bottom:16px;">
         <sl-radio value="standalone">Restore this node only <span class="text-muted">(it leaves the network and becomes a new node)</span></sl-radio>
@@ -139,7 +147,10 @@ else
             <strong>Every node of the network is asked to restore this snapshot.</strong>
             <ul style="margin:8px 0 0 20px;">
                 <li>This node keeps its identity, its users and the nodes it trusts; its articles, folders, tags and media are replaced with the snapshot's.</li>
-                <li>Each other node applies it when it next syncs, and <strong>only if</strong> it trusts this node as a superadmin and has <em>Auto-restore</em> switched on for this node (Admin &rarr; Devices, on the page of that device). Today @autoRestorePeers of @activePeers trusted node(s) have it on. A node without it does not apply the restore.</li>
+                <li>Other devices apply it only if <em>Auto-restore</em> is on for this computer. Now it is on at @autoRestorePeers of @activePeers.
+                    <details class="admin-more"><summary>More details</summary>
+                    <p>Each other node applies it when it next syncs, and <strong>only if</strong> it trusts this node as a superadmin and has <em>Auto-restore</em> switched on for this node (Admin &rarr; Devices, on the page of that device). Today @autoRestorePeers of @activePeers trusted node(s) have it on. A node without it does not apply the restore.</p>
+                    </details></li>
                 <li>Keep this node running and reachable: the others download the snapshot from it (the offer is open for 30 days).</li>
                 <li>Blind copies are reseeded.</li>
                 <li>A safety backup of this node is always taken first.</li>

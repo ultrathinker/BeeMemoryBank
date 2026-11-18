@@ -15,7 +15,7 @@ public sealed class NullEventLogger : IEventLogger
     public void SignalSync() { }
     public Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry, Guid? eventId = null) => Task.FromResult(default(RowVersion));
     public Task<RowVersion> LogWhitelistRevokeAsync(Guid nodeId) => Task.FromResult(default(RowVersion));
-    public Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null) => Task.FromResult(default(RowVersion));
+    public Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null, string? ownership = null, Guid? ownerPersonId = null, string? ownerLabel = null) => Task.FromResult(default(RowVersion));
     public Task LogMasterPasswordChangedAsync(DateTime changedAt) => Task.CompletedTask;
     public Task LogCommentCreateAsync(Comment comment) => Task.CompletedTask;
     public Task LogCommentDeleteAsync(Guid commentId) => Task.CompletedTask;

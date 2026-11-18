@@ -16,7 +16,7 @@ public sealed class PeerIdentityMismatchException(Guid expectedNodeId, Guid decl
 }
 
 /// <summary>
-/// The node that answered declares the right node id and ANOTHER public key than the whitelist has on record for it (BMB-307 fix round): the node id is only
+/// The node that answered declares the right node id and ANOTHER public key than the whitelist has on record for it (BMB-307): the node id is only
 /// a claim, the key is what the network knows the node by. Refused, never "updated": a changed key is not something an address change may carry.
 /// </summary>
 public sealed class PeerKeyMismatchException(Guid nodeId) : InvalidOperationException(

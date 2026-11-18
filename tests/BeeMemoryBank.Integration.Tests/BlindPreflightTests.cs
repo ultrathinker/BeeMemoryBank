@@ -11,8 +11,8 @@ namespace BeeMemoryBank.Integration.Tests;
 /// Plan 4.2 / 3.1: before adding a blind node the PC asks every reachable full peer how it sees the
 /// PC (GET /api/sync/my-standing) and refuses — naming the node — while any peer does not see it as
 /// superadmin or any full node is still on a protocol that knows nothing of blind nodes. When nobody
-/// answers, it warns and goes on: the pair code, not a peer, makes the PC the blind node's authority
-/// (review r1-merge #3).
+/// answers, it warns and goes on: the pair code, not a peer, makes the PC the blind node's authority.
+///
 /// </summary>
 [Collection(HeavyOperationCollection.Name)]
 public class BlindPreflightTests : IAsyncLifetime
@@ -64,7 +64,7 @@ public class BlindPreflightTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review r1-merge #3: no full peer answers (here the hub is switched off). Nothing confirmed the PC's
+    /// No full peer answers (here the hub is switched off). Nothing confirmed the PC's
     /// standing, which is said, but it is no reason to refuse: the blind node will trust the PC because
     /// it holds the pair code. It is still no confirmation for anything else that asks.
     /// </summary>
@@ -135,7 +135,7 @@ public class BlindPreflightTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-merge #2: whether this node may call itself superadmin in a package is the network's
+    /// Whether this node may call itself superadmin in a package is the network's
     /// answer — every full peer that answers must say so, and one must answer.
     /// </summary>
     [Fact]
@@ -152,7 +152,7 @@ public class BlindPreflightTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-merge round 2 #2: a second full peer that is reachable but refuses the PC (it does not
+    /// A second full peer that is reachable but refuses the PC (it does not
     /// have the PC as an active peer: 401 in the handshake) is an answer — "no" — not "offline". One
     /// positive peer is then not enough.
     /// </summary>

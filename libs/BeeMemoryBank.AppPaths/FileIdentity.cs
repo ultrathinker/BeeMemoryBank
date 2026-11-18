@@ -22,9 +22,17 @@ public static class FileIdentity
     /// True where the identity is read through libc <c>stat</c>/<c>fstat</c>. .NET answers false to <c>IsLinux()</c> on Android although its libc
     /// (bionic) has the same calls and, on arm64, the same <c>struct stat</c> layout; without it a phone could never pass the scan of its own folder.
     /// </summary>
-    internal static bool UsesUnixStat(bool isLinux, bool isMacOs, bool isAndroid) => isLinux || isMacOs || isAndroid;
+    /// <para>The iPhone is Darwin like macOS: the same calls and the same <c>struct stat</c>. Without it every live file of an iPhone answered
+    /// "identity unavailable", so the phone's own database counted as an unencrypted copy and "Encrypt this phone" could never start there
+    /// (found on a real iPhone 15 Pro, 15.11).</para>
+    internal static bool UsesUnixStat(bool isLinux, bool isMacOs, bool isAndroid, bool isApplePhone = false) =>
+        isLinux || isMacOs || isAndroid || isApplePhone;
 
-    private static bool UsesUnixStat() => UsesUnixStat(OperatingSystem.IsLinux(), OperatingSystem.IsMacOS(), OperatingSystem.IsAndroid());
+    private static bool UsesUnixStat() =>
+        UsesUnixStat(OperatingSystem.IsLinux(), OperatingSystem.IsMacOS(), OperatingSystem.IsAndroid(), IsApplePhone());
+
+    /// <summary>iOS (Mac Catalyst answers true to IsIOS too): Darwin, where .NET finds the C library by its full path.</summary>
+    private static bool IsApplePhone() => OperatingSystem.IsIOS() || OperatingSystem.IsMacCatalyst();
 
     /// <summary>The identity of <paramref name="path"/> (symbolic links are followed, as an open would), or null when it cannot be read.</summary>
     public static FileIdentityInfo? TryGet(string path)
@@ -109,12 +117,21 @@ public static class FileIdentity
         if (arch is not (Architecture.X64 or Architecture.Arm64)) return null;
 
         var buffer = Marshal.AllocHGlobal(StatBufferSize);
-        try { return TryReadUnixStat(buffer, () => Stat(path, buffer)); }
+        try { return TryReadUnixStat(buffer, () => IsApplePhone() ? AppleStat(path, buffer) : Stat(path, buffer)); }
         finally { Marshal.FreeHGlobal(buffer); }
     }
 
     [DllImport("libc", EntryPoint = "stat", SetLastError = true)]
     private static extern int Stat(string path, IntPtr buffer);
+
+    // The iPhone: the C library by its full path, the way .NET for iOS names it (arm64 Darwin has 64-bit inodes under the plain names).
+    private const string AppleLibc = "/usr/lib/libc.dylib";
+
+    [DllImport(AppleLibc, EntryPoint = "stat", SetLastError = true)]
+    private static extern int AppleStat(string path, IntPtr buffer);
+
+    [DllImport(AppleLibc, EntryPoint = "fstat", SetLastError = true)]
+    private static extern int AppleFStat(int fd, IntPtr buffer);
 
     private static FileIdentityInfo? TryGetUnixHandle(SafeFileHandle handle)
     {
@@ -125,6 +142,7 @@ public static class FileIdentity
         {
             return TryReadUnixStat(buffer, () =>
             {
+                if (IsApplePhone()) return AppleFStat(fd, buffer);
                 try { return FStat(fd, buffer); }
                 catch (EntryPointNotFoundException) { return FxStat(arch == Architecture.X64 ? 1 : 0, fd, buffer); }
             });
@@ -142,7 +160,7 @@ public static class FileIdentity
         for (var i = 0; i < StatBufferSize; i += 8) Marshal.WriteInt64(buffer, i, 0);
         if (stat() != 0) return null;
 
-        if (OperatingSystem.IsMacOS())
+        if (OperatingSystem.IsMacOS() || IsApplePhone())
         {
             // struct stat (64-bit inodes): st_dev int32 @0, st_mode u16 @4, st_nlink u16 @6, st_ino u64 @8.
             return new FileIdentityInfo((uint)Marshal.ReadInt32(buffer, 0), (ulong)Marshal.ReadInt64(buffer, 8), (ushort)Marshal.ReadInt16(buffer, 6));

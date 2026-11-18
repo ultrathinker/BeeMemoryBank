@@ -8,7 +8,7 @@ using BeeMemoryBank.Storage.Sqlite;
 namespace BeeMemoryBank.Storage.Tests.Search;
 
 /// <summary>
-/// WP-13 Task 2: "real process kill mid-write, then restart" -- investigates whether
+/// "real process kill mid-write, then restart" -- investigates whether
 /// <see cref="EncryptedSegmentStore.StoreAsync"/> can leave disk state that a subsequent load
 /// mishandles (crashes, or returns truncated/garbage data) after a hard kill mid-write.
 ///
@@ -127,7 +127,7 @@ public class EncryptedSegmentStoreResilienceTests : IAsyncLifetime
         fullBytes.Length.Should().BeGreaterThan(EncryptedSegmentFormat.HeaderSize, "test setup should produce more than just a header so truncation is meaningful");
 
         // Simulate "only the first half of the encrypted segment's bytes made it to disk" -- the
-        // brief's literal description of a torn/interrupted write, reproduced directly at the file
+        // literal description of a torn/interrupted write, reproduced directly at the file
         // level regardless of exactly which OS mechanism would produce it.
         byte[] truncated = fullBytes[..(fullBytes.Length / 2)];
         await File.WriteAllBytesAsync(manifest.FilePath, truncated);

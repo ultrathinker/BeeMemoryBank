@@ -11,7 +11,7 @@ using BeeMemoryBank.Crypto;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// BMB-307 fix round 2 (T2): the ordinary sync client resolves a name itself and refuses every address a node may not call, where the socket is opened. A literal
+/// BMB-307: the ordinary sync client resolves a name itself and refuses every address a node may not call, where the socket is opened. A literal
 /// address is judged when it is typed; a NAME passes that check and then resolves to whatever its DNS says - an alias of the cloud metadata address, an answer
 /// that mixes a good address with a bad one, an answer that changes between the check and the connection. Loopback and private LAN stay allowed.
 /// </summary>

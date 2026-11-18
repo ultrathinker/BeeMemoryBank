@@ -2061,6 +2061,14 @@ sl-input.bmb-secret::part(input) {
 .admin-scope .admin-about li { margin-bottom: 4px; }
 .admin-scope .admin-about h2 { font-size: 1rem; margin: 16px 0 6px; }
 .admin-scope .admin-about .admin-warning { border-left: 3px solid var(--sl-color-danger-600, #dc2626); padding: 4px 0 4px 12px; margin: 0 0 12px; }
+/* "More details" (one plain sentence on top, everything technical folded away): a native details element, no script. */
+details.admin-more { margin: 6px 0 12px; font-size: .85rem; line-height: 1.55; color: var(--text-secondary); }
+details.admin-more > summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; color: var(--sl-color-primary-600); font-weight: 600; }
+details.admin-more > summary::-webkit-details-marker { display: none; }
+details.admin-more > summary::before { content: ""; width: 0; height: 0; border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform .15s; }
+details.admin-more[open] > summary::before { transform: rotate(90deg); }
+details.admin-more > :not(summary) { margin: 8px 0 0; }
+details.admin-more p { margin: 0 0 8px; }
 
 .admin-scope .admin-body { min-width: 0; }
 .admin-scope .admin-body .card { max-width: 880px; }

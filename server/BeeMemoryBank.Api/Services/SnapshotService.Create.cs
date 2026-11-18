@@ -130,7 +130,7 @@ public partial class SnapshotService
 
             // Every change to the copy comes BEFORE its final compaction. A row updated or deleted
             // afterwards would only be gone from queries: SQLite leaves the old bytes in free and
-            // overflow pages, and the file goes into the archive as it is (review L-stage1 #1 — a
+            // overflow pages, and the file goes into the archive as it is (a
             // nulled embedding projection was still readable in the raw package).
             additions?.AdjustDb(tempDb);
             if (filterSecrets)

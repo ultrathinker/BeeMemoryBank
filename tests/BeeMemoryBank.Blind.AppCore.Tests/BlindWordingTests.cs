@@ -5,7 +5,7 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Wording of the sentences the shared core shows (fix round 2, addendum B): a sentence names the source by its name and never hard-codes a gender (the source may be a person or a computer), and no
+/// Wording of the sentences the shared core shows: a sentence names the source by its name and never hard-codes a gender (the source may be a person or a computer), and no
 /// sentence sends the person to a button that no head has any more. Read from the source of <c>Blind.AppCore</c>, so that a new sentence is held to the same rule.
 /// </summary>
 public sealed class BlindWordingTests

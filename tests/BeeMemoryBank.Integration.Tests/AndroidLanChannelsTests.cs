@@ -689,15 +689,15 @@ public class AndroidLanChannelsTests
         var xaml = App("Pages", "StatusPage.xaml");
         var page = App("Pages", "StatusPage.xaml.cs");
 
-        xaml.Should().Contain("Text=\"Change address\"").And.Contain("Clicked=\"OnEditPeerUrlClicked\"");
-        xaml.Should().Contain("Text=\"Add an address\"").And.Contain("Clicked=\"OnAddPeerAddressClicked\"");
-        xaml.Should().Contain("Clicked=\"OnRemovePeerChannelClicked\"").And.Contain("Binding CanRemove");
+        // The device rows open the app's sheet (change / remove address, remove device); the add button is on the page.
+        xaml.Should().Contain("Clicked=\"OnAddAddressClicked\"").And.Contain("x:Name=\"DevicesList\"");
         xaml.Should().NotContain("Text=\"Edit URL\"");
+        page.Should().Contain("Add(\"DeviceChangeAddress\"").And.Contain("Add(\"DeviceRemoveAddress\"").And.Contain("Add(\"DeviceRemoveDevice\"");
 
         // The primary address still goes through the one address service; a typed one through the channel service, which asks who answers.
         page.Should().Contain("PeerAddressService").And.Contain("ChangeAsync(nodeId, typed, \"phone\", \"phone\", saveWhenUnanswered)");
         page.Should().Contain("PeerChannelService").And.Contain("AddAsync(nodeId, typed, saveWithoutAnswer)").And.Contain("result.CanSaveAnyway");
-        page.Should().Contain("\"Save anyway\"").And.Contain("RemoveAsync(line.PeerNodeId, line.Address)");
+        page.Should().Contain("AppStrings.Get(\"SaveAnyway\")").And.Contain("RemoveAsync(line.PeerNodeId, line.Address)");
         page.Should().NotContain("AddManualAsync", "the page writes no row of its own");
         page.Should().NotContain("{address}").And.NotContain("api/sync/identity");
     }

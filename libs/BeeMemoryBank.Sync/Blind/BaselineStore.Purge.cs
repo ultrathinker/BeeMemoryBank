@@ -18,7 +18,8 @@ public sealed partial class BaselineStore
     [
         "sqlite_sequence", "tbl_audit_log", "tbl_baseline", "tbl_baseline_blob", "tbl_blind_restore_code", "tbl_blind_state",
         "tbl_blob", "tbl_compaction_log", "tbl_dek_retired_link", "tbl_dek_rotation_state", "tbl_event", "tbl_metadata_activation",
-        "tbl_metadata_key", "tbl_migration", "tbl_migration_marker", "tbl_node_identity", "tbl_recovery_box",
+        "tbl_metadata_key", "tbl_migration", "tbl_migration_marker", "tbl_node_identity", "tbl_node_key_conflict", "tbl_node_key_history",
+        "tbl_node_state", "tbl_recovery_box",
         "tbl_recovery_box_check", "tbl_recovery_box_pending_retire", "tbl_restore_event_state", "tbl_restore_replay_shield",
         "tbl_sealed_secret", "tbl_state_anchor", "tbl_sync_position", "tbl_sync_push_position", "tbl_sync_quarantine",
         "tbl_whitelist",

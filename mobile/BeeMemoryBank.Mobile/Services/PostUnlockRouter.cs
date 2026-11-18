@@ -43,6 +43,11 @@ public class PostUnlockRouter
         {
             await Shell.Current.GoToAsync(target);
             App.StartSyncService();
+            // The vault is open and the app is in front: start counting idle time for the auto-lock.
+            _sp.GetService<AutoLockService>()?.Start();
+            // A text shared to the app while it was locked waited for this unlock: the editor opens with it now.
+            if (ShareIntentHandler.PendingText is not null)
+                await Shell.Current.GoToAsync("articleEdit");
         }
     }
 

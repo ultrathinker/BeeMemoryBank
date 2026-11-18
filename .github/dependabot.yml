@@ -51,9 +51,21 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # A new major .NET (10 -> 11) is a platform move, not a base-image refresh: the SDK, every
+      # TargetFramework and the runtime of the desktop and phone apps move with it, as one change.
+      # Patch and minor tags of the same major are still proposed.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   # The blind node image (docker/blind/Dockerfile) has its own base images: without this entry they were never proposed.
   - package-ecosystem: "docker"
     directory: "/docker/blind"
     schedule:
       interval: "weekly"
+    ignore:
+      # A new major .NET (10 -> 11) is a platform move, not a base-image refresh: the SDK, every
+      # TargetFramework and the runtime of the desktop and phone apps move with it, as one change.
+      # Patch and minor tags of the same major are still proposed.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

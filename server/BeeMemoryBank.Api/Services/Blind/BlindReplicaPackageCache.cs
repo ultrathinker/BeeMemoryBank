@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Hosting.AspNetCore;
 using BeeMemoryBank.Sync.Blind.Format2;
 using Microsoft.Extensions.DependencyInjection;
@@ -181,10 +182,19 @@ public sealed class BlindReplicaPackageCache(
         }
     }
 
+    /// <summary>The node's identity key now; a cached package signed by another (a key the node retired at a re-key) is built again.</summary>
+    private async Task<byte[]> SigningKeyAsync()
+    {
+        using var scope = scopes.CreateScope();
+        return (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())?.Ed25519PublicKey ?? [];
+    }
+
     private async Task<Entry> GetCurrentLockedAsync(Func<CancellationToken, Task<bool>> producerIsSuperadmin, CancellationToken ct)
     {
         var now = time.GetUtcNow();
+        var signingKey = await SigningKeyAsync();
         if (_entry is { } cached
+            && cached.SignedBy.AsSpan().SequenceEqual(signingKey)
             && now - cached.CreatedAt < Lifetime
             && File.Exists(cached.Served.FilePath)
             && File.Exists(cached.Served.FilePath + ".sig"))
@@ -197,7 +207,7 @@ public sealed class BlindReplicaPackageCache(
         var package = await scope.ServiceProvider.GetRequiredService<BlindPackageBuilder>()
             .BuildAsync(Guid.NewGuid(), includesUpTo: null, isSuperadmin, ct,
                 outputDirectory: PackageDirectory(scope.ServiceProvider.GetRequiredService<SnapshotService>()));
-        var replacement = new Entry(ServedPackage.Of(package), now, package);
+        var replacement = new Entry(ServedPackage.Of(package), now, package, signingKey);
         var superseded = _entry;
         _entry = replacement;
         if (superseded is not null)
@@ -217,7 +227,9 @@ public sealed class BlindReplicaPackageCache(
         {
             var key = kind + ":" + baseline.Files.Manifest.BaselineId.ToString("N");
             var now = time.GetUtcNow();
+            var signingKey = await SigningKeyAsync();
             if (!_v2.TryGetValue(key, out var entry)
+                || !entry.SignedBy.AsSpan().SequenceEqual(signingKey)
                 || now - entry.CreatedAt >= Lifetime
                 || !File.Exists(entry.Served.FilePath) || !File.Exists(entry.Served.FilePath + ".sig"))
             {
@@ -226,7 +238,7 @@ public sealed class BlindReplicaPackageCache(
                     new BlindPackageV2Request(kind, Guid.NewGuid(), baseline, IncludesUpTo: null,
                         IncludeBlobs: kind == BlindPackageKinds.Full,
                         OutputDirectory: PackageDirectory(scope.ServiceProvider.GetRequiredService<SnapshotService>())), ct);
-                var replacement = new Entry(new ServedPackage(package.FilePath, package.Sha256, package.Manifest.SeedId), now);
+                var replacement = new Entry(new ServedPackage(package.FilePath, package.Sha256, package.Manifest.SeedId), now, signedBy: signingKey);
                 if (entry is not null) RetireLocked(entry);
                 _v2[key] = replacement;
                 entry = replacement;
@@ -356,8 +368,10 @@ public sealed class BlindReplicaPackageCache(
         }
     }
 
-    internal sealed class Entry(ServedPackage served, DateTimeOffset createdAt, BlindPackage? package = null)
+    internal sealed class Entry(ServedPackage served, DateTimeOffset createdAt, BlindPackage? package = null, byte[]? signedBy = null)
     {
+        /// <summary>The node's identity key when the package was built and signed: a package of a key the node retired is not served.</summary>
+        public byte[] SignedBy { get; } = signedBy ?? [];
         public ServedPackage Served { get; } = served;
         public BlindPackage? Package { get; } = package;
         public DateTimeOffset CreatedAt { get; } = createdAt;

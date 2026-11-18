@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Api.Services;
 
 /// <summary>
-/// The file side of a blind seed's cutover (review L-stage1 #4): the new database and every media file
+/// The file side of a blind seed's cutover: the new database and every media file
 /// are staged and checked first, a durable marker says how far the switch got, and the old database is
 /// kept until the whole cutover is done — so a process that dies anywhere in between is either rolled
 /// back to the old database or finished at the next start (<see cref="Recover"/>), never left on a new
@@ -15,7 +15,7 @@ namespace BeeMemoryBank.Api.Services;
 /// <para>A marker that cannot be read at all is the one state the files alone must decide: the old
 /// database and media in the directory mean a switch had begun, so the cutover is
 /// <see cref="Unresolved"/> — kept, and refused as a base for a new seed — rather than deleted as
-/// one that never started (Codex #3).</para>
+/// one that never started.</para>
 ///
 /// <para>Layout, in the data volume (not in blind-tmp, which every start empties):
 /// <c>blind-cutover/marker.json</c> (seed id, phase), <c>new.db</c>, <c>media/</c> (the complete new
@@ -32,7 +32,7 @@ public sealed class BlindSeedCutover
     /// <summary>
     /// Not a phase the cutover writes: the marker is missing or cannot be read while the directory
     /// still holds what only a switch creates. Read as "never started", that state cost the old
-    /// database and media — the only way back (Codex #3).
+    /// database and media — the only way back.
     /// </summary>
     public const string Unresolved = "unresolved";
 
@@ -70,7 +70,7 @@ public sealed class BlindSeedCutover
         if (Directory.Exists(_dir))
         {
             // The directory itself, and the names the phases below act on, must be the cutover's own
-            // plain entries (security #9) — see the guards above; PhaseOf reads the marker, which
+            // plain entries — see the guards above; PhaseOf reads the marker, which
             // refuses a linked one, so this is the write and delete side of the same rule.
             RefuseLink(_dir);
             RefuseLink(MarkerPath);
@@ -101,7 +101,7 @@ public sealed class BlindSeedCutover
     public void StageMedia(string packageMediaDir)
     {
         // A live media directory that is a link would have this copy read whatever it points at into
-        // the seed's staged media — someone else's files, sent on to the seeder (security #9).
+        // the seed's staged media — someone else's files, sent on to the seeder.
         RefuseLink(_liveMedia);
         RefuseLink(StagedMediaDir);
         if (Directory.Exists(_liveMedia))
@@ -125,7 +125,7 @@ public sealed class BlindSeedCutover
     public void WriteMarker(Guid seedId, string phase)
     {
         RefuseLink(MarkerPath);
-        // A random name opened with CreateNew (Codex round 2, security #9): the old fixed ".tmp" was
+        // A random name opened with CreateNew: the old fixed ".tmp" was
         // opened by name with FileMode.Create, which follows a link someone left at that name and
         // truncates whatever it points at — outside the data root. CreateNew cannot follow anything:
         // it fails if the name exists at all, a link included, and a name nobody can predict cannot
@@ -294,7 +294,7 @@ public sealed class BlindSeedCutover
     /// The phase of the cutover directory, judged from the marker <b>and</b> from what is in it. A
     /// marker that cannot be read is not an absent one: the old database and media beside it are the
     /// only way back, and only a directory holding none of them can be dropped as never started
-    /// (Codex #3). <see cref="SwitchFiles"/> moves the old database aside first and the old media
+    ///. <see cref="SwitchFiles"/> moves the old database aside first and the old media
     /// second, so either one being there means the switch had begun.
     /// </summary>
     private (string Phase, Guid? SeedId) PhaseOf()
@@ -310,7 +310,7 @@ public sealed class BlindSeedCutover
         if (IsLink(MarkerPath))
         {
             // A marker that is a link is not our marker: reading through it would take whatever it
-            // points at as the cutover's phase, including a file outside the data root (security #9).
+            // points at as the cutover's phase, including a file outside the data root.
             // Reported as unreadable — with the files beside it, that is Unresolved, and nothing is
             // deleted on the strength of it.
             return null;
@@ -375,7 +375,7 @@ public sealed class BlindSeedCutover
         {
             // A path in the cutover directory is not a plain file or directory of ours — a link, or
             // something outside the data root. Refusing is the only safe answer, and refusing here
-            // means leaving every file exactly where it is (security #9); the node starts on
+            // means leaving every file exactly where it is; the node starts on
             // whatever database is live, and the next seed is refused until an operator looks.
             logger.LogError(ex, "Blind seed: the cutover directory in {Data} could not be recovered safely; nothing was changed", dataPath);
         }
@@ -384,7 +384,7 @@ public sealed class BlindSeedCutover
     /// <summary>
     /// A cutover directory whose marker is missing or unreadable while the database (or the media
     /// directory) it replaced is still in it: the switch may have happened, and nothing here can say
-    /// whether it finished — so nothing is discarded (Codex #3). The old files are put back where the
+    /// whether it finished — so nothing is discarded. The old files are put back where the
     /// node cannot start without them (a live database or live media directory that is gone), and
     /// otherwise left exactly where they are for an operator, with the state spelled out; the next
     /// seed is refused until it is resolved.
@@ -428,7 +428,7 @@ public sealed class BlindSeedCutover
 
     // ── every path this type touches is its own, and a plain one ────────────────────────────────
     //
-    // The cutover writes, moves onto and deletes fixed names under the data root (Codex round 2,
+    // The cutover writes, moves onto and deletes fixed names under the data root (
     // security #9). A symbolic link, junction or any other reparse point planted at one of those
     // names is not the cutover's file: a write through it lands wherever it points (outside the data
     // root, on a path the attacker chose), and a recursive delete of a directory that is a link can
@@ -458,7 +458,7 @@ public sealed class BlindSeedCutover
     }
 
     /// <summary>
-    /// The staged and the old database with their sidecars (review A2-c). The switch renames <c>new.db</c> onto the
+    /// The staged and the old database with their sidecars. The switch renames <c>new.db</c> onto the
     /// live path and a rename moves a link as a link, so a <c>new.db</c> planted as one would become the live
     /// database's path; the old database's sidecars are moved back onto the live ones by a rollback.
     /// </summary>

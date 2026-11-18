@@ -100,7 +100,16 @@ public record WhitelistEntryDto(
     bool IsSuperadmin = false,
     // How blind copies trust this node's TLS endpoint: "pin", "public-ca" or null (not callable by blind copies); ADR 0007.
     string? TlsTrust = null,
-    string? TlsSpki = null);
+    string? TlsSpki = null,
+    string Ownership = "unknown",
+    Guid? OwnerPersonId = null,
+    string? OwnerLabel = null,
+    bool NeedsReview = false,
+    string? RuntimeKind = null,
+    string? ReportedAppVersion = null,
+    string? SuggestedOwnership = null,
+    Guid? SuggestedOwnerPersonId = null,
+    string? SuggestedOwnerLabel = null);
 
 /// <summary>The answer to "Let blind copies call this node": the notice to show (the trade-off of the mode chosen) and the pin recorded.</summary>
 public record HubSetDto(WhitelistEntryDto? Entry, string? Pin, bool PubliclyTrusted, string? Notice);
@@ -163,7 +172,39 @@ public record PasswordHintLookupResult(PasswordHintLookupOutcome Outcome, string
 /// <summary>The recovery-key state of the node, as GET /api/keys/recovery-status reports it (no key material).</summary>
 public record RecoveryKeyStatusDto(bool Required, bool Acknowledged, bool HasRecoveryKey, bool NoticeDismissed);
 
-public record UserDto(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt, bool ChatAccess);
+public record UserDto(int Id, string Username, string DisplayName, string Role, DateTime CreatedAt, DateTime? LastLoginAt, bool ChatAccess, Guid PersonId = default,
+    string AccountState = "active", string? RemovalStatus = null, Guid? RemovalProcessId = null, bool Replicated = false);
+
+/// <summary>A removal of a superadmin as the API shows it (release 2.12.0). Plain words only; no secret, no exception text.</summary>
+public record OffboardingDto(
+    Guid ProcessId, Guid PersonId, string Person, string Target, string? TargetRole, int Step, int StepCount, bool Open, bool DrivenHere, bool CanTakeOver,
+    string? Outcome, DateTime StartedAt, DateTime? ClosedAt, string StartedBy, bool NeedsPassword, string Status,
+    List<OffboardingStepDto> Steps, List<OffboardingReviewItemDto> Review, List<string> Bridges, List<string> Reminders);
+
+public record OffboardingStepDto(int Number, string Title, string State, string? Sentence, List<OffboardingWaitDto> Waits);
+
+public record OffboardingWaitDto(Guid NodeId, string NodeName, string State, string? Why, bool OpenOnce, bool CanRevoke);
+
+public record OffboardingReviewItemDto(string Id, string Kind, string Label, string Why, bool DefaultRemove, string? Decision, string? Reason, bool Applied, string? DecidedBy);
+
+public record OffboardingDecisionDto(string ItemId, string Decision, string? Reason = null, string? Target = null);
+
+public record SharedDoorBlockerDto(Guid NodeId, string DisplayName);
+
+public record SharedDoorsStatusDto(
+    Guid? AccountsHomeNodeId,
+    string? AccountsHomeName,
+    bool IsThisNodeAccountsHome,
+    bool IsThisNodeShared,
+    bool ShouldOfferAccountsHome,
+    List<SharedDoorBlockerDto> BlockedSharedNodes,
+    long LastIssuedVersion,
+    long LatestReceivedVersion,
+    long AppliedVersion,
+    DateTime? AppliedAt,
+    string? LastError,
+    List<SharedDoorBlockerDto>? SkippedSharedNodes = null,
+    bool AccountsHomeChanged = false);
 
 public record AclEntryDto(int Id, Guid FolderId, string FolderPath, string Effect, DateTime CreatedAt, bool IsReadOnly = false);
 

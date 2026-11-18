@@ -24,7 +24,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The contract of the node's door (srvfix8, review RV6, tests the review named): every route of <see cref="BlindUsageMiddleware.DataRouteKeys"/> reaches
+/// The contract of the node's door: every route of <see cref="BlindUsageMiddleware.DataRouteKeys"/> reaches
 /// <see cref="BlindAdmissionExtensions.ReserveForPeer"/> in its REAL handler once it has a valid credential. A handler that forgets the hook still works - its bytes are counted - but
 /// reserves nothing, so N callers could pass the same remaining budget together; nothing else fails when that happens, so this does. A new data route has no recipe here and fails too.
 /// </summary>

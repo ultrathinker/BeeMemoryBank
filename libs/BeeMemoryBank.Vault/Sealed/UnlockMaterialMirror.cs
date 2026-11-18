@@ -97,9 +97,10 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
         if (!Sealed) return;
         ArgumentNullException.ThrowIfNull(door);
         var hash = BootDoorHash.Of(door.Kind, door.SourceId, door.SlotType, door.KeyHash, door.KdfVersion, door.ArgonMemory,
-            door.ArgonIterations, door.ArgonParallelism, door.Salt, door.EncryptedMasterDek, door.Iv);
+            door.ArgonIterations, door.ArgonParallelism, door.Salt, door.EncryptedMasterDek, door.Iv, door.DoorVersion, door.DoorPublicKey);
         await _doors.AddPendingAsync(new BootDoor(0, door.Kind, door.SourceId, door.SlotType, door.EncryptedMasterDek, door.Iv, door.Salt,
-            door.ArgonMemory, door.ArgonIterations, door.ArgonParallelism, door.KeyHash, door.KdfVersion, hash, door.DekFingerprint, true), ct)
+            door.ArgonMemory, door.ArgonIterations, door.ArgonParallelism, door.KeyHash, door.KdfVersion, hash, door.DekFingerprint, true,
+            door.DoorVersion, door.DoorPublicKey), ct)
             .ConfigureAwait(false);
     }
 
@@ -249,20 +250,33 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
         // One read transaction: the version, the doors and the mirrors are one consistent picture of the database.
         using var transaction = connection.BeginTransaction();
 
+        // Each door carries the DEK fingerprint its row names (null = unknown): the writer keeps a wrapper for every named DEK and, while one
+        // door is unknown, for every DEK the session holds (the pruning rule of ADR 0012).
+        // A database from before migration 046 (the copy an offline re-key or a seal works on may be one) has no door columns: every door
+        // there is a v1 wrap of unknown DEK.
+        var hasDoorColumns = await connection.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM pragma_table_info('tbl_key_slot') WHERE name = 'door_version'", transaction: transaction).ConfigureAwait(false) > 0;
+        var slotDoorColumns = hasDoorColumns
+            ? "door_version AS DoorVersion, door_public_key AS DoorPublicKey, dek_fp AS DekFingerprint"
+            : "1 AS DoorVersion, NULL AS DoorPublicKey, NULL AS DekFingerprint";
+        var agentDoorColumns = hasDoorColumns ? "door_public_key AS DoorPublicKey, dek_fp AS DekFingerprint" : "NULL AS DoorPublicKey, NULL AS DekFingerprint";
         var doors = new List<BootDoor>();
         foreach (var s in await connection.QueryAsync<SlotRecord>(
-                     @"SELECT slot_id AS SlotId, slot_type AS SlotType, encrypted_master_dek AS EncryptedMasterDek, iv AS Iv, salt AS Salt,
-                              argon_memory AS ArgonMemory, argon_iterations AS ArgonIterations, argon_parallelism AS ArgonParallelism
+                     $@"SELECT slot_id AS SlotId, slot_type AS SlotType, encrypted_master_dek AS EncryptedMasterDek, iv AS Iv, salt AS Salt,
+                              argon_memory AS ArgonMemory, argon_iterations AS ArgonIterations, argon_parallelism AS ArgonParallelism,
+                              {slotDoorColumns}
                        FROM tbl_key_slot ORDER BY slot_id", transaction: transaction).ConfigureAwait(false))
             doors.Add(new BootDoor(0, BootDoorKinds.Slot, s.SlotId, s.SlotType, s.EncryptedMasterDek, s.Iv, s.Salt, (int?)s.ArgonMemory,
                 (int?)s.ArgonIterations, (int?)s.ArgonParallelism, null, null,
                 BootDoorHash.Of(BootDoorKinds.Slot, s.SlotId, s.SlotType, null, null, (int?)s.ArgonMemory, (int?)s.ArgonIterations, (int?)s.ArgonParallelism,
-                    s.Salt, s.EncryptedMasterDek, s.Iv), null, false));
+                    s.Salt, s.EncryptedMasterDek, s.Iv, (int)s.DoorVersion, s.DoorPublicKey), s.DekFingerprint, false, (int)s.DoorVersion, s.DoorPublicKey));
         foreach (var a in await connection.QueryAsync<AgentRecord>(
-                     @"SELECT id AS Id, key_hash AS KeyHash, salt AS Salt, kdf_version AS KdfVersion, encrypted_dek AS EncryptedDek, dek_iv AS DekIv
+                     $@"SELECT id AS Id, key_hash AS KeyHash, salt AS Salt, kdf_version AS KdfVersion, encrypted_dek AS EncryptedDek, dek_iv AS DekIv,
+                              {agentDoorColumns}
                        FROM tbl_agent WHERE encrypted_dek IS NOT NULL AND dek_iv IS NOT NULL AND status = 'A' ORDER BY id", transaction: transaction).ConfigureAwait(false))
             doors.Add(new BootDoor(0, BootDoorKinds.Agent, a.Id, null, a.EncryptedDek, a.DekIv, a.Salt, null, null, null, a.KeyHash, (int?)a.KdfVersion,
-                BootDoorHash.Of(BootDoorKinds.Agent, a.Id, null, a.KeyHash, (int?)a.KdfVersion, null, null, null, a.Salt, a.EncryptedDek, a.DekIv), null, false));
+                BootDoorHash.OfAgent(a.Id, a.KeyHash, (int?)a.KdfVersion, a.Salt, a.EncryptedDek, a.DekIv, a.DoorPublicKey), a.DekFingerprint, false,
+                BootDoorHash.AgentDoorVersion((int?)a.KdfVersion), a.DoorPublicKey));
 
         BootIdentity? identity = null;
         var row = await connection.QuerySingleOrDefaultAsync<IdentityRecord>(
@@ -302,6 +316,9 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
         public long? ArgonMemory { get; set; }
         public long? ArgonIterations { get; set; }
         public long? ArgonParallelism { get; set; }
+        public long DoorVersion { get; set; } = 1;
+        public byte[]? DoorPublicKey { get; set; }
+        public string? DekFingerprint { get; set; }
     }
 
     private sealed class AgentRecord
@@ -312,6 +329,8 @@ public sealed class UnlockMaterialMirror : IUnlockMaterialMirror
         public long? KdfVersion { get; set; }
         public byte[] EncryptedDek { get; set; } = [];
         public byte[] DekIv { get; set; } = [];
+        public byte[]? DoorPublicKey { get; set; }
+        public string? DekFingerprint { get; set; }
     }
 
     private sealed class IdentityRecord

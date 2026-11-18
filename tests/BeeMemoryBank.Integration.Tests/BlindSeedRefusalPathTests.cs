@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-312 fix round, finding 2: the refusal of a seed is logged at Warning and answered to the sender, and it must hold a fixed sentence about the check that
+/// BMB-312: the refusal of a seed is logged at Warning and answered to the sender, and it must hold a fixed sentence about the check that
 /// failed - never the private directory layout of the node that refused. A link planted where the cutover works made the sentence carry the full path of it.
 /// </summary>
 [Collection(HeavyOperationCollection.Name)]

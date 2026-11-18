@@ -28,6 +28,11 @@ public class DekRotationFlowTests : IAsyncLifetime
         var loginResp = await _client.PostAsJsonAsync("/api/session/login",
             new { username = "admin", password = Password });
         loginResp.EnsureSuccessStatusCode();
+        // The unlock starts the post-unlock catch-up in the background, and its FinishPendingCompletionAsync holds the rotation's
+        // own lock for a moment even when no rotation is left to finish. A propose sent while it runs is refused with "Another
+        // rotation is in progress." - on a loaded machine (other rotation classes beside this one) that moment covered the first
+        // propose of a test. Every test here starts after it.
+        await _factory.Services.GetRequiredService<SessionService>().PostUnlockCatchUp;
     }
 
     public Task DisposeAsync()
@@ -303,7 +308,7 @@ public class DekRotationFlowTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Availability guardrail (adversarial, P1): an active peer whose stored Ed25519 key is not a
+    /// Availability guardrail (adversarial): an active peer whose stored Ed25519 key is not a
     /// valid curve point (corrupt row, or a maliciously planted key) is EXCLUDED from the rotation
     /// with a log — it must not (a) abort the whole rotation for every healthy peer, nor (b) be
     /// sealed an envelope from an off-curve/small-order key. The rotation still completes.
@@ -581,7 +586,18 @@ public class DekRotationFlowTests : IAsyncLifetime
         var kek = KeyDerivation.DeriveKek(
             Password, slotBefore.Salt!,
             slotBefore.ArgonMemory!.Value, slotBefore.ArgonIterations!.Value, slotBefore.ArgonParallelism!.Value);
-        var preRotationDek = MasterKeyManager.UnwrapMasterDek(slotBefore.EncryptedMasterDek, slotBefore.IV, kek);
+        var preRotationDek = BeeMemoryBank.Crypto.Doors.OpenSlot(slotBefore, kek);
+
+        // Since 2.12 a rotation keeps the chain only while the node has a v1 door that no rotation can re-seal (the bridge, DekBridge;
+        // a node without one keeps none: QuietRotationTests.H10). The straggler here is a recovery key from before 2.12.
+        using (var conn = connFactory.CreateConnection())
+        {
+            var (stragglerWrap, stragglerIv) = MasterKeyManager.WrapMasterDek(preRotationDek, System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+            await conn.ExecuteAsync(
+                @"INSERT INTO tbl_key_slot (slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, created_at, door_version)
+                  VALUES ('recovery', @w, @iv, @salt, 65536, 3, 4, @now, 1)",
+                new { w = stragglerWrap, iv = stragglerIv, salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32), now = DateTime.UtcNow.ToString("O") });
+        }
 
         var proposeResp = await _client.PostAsJsonAsync("/api/dek-rotation/propose",
             new { masterPassword = Password });
@@ -649,6 +665,109 @@ public class DekRotationFlowTests : IAsyncLifetime
         public string? Enc { get; set; }
         public string? Iv { get; set; }
         public string State { get; set; } = "";
+    }
+
+    [Fact]
+    public async Task Propose_CarriesAWellFormedRemovalReason_InBothEvents_AndRefusesAnyOtherReason()
+    {
+        var bad = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password, reason = "because I said so" });
+        bad.StatusCode.Should().Be(HttpStatusCode.BadRequest, "only offboarding:<process id> has a meaning");
+
+        var resp = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password, reason = "offboarding:proc-1" });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var commitEventId = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("commitEventId").GetGuid().ToString();
+
+        using var conn = _factory.Services.GetRequiredService<DbConnectionFactory>().CreateConnection();
+        var commit = await conn.QuerySingleAsync<string>("SELECT payload FROM tbl_event WHERE event_id = @id COLLATE NOCASE", new { id = commitEventId });
+        JsonSerializer.Deserialize<BeeMemoryBank.Sync.DekRotationCommitPayload>(commit)!.Reason.Should().Be("offboarding:proc-1");
+        var proposed = await conn.QuerySingleAsync<string>("SELECT payload FROM tbl_event WHERE event_type = 'dek_rotation_proposed'");
+        JsonSerializer.Deserialize<BeeMemoryBank.Sync.DekRotationProposedPayload>(proposed)!.Reason.Should().Be("offboarding:proc-1");
+    }
+
+    [Fact]
+    public async Task AProposeRightAfterAnUnlock_IsNotRefused_WhileTheCatchUpLooksForAnUnfinishedRotation()
+    {
+        // Every unlock's catch-up asks whether a rotation is left to finish (FinishPendingCompletionAsync). It took the rotation's own lock
+        // before it read the answer, so a propose in that moment was refused "Another rotation is in progress." with no rotation anywhere.
+        // Here the read of the answer is slow and the propose comes while it runs.
+        var rotation = _factory.Services.GetRequiredService<BeeMemoryBank.Api.Services.DekRotationService>();
+        var session = _factory.Services.GetRequiredService<SessionService>();
+        (await _client.PostAsync("/api/session/lock", null)).EnsureSuccessStatusCode();
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rotation.BeforeCompletionRecordReadForTests = async () =>
+        {
+            reading.TrySetResult();
+            await release.Task;
+        };
+        try
+        {
+            (await _client.PostAsJsonAsync("/api/session/login", new { username = "admin", password = Password })).EnsureSuccessStatusCode();
+            await reading.Task.WaitAsync(TimeSpan.FromSeconds(60));
+
+            var propose = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
+
+            propose.StatusCode.Should().Be(HttpStatusCode.OK, await propose.Content.ReadAsStringAsync());
+        }
+        finally
+        {
+            release.TrySetResult();
+            rotation.BeforeCompletionRecordReadForTests = null;
+        }
+        await session.PostUnlockCatchUp;
+    }
+
+    [Fact]
+    public async Task ARotationIsRefused_WhileAnOfflineReKeyHoldsItsLock_OrAnotherKeyOperationRunsHere()
+    {
+        // 2.12 (plan WS-A6): rotation, identity re-key and offline re-key exclude each other on a node.
+        var dataPath = _factory.Services.GetRequiredService<BeeMemoryBank.Api.Services.SnapshotService>().DataPath;
+        using (var rekey = BeeMemoryBank.AppPaths.RekeyLock.TryAcquire(dataPath))
+        {
+            rekey.Should().NotBeNull();
+            var refused = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
+            refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            (await refused.Content.ReadAsStringAsync()).Should().Contain("offline re-key");
+        }
+
+        using (var other = KeyOperationLock.TryEnter(_factory.Services.GetRequiredService<DbConnectionFactory>().DatabaseId, "an identity re-key"))
+        {
+            other.Should().NotBeNull();
+            var refused = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
+            refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            (await refused.Content.ReadAsStringAsync()).Should().Contain("an identity re-key");
+        }
+
+        (await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password })).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task AnAcceptIsRefusedWith409BeforeItIsAnswered_WhileAnOfflineReKeyOrAnotherKeyOperationHoldsTheLock()
+    {
+        // /accept answered 202 and then failed in the background, so the refusal only showed up as a Failed step in /progress.
+        var propose = await _client.PostAsJsonAsync("/api/dek-rotation/propose", new { masterPassword = Password });
+        propose.StatusCode.Should().Be(HttpStatusCode.OK);
+        var commitEventId = (await propose.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("commitEventId").GetGuid().ToString();
+        var dataPath = _factory.Services.GetRequiredService<BeeMemoryBank.Api.Services.SnapshotService>().DataPath;
+
+        using (var rekey = BeeMemoryBank.AppPaths.RekeyLock.TryAcquire(dataPath))
+        {
+            rekey.Should().NotBeNull();
+            var refused = await _client.PostAsJsonAsync("/api/dek-rotation/accept", new { commitEventId, masterPassword = Password });
+            refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            (await refused.Content.ReadAsStringAsync()).Should().Contain("offline re-key");
+        }
+
+        using (var other = KeyOperationLock.TryEnter(_factory.Services.GetRequiredService<DbConnectionFactory>().DatabaseId, "an identity re-key"))
+        {
+            other.Should().NotBeNull();
+            var refused = await _client.PostAsJsonAsync("/api/dek-rotation/accept", new { commitEventId, masterPassword = Password });
+            refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            (await refused.Content.ReadAsStringAsync()).Should().Contain("an identity re-key");
+        }
+
+        var progress = await (await _client.GetAsync("/api/dek-rotation/progress")).Content.ReadAsStringAsync();
+        progress.Should().NotContain("cannot start now", "a refusal answered at once leaves no failed run behind");
     }
 
     [Fact]

@@ -236,7 +236,7 @@ public sealed class BlindJoinTests : IAsyncLifetime
         (await _local.GetAsync("/api/blind/pair-code")).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
-    // ── an answer that is lost (R4-01), on a real full node ────────────────
+    // ── an answer that is lost, on a real full node ────────────────
 
     [Fact]
     public async Task R4_01_an_answer_that_was_lost_leaves_a_redemption_the_owner_can_confirm_and_the_node_can_complete()

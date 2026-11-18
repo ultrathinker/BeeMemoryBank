@@ -1,0 +1,1283 @@
+<?xml version='1.0' encoding='utf-8'?>
+<root xmlns:ns1="urn:schemas-microsoft-com:xml-msdata" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:schema id="root">
+    <xs:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xs:element name="root" ns1:IsDataSet="true">
+      <xs:complexType>
+        <xs:choice maxOccurs="unbounded">
+          <xs:element name="metadata">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="value" type="xsd:string" minOccurs="0" />
+              </xs:sequence>
+              <xs:attribute name="name" use="required" type="xsd:string" />
+              <xs:attribute name="type" type="xsd:string" />
+              <xs:attribute name="mimetype" type="xsd:string" />
+              <xs:attribute ref="xml:space" />
+            </xs:complexType>
+          </xs:element>
+          <xs:element name="assembly">
+            <xs:complexType>
+              <xs:attribute name="alias" type="xsd:string" />
+              <xs:attribute name="name" type="xsd:string" />
+            </xs:complexType>
+          </xs:element>
+          <xs:element name="data">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="value" type="xsd:string" minOccurs="0" ns1:Ordinal="1" />
+                <xs:element name="comment" type="xsd:string" minOccurs="0" ns1:Ordinal="2" />
+              </xs:sequence>
+              <xs:attribute name="name" type="xsd:string" use="required" ns1:Ordinal="1" />
+              <xs:attribute name="type" type="xsd:string" ns1:Ordinal="3" />
+              <xs:attribute name="mimetype" type="xsd:string" ns1:Ordinal="4" />
+              <xs:attribute ref="xml:space" />
+            </xs:complexType>
+          </xs:element>
+          <xs:element name="resheader">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="value" type="xsd:string" minOccurs="0" ns1:Ordinal="1" />
+              </xs:sequence>
+              <xs:attribute name="name" type="xsd:string" use="required" />
+            </xs:complexType>
+          </xs:element>
+        </xs:choice>
+      </xs:complexType>
+    </xs:element>
+  </xs:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="AppTitle" xml:space="preserve">
+    <value>BeeMemoryBank</value>
+  </data>
+  <data name="TabTree" xml:space="preserve">
+    <value>Дерево</value>
+  </data>
+  <data name="TabSearch" xml:space="preserve">
+    <value>Поиск</value>
+  </data>
+  <data name="TabSync" xml:space="preserve">
+    <value>Синхронизация</value>
+  </data>
+  <data name="TabSettings" xml:space="preserve">
+    <value>Настройки</value>
+  </data>
+  <data name="SyncBadgeSynced" xml:space="preserve">
+    <value>Готово</value>
+  </data>
+  <data name="SyncBadgeSyncing" xml:space="preserve">
+    <value>Синхронизация…</value>
+  </data>
+  <data name="SyncBadgeOffline" xml:space="preserve">
+    <value>Нет сети</value>
+  </data>
+  <data name="SyncBadgeError" xml:space="preserve">
+    <value>Ошибка</value>
+  </data>
+  <data name="SyncBadgeAccessibility" xml:space="preserve">
+    <value>Статус синхронизации: {0}</value>
+  </data>
+  <data name="Ok" xml:space="preserve">
+    <value>ОК</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Отмена</value>
+  </data>
+  <data name="Save" xml:space="preserve">
+    <value>Сохранить</value>
+  </data>
+  <data name="Delete" xml:space="preserve">
+    <value>Удалить</value>
+  </data>
+  <data name="Back" xml:space="preserve">
+    <value>Назад</value>
+  </data>
+  <data name="Retry" xml:space="preserve">
+    <value>Повторить</value>
+  </data>
+  <data name="Close" xml:space="preserve">
+    <value>Закрыть</value>
+  </data>
+  <data name="Create" xml:space="preserve">
+    <value>Создать</value>
+  </data>
+  <data name="Edit" xml:space="preserve">
+    <value>Изменить</value>
+  </data>
+  <data name="Rename" xml:space="preserve">
+    <value>Переименовать</value>
+  </data>
+  <data name="Move" xml:space="preserve">
+    <value>Переместить</value>
+  </data>
+  <data name="Unlock" xml:space="preserve">
+    <value>Разблокировать</value>
+  </data>
+  <data name="LockNow" xml:space="preserve">
+    <value>Заблокировать сейчас</value>
+  </data>
+  <data name="ShowPassword" xml:space="preserve">
+    <value>Показать пароль</value>
+  </data>
+  <data name="HidePassword" xml:space="preserve">
+    <value>Скрыть пароль</value>
+  </data>
+  <data name="ShowAllTags" xml:space="preserve">
+    <value>Показать все теги</value>
+  </data>
+  <data name="Appearance" xml:space="preserve">
+    <value>Оформление</value>
+  </data>
+  <data name="ThemeSystem" xml:space="preserve">
+    <value>Система</value>
+  </data>
+  <data name="ThemeDark" xml:space="preserve">
+    <value>Тёмная</value>
+  </data>
+  <data name="ThemeLight" xml:space="preserve">
+    <value>Светлая</value>
+  </data>
+  <data name="NewFolder" xml:space="preserve">
+    <value>Новая папка</value>
+  </data>
+  <data name="NewArticle" xml:space="preserve">
+    <value>Новая статья</value>
+  </data>
+  <data name="FolderNameLabel" xml:space="preserve">
+    <value>Название папки</value>
+  </data>
+  <data name="FolderNamePlaceholder" xml:space="preserve">
+    <value>Например: Заметки</value>
+  </data>
+  <data name="NewFolderParentRoot" xml:space="preserve">
+    <value>Будет создана в корневом разделе</value>
+  </data>
+  <data name="NewFolderParentFormat" xml:space="preserve">
+    <value>Внутри папки «{0}»</value>
+  </data>
+  <data name="SettingsTrash" xml:space="preserve">
+    <value>Корзина</value>
+  </data>
+  <data name="ErrorTitle" xml:space="preserve">
+    <value>Ошибка</value>
+  </data>
+  <data name="TreeRoot" xml:space="preserve">
+    <value>Корень</value>
+  </data>
+  <data name="TreeEmptyTitle" xml:space="preserve">
+    <value>Папка пуста</value>
+  </data>
+  <data name="TreeEmptyDesc" xml:space="preserve">
+    <value>Создайте новую статью или вложенную папку в этом разделе.</value>
+  </data>
+  <data name="FolderActions" xml:space="preserve">
+    <value>Действия с папкой</value>
+  </data>
+  <data name="ArticleActions" xml:space="preserve">
+    <value>Действия со статьёй</value>
+  </data>
+  <data name="TitleLabel" xml:space="preserve">
+    <value>Название статьи</value>
+  </data>
+  <data name="TitlePlaceholder" xml:space="preserve">
+    <value>Например: План поездки</value>
+  </data>
+  <data name="FolderLabel" xml:space="preserve">
+    <value>Папка</value>
+  </data>
+  <data name="EditorBodyPlaceholder" xml:space="preserve">
+    <value>## Заголовок
+
+Текст заметки…</value>
+  </data>
+  <data name="SaveArticle" xml:space="preserve">
+    <value>Сохранить статью</value>
+  </data>
+  <data name="SearchPlaceholder" xml:space="preserve">
+    <value>Найти статью…</value>
+  </data>
+  <data name="SearchInText" xml:space="preserve">
+    <value>Искать и в тексте статей</value>
+  </data>
+  <data name="NothingFoundTitle" xml:space="preserve">
+    <value>Ничего не найдено</value>
+  </data>
+  <data name="NothingFoundDesc" xml:space="preserve">
+    <value>Попробуйте другой запрос или выберите другой тег.</value>
+  </data>
+  <data name="ItemCountOne" xml:space="preserve">
+    <value>{0} элемент</value>
+  </data>
+  <data name="ItemCountFew" xml:space="preserve">
+    <value>{0} элемента</value>
+  </data>
+  <data name="ItemCountMany" xml:space="preserve">
+    <value>{0} элементов</value>
+  </data>
+  <data name="ItemCountOther" xml:space="preserve">
+    <value>{0} items</value>
+  </data>
+  <data name="ProtectedTitle" xml:space="preserve">
+    <value>Статья защищена паролем</value>
+  </data>
+  <data name="ArticlePasswordLabel" xml:space="preserve">
+    <value>Пароль статьи</value>
+  </data>
+  <data name="EnterArticlePassword" xml:space="preserve">
+    <value>Введите пароль статьи</value>
+  </data>
+  <data name="OpenArticle" xml:space="preserve">
+    <value>Открыть статью</value>
+  </data>
+  <data name="NewArticleTitle" xml:space="preserve">
+    <value>Новая статья</value>
+  </data>
+  <data name="EditArticleTitle" xml:space="preserve">
+    <value>Изменение статьи</value>
+  </data>
+  <data name="TrashEmptyTitle" xml:space="preserve">
+    <value>Корзина пуста</value>
+  </data>
+  <data name="TrashEmptyDesc" xml:space="preserve">
+    <value>Удалённые статьи будут попадать сюда, чтобы их можно было восстановить.</value>
+  </data>
+  <data name="TrashRestore" xml:space="preserve">
+    <value>Восстановить</value>
+  </data>
+  <data name="DeleteArticleTitle" xml:space="preserve">
+    <value>Удалить статью?</value>
+  </data>
+  <data name="DeleteArticleDesc" xml:space="preserve">
+    <value>Статья будет удалена на всех ваших устройствах. Её можно восстановить из корзины.</value>
+  </data>
+  <data name="UnsavedTitle" xml:space="preserve">
+    <value>Сохранить изменения?</value>
+  </data>
+  <data name="UnsavedDesc" xml:space="preserve">
+    <value>В статье есть несохранённые правки.</value>
+  </data>
+  <data name="DontSave" xml:space="preserve">
+    <value>Не сохранять</value>
+  </data>
+  <data name="TitleRequired" xml:space="preserve">
+    <value>Введите название статьи.</value>
+  </data>
+  <data name="ArticleNotFound" xml:space="preserve">
+    <value>Статья не найдена.</value>
+  </data>
+  <data name="WrongArticlePassword" xml:space="preserve">
+    <value>Неверный пароль статьи.</value>
+  </data>
+  <data name="ProtectedHintFormat" xml:space="preserve">
+    <value>Подсказка: {0}</value>
+  </data>
+  <data name="LockPill" xml:space="preserve">
+    <value>Пароль</value>
+  </data>
+  <data name="SyncNow" xml:space="preserve">
+    <value>Синхронизировать сейчас</value>
+  </data>
+  <data name="SearchHintDesc" xml:space="preserve">
+    <value>Названия, папки и, с включённым переключателем, текст статей. Поиск по смыслу выполняется на ваших компьютерах.</value>
+  </data>
+  <data name="TrashDesc" xml:space="preserve">
+    <value>Статьи, удалённые на любом из ваших устройств. Восстановление создаёт копию с именем [RESTORED] на верхнем уровне; очистка корзины выполняется на компьютере.</value>
+  </data>
+  <data name="RestoredTitle" xml:space="preserve">
+    <value>Восстановлено</value>
+  </data>
+  <data name="RestoredFormat" xml:space="preserve">
+    <value>«[RESTORED] {0}» — в начале ваших статей.</value>
+  </data>
+  <data name="OpenLinkTitle" xml:space="preserve">
+    <value>Открыть ссылку</value>
+  </data>
+  <data name="OpenLinkAction" xml:space="preserve">
+    <value>Открыть</value>
+  </data>
+  <data name="NoteNotFound" xml:space="preserve">
+    <value>Статьи больше нет (она удалена здесь или на другом устройстве).</value>
+  </data>
+  <data name="NoteOpenError" xml:space="preserve">
+    <value>Не удалось открыть статью: {0}</value>
+  </data>
+  <data name="FolderReadError" xml:space="preserve">
+    <value>Не удалось прочитать папку: {0}</value>
+  </data>
+  <data name="DateToday" xml:space="preserve">
+    <value>сегодня</value>
+  </data>
+  <data name="DateYesterday" xml:space="preserve">
+    <value>вчера</value>
+  </data>
+  <data name="SettingsSignIn" xml:space="preserve">
+    <value>Вход</value>
+  </data>
+  <data name="SettingsFingerprint" xml:space="preserve">
+    <value>Вход по отпечатку</value>
+  </data>
+  <data name="SettingsFingerprintDesc" xml:space="preserve">
+    <value>Открывать приложение по биометрии телефона</value>
+  </data>
+  <data name="SettingsLock" xml:space="preserve">
+    <value>Блокировка</value>
+  </data>
+  <data name="SettingsLockOnLeave" xml:space="preserve">
+    <value>Блокировать, когда я ухожу из приложения</value>
+  </data>
+  <data name="SettingsLockIdle" xml:space="preserve">
+    <value>Блокировать при бездействии</value>
+  </data>
+  <data name="SettingsRecovery" xml:space="preserve">
+    <value>Восстановление</value>
+  </data>
+  <data name="SettingsRecoveryDesc" xml:space="preserve">
+    <value>Ключ позволяет задать новый мастер-пароль, если вы забудете текущий.</value>
+  </data>
+  <data name="SettingsNewRecovery" xml:space="preserve">
+    <value>Создать новый ключ восстановления</value>
+  </data>
+  <data name="SettingsStorage" xml:space="preserve">
+    <value>Хранилище на телефоне</value>
+  </data>
+  <data name="SettingsEncryptedPill" xml:space="preserve">
+    <value>Вся база зашифрована</value>
+  </data>
+  <data name="SettingsNotEncryptedPill" xml:space="preserve">
+    <value>Шифрование всей базы — выключено</value>
+  </data>
+  <data name="SettingsEncryptedDesc" xml:space="preserve">
+    <value>Файл локальной базы на телефоне зашифрован целиком, включая названия, папки и теги.</value>
+  </data>
+  <data name="SettingsNotEncryptedDesc" xml:space="preserve">
+    <value>Статьи и так хранятся зашифрованными. Это действие шифрует файл базы целиком: названия, папки и теги тоже.</value>
+  </data>
+  <data name="EncryptDatabaseButton" xml:space="preserve">
+    <value>Зашифровать базу на этом телефоне</value>
+  </data>
+  <data name="SettingsOpen" xml:space="preserve">
+    <value>Открыть</value>
+  </data>
+  <data name="SettingsAbout" xml:space="preserve">
+    <value>Об устройстве</value>
+  </data>
+  <data name="SettingsDeviceName" xml:space="preserve">
+    <value>Имя устройства</value>
+  </data>
+  <data name="SettingsDeviceId" xml:space="preserve">
+    <value>Идентификатор</value>
+  </data>
+  <data name="SettingsAppVersion" xml:space="preserve">
+    <value>Версия приложения</value>
+  </data>
+  <data name="LockIdle1" xml:space="preserve">
+    <value>Через 1 минуту</value>
+  </data>
+  <data name="LockIdle5" xml:space="preserve">
+    <value>Через 5 минут</value>
+  </data>
+  <data name="LockIdle15" xml:space="preserve">
+    <value>Через 15 минут</value>
+  </data>
+  <data name="LockIdleNever" xml:space="preserve">
+    <value>Не блокировать</value>
+  </data>
+  <data name="SyncStateCard" xml:space="preserve">
+    <value>Состояние</value>
+  </data>
+  <data name="SyncLastSync" xml:space="preserve">
+    <value>Последняя синхронизация</value>
+  </data>
+  <data name="SyncDevicesCard" xml:space="preserve">
+    <value>Устройства</value>
+  </data>
+  <data name="SyncNoDevices" xml:space="preserve">
+    <value>Нет добавленных устройств.</value>
+  </data>
+  <data name="SyncThisDevice" xml:space="preserve">
+    <value>Это устройство</value>
+  </data>
+  <data name="SyncDeviceIdLabel" xml:space="preserve">
+    <value>Идентификатор</value>
+  </data>
+  <data name="SyncOfflineTitle" xml:space="preserve">
+    <value>Нет сети</value>
+  </data>
+  <data name="SyncOfflineDesc" xml:space="preserve">
+    <value>Изменения сохраняются на телефоне и отправятся, когда появится связь.</value>
+  </data>
+  <data name="SyncErrorTitle" xml:space="preserve">
+    <value>Ошибка синхронизации</value>
+  </data>
+  <data name="RecoveryCopy" xml:space="preserve">
+    <value>Скопировать</value>
+  </data>
+  <data name="RecoverySavedCheck" xml:space="preserve">
+    <value>Я сохранил новый ключ в надёжном месте</value>
+  </data>
+  <data name="RecoveryContinue" xml:space="preserve">
+    <value>Продолжить</value>
+  </data>
+  <data name="RecoveryDone" xml:space="preserve">
+    <value>Готово</value>
+  </data>
+  <data name="EncryptPageTitle" xml:space="preserve">
+    <value>Шифрование всей базы на телефоне</value>
+  </data>
+  <data name="EncryptShortTitle" xml:space="preserve">
+    <value>Шифрование</value>
+  </data>
+  <data name="EncryptPageDesc" xml:space="preserve">
+    <value>Статьи и так хранятся зашифрованными. Это действие шифрует файл базы целиком: названия, папки и теги тоже будут скрыты на памяти телефона.</value>
+  </data>
+  <data name="EncryptWarningTitle" xml:space="preserve">
+    <value>Не закрывайте приложение</value>
+  </data>
+  <data name="EncryptWarningDesc" xml:space="preserve">
+    <value>Шифрование всей базы займёт время. Во время процесса нельзя закрывать приложение или перезагружать телефон.</value>
+  </data>
+  <data name="EncryptOnlyCopy" xml:space="preserve">
+    <value>Этот телефон хранит единственную копию заметок; шифрование нельзя отменить</value>
+  </data>
+  <data name="EncryptConfirm" xml:space="preserve">
+    <value>Зашифровать</value>
+  </data>
+  <data name="MasterPasswordPlaceholder" xml:space="preserve">
+    <value>Введите мастер-пароль</value>
+  </data>
+  <data name="SyncAddAddress" xml:space="preserve">
+    <value>+ Добавить адрес</value>
+  </data>
+  <data name="Remove" xml:space="preserve">
+    <value>Снять</value>
+  </data>
+  <data name="LockGrace0" xml:space="preserve">
+    <value>Сразу</value>
+  </data>
+  <data name="LockGrace1" xml:space="preserve">
+    <value>Через 1 минуту</value>
+  </data>
+  <data name="LockGrace5" xml:space="preserve">
+    <value>Через 5 минут</value>
+  </data>
+  <data name="LockIdle2" xml:space="preserve">
+    <value>Через 2 минуты</value>
+  </data>
+  <data name="SyncNotYet" xml:space="preserve">
+    <value>Ещё не было с момента открытия приложения.</value>
+  </data>
+  <data name="SyncRoundFormat" xml:space="preserve">
+    <value>{0} доступно, {1} с ошибкой, {2} изменений получено</value>
+  </data>
+  <data name="SyncNotesLabel" xml:space="preserve">
+    <value>Заметок на этом iPhone</value>
+  </data>
+  <data name="SyncIosNote" xml:space="preserve">
+    <value>Этот iPhone сам вызывает ваши другие устройства, пока приложение открыто: после каждого изменения, раз в минуту и ещё раз при выходе из приложения. Пока приложение открыто, он также ищет ваши компьютеры в этой сети Wi-Fi, чтобы синхронизироваться с ними напрямую. Входящих вызовов он не ждёт: iOS останавливает приложения в фоне.</value>
+  </data>
+  <data name="SyncLanOffTitle" xml:space="preserve">
+    <value>Локальная сеть выключена</value>
+  </data>
+  <data name="PeerWaysTitle" xml:space="preserve">
+    <value>Способы связи</value>
+  </data>
+  <data name="PeerNoChannels" xml:space="preserve">
+    <value>У этого iPhone пока нет адреса этого устройства.</value>
+  </data>
+  <data name="PeerDesc" xml:space="preserve">
+    <value>Этот iPhone перебирает адреса по очереди и продолжает использовать тот, который сработал. Он не принимает адрес только потому, что тот ответил: устройство там должно быть именно этим, с его ключом.</value>
+  </data>
+  <data name="PeerOnlyIphone" xml:space="preserve">
+    <value>Введён только на этом iPhone: другие устройства его не знают.</value>
+  </data>
+  <data name="PeerAddTitle" xml:space="preserve">
+    <value>Добавить адрес</value>
+  </data>
+  <data name="PeerAddDesc" xml:space="preserve">
+    <value>IP-адрес, имя или веб-адрес устройства {0}. https:// и порт {1} подставляются, если не указаны.</value>
+  </data>
+  <data name="PeerCheck" xml:space="preserve">
+    <value>Проверить</value>
+  </data>
+  <data name="PeerNothingTitle" xml:space="preserve">
+    <value>Нечем подтвердить</value>
+  </data>
+  <data name="PeerNothingDesc" xml:space="preserve">
+    <value>Сохранить адрес всё равно? Используйте его, если устройство сейчас выключено или в другой сети.</value>
+  </data>
+  <data name="PeerSaveAnyway" xml:space="preserve">
+    <value>Сохранить всё равно</value>
+  </data>
+  <data name="PeerNotSaved" xml:space="preserve">
+    <value>Не сохранено</value>
+  </data>
+  <data name="PeerRemoveTitle" xml:space="preserve">
+    <value>Убрать адрес</value>
+  </data>
+  <data name="PeerRemoveDesc" xml:space="preserve">
+    <value>Перестать использовать этот адрес для {0}? Другие устройства сохранят свои.</value>
+  </data>
+  <data name="PeerNotOne" xml:space="preserve">
+    <value>Не входит в устройства, с которыми синхронизируется этот iPhone.</value>
+  </data>
+  <data name="PeerReadError" xml:space="preserve">
+    <value>Не удалось прочитать адреса: {0}</value>
+  </data>
+  <data name="RecoveryShowTitle" xml:space="preserve">
+    <value>Запишите ключ восстановления</value>
+  </data>
+  <data name="RecoveryShowDesc" xml:space="preserve">
+    <value>Это единственный способ вернуться, если вы забудете мастер-пароль. Ключ показывается сейчас и больше никогда: приложение его не хранит.</value>
+  </data>
+  <data name="RecoveryCopyWarn" xml:space="preserve">
+    <value>Копия остаётся только на этом iPhone и исчезает из буфера обмена через две минуты. Храните ключ на бумаге или в менеджере паролей, вдали от телефона.</value>
+  </data>
+  <data name="RecoveryCopied" xml:space="preserve">
+    <value>Скопировано на две минуты</value>
+  </data>
+  <data name="EncryptStatusOn" xml:space="preserve">
+    <value>База этого iPhone зашифрована. Она закрывается при каждом уходе приложения в фон, и открывает её мастер-пароль (или Face ID).</value>
+  </data>
+  <data name="EncryptStatusOff" xml:space="preserve">
+    <value>Зашифруйте заметки на этом iPhone, чтобы копия его памяти ничего не показывала. Путь назад — удалить хранилище здесь и присоединиться заново с другого устройства.</value>
+  </data>
+  <data name="EncryptKeepOpen" xml:space="preserve">
+    <value>Не закрывайте приложение и держите iPhone подключённым к зарядке, пока база шифруется. Если прервать процесс, приложение завершит или откатит его при следующем запуске.</value>
+  </data>
+  <data name="EncryptWrongPassword" xml:space="preserve">
+    <value>Мастер-пароль неверен.</value>
+  </data>
+  <data name="EncryptFailed" xml:space="preserve">
+    <value>Шифрование не удалось; iPhone не изменён.</value>
+  </data>
+  <data name="SettingsFingerprintName" xml:space="preserve">
+    <value>Разблокировка по {0}</value>
+  </data>
+  <data name="SettingsFingerprintOff" xml:space="preserve">
+    <value>{0} не настроен на этом iPhone.</value>
+  </data>
+  <data name="SettingsNewRecoveryConfirm" xml:space="preserve">
+    <value>Создать новый ключ восстановления? Он показывается один раз.</value>
+  </data>
+  <data name="SettingsNewRecoveryAction" xml:space="preserve">
+    <value>Создать</value>
+  </data>
+  <data name="SyncBusyMessage" xml:space="preserve">
+    <value>Подождите, пока этот iPhone синхронизируется. Не закрывайте приложение до завершения.</value>
+  </data>
+  <data name="MasterPasswordLabel" xml:space="preserve">
+    <value>Мастер-пароль</value>
+  </data>
+  <data name="EncryptBusyMessage" xml:space="preserve">
+    <value>Подождите. База перезаписывается; это может занять несколько минут. Экран остаётся включённым. Не закрывайте приложение.</value>
+  </data>
+  <data name="UnlockSubtitle" xml:space="preserve">
+    <value>Откройте хранилище</value>
+  </data>
+  <data name="UnlockButton" xml:space="preserve">
+    <value>Открыть хранилище</value>
+  </data>
+  <data name="UnlockPasswordPlaceholder" xml:space="preserve">
+    <value>Введите пароль</value>
+  </data>
+  <data name="UnlockEmpty" xml:space="preserve">
+    <value>Введите пароль.</value>
+  </data>
+  <data name="UnlockWrong" xml:space="preserve">
+    <value>Неверный пароль.</value>
+  </data>
+  <data name="UnlockOr" xml:space="preserve">
+    <value>или</value>
+  </data>
+  <data name="MasterHintPlaceholder" xml:space="preserve">
+    <value>Не должна содержать сам пароль</value>
+  </data>
+  <data name="WelcomeTitle" xml:space="preserve">
+    <value>Добро пожаловать</value>
+  </data>
+  <data name="WelcomeDesc" xml:space="preserve">
+    <value>Личная зашифрованная база знаний на вашем телефоне и других ваших устройствах.</value>
+  </data>
+  <data name="WelcomeConnect" xml:space="preserve">
+    <value>Подключиться к своему хранилищу</value>
+  </data>
+  <data name="ConnectTitle" xml:space="preserve">
+    <value>Подключение к хранилищу</value>
+  </data>
+  <data name="ConnectDeviceNameLabel" xml:space="preserve">
+    <value>Имя этого устройства</value>
+  </data>
+  <data name="ConnectDeviceNamePlaceholder" xml:space="preserve">
+    <value>Мой телефон</value>
+  </data>
+  <data name="ConnectAddrLabel" xml:space="preserve">
+    <value>Код подключения</value>
+  </data>
+  <data name="ConnectHintLabel" xml:space="preserve">
+    <value>Подсказка к паролю (обязательно)</value>
+  </data>
+  <data name="ConnectHintMeta" xml:space="preserve">
+    <value>Она не должна содержать сам пароль. Любой, кто может читать папку данных этого устройства, может прочитать подсказку, поэтому не пишите в ней ничего секретного.</value>
+  </data>
+  <data name="ConnectStart" xml:space="preserve">
+    <value>Подключиться</value>
+  </data>
+  <data name="WelcomeCreate" xml:space="preserve">
+    <value>Создать новое хранилище</value>
+  </data>
+  <data name="WelcomeIosDesc" xml:space="preserve">
+    <value>Уже используете Bee Memory Bank на компьютере? Подключитесь к нему кодом из «Подключить устройство». Начинаете с нуля? Создайте новое хранилище на этом iPhone; компьютеры можно подключить позже.</value>
+  </data>
+  <data name="CreateTitle" xml:space="preserve">
+    <value>Новое хранилище</value>
+  </data>
+  <data name="CreateRepeatPlaceholder" xml:space="preserve">
+    <value>То же самое ещё раз</value>
+  </data>
+  <data name="CreatePasswordMeta" xml:space="preserve">
+    <value>Не менее 8 символов, с заглавной буквой, строчной буквой и цифрой. Он открывает ваше хранилище на каждом устройстве и нигде не хранится: никто не сможет сбросить его за вас. Дальше вы получите ключ восстановления — на случай, если забудете пароль.</value>
+  </data>
+  <data name="CreateBusyTitle" xml:space="preserve">
+    <value>Создаём ваше хранилище</value>
+  </data>
+  <data name="CreateBusyMessage" xml:space="preserve">
+    <value>Подождите. Ключ намеренно медленно выводится из пароля; это занимает несколько секунд.</value>
+  </data>
+  <data name="JoinCodeMeta" xml:space="preserve">
+    <value>Код показывает Bee Memory Bank на компьютере: «Администрирование» → «Подключить устройство». Нажмите «Сканировать QR-код» и наведите камеру на экран компьютера — код подставится сам.
+
+Вместо кода можно ввести https-адрес своего сервера.
+
+Мастер-пароль уходит только тому компьютеру, который показал код.</value>
+  </data>
+  <data name="JoinPasswordMeta" xml:space="preserve">
+    <value>Главный пароль с компьютера, к которому вы подключаетесь.</value>
+  </data>
+  <data name="JoinPaste" xml:space="preserve">
+    <value>Вставить</value>
+  </data>
+  <data name="JoinBusyTitle" xml:space="preserve">
+    <value>Подключаем ваше хранилище</value>
+  </data>
+  <data name="JoinBusyMessage" xml:space="preserve">
+    <value>Подождите. Хранилище скачивается целиком; на медленном соединении это может занять несколько минут.</value>
+  </data>
+  <data name="JoinStep1" xml:space="preserve">
+    <value>Связываемся с компьютером…</value>
+  </data>
+  <data name="JoinStep2" xml:space="preserve">
+    <value>Проверяем мастер-пароль…</value>
+  </data>
+  <data name="JoinStep3" xml:space="preserve">
+    <value>Обмениваемся ключами…</value>
+  </data>
+  <data name="JoinStep4" xml:space="preserve">
+    <value>Скачиваем ваше хранилище…</value>
+  </data>
+  <data name="JoinStep5" xml:space="preserve">
+    <value>Импортируем заметки…</value>
+  </data>
+  <data name="JoinStep6" xml:space="preserve">
+    <value>Почти готово…</value>
+  </data>
+  <data name="UnlockQuickFormat" xml:space="preserve">
+    <value>Войти по {0}</value>
+  </data>
+  <data name="UnlockQuickOff" xml:space="preserve">
+    <value>{0} был выключен для этого хранилища (его ключ изменился). Откройте хранилище мастер-паролем; включить снова можно в настройках.</value>
+  </data>
+  <data name="UnlockHintFormat" xml:space="preserve">
+    <value>Подсказка: {0}</value>
+  </data>
+  <data name="MoveTitle" xml:space="preserve">
+    <value>Переместить</value>
+  </data>
+  <data name="MoveRoot" xml:space="preserve">
+    <value>/ (Корень)</value>
+  </data>
+  <data name="RenameTitle" xml:space="preserve">
+    <value>Переименовать</value>
+  </data>
+  <data name="NewNameLabel" xml:space="preserve">
+    <value>Новое название</value>
+  </data>
+  <data name="DeleteFolderTitle" xml:space="preserve">
+    <value>Удалить папку?</value>
+  </data>
+  <data name="DeleteFolderDesc" xml:space="preserve">
+    <value>Папка и её подпапки будут удалены на всех ваших устройствах. Статьи внутри будут перемещены в корень.</value>
+  </data>
+  <data name="AllTags" xml:space="preserve">
+    <value>Все теги</value>
+  </data>
+  <data name="TagList" xml:space="preserve">
+    <value>Список тегов</value>
+  </data>
+  <data name="CommentsFormat" xml:space="preserve">
+    <value>Комментарии ({0})</value>
+  </data>
+  <data name="NoComments" xml:space="preserve">
+    <value>Комментариев пока нет.</value>
+  </data>
+  <data name="AddCommentPlaceholder" xml:space="preserve">
+    <value>Добавить комментарий…</value>
+  </data>
+  <data name="Send" xml:space="preserve">
+    <value>Отправить</value>
+  </data>
+  <data name="DeleteCommentTitle" xml:space="preserve">
+    <value>Удалить комментарий?</value>
+  </data>
+  <data name="DeleteCommentDesc" xml:space="preserve">
+    <value>Удалить этот комментарий?</value>
+  </data>
+  <data name="TagsLabel" xml:space="preserve">
+    <value>Теги</value>
+  </data>
+  <data name="AddTag" xml:space="preserve">
+    <value>Добавить</value>
+  </data>
+  <data name="ChooseFolder" xml:space="preserve">
+    <value>Выбрать папку</value>
+  </data>
+  <data name="NewFolderExample" xml:space="preserve">
+    <value>например: МояПапка</value>
+  </data>
+  <data name="CommentDecryptError" xml:space="preserve">
+    <value>[не удалось расшифровать комментарий]</value>
+  </data>
+  <data name="SearchTagsPlaceholder" xml:space="preserve">
+    <value>Поиск тегов…</value>
+  </data>
+  <data name="DeleteTagTitle" xml:space="preserve">
+    <value>Удалить тег</value>
+  </data>
+  <data name="DeleteTagDescFormat" xml:space="preserve">
+    <value>Удалить тег «{0}» из всех статей?</value>
+  </data>
+  <data name="TagsCountFormat" xml:space="preserve">
+    <value>Теги ({0})</value>
+  </data>
+  <data name="SelectedFolderFormat" xml:space="preserve">
+    <value>Выбранная папка: {0}</value>
+  </data>
+  <data name="SearchFoldersPlaceholder" xml:space="preserve">
+    <value>Поиск папок…</value>
+  </data>
+  <data name="SelectFolder" xml:space="preserve">
+    <value>Выбрать</value>
+  </data>
+  <data name="MergeTag" xml:space="preserve">
+    <value>Объединить</value>
+  </data>
+  <data name="MergeTagTitle" xml:space="preserve">
+    <value>Объединить тег</value>
+  </data>
+  <data name="MergeTagLabel" xml:space="preserve">
+    <value>В тег</value>
+  </data>
+  <data name="AddTagPlaceholder" xml:space="preserve">
+    <value>Название тега</value>
+  </data>
+  <data name="RelatedTitle" xml:space="preserve">
+    <value>Похожие статьи</value>
+  </data>
+  <data name="ShowMore" xml:space="preserve">
+    <value>Показать ещё</value>
+  </data>
+  <data name="ShowAll" xml:space="preserve">
+    <value>Показать все</value>
+  </data>
+  <data name="ShowLess" xml:space="preserve">
+    <value>Показать меньше</value>
+  </data>
+  <data name="ShowRaw" xml:space="preserve">
+    <value>Показать исходный текст</value>
+  </data>
+  <data name="ShowRendered" xml:space="preserve">
+    <value>Показать красиво</value>
+  </data>
+  <data name="SetPassword" xml:space="preserve">
+    <value>Поставить пароль</value>
+  </data>
+  <data name="RemovePassword" xml:space="preserve">
+    <value>Снять пароль</value>
+  </data>
+  <data name="RemovePasswordTitle" xml:space="preserve">
+    <value>Снять пароль</value>
+  </data>
+  <data name="RemovePasswordDesc" xml:space="preserve">
+    <value>Введите пароль статьи, чтобы снять защиту. Статья станет доступна без пароля.</value>
+  </data>
+  <data name="WrongPasswordTitle" xml:space="preserve">
+    <value>Неверный пароль</value>
+  </data>
+  <data name="WrongPasswordDesc" xml:space="preserve">
+    <value>Пароль неверный.</value>
+  </data>
+  <data name="ImageUnavailableFormat" xml:space="preserve">
+    <value>[Изображение недоступно: {0}]</value>
+  </data>
+  <data name="ModeText" xml:space="preserve">
+    <value>Текст</value>
+  </data>
+  <data name="ModePreview" xml:space="preserve">
+    <value>Просмотр</value>
+  </data>
+  <data name="EmptyNotePreview" xml:space="preserve">
+    <value>Пустая заметка.</value>
+  </data>
+  <data name="SnippetHeading" xml:space="preserve">
+    <value>
+## Заголовок
+</value>
+  </data>
+  <data name="SnippetBold" xml:space="preserve">
+    <value>**выделенный текст**</value>
+  </data>
+  <data name="SnippetList" xml:space="preserve">
+    <value>
+- Пункт списка
+</value>
+  </data>
+  <data name="SnippetLink" xml:space="preserve">
+    <value>[название](https://example.com)</value>
+  </data>
+  <data name="ToolbarHeading" xml:space="preserve">
+    <value>Заголовок</value>
+  </data>
+  <data name="ToolbarBold" xml:space="preserve">
+    <value>Жирный</value>
+  </data>
+  <data name="ToolbarList" xml:space="preserve">
+    <value>Список</value>
+  </data>
+  <data name="ToolbarLink" xml:space="preserve">
+    <value>Ссылка</value>
+  </data>
+  <data name="ToolbarImage" xml:space="preserve">
+    <value>Картинка</value>
+  </data>
+  <data name="ArticlePasswordCardTitle" xml:space="preserve">
+    <value>Пароль для этой статьи</value>
+  </data>
+  <data name="ArticlePasswordCardMeta" xml:space="preserve">
+    <value>Открытие статьи только по отдельному паролю</value>
+  </data>
+  <data name="ArticlePasswordPlaceholder" xml:space="preserve">
+    <value>Введите пароль</value>
+  </data>
+  <data name="RepeatPasswordLabel" xml:space="preserve">
+    <value>Повтор пароля</value>
+  </data>
+  <data name="RepeatPasswordPlaceholder" xml:space="preserve">
+    <value>Повторите пароль</value>
+  </data>
+  <data name="HintLabel" xml:space="preserve">
+    <value>Подсказка</value>
+  </data>
+  <data name="HintPlaceholder" xml:space="preserve">
+    <value>Подсказка к паролю статьи</value>
+  </data>
+  <data name="PasswordWarning" xml:space="preserve">
+    <value>Если забыть пароль статьи, её нельзя будет открыть.</value>
+  </data>
+  <data name="PasswordTooShort" xml:space="preserve">
+    <value>Пароль должен быть не короче 4 символов.</value>
+  </data>
+  <data name="PasswordMismatch" xml:space="preserve">
+    <value>Пароль и повтор должны совпадать.</value>
+  </data>
+  <data name="UnlockFirst" xml:space="preserve">
+    <value>Сначала откройте статью паролем.</value>
+  </data>
+  <data name="ContentLabel" xml:space="preserve">
+    <value>Текст статьи</value>
+  </data>
+  <data name="ExpandAll" xml:space="preserve">
+    <value>Развернуть всё</value>
+  </data>
+  <data name="CollapseAll" xml:space="preserve">
+    <value>Свернуть всё</value>
+  </data>
+  <data name="Reset" xml:space="preserve">
+    <value>Сбросить</value>
+  </data>
+  <data name="Recent" xml:space="preserve">
+    <value>Недавние</value>
+  </data>
+  <data name="FoundFormat" xml:space="preserve">
+    <value>Найдено ({0})</value>
+  </data>
+  <data name="SettingsChangeMaster" xml:space="preserve">
+    <value>Сменить мастер-пароль</value>
+  </data>
+  <data name="PasswordChanged" xml:space="preserve">
+    <value>Мастер-пароль изменён</value>
+  </data>
+  <data name="ChangeMasterTitle" xml:space="preserve">
+    <value>Сменить мастер-пароль</value>
+  </data>
+  <data name="CurrentPasswordLabel" xml:space="preserve">
+    <value>Текущий пароль</value>
+  </data>
+  <data name="CurrentPasswordPlaceholder" xml:space="preserve">
+    <value>Введите текущий пароль</value>
+  </data>
+  <data name="NewPasswordLabel" xml:space="preserve">
+    <value>Новый пароль</value>
+  </data>
+  <data name="NewPasswordPlaceholder" xml:space="preserve">
+    <value>Минимум 8 символов</value>
+  </data>
+  <data name="RepeatNewPasswordLabel" xml:space="preserve">
+    <value>Повтор нового пароля</value>
+  </data>
+  <data name="RepeatNewPasswordPlaceholder" xml:space="preserve">
+    <value>Повторите новый пароль</value>
+  </data>
+  <data name="ChangeMasterErrorFill" xml:space="preserve">
+    <value>Заполните все поля.</value>
+  </data>
+  <data name="ChangeMasterErrorMismatch" xml:space="preserve">
+    <value>Новые пароли должны совпадать и быть не короче 8 символов.</value>
+  </data>
+  <data name="ChangeMasterErrorHint" xml:space="preserve">
+    <value>Укажите подсказку без самого пароля.</value>
+  </data>
+  <data name="ChangingPasswordTitle" xml:space="preserve">
+    <value>Смена пароля</value>
+  </data>
+  <data name="ChangingPasswordMessage" xml:space="preserve">
+    <value>Подождите. Новый пароль применяется к ключам этого телефона.</value>
+  </data>
+  <data name="IdCopied" xml:space="preserve">
+    <value>Идентификатор скопирован</value>
+  </data>
+  <data name="KeyCopied" xml:space="preserve">
+    <value>Ключ устройства скопирован</value>
+  </data>
+  <data name="SettingsDeviceKey" xml:space="preserve">
+    <value>Ключ устройства</value>
+  </data>
+  <data name="WipeTitle" xml:space="preserve">
+    <value>Удалить данные с этого телефона?</value>
+  </data>
+  <data name="WipeDesc" xml:space="preserve">
+    <value>Локальная копия хранилища и настройки на этом телефоне будут удалены. Данные на других ваших устройствах сохранятся.</value>
+  </data>
+  <data name="WipingTitle" xml:space="preserve">
+    <value>Удаление данных на этом телефоне</value>
+  </data>
+  <data name="WipingMessage" xml:space="preserve">
+    <value>Подождите. Локальные данные удаляются, и приложение перезапускается само.</value>
+  </data>
+  <data name="WipeFailedTitle" xml:space="preserve">
+    <value>Удаление не удалось</value>
+  </data>
+  <data name="WipeIncomplete" xml:space="preserve">
+    <value>Не все данные на этом телефоне удалось удалить. Закройте приложение и попробуйте снова.</value>
+  </data>
+  <data name="SettingsDangerZone" xml:space="preserve">
+    <value>Опасная зона</value>
+  </data>
+  <data name="SettingsWipe" xml:space="preserve">
+    <value>Удалить данные с этого телефона</value>
+  </data>
+  <data name="SlotsTitle" xml:space="preserve">
+    <value>Слоты паролей</value>
+  </data>
+  <data name="SlotsDesc" xml:space="preserve">
+    <value>Каждый слот — независимый пароль, который открывает те же данные.</value>
+  </data>
+  <data name="SlotMain" xml:space="preserve">
+    <value>Основной пароль</value>
+  </data>
+  <data name="SlotUser" xml:space="preserve">
+    <value>Пароль пользователя</value>
+  </data>
+  <data name="SlotDev" xml:space="preserve">
+    <value>Пароль разработчика</value>
+  </data>
+  <data name="SlotRecovery" xml:space="preserve">
+    <value>Ключ восстановления</value>
+  </data>
+  <data name="SlotCreatedFormat" xml:space="preserve">
+    <value>Создан {0}</value>
+  </data>
+  <data name="DeleteSlotTitle" xml:space="preserve">
+    <value>Удалить слот</value>
+  </data>
+  <data name="DeleteSlotDescFormat" xml:space="preserve">
+    <value>Убрать «{0}»? Этот пароль больше не будет работать.</value>
+  </data>
+  <data name="AddDevTitle" xml:space="preserve">
+    <value>Добавить пароль разработчика</value>
+  </data>
+  <data name="AddDevDesc" xml:space="preserve">
+    <value>Дополнительный пароль для тестирования. Можно удалить в любой момент.</value>
+  </data>
+  <data name="DevPasswordPlaceholder" xml:space="preserve">
+    <value>Новый пароль разработчика</value>
+  </data>
+  <data name="DevPasswordConfirmPlaceholder" xml:space="preserve">
+    <value>Повторите пароль разработчика</value>
+  </data>
+  <data name="DevPasswordEmpty" xml:space="preserve">
+    <value>Введите пароль разработчика.</value>
+  </data>
+  <data name="DevPasswordAdded" xml:space="preserve">
+    <value>Пароль разработчика добавлен.</value>
+  </data>
+  <data name="SyncInvisibleTitle" xml:space="preserve">
+    <value>Невидимый режим</value>
+  </data>
+  <data name="SyncInvisibleDesc" xml:space="preserve">
+    <value>Другие устройства вас не видят, синхронизация не идёт</value>
+  </data>
+  <data name="SyncStateInvisible" xml:space="preserve">
+    <value>Невидимый режим</value>
+  </data>
+  <data name="SyncEventsCard" xml:space="preserve">
+    <value>Последние события</value>
+  </data>
+  <data name="SyncNoEvents" xml:space="preserve">
+    <value>Нет последних событий.</value>
+  </data>
+  <data name="EventArticleCreated" xml:space="preserve">
+    <value>Статья создана</value>
+  </data>
+  <data name="EventArticleUpdated" xml:space="preserve">
+    <value>Статья обновлена</value>
+  </data>
+  <data name="EventArticleDeleted" xml:space="preserve">
+    <value>Статья удалена</value>
+  </data>
+  <data name="EventCommentAdded" xml:space="preserve">
+    <value>Комментарий добавлен</value>
+  </data>
+  <data name="EventCommentDeleted" xml:space="preserve">
+    <value>Комментарий удалён</value>
+  </data>
+  <data name="EventDeviceAdded" xml:space="preserve">
+    <value>Устройство добавлено</value>
+  </data>
+  <data name="EventDeviceRemoved" xml:space="preserve">
+    <value>Устройство убрано</value>
+  </data>
+  <data name="TimeJustNow" xml:space="preserve">
+    <value>только что</value>
+  </data>
+  <data name="TimeMinutesAgoFormat" xml:space="preserve">
+    <value>{0} мин назад</value>
+  </data>
+  <data name="TimeHoursAgoFormat" xml:space="preserve">
+    <value>{0} ч назад</value>
+  </data>
+  <data name="TimeDaysAgoFormat" xml:space="preserve">
+    <value>{0} дн назад</value>
+  </data>
+  <data name="DeviceRemoveDevice" xml:space="preserve">
+    <value>Убрать устройство</value>
+  </data>
+  <data name="RemoveDeviceDescFormat" xml:space="preserve">
+    <value>Убрать «{0}» из ваших устройств? Оно больше не будет синхронизироваться с этим телефоном.</value>
+  </data>
+  <data name="Copy" xml:space="preserve">
+    <value>Копировать</value>
+  </data>
+  <data name="JoinScanQr" xml:space="preserve">
+    <value>Сканировать QR-код</value>
+  </data>
+  <data name="JoinMore" xml:space="preserve">
+    <value>Подробнее</value>
+  </data>
+  <data name="JoinLess" xml:space="preserve">
+    <value>Скрыть</value>
+  </data>
+  <data name="ScanQrHelp" xml:space="preserve">
+    <value>Наведите камеру на QR-код на экране компьютера</value>
+  </data>
+  <data name="ScanQrDenied" xml:space="preserve">
+    <value>Нет доступа к камере. Разрешите его: Настройки → Bee Memory Bank → Камера.</value>
+  </data>
+  <data name="ScanQrNoCamera" xml:space="preserve">
+    <value>Камера недоступна.</value>
+  </data>
+  <data name="AutoEncryptTitle" xml:space="preserve">
+    <value>Шифруем базу на этом телефоне</value>
+  </data>
+  <data name="AutoEncryptMessage" xml:space="preserve">
+    <value>Это займёт несколько секунд. Не закрывайте приложение.</value>
+  </data>
+  <data name="AutoEncryptFailed" xml:space="preserve">
+    <value>Базу на телефоне не удалось зашифровать: {0}.</value>
+  </data>
+  <data name="AutoEncryptOldNetwork" xml:space="preserve">
+    <value>Базу на телефоне нельзя зашифровать: ваша сеть ещё работает в старом формате синхронизации. Обновите Bee Memory Bank на компьютере, включите там новый формат и подключите телефон заново.</value>
+  </data>
+  <data name="AutoEncryptFailedReason" xml:space="preserve">
+    <value>произошла непредвиденная ошибка; ваши заметки в безопасности, приложение продолжает работать</value>
+  </data>
+  <data name="OpenPrepareError" xml:space="preserve">
+    <value>Не удалось открыть хранилище на этом iPhone. Закройте приложение и попробуйте снова; если не поможет, восстановите папку данных из одного набора резервных копий.</value>
+  </data>
+  <data name="PickImageError" xml:space="preserve">
+    <value>Не удалось выбрать снимок. Проверьте, что Bee Memory Bank разрешён доступ к фототеке, и попробуйте снова.</value>
+  </data>
+  <data name="ReadListError" xml:space="preserve">
+    <value>Не удалось прочитать этот список. Закройте приложение и попробуйте снова.</value>
+  </data>
+  <data name="SyncUnreachableFormat" xml:space="preserve">
+    <value>Компьютер {0} пока недоступен.</value>
+  </data>
+  <data name="SyncUnreachableTitle" xml:space="preserve">
+    <value>Пока недоступен</value>
+  </data>
+  <data name="SyncBadgeUnreachable" xml:space="preserve">
+    <value>Недоступен</value>
+  </data>
+  <data name="SyncProblemWrongKey" xml:space="preserve">
+    <value>Компьютер ответил другим ключом, не тем, что этот телефон закрепил при подключении; ничего не отправлено.</value>
+  </data>
+  <data name="SyncProblemRefused" xml:space="preserve">
+    <value>Компьютер больше не принимает этот телефон (его убрали из сети?).</value>
+  </data>
+  <data name="SyncProblemBusy" xml:space="preserve">
+    <value>Компьютер занят или на обслуживании; следующий раунд.</value>
+  </data>
+  <data name="SyncProblemSnapshot" xml:space="preserve">
+    <value>Эта копия слишком отстала от компьютера, чтобы догнать синхронизацией; подключитесь заново.</value>
+  </data>
+  <data name="SyncProblemOther" xml:space="preserve">
+    <value>Попытка синхронизации не удалась.</value>
+  </data>
+  <data name="SyncReachDirectLan" xml:space="preserve">
+    <value>Напрямую, в этой сети</value>
+  </data>
+  <data name="SyncReachDirectInternet" xml:space="preserve">
+    <value>Напрямую, через интернет</value>
+  </data>
+  <data name="SyncReachAway" xml:space="preserve">
+    <value>Не в этой сети</value>
+  </data>
+  <data name="SyncReachOldVersion" xml:space="preserve">
+    <value>Для прямой синхронизации в этой сети нужно обновление на {0}</value>
+  </data>
+  <data name="SyncReachViaRelay" xml:space="preserve">
+    <value>Не в этой сети; его изменения приходят через другое устройство</value>
+  </data>
+  <data name="SyncLanOff" xml:space="preserve">
+    <value>Доступ к локальной сети для Bee Memory Bank выключен: прямая синхронизация с компьютерами не работает; синхронизация идёт через сервер. Чтобы включить, откройте Настройки &gt; Конфиденциальность и безопасность &gt; Локальная сеть и включите Bee Memory Bank.</value>
+  </data>
+  <data name="QuickUnlockQuestion" xml:space="preserve">
+    <value>Открывать хранилище через {0} вместо ввода мастер-пароля? Пароль не сохраняется.</value>
+  </data>
+  <data name="QuickUnlockUse" xml:space="preserve">
+    <value>Использовать {0}</value>
+  </data>
+  <data name="QuickUnlockNotNow" xml:space="preserve">
+    <value>Не сейчас</value>
+  </data>
+  <data name="SyncContactFormat" xml:space="preserve">
+    <value>Последний контакт: {0}</value>
+  </data>
+  <data name="SyncNoContact" xml:space="preserve">
+    <value>С момента открытия приложения контакта ещё не было</value>
+  </data>
+  <data name="SyncKeyPinned" xml:space="preserve">
+    <value>ключ закреплён</value>
+  </data>
+  <data name="PeerSourceManual" xml:space="preserve">
+    <value>Добавлен на этом iPhone</value>
+  </data>
+  <data name="PeerSourcePrimary" xml:space="preserve">
+    <value>Его адрес</value>
+  </data>
+  <data name="PeerSourceAnnounced" xml:space="preserve">
+    <value>Сообщён им</value>
+  </data>
+  <data name="PeerSourceMdns" xml:space="preserve">
+    <value>Виден в этом Wi-Fi</value>
+  </data>
+  <data name="PeerWorkedFormat" xml:space="preserve">
+    <value>работал {0}</value>
+  </data>
+  <data name="PeerNeverWorked" xml:space="preserve">
+    <value>ещё не работал</value>
+  </data>
+  <data name="PeerUsedFirstFormat" xml:space="preserve">
+    <value>используется первым, {0}</value>
+  </data>
+  <data name="PeerNotTriedLan" xml:space="preserve">
+    <value>не пробовался: не в его сети</value>
+  </data>
+  <data name="PeerNotTriedWrong" xml:space="preserve">
+    <value>не пробовался: там ответило другое устройство</value>
+  </data>
+  <data name="PeerAddNotFound" xml:space="preserve">
+    <value>Это устройство не входит в число устройств, с которыми синхронизируется этот iPhone.</value>
+  </data>
+  <data name="PeerAddBlind" xml:space="preserve">
+    <value>Скрытый узел доступен по адресу своего сопряжения; чтобы перенести его, сопрягите заново.</value>
+  </data>
+  <data name="PeerAddRefused" xml:space="preserve">
+    <value>Этот адрес не подходит для устройства.</value>
+  </data>
+  <data name="PeerAddWrongPeer" xml:space="preserve">
+    <value>По этому адресу отвечает другое устройство или устройство с другим ключом либо сертификатом. Ничего не сохранено.</value>
+  </data>
+  <data name="PeerAddNotSyncServer" xml:space="preserve">
+    <value>По этому адресу что-то отвечает, но это не узел Bee Memory Bank.</value>
+  </data>
+  <data name="PeerAddNoAnswer" xml:space="preserve">
+    <value>По этому адресу никто не ответил.</value>
+  </data>
+  <data name="PeerAddTooManyFormat" xml:space="preserve">
+    <value>Для этого устройства уже введено {0} адресов; сначала удалите один.</value>
+  </data>
+  <data name="PeerAddSavedAnswered" xml:space="preserve">
+    <value>Сохранено. Ответило как это устройство.</value>
+  </data>
+  <data name="PeerAddSavedSilent" xml:space="preserve">
+    <value>Сохранено. Там пока никто не отвечает.</value>
+  </data>
+  <data name="SearchErrorDesc" xml:space="preserve">
+    <value>Поиск не смог прочитать заметки.</value>
+  </data>
+  <data name="SyncProblemDisconnected" xml:space="preserve">
+    <value>Администратор отключил это устройство от хранилища. Всё, что уже есть на нём, по-прежнему можно читать здесь; новых изменений оно больше не получает.</value>
+  </data>
+  <data name="SyncDisconnectedTitle" xml:space="preserve">
+    <value>Отключено от хранилища</value>
+  </data>
+  <data name="SyncBadgeDisconnected" xml:space="preserve">
+    <value>Отключено</value>
+  </data>
+  <data name="SlotRecoveryOwnerFormat" xml:space="preserve">
+    <value>Ключ восстановления: {0}</value>
+  </data>
+  <data name="SlotRecoveryNoOwner" xml:space="preserve">
+    <value>Ключ восстановления (владелец неизвестен)</value>
+  </data>
+  <data name="SlotQuickUnlock" xml:space="preserve">
+    <value>Face ID на этом iPhone</value>
+  </data>
+  <data name="SettingsDeviceOwner" xml:space="preserve">
+    <value>Принадлежит</value>
+  </data>
+  <data name="SettingsDeviceShared" xml:space="preserve">
+    <value>Организации (общее устройство)</value>
+  </data>
+</root>

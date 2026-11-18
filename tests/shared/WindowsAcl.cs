@@ -5,7 +5,7 @@ using System.Security.Principal;
 namespace BeeMemoryBank.TestSupport;
 
 /// <summary>
-/// A Windows-ACL fact (review release-a #7): skipped on any other system, where the owner-only rule is the 0600 mode
+/// A Windows-ACL fact: skipped on any other system, where the owner-only rule is the 0600 mode
 /// the platform's own tests check.
 /// </summary>
 public sealed class WindowsAclFactAttribute : FactAttribute

@@ -64,7 +64,10 @@ public interface IEventLogger
     /// <inheritdoc cref="LogWhitelistAddAsync"/>
     /// <param name="tlsSpki">Null = unchanged; "" = remove the pin (for an older node, see <c>WhitelistUpdatePayload</c>).</param>
     /// <param name="tlsTrust">Null = unchanged; <see cref="BlindTrust"/> value to set the mode, <see cref="BlindTrust.None"/> to clear it.</param>
-    Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null);
+    /// <param name="ownership">Null = unchanged; <see cref="OwnershipKinds"/> value to set device ownership.</param>
+    /// <param name="ownerPersonId">Owner's <c>person_id</c> when <paramref name="ownership"/> is <c>personal</c>.</param>
+    /// <param name="ownerLabel">Owner's display name when <paramref name="ownership"/> is <c>personal</c>.</param>
+    Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null, string? ownership = null, Guid? ownerPersonId = null, string? ownerLabel = null);
     Task LogCommentCreateAsync(Comment comment);
     Task LogCommentDeleteAsync(Guid commentId);
     Task LogFolderCreateAsync(Folder folder);
@@ -88,4 +91,27 @@ public interface IEventLogger
     /// no key material — see MasterPasswordChangedPayload for why that is the whole design.
     /// </summary>
     Task LogMasterPasswordChangedAsync(DateTime changedAt);
+
+    /// <summary>
+    /// The tombstone of a removed person (release 2.12.0, plan R1): the person id, <c>deleted</c> or <c>demoted</c>, the time; nothing else. Logged under
+    /// <paramref name="eventId"/>, fixed by the caller before the first try, so a step resumed after a crash finds the event it already wrote instead of
+    /// writing a second one. Returns false when an event with that id is already in the log.
+    /// </summary>
+    Task<bool> LogPersonRemovedAsync(Guid personId, string outcome, DateTime removedAt, Guid eventId) =>
+        Task.FromException<bool>(new NotSupportedException("This event logger cannot write the tombstone of a removed person."));
+
+    /// <summary>
+    /// The state of a removal process (release 2.12.0, plan E2): ids, the kind of target, the step and the times. Returns the event's Lamport time, which
+    /// is the version the caller stores with its own row (newest wins on every node).
+    /// </summary>
+    Task<long> LogOffboardingStateAsync(Guid processId, Guid personId, Guid accountsNodeId, Guid driverNodeId, string target, int step,
+        DateTime startedAt, DateTime? closedAt, string? outcome) =>
+        Task.FromException<long>(new NotSupportedException("This event logger cannot write the state of a removal process."));
+
+    /// <summary>
+    /// Step S1 of a removal (release 2.12.0): the driver asks <paramref name="nodes"/> for a new identity key, reason <c>offboarding:&lt;process id&gt;</c>.
+    /// Ids only. Each asked node re-keys itself once for that process.
+    /// </summary>
+    Task LogNodeRekeyRequestAsync(Guid processId, IReadOnlyList<Guid> nodes) =>
+        Task.FromException(new NotSupportedException("This event logger cannot ask nodes for a new identity key."));
 }

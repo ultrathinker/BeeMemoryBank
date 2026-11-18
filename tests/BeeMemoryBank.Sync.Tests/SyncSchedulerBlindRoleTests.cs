@@ -138,7 +138,7 @@ public class SyncSchedulerBlindRoleTests : IAsyncLifetime
     [Fact]
     public async Task The_warning_about_an_unreachable_peer_says_the_kind_of_failure_and_the_type_and_never_the_exceptions_own_words()
     {
-        // BMB-306/307 fix round 3 (G3): the exception's message carried an address, a token and a proxy's words straight into the log.
+        // BMB-306/307: the exception's message carried an address, a token and a proxy's words straight into the log.
         var (scheduler, peer, log) = await NodeAsync(new EnvironmentNodeRole("full"), HttpStatusCode.OK);
         peer.Unreachable = true;
         peer.UnreachableMessage = "Could not reach https://evil.example/pay?token=tok_5c4b3a29 (192.0.2.7:443): the proxy said <html>Pay now</html>";
@@ -173,7 +173,7 @@ public class SyncSchedulerBlindRoleTests : IAsyncLifetime
         peer.Requests.Should().HaveCount(2);
     }
 
-    // ---- BMB-309 fix round: what an episode is, and what ends it ----
+    // ---- BMB-309: what an episode is, and what ends it ----
 
     private async Task MovePeerAsync(string address)
     {

@@ -13,7 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Plan 3.6 guard (review L-stage0 #10): a blind node takes in what a full node writes — article
+/// Plan 3.6 guard: a blind node takes in what a full node writes — article
 /// create and update with concept tags, media — without the DEK and without the embedding model.
 /// The bodies stay ciphertext, tags land without vectors, and nothing is refused: a blind node that
 /// quarantined content events would be useless as a replica.

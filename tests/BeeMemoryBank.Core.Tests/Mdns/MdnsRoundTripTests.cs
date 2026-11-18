@@ -13,7 +13,7 @@ namespace BeeMemoryBank.Core.Tests.Mdns;
 /// announcer produces) under a unique per-run service type, then browses for it with
 /// <see cref="MdnsBrowser"/> and asserts the announced node is discovered with the right metadata.
 ///
-/// See TASK_BRIEF "Definition of done" item 2: this is a genuine exercise of the multicast network
+/// This is a genuine exercise of the multicast network
 /// path. mDNS requires multicast-capable sockets (UDP 224.0.0.251:5353); some sandboxed/CI
 /// environments restrict these. The test isolates itself with a unique service type so it never
 /// collides with real nodes on the LAN.

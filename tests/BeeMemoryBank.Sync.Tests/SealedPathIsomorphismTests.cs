@@ -151,6 +151,9 @@ public class SealedPathIsomorphismTests : IAsyncLifetime
             tables.Add((table, rows3, rows4));
         }
         local.Should().BeSubsetOf(NodeLocalColumns);
+        // A receiver's own clock may or may not tick between B3 and its control, so this run alone cannot show every
+        // node-local column; they are node-local whatever it shows (a tag's created_at failed CI once this way).
+        local.UnionWith(NodeLocalColumns);
         differing.Should().BeSubsetOf(local, "only what differs between two clear receivers differs");
         foreach (var (table, rows3, rows4) in tables)
             Lines(table, rows4, local).Should().Equal(Lines(table, rows3, local), $"{table} is the same after the sealed run");

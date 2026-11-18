@@ -27,7 +27,7 @@ public partial class FolderPickerPage : ContentPage
         public bool IsExpanded
         {
             get => _isExpanded;
-            set { _isExpanded = value; OnPropertyChanged(); OnPropertyChanged(nameof(Arrow)); }
+            set { _isExpanded = value; OnPropertyChanged(); }
         }
 
         private bool _isVisible = true;
@@ -44,9 +44,7 @@ public partial class FolderPickerPage : ContentPage
             set { _isSelected = value; OnPropertyChanged(); }
         }
 
-        public Thickness DepthMargin => new(Depth * 20, 2, 0, 2);
-        public string Arrow => IsExpanded ? "▼" : "▶";
-        public string Icon => "📁";
+        public Thickness DepthMargin => new(Depth * 20, 4, 0, 4);
 
         public event PropertyChangedEventHandler? PropertyChanged;
         protected void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -58,6 +56,7 @@ public partial class FolderPickerPage : ContentPage
         InitializeComponent();
         _services = services;
         FolderList.ItemsSource = _visibleNodes;
+        SelectedPathLabel.Text = Localization.AppStrings.Format("SelectedFolderFormat", "/");
     }
 
     protected override void OnAppearing()
@@ -159,7 +158,7 @@ public partial class FolderPickerPage : ContentPage
         foreach (var n in _allNodes) n.IsSelected = false;
         node.IsSelected = true;
         _selectedPath = node.FullPath;
-        SelectedPathLabel.Text = _selectedPath;
+        SelectedPathLabel.Text = Localization.AppStrings.Format("SelectedFolderFormat", _selectedPath);
         SelectButton.IsEnabled = true;
 
         // Toggle expand/collapse
@@ -191,8 +190,8 @@ public partial class FolderPickerPage : ContentPage
     // busy-exempt: adds a folder to the list on this screen only (the folder itself is created when the article is saved), nothing is sent
     private async void OnNewFolderClicked(object? sender, EventArgs e)
     {
-        var name = await this.ShowInputPopupAsync("New Folder", "Folder name:",
-            placeholder: "e.g. MyFolder");
+        var name = await this.ShowInputPopupAsync(Localization.AppStrings.Get("NewFolder"), Localization.AppStrings.Get("FolderNameLabel"),
+            placeholder: Localization.AppStrings.Get("NewFolderExample"));
         if (string.IsNullOrWhiteSpace(name)) return;
 
         name = name.Trim().Trim('/');
@@ -223,7 +222,7 @@ public partial class FolderPickerPage : ContentPage
         foreach (var n in _allNodes) n.IsSelected = false;
         newNode.IsSelected = true;
         _selectedPath = newPath;
-        SelectedPathLabel.Text = _selectedPath;
+        SelectedPathLabel.Text = Localization.AppStrings.Format("SelectedFolderFormat", _selectedPath);
         SelectButton.IsEnabled = true;
 
         RebuildVisibleList(SearchBar.Text);
@@ -249,7 +248,14 @@ public partial class FolderPickerPage : ContentPage
 
     private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)
     {
+        ClearFolderSearchButton.IsVisible = (e.NewTextValue ?? "").Length > 0;
         RebuildVisibleList(e.NewTextValue);
+    }
+
+    private void OnClearSearchClicked(object? sender, EventArgs e)
+    {
+        SearchBar.Text = "";
+        SearchBar.Focus();
     }
 
     // busy-exempt: hands the folder picked back to the editor, nothing is sent and nothing waits

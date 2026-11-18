@@ -116,7 +116,7 @@ internal sealed class FakeLoop : IIosLoop
 }
 
 /// <summary>
-/// Fix round 2, item 1 (review revfixios, MAJOR F1): the foreground transition, the stop, the background round and the disposal are ONE ordered queue. The sleep/resume callbacks of the app
+/// The foreground transition, the stop, the background round and the disposal are ONE ordered queue. The sleep/resume callbacks of the app
 /// are one-line calls into it, so the orderings that went wrong - a stale stop finishing after a newer start, a start asked for while a round holds the turn, a disposal in the middle of a
 /// transition - are driven here with a loop and a round that wait for the test.
 /// </summary>

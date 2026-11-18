@@ -2,6 +2,7 @@ using BeeMemoryBank.AppPaths;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Storage.Boot;
+using BeeMemoryBank.Storage.PreUnlock;
 using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Sync;
@@ -46,7 +47,7 @@ public sealed class PhoneVaultLifecycle(IVaultGate? gate, SessionService session
 {
     /// <summary>
     /// "Encrypt this phone's database" was hidden until the native release gate of spec 12.4 is green; the integration round sets this to
-    /// true after it. This build offers it, by the owner's decision, to be run on his own device (the gate's device run: encrypt, background,
+    /// true after it. This build offers it to be run on the person's own device (the gate's device run: encrypt, background,
     /// unlock, kill mid-encryption, restart). The lifecycle and the rest of this file work with it either way.
     /// </summary>
     public static bool PhoneEncryptionAvailable => true;
@@ -106,6 +107,40 @@ public sealed class PhoneVaultLifecycle(IVaultGate? gate, SessionService session
     {
         session.Lock();
         if (gate is not null) await gate.CloseAsync("lock");
+    }
+
+    /// <summary>
+    /// The end of a phone's wipe ("delete all data", "cancel and delete" of the first sync, the setup reset), the same as the node's reset
+    /// (<c>NodeResetService.ReturnToPlainAsync</c>, spec 13.1): the gate closes (the boot store is not rewritten: it is about to go), the session
+    /// forgets its key, the whole vault file set goes (<see cref="DeleteVaultFiles"/>), and the gate is a plain gate again. Deleting the database
+    /// alone left the boot store behind, and the next start was the dead end <c>db_missing_or_empty</c>.
+    /// </summary>
+    public async Task ReturnToPlainAsync(string dataPath, CancellationToken ct = default)
+    {
+        if (gate is not null) await gate.CloseAsync(VaultGate.ResetReason, ct);
+        session.Lock();
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        DeleteVaultFiles(dataPath);
+        (gate as VaultGate)?.SwitchToPlain();
+    }
+
+    /// <summary>
+    /// Deletes every file of the vault in a phone's data folder: the boot store, the database, the chat database, the password-hint mirror and the
+    /// seal journal, each with its <c>-wal</c>/<c>-shm</c>/<c>-journal</c>, and any leftover of an interrupted encryption. Nothing else in the folder
+    /// is touched. A file that cannot be deleted throws: a wipe never says done over data that is still there.
+    /// </summary>
+    public static void DeleteVaultFiles(string dataPath)
+    {
+        if (!Directory.Exists(dataPath)) return;
+        foreach (var name in new[] { VaultStoreFiles.Boot, VaultStoreFiles.Database, VaultStoreFiles.Chat, PasswordHintFile.FileName, VaultStoreFiles.SealJournal })
+            foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+            {
+                var path = Path.Combine(dataPath, name + suffix);
+                if (File.Exists(path)) File.Delete(path);
+            }
+        foreach (var leftover in new[] { VaultStoreFiles.SealNewSuffix, VaultStoreFiles.SealOldSuffix }
+                     .SelectMany(suffix => Directory.EnumerateFiles(dataPath, "*" + suffix + "*")).ToList())
+            File.Delete(leftover);
     }
 
     /// <summary>The unlock page: the typed password, or the one the Keystore released behind the fingerprint (spec 12.1).</summary>
@@ -199,7 +234,7 @@ public static class PhoneVaultServices
                     () => sp.GetService<IUnlockMaterialMirror>(),
                     sp.GetService<ILogger<VaultGate>>(),
                     sealedFolder ? VaultStoreMode.Sealed : VaultStoreMode.Plain);
-                gate.PlainLeftovers = () => SealSwapResolver.Leftovers(dataPath).Count == 0 ? [] : sp.GetRequiredService<SealMigrationService>().ClearLeftovers();   // review round 1, H1
+                gate.PlainLeftovers = () => SealSwapResolver.Leftovers(dataPath).Count == 0 ? [] : sp.GetRequiredService<SealMigrationService>().ClearLeftovers();
                 return gate;
             });
             services.AddSingleton<IVaultGate>(sp => sp.GetRequiredService<VaultGate>());

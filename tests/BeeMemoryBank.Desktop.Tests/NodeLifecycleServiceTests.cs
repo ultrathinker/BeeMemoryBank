@@ -223,7 +223,7 @@ public class NodeLifecycleServiceTests
     public async Task StartOrAttachAsync_ToARunningNode_ReportsItAsAttached_UntilStopped()
     {
         // A node already running on the vault: its .runtime.json names a live process (this one) and a front that
-        // answers /node/status. The service attaches, and says so (the re-key refuses on it, review release-b R2-3).
+        // answers /node/status. The service attaches, and says so (the re-key refuses on it).
         var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
         listener.Start();
         var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
@@ -333,10 +333,10 @@ public class NodeLifecycleServiceTests
         fs.Write(new byte[4096], 0, 4096);
     }
 
-    // ── Этап 6 Codex-review fix — rescue must not fire for a non-default vault ─
+    // ── Rescue must not fire for a non-default vault ─
 
     /// <summary>
-    /// Regression guard for the Этап 6 review finding: <c>StartOrAttachAsync</c> (the DESKTOP
+    /// Regression guard for a review finding: <c>StartOrAttachAsync</c> (the DESKTOP
     /// side, used for every profile — not just the default one) must gate
     /// <c>LegacyDataRescue.TryRescue</c> on the target being the canonical default vault, exactly
     /// like <c>desktop/BeeMemoryBank.Node/Program.cs</c> already does. Before this fix, a brand
@@ -448,7 +448,7 @@ public class NodeLifecycleServiceTests
     // ── Final-review fix — surface a conflict-rescue's recovered vault ─────────
 
     /// <summary>
-    /// Regression guard for the final-review finding: when the default vault already holds a
+    /// Regression guard for a review finding: when the default vault already holds a
     /// DIFFERENT valid database than the legacy source, <c>LegacyDataRescue.TryRescue</c> copies
     /// the legacy data into a fresh, UNREGISTERED <c>recovered-&lt;date&gt;</c> vault rather than
     /// overwriting the existing one. Before this fix, <c>StartOrAttachAsync</c> silently dropped

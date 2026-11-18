@@ -36,7 +36,7 @@ public class SpkiPinningTests : SyncTestFixture
     }
 
     /// <summary>
-    /// Review L-stage1 #5: the handler every sync client uses never follows a redirect itself...
+    /// The handler every sync client uses never follows a redirect itself...
     /// </summary>
     [Fact]
     public void TheSyncHandler_DoesNotFollowRedirects()

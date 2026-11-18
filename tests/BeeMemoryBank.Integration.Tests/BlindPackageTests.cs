@@ -80,7 +80,7 @@ public class BlindPackageTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage1 #1: "no projection" must hold for the bytes that travel, not just for a
+    /// "no projection" must hold for the bytes that travel, not just for a
     /// query — SQLite keeps updated-away values in free pages until the file is rewritten.
     /// </summary>
     [Fact]
@@ -108,7 +108,7 @@ public class BlindPackageTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A0 wire hygiene (brief P1-A0): concept-tag embeddings are derived from the plaintext tag name,
+    /// Wire hygiene: concept-tag embeddings are derived from the plaintext tag name,
     /// exactly what the article projections are derived from, and travel with their model version —
     /// a blind node must hold neither.
     /// </summary>
@@ -137,7 +137,7 @@ public class BlindPackageTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A0 wire hygiene, review round: the standing events ride in blind-manifest.json, serialized
+    /// Wire hygiene: the standing events ride in blind-manifest.json, serialized
     /// with the manifest's own options — not through SyncWire — so a legacy entity_id on a stored
     /// row would be relayed and the four envelope keys would appear as explicit nulls even where
     /// nothing was selected into them. The envelope may not leave the node here either.
@@ -181,7 +181,7 @@ public class BlindPackageTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A blind copy takes the key a manifest names only for a row in pin mode (ADR 0007, review INT-03): a pin left beside the normal
+    /// A blind copy takes the key a manifest names only for a row in pin mode (ADR 0007): a pin left beside the normal
     /// certificate, or beside a mode this build does not know, is not handed on to the copy.
     /// </summary>
     [Fact]

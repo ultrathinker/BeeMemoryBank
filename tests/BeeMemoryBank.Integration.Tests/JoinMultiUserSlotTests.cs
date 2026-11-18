@@ -46,7 +46,7 @@ public class JoinMultiUserSlotTests : IAsyncLifetime
         var firstKek = KeyDerivation.DeriveKek(
             FirstPassword, firstSlot.Salt!,
             firstSlot.ArgonMemory!.Value, firstSlot.ArgonIterations!.Value, firstSlot.ArgonParallelism!.Value);
-        var masterDek = MasterKeyManager.UnwrapMasterDek(firstSlot.EncryptedMasterDek, firstSlot.IV, firstKek);
+        var masterDek = BeeMemoryBank.Crypto.Doors.OpenSlot(firstSlot, firstKek);
 
         var secondSalt = KeyDerivation.GenerateSalt();
         var secondKek = KeyDerivation.DeriveKek(SecondPassword, secondSalt);

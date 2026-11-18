@@ -52,24 +52,51 @@ page. See [sealed-database.md](sealed-database.md) and
 
 ### Key Slots (`tbl_key_slot`)
 
-Every entry point that can unlock the vault — each user, each recovery key — owns one row in `tbl_key_slot` containing the Master DEK wrapped with a key derived from that entry point's secret.
+Every entry point that can unlock the vault — each user, each recovery key — owns one row in `tbl_key_slot` (a *door*) containing the Master DEK behind a key derived from that entry point's secret.
 
 ```sql
 -- One slot per unlock pathway
 slot_type:           "user"          -- per-user slot; tbl_user.key_slot_id → tbl_key_slot.slot_id
-                     "recovery"      -- recovery key slot (issued separately)
+                     "recovery"      -- recovery key slot (personal since 2.12: belongs to the superadmin who issued it)
                      "password"      -- legacy single-slot type, only on pre-A2 nodes
-encrypted_master_dek: BLOB           -- AES-256-GCM(master_dek, kek), 48 bytes (32 + 16 tag)
-iv:                  BLOB            -- 12 bytes (GCM nonce)
+                     "os_auto_unlock", "server_auto_unlock", "quick_unlock"   -- secret-keyed doors (no salt, no Argon2)
+encrypted_master_dek: BLOB           -- door v1: AES-256-GCM(master_dek, kek), 48/49 bytes; door v2: the 93-byte sealed box
+iv:                  BLOB            -- v1: 12 bytes (GCM nonce); v2: a copy of the box nonce (not used to open)
 salt:                BLOB            -- 32 bytes (Argon2id salt, unique per slot)
 argon_memory:        65536           -- 64 MB
 argon_iterations:    3
 argon_parallelism:   4
+door_version:        1 | 2           -- migration 046: 1 = a wrap under the KEK, 2 = a sealed box
+door_public_key:     BLOB            -- v2: the door's X25519 public key
+dek_fp:              TEXT            -- DekFingerprint of the DEK the door yields; NULL = unknown
+owner_user_id:       INTEGER         -- the person the door belongs to (user slots kept by the database; recovery slots since 2.12)
+created_by_user_id:  INTEGER         -- who made the door, when known
+label:               TEXT            -- e.g. the device of a quick-unlock door, or a recovery key's memory aid
 ```
+
+**Door format v2 (sealed doors, 2.12, [ADR 0012](adr/0012-sealed-doors.md)).** The KEK is derived as always; it then derives an
+X25519 key pair (`HKDF-SHA256(KEK, door salt, "bmb-door-x25519-v1")`, clamped), and the Master DEK is *sealed* to the public key:
+`box = 0x02 || eph_pk(32) || nonce(12) || AES-256-GCM(key, dek)`, where `key = HKDF-SHA256(X25519(eph_sk, door_pk), door_pk || eph_pk,
+"bmb-door-v2\0" || kind)` and the additional data is `0x02 || door_pk || eph_pk`. Opening is KEK → door key → shared secret → AES-GCM, then
+the sentinel check as before. Unlike a wrap, a box can be written to a door from its public key alone, without the secret. Every new door is
+v2 (`Doors` in the Vault is the one place that opens either format and writes v2); a v1 door is opened for as long as it exists and becomes
+v2 at the first successful use of its secret (a password or recovery door at an unlock, a password check, a recovery reset or a
+superadmin's sign-in on an open node; the auto-unlock doors and agents as described in their sections; the lazy rewrap writes v2). The
+legacy single `password` slot stays v1 until it is migrated to a `user` slot (a box is bound to its kind). Each replacement keeps the slot
+id and follows the door-replacement order below. A node with a v2 door cannot be downgraded. The *device recovery box* a superadmin's door
+publishes for the blind copies is a byte copy of a v1 door, and for a v2 door `wrapped = 0x02 || door_pk(32) || box(93)` beside the same salt
+and Argon2 preset; a restore opens either with the password. Nodes advertise the capability `door-box-v1`.
+
+**`quick_unlock`** is a secret-keyed door like the auto-unlock ones, for a phone that keeps only a 32-byte secret in its key store
+(`QuickUnlockDoors`: create, open, open while closed, remove). No password path tries it (it has no salt). The iPhone's Face ID unlock
+is such a door (`mobile/BeeMemoryBank.FullIos/Services/QuickUnlock.cs`, `docs/full-node/IOS.md`): one per phone, owned by the phone's
+administrator, the secret in the Keychain behind the biometry; the older Keychain-wrapped master key is converted at the next unlock.
 
 **Important:** The salt is randomly generated per slot. Even with the same password on two nodes, the KEK will differ. The Master DEK is the same across the network (transferred during `join`).
 
 **Multi-user model:** every active user with login access has a `tbl_user.key_slot_id` pointing to their personal slot. This lets two superadmins unlock the same vault with different passwords. Adding a user creates a new `tbl_key_slot` row wrapping the same Master DEK with the new user's KEK.
+
+**Recovery keys are personal (2.12).** A recovery key belongs to the superadmin who issued it, for themself: its slot records `owner_user_id` and `created_by_user_id` (and an optional `label`). The forgot-password reset it powers (`UserService.ResetPasswordWithRecoveryKeyAsync`) resets only that owner's password — naming another superadmin is refused exactly like a wrong key, after the same Argon2id work, so it is no oracle for who owns which key. A key issued **before 2.12** has no owner on record and keeps the older rule (it resets any active superadmin); such keys, the un-migrated legacy `password` slot, and agents with no owner form the *unknown-owner set* (`UnknownOwnerDoors`) that a removal revokes by default. Unlocking the vault with a recovery key is unchanged — the door opens for whoever holds the key. Revoking a key (one, or all with no owner) is refused if it would leave no door a person can open (`SlotDoors.EnsureAPersonDoorRemainsAsync`); auto-unlock doors are machine secrets and do not count. Demoting or deleting a superadmin revokes that person's recovery keys with their other doors (`PersonDoors`). See [account-recovery.md](account-recovery.md).
 
 **Legacy "password" slot:** before the password unification (Phase A2), every node had a single shared `slot_type='password'` row. New nodes initialize directly with `user`-type slots; existing nodes are migrated transparently on the first successful unlock by `LegacyPasswordSlotMigrationService`. See [Password Unification](#password-unification) below.
 
@@ -113,9 +140,19 @@ dek_salt:           BLOB  -- 32 bytes (Argon2id salt)
 
 Each superadmin has their own key slot wrapping the Master DEK with their password. This allows multiple people to unlock the system independently. Users with the "user" role can only log in when the system is already unlocked — they have no key slot.
 
+**Replicated superadmin doors on shared nodes (2.12, [ADR 0014](adr/0014-people-and-shared-nodes.md)).** A shared non-home node that applies `superadmin_doors_set` from the accounts node creates `replicated = 1` superadmin rows with an empty `password_hash` and a v2 `user` door sealed from the account holder's `{salt, argon_memory, argon_iterations, argon_parallelism, door_public_key}` via `Doors.SealTo` (neither password, private key, nor Master DEK ever leaves the accounts node in the event). Authentication opens that specific slot via `TryOpenUserDoorAsync` (or reuses the slot already opened during closed-sealed startup in `OpenSessionForLoginAsync`), keeping 1 Argon2id derivation parity across unknown/wrong/foreign/valid credentials and rejecting password, hint, role, or delete mutations on replicated rows (`ReplicatedUserException`, naming the accounts node).
+
 **Promotion is deferred, not instant.** Building a key slot requires the target user's *plaintext* password, which the admin doing the promoting does not have. So promoting an existing user to superadmin only changes their role: `key_slot_id` stays `NULL`, and the slot is created at the promoted user's next successful login (`UserService.ProvisionMissingKeySlotAsync`, called from `/api/session/login`), or earlier if an admin resets their password. Provisioning commits through a conditional `UPDATE … WHERE key_slot_id IS NULL AND role = 'superadmin' AND is_active = 1`, so two concurrent logins cannot each leave a slot behind — an orphaned slot would keep answering to that password forever, surviving every later rotation.
 
-Because "another superadmin exists" no longer implies "another superadmin can unlock", demoting or deleting a user refuses to drop their slot unless some **other active superadmin still holds one** (`EnsureAnotherSuperadminHoldsAKeySlotAsync`). Counting rows in `tbl_key_slot` is not equivalent and was the earlier, weaker check: a `recovery` slot opens only with the recovery key, and an `os_auto_unlock` slot has no KDF parameters at all so `UnlockAsync` skips it — either one pads the count past the guard while leaving nobody able to unlock with a password. For the same reason, `KeyManagementService.RemoveSlotAsync` clears `tbl_user.key_slot_id` for the slot it deletes: a dangling id makes the user look provisioned and silently suppresses re-provisioning at their next login.
+**A demotion is one transaction and says what the person may see afterwards.** `UserService.DemoteSuperadminAsync` changes the role, deletes
+the person's key slot (its boot-store copies are retired first, as for every slot deletion), writes the per-user folder rules, deletes the remote
+tokens, revokes the agents and bumps the security stamp together: there is no moment at which the person is an ordinary user who can see every
+folder. A demotion that carries no explicit access choice is refused: a role that is not open (closed base policy, or a role with allow rules), per-user
+`folderRules` (built-in `user` role only, the same limit `/api/restrictions/user` has; they replace any rows left from before a promotion), or
+`allowOpenRole = true`, the caller saying out loud that the open built-in role is meant. The built-in open role is never the default. `PUT /api/users/{id}`
+with a superadmin target and a different role takes these fields (`allowOpenRole`, `folderRules`); `UpdateUserAsync` itself refuses to demote.
+
+Because "another superadmin exists" no longer implies "another superadmin can unlock", demoting or deleting a user refuses to drop their slot unless some **other active superadmin still holds one** (`EnsureAnotherSuperadminHoldsAKeySlotAsync`). Counting rows in `tbl_key_slot` is not equivalent and was the earlier, weaker check: a `recovery` slot opens only with the recovery key, and an `os_auto_unlock` slot has no KDF parameters at all so `UnlockAsync` skips it — either one pads the count past the guard while leaving nobody able to unlock with a password. For the same reason, `KeyManagementService.RemoveSlotAsync` clears `tbl_user.key_slot_id` for the slot it deletes: a dangling id makes the user look provisioned and silently suppresses re-provisioning at their next login. Since 2.12 the transition also revokes the person's **recovery keys** (a recovery key is personal): `PersonDoors.RevokeAllOfAsync` retires and deletes their user door, their recovery keys and their auto-unlock agents' doors in the same transaction, in the boot-store order.
 
 ### Agent (`tbl_agent`)
 
@@ -124,9 +161,15 @@ key_prefix:     TEXT  -- "bee_a1b2c3d4" (first 12 characters for UI display)
 key_hash:       TEXT  -- SHA256(full_api_key) — for database lookup
 encrypted_dek:  BLOB  -- AES-256-GCM(master_dek, derived_key); NULL unless owner is a superadmin
 dek_iv:         BLOB  -- 12 bytes; NULL alongside encrypted_dek
-salt:           BLOB  -- 32 bytes (v1 only); NULL for legacy v0 agents, and NULL alongside encrypted_dek
-kdf_version:    INT   -- 0 = legacy SHA256, 1 = HKDF-SHA256, 0 also when there's no wrapped DEK at all
+salt:           BLOB  -- 16 bytes (v1 and v2); NULL for legacy v0 agents, and NULL alongside encrypted_dek
+kdf_version:    INT   -- 0 = legacy SHA256, 1 = HKDF-SHA256, 2 = sealed door (2.12), 0 also when there's no wrapped DEK at all
+door_public_key: BLOB -- v2: the agent door's X25519 public key
+dek_fp:         TEXT  -- DekFingerprint of the DEK the door yields
 ```
+
+**KDF v2 (sealed agent door, 2.12):** the KEK is the v1 derived key below; `encrypted_dek` holds a 93-byte box sealed to the door's public key
+(kind `agent`, [ADR 0012](adr/0012-sealed-doors.md)). New auto-unlock agents are always v2; a v0/v1 agent is sealed again at its first
+authenticated request while the vault is open.
 
 **H6 fix — wrapping is opt-in by owner role, not universal.** Every agent used to get a wrapped
 Master DEK regardless of who owned it, which made an ordinary, folder-restricted user's
@@ -143,7 +186,10 @@ yields nothing usable from its row alone. Migration `014_agent_dek_optional.sql`
 clears these three columns (and resets `kdf_version` to 0) for every pre-existing agent whose
 owner isn't a superadmin; this is irreversible (there is no way to re-wrap without the plaintext
 API key, which is shown only once at creation). Demoting a superadmin
-(`UserService.UpdateUserAsync`) does the same clearing live, for the same reason. **Promoting** a
+(`UserService.DemoteSuperadminAsync`) and deleting any user (`UserService.DeleteUserAsync`) do the same
+clearing live, for the same reason, and go further: every agent the person owns is **revoked** (`status = 'D'`, whether or not it
+carried a wrapped key) and their remote API tokens are deleted, in the same transaction as the role change or the deletion
+(release 2.12). **Promoting** a
 user to superadmin does NOT retroactively wrap their existing agents' keys either, for the exact
 same reason (no plaintext API key to derive from) — only a newly created agent, made after the
 promotion, gets wrapped.
@@ -166,12 +212,23 @@ The Ed25519 private key used to sign sync events is stored encrypted under the m
 ed25519_public_key:    BLOB  -- 32 bytes, plaintext (used for verification by peers)
 ed25519_private_key:   BLOB  -- v=0: raw 32-byte seed (legacy); v=1: AES-256-GCM(seed, master_dek)
 ed25519_private_key_iv: BLOB -- 12 bytes (v=1 only)
-ed25519_private_key_v:  INT  -- 0 or 1
+ed25519_private_key_v:  INT  -- 0 or 1; 2 = the seed lives outside the database, in a device key store (blind nodes, phones)
 ```
 
 **Why encrypted:** Without it, a rooted attacker who exfiltrated `beememorybank.db` could sign arbitrary sync events as this node and propagate hard-deletes / restore-network across the cluster.
 
 **Migration:** `UpgradePrivateKeyToV1Async` runs on every successful unlock — fresh nodes are always created v=1 (`InitializationService` and the mobile `NodeSetupService.JoinAsync` both call `NodeIdentityCrypto.EncryptPrivateKey` before persist). Legacy v=0 nodes get upgraded the first time the user unlocks. The `SignWithIdentity` helper dispatches by `Ed25519PrivateKeyV`.
+
+**A new identity key (2.12).** The identity seed is inside every full backup of the node, protected only by the master key,
+so a person who kept an old backup and an old password could sign as the node; changing the master key does not change it.
+A re-key ([ADR 0013](adr/0013-identity-rekey.md)) writes a new seed wrapped under the current master DEK in the same
+transaction as the `node_key_rotated` event, with SQLite `secure_delete` on so that the old wrapped seed is overwritten rather
+than left in a free page; the seed buffers are cleared afterwards. The retired public keys are kept in
+`tbl_node_key_history` (newest 16 per node) so that old events and packages still verify; they never authenticate again.
+A node whose seed lives in a device key store (`ed25519_private_key_v = 2`, blind nodes and phones) **cannot be re-keyed
+from here** — this release has no re-key path for an external key, and the attempt is refused with the advice to remove
+the node on another superadmin's device and set it up again as a new node. When a peer re-keys, the Android ingest key
+store enrols the seed again if the enrolled one is not the seed of the current key.
 
 ### Node data keys (`tbl_node_data_key`) and chat.db
 
@@ -218,7 +275,7 @@ both database files under the DBK; the chat file's page key comes from the same 
 HKDF purpose. The row-level scheme above is unchanged and stays the layer DEK rotation works
 through — a rotation re-wraps the node data key and the DBK's wrapper, and touches no page. What a
 sealed node changes for backups and restores (the boot store, file-level copies of a stopped node)
-is in [sealed-database.md](sealed-database.md#backups).
+is in [sealed-database.md](sealed-database.md#backing-up-and-restoring-an-encrypted-node).
 
 ### Sentinel (`tbl_node_identity.sentinel_value`)
 
@@ -286,9 +343,9 @@ After unification:
 
 - Each active user with login access owns one `tbl_key_slot` row of type `user`.
 - `KeyManagementService.ChangePasswordAsync` rotates a user's slot in place: derives a new KEK from the new password, wraps the existing Master DEK with it, swaps the slot's `encrypted_master_dek`/`iv`/`salt`. The Master DEK itself is unchanged. Other users' slots are untouched.
-- Recovery keys live as separate `slot_type='recovery'` rows. They're issued via the Admin UI; the user receives the key once and stores it offline. A recovery slot can be used like a password slot to unlock the vault (the `bmb` command line), and — without signing in — to set a new password for a superadmin: the Sign In page's **Forgot your password? Use a recovery key** (`/RecoverAccess`) and `bmb user reset-password`. Both open only `recovery` slots, never touch the shared session, and re-wrap the master key under the new password in that user's own slot; other users' slots and every recovery key stay as they were. See [account-recovery.md](account-recovery.md).
+- Recovery keys live as separate `slot_type='recovery'` rows. They're issued via the Admin UI **for the issuing superadmin** (the slot records its owner); the user receives the key once and stores it offline. A recovery slot can be used like a password slot to unlock the vault (the `bmb` command line), and — without signing in — to set a new password for **its owner's** superadmin account: the Sign In page's **Forgot your password? Use a recovery key** (`/RecoverAccess`) and `bmb user reset-password`. Both open only `recovery` slots, never touch the shared session, and re-wrap the master key under the new password in that user's own slot; other users' slots and every recovery key stay as they were. A pre-2.12 key has no owner and keeps the older rule (any active superadmin). See [account-recovery.md](account-recovery.md).
 
-`AddPasswordSlotAsync` is whitelisted to `["user", "recovery"]` slot types only — it cannot create the legacy `password` type.
+`AddPasswordSlotAsync` is whitelisted to the `user` slot type only — it cannot create the legacy `password` type, and a recovery key must be issued with an owner via `IssueRecoveryKeyAsync` (2.12), not as an ownerless slot here.
 
 ## DEK Rotation
 
@@ -327,14 +384,57 @@ the next MEK generation in the same transaction as the DEK swap and publishes it
 `metadata_key_set` event right after; until it is published, writing new sealed content is briefly
 refused (`metadata_key_publish_pending`), and a peer the rotation left out can no more open the new
 metadata than the new content. The details are in
-[sync.md](sync.md#rotation-on-a-mesh-with-metadata-encryption-260-activated).
+[sync.md](sync.md#metadata-keys-and-dek-rotation).
 
-**On a sealed node, a rotation re-wraps the database key's wrapper and switches the server
-auto-unlock option off.** The DBK itself never changes and no encrypted page is rewritten — the
-rotation's re-wrap work is exactly as on an unencrypted node. The `server_auto_unlock` slot is
-deleted with the other old-DEK slots, so the server starts locked afterwards until an administrator
-signs in; turn "Start unlocked after a restart" on again if you still want it. See
+**On a sealed node, a rotation re-wraps the database key's wrapper.** The DBK itself never changes
+and no encrypted page is rewritten — the rotation's re-wrap work is exactly as on an unencrypted node.
+Since 2.12 the `server_auto_unlock` door is sealed to the new DEK like every other v2 door and its
+enable record follows it (below), so "Start unlocked after a restart" stays on; only a v1 server
+door (one never used since the update) is deleted, which switches the option off as before. The
+record is written before the rotation commits; if that write fails it is written again right after
+the commit. Only when it cannot be written then either, or the node stops between the commit and
+that write, does the next start find a record that names a door that is gone: it switches the
+option off and the node waits for a password (it never opens with the old record). See
 [sealed-database.md](sealed-database.md#key-rotation).
+
+**The quiet rotation (2.12, [ADR 0012](adr/0012-sealed-doors.md#the-quiet-rotation)).** Nobody who
+stays has to do anything after a rotation. Inside the rotation transaction, on the initiator and on
+every peer, every v2 door is sealed to the new DEK from its public key and names it (`dek_fp`): the
+superadmins' doors, recovery keys, OS and server auto-unlock, quick unlock, and the v2 auto-unlock
+agents; each re-sealed door goes to the boot store as pending before the commit. No door of somebody
+who stays is deleted and `tbl_user.key_slot_id` is never cleared. What cannot be re-sealed is a v1
+door (only its secret can write it): a v1 password or recovery door is **kept**, and reaches the new
+DEK at its next use through the *bridge* below; a v1 OS/server/quick-unlock door and a v1 (kdf 0/1)
+auto-unlock agent hold the old DEK under a secret the rotation does not have and are deleted as
+before. Right before the rotation the node seals a v1 OS or server door whose secret it can read
+(`IUnlockedDoorUpgrade`), so those are re-sealed rather than deleted. The server's enable record names
+the old and the re-sealed door (and both DEKs) before the commit and only the new ones after it; a
+crash leaves the server armed and the next unlock settles the record.
+
+**The bridge and H10.** The chain row (`tbl_dek_rotation_state.chain_encrypted_new_dek`, NEW under
+OLD) is what lets a v1 door reach the current DEK — and what lets somebody with the OLD DEK and a
+later copy of the database reach the NEW one. Since 2.12 a rotation writes it **only while the node
+has a v1 door**; without one every chain row is cleared in the rotation transaction. The change that
+removes the node's last v1 door (its upgrade at first use, or its delete) clears every chain row in
+the same transaction (`DekBridge`). The Master key page shows a bridge that is still there (whose
+doors, since which rotation) with a button that removes it at once: the v1 doors are deleted and
+their owners set their passwords again, as after a rotation before 2.12. Never purged: the retired
+links (`tbl_dek_retired_link`) and the retired-DEK store (`retired-master-dek:<commit>` node data
+keys), both OLD under NEW: late data and restores need them.
+
+**The rotation's own retired link.** Inside its transaction every node writes the link OLD under NEW
+into `tbl_dek_retired_link` (author = itself) with a marker; the reconciler publishes it as
+`retired_link_set` after the commit (also after a crash) and removes the marker. The reconciler's
+chain walk stays for rotations applied before 2.12.
+
+**What an attacker with the OLD DEK can and cannot do after a rotation.** With a copy of the database
+made *before* the rotation: everything that copy held, as before (data already given). With a copy
+made *after* the rotation, on a node without v1 doors: nothing new — no row yields the NEW DEK from
+the OLD one (the chain is gone, the retired material is OLD under NEW, the doors are sealed to keys
+derived from secrets, the node identity seed is under the NEW DEK so the per-peer envelopes of the
+commit stay closed). On a node that still has a bridge, the chain row yields the NEW DEK: the bridge
+is visible on the Master key page and can be removed. Commit events of pre-ADR-0006 rotations in an
+uncompacted log keep NEW under OLD for those old rotations (honest limit).
 
 ### Three-Step Flow (Initiator Node)
 
@@ -378,13 +478,15 @@ The accept phase:
      raced the rotation cannot slip past this: `RemoteAccountService` writes tokens in a
      `BEGIN IMMEDIATE` transaction that re-checks the sentinel against the DEK it sealed with, and
      re-seals under the swapped-in DEK if the rotation committed in between.
-   - Deletes the `tbl_agent` rows that carry a wrapped Master DEK (`encrypted_dek IS NOT NULL` —
-     superadmin-owned auto-unlock agents): their wrap is keyed by the plaintext API key, which the
-     server never stores, so it cannot be re-wrapped; they must be re-issued. Every other agent holds
-     no key material (`Agent.CanAutoUnlock` is false) and keeps working unchanged.
-   - Re-wraps the initiator's key slot with the new DEK. **Deletes all other key slots** (users must re-register).
-   - Deletes recovery-type key slots.
-   - Persists the chain material `LazySlotRewrapService` needs to walk this rotation later (see below), inside the same transaction that marks the rotation `Applied`.
+   - Seals every v2 door and every v2 auto-unlock agent to the new DEK (the quiet rotation above). Deletes the `tbl_agent`
+     rows that still carry a v0/v1 wrapped Master DEK: their wrap is keyed by the plaintext API key, which the server never
+     stores, so it cannot be re-wrapped; they must be re-issued. Every other agent holds no key material
+     (`Agent.CanAutoUnlock` is false) and keeps working unchanged. Deletes v1 OS/server/quick-unlock doors.
+   - Re-seals the initiator's key slot with the new DEK (as a v2 door for the same password, naming the new DEK). Since
+     2.12 no other key slot is deleted.
+   - Persists the chain material `LazySlotRewrapService` needs to walk this rotation later (see below), inside the same
+     transaction that marks the rotation `Applied` — only while the node has a v1 door (the bridge).
+   - Writes the rotation's own retired link (OLD under NEW) with its publication marker.
    - Updates `tbl_node_identity`: new sentinel + new `dek_epoch`.
    - Marks the rotation state as `APPLIED` inside the same transaction.
 5. Swaps the in-memory Master DEK in `SessionService`.
@@ -448,12 +550,15 @@ During login, the sentinel is used to detect whether the user's key slot is wrap
 
 ### Lazy Slot Rewrap
 
-When DEK rotation completes on a peer node via auto-accept (or manual peer-accept), the peer's existing user key slots remain in place but are still wrapped with the old DEK. **Only DEK-bearing `tbl_agent` rows (auto-unlock agents) and `recovery`/`os_auto_unlock` slots are deleted** on the peer — user slots are deliberately preserved so that on the next login, lazy rewrap can transparently migrate them to the new DEK. (Initiator-side acceptance is different: there, all OTHER user slots are dropped because the initiator's local users are the canonical set.) When a peer's user logs in after auto-accept, the system detects a sentinel mismatch:
+Since 2.12 a rotation re-seals every v2 door on every node, so a lazy rewrap is needed only for a **v1** password or recovery door that
+the rotation kept (a straggler, whose owner has not used it since the update), on the initiator as on a peer. When such a door is used
+after a rotation, the system detects a sentinel mismatch:
 
 - `LazySlotRewrapService.TryRewrapAsync()` walks `tbl_dek_rotation_state` rows with state `Applied`, sorted by creation time.
 - For each rotation, it unwraps the next DEK from the commit event payload using the current candidate DEK.
 - After each step, it calls `VerifySentinel(currentSentinel, candidateDek)`. When this returns true, the chain has reached the current DEK.
-- The user's key slot is re-wrapped with the current DEK. Transparent — no user action required.
+- The user's key slot is re-written with the current DEK — since 2.12 as a sealed (v2) door, through `SlotDoors` (pending boot door, the row
+  only while it still holds the door that was opened, the rewrite), and naming the new DEK. Transparent — no user action required.
 
 **Chain persistence (2026-09-04).** This walk used to read every link out of the
 `dek_rotation_commit` event in `tbl_event` — but event-log compaction deletes exactly those rows
@@ -485,10 +590,13 @@ Every rotation action is logged to `tbl_audit_log`: propose, accept, cancel, pee
 ## An Encrypted Node: the Database Key and the Boot Store
 
 Everything above describes what every node does: bodies, comments and media are encrypted, and titles, paths and tags are plain
-columns in a plain SQLite file. The owner can go one step further with **Encrypt this node**. Then the database file itself is
-encrypted page by page (SQLCipher 4 pages, written by SQLite3MC), so a stolen disk shows no title, path, tag, user name, agent
-name, audit line or SQLite schema; `chat.db` is encrypted the same way, under its own key. This is owner-started and nothing
-encrypts a node by itself.
+columns in a plain SQLite file. The node can go one step further and encrypt the database file itself, page by page
+(SQLCipher 4 pages, written by SQLite3MC), so a stolen disk shows no title, path, tag, user name, agent name, audit line or
+SQLite schema; `chat.db` is encrypted the same way, under its own key. A node set up since 2.6.2 is encrypted from its first
+day. A node set up by an earlier version that is still plain **encrypts itself** since 2.12: right after the next unlock, once
+the network has metadata encryption on, the same migration runs in the background (`AutoSealService`, one attempt per unlock,
+no button). `bmb vault seal` remains for the command line. Phones encrypt themselves too, right after a create or a join;
+a plain phone copy left by an older build is set up again, not converted.
 
 ### A fourth key: the database key (DBK)
 
@@ -524,8 +632,8 @@ The key slots, the users and the agents live *inside* the database, but a locked
 it. So an encrypted node keeps **copies** of the ways in in a small plain SQLite file, `beememorybank.boot.db` (the *boot store*).
 The database stays authoritative; the boot store can be rebuilt from it at any time. It holds only allow-listed columns:
 
-- the doors: each key slot's and each auto-unlock agent's wrapped master key with its iv, salt and Argon2 parameters, and the agent's
-  key hash. These are exactly as exposed as the same columns were in `tbl_key_slot` and `tbl_agent` (the Argon2id cost that
+- the doors: each key slot's and each auto-unlock agent's wrapped or sealed master key with its iv, salt and Argon2 parameters, its door
+  format and (v2) public key, the DEK fingerprint it names, and the agent's key hash. These are exactly as exposed as the same columns were in `tbl_key_slot` and `tbl_agent` (the Argon2id cost that
   protects a slot still stands between a thief and a password). No user name and no agent name is copied;
 - the wrapped database key, one wrapper per master key some door can still yield;
 - the node's id, display name and public key, and the list of peers (names, addresses, TLS pins, flags);
@@ -537,7 +645,14 @@ The database stays authoritative; the boot store can be rebuilt from it at any t
 store **before** the database delete, and after the commit the whole boot store is rewritten from the database. A crash at any
 point therefore leaves the node unlockable with the password it had and never with a door that was removed. As a backstop, a
 trigger set in the vault (migration `040_sealed_unlock_material.sql`) bumps `unlock_material_version` inside the writing
-transaction, and a watcher compares it with the boot store every 10 seconds and rewrites it when it is behind.
+transaction, and a watcher compares it with the boot store every 10 seconds and rewrites it when it is behind. The sole deliberate
+exception to retire-before-delete is `superadmin_doors_set` replacement in `SharedDoorsApplier`: it adds pending replacement
+doors before commit, deletes superseded local/removed doors inside the single SQLite transaction, and removes the old boot-store
+entries immediately afterward in the post-commit `SlotDoors.RewriteAsync`. Retiring the old doors *before* that commit would risk
+leaving a shared node with zero boot doors (un-unlockable) if it crashed mid-swap; this trades a narrow one-restart window in
+which a crash before the post-commit rewrite leaves a stale boot-store copy until the next rewrite/watcher cycle reconciles it.
+(By contrast, when a node transitions from `shared` to `personal`, `PurgeReplicatedForPersonalAsync` has local slots left and
+follows the normal retire-before-delete rule.)
 
 **The password-hint mirror.** One question is asked while the database is closed and cannot wait for an unlock: *what hint did this
 person write?* The sign-in page reads a small derived file, `beememorybank.hints.json`, beside the boot store. It is rewritten from
@@ -547,17 +662,24 @@ the names. It is not part of a backup, a snapshot or a join archive: a restored 
 can read the data folder can read the hints, which is why every hint form says never to put a secret in one.
 
 **Wrappers and DEK rotation.** A door may yield an older master key (a peer that accepted a rotation rewraps each user's slot at that
-user's next login). The boot store therefore keeps a wrapper for every master key some door may still yield, and no other. After
-a rotation the *initiator* has exactly one wrapper, under the new key, so a node the rotation left out, which still holds the old
-key, cannot open a stolen copy of this node's disk. An *auto-accepting peer* keeps the old wrapper until the last slot under the old
-key is rewrapped or deleted; that equals the exposure the rotation's chain material already had on that disk.
+user's next login). The boot store therefore keeps a wrapper for every master key some door may still yield, and no other. Since 2.12 each
+door names its DEK (`dek_fp`), and the rule is exact: the boot store keeps the wrapper of the current DEK and of every DEK a door names;
+while any door's DEK is unknown (a v1 door nobody has used since the upgrade) it keeps a wrapper for every DEK the session holds; and with
+no DEK in the session (locked, closing) it prunes nothing. A sealed node opens its file before the database, so this is what guarantees that
+a straggler's door, whatever older DEK it holds, still opens the node; its wrapper goes as soon as the door is rewrapped. After
+a rotation on a node whose doors are all v2 (initiator or peer) there is exactly one wrapper, under the new key, so a node the
+rotation left out, which still holds the old key, cannot open a stolen copy of this node's disk. A node that keeps a v1 door keeps the
+old wrapper until that door is rewrapped or deleted; that equals the exposure the bridge already has on that disk.
 
 ### Auto-unlock and what a stolen disk then gives
 
 Auto-unlock keeps a key next to the data, so with it on the encryption protects against much less. On a **desktop** the secret
 is in the Windows or macOS key store (`os-auto-unlock.dat`); on a **server** the owner may switch on *Start unlocked after a
 restart*, whose key lives in a file, preferably outside the data folder ([deployment.md](deployment.md#start-unlocked-after-a-restart-servers)).
-Both are off by default, both are warned about twice, and neither is ever in a backup.
+Both are off by default, both are warned about twice, and neither is ever in a backup. Both write sealed (v2) doors (secret = KEK, no salt).
+A v1 slot of either kind seals itself again as a v2 door after the next unlock, as soon as its secret is readable (`IUnlockedDoorUpgrade`, run
+by the post-unlock catch-up). The server rewrites its enable record in the same step: while the door changes the record names the slot hash
+before and after (`next_slot_sha256`), so a crash leaves the server armed rather than "stale".
 
 ### What encryption does not hide
 
@@ -740,11 +862,12 @@ When the session is unlocked and a user opts into content search, SearchService 
 
 This keeps memory usage proportional to the channel capacity, not total article count.
 
-## Cryptographic Files (BeeMemoryBank.Crypto, ~450 LOC)
+## Cryptographic Files (BeeMemoryBank.Crypto)
 
 | File | LOC | Purpose |
 |---|---|---|
 | `AesGcmHelper.cs` | ~50 | Encrypt/Decrypt with AES-256-GCM (12B nonce, 16B tag) |
+| `DoorBox.cs` | ~220 | Sealed doors (format v2, 2.12): KEK → X25519 key pair, Seal/TryOpen of the 93-byte box ([ADR 0012](adr/0012-sealed-doors.md)) |
 | `MasterKeyManager.cs` | ~40 | Generate (32B random), Wrap/Unwrap Master DEK |
 | `DekManager.cs` | ~30 | Wrap/Unwrap per-article/media DEK |
 | `KeyDerivation.cs` | ~35 | Argon2id: password + salt → 32B KEK |

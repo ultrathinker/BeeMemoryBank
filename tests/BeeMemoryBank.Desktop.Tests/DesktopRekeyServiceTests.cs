@@ -162,7 +162,7 @@ public class DesktopRekeyServiceTests : IDisposable
         status.Should().Contain("plain text from the verb").And.Contain("{\"step\":").And.Contain("Re-keying: verify");
     }
 
-    /// <summary>R2-3: StopAsync leaves an attached node running, so the re-key refuses before touching anything.</summary>
+    /// <summary>StopAsync leaves an attached node running, so the re-key refuses before touching anything.</summary>
     [Fact]
     public async Task AnAttachedExternalNode_IsRefused_BeforeAnythingIsStoppedOrRun()
     {

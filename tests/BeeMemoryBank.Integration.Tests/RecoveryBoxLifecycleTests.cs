@@ -240,7 +240,7 @@ public class RecoveryBoxLifecycleTests : IAsyncLifetime
         (await StatusOfAsync(box)).Status.Should().Be("A");
     }
 
-    // --- the old password after a change (F7) ------------------------------------------------
+    // --- the old password after a change ------------------------------------------------
 
     [Fact]
     public async Task AfterPasswordChangeAndCleanup_TheOldPasswordOpensNothingInACopyOfTheDatabase()

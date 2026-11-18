@@ -8,9 +8,12 @@
 {
     <sl-alert id="recovery-key-notice" variant="warning" open style="margin-bottom:16px;">
         <sl-icon slot="icon" name="key"></sl-icon>
-        <strong>No recovery key has been issued for this node.</strong><br />
-        There is no e-mail recovery: without a recovery key, a forgotten superadmin password cannot be recovered.
-        <a href="/Admin/RecoveryKey">Issue one now</a> and keep it somewhere safe, away from this computer.
+        <strong>Make a recovery key, in case you forget your password.</strong> <a href="/Admin/RecoveryKey">Make it now</a>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>There is no e-mail recovery: without a recovery key, a forgotten superadmin password cannot be recovered.
+               Keep the key somewhere safe, away from this computer.</p>
+        </details>
         <form method="post" asp-page="/Admin/Index" asp-page-handler="DismissRecoveryKeyNotice" data-busy="short" style="margin-top:10px;">
             <sl-button type="submit" size="small" variant="warning" outline>
                 I have handled this &mdash; dismiss

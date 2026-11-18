@@ -26,7 +26,8 @@ public static class BootDoorKinds
 
 /// <summary>
 /// One way to obtain the master DEK before unlock (spec 4.1): a copy of a key slot or of an auto-unlock agent's wrapped DEK. Never a
-/// user name, an agent name or a description.
+/// user name, an agent name or a description. <see cref="DoorVersion"/> 2 is a sealed door (ADR 0012): <see cref="EncryptedMasterDek"/>
+/// is the box and <see cref="DoorPublicKey"/> the key it is sealed to.
 /// </summary>
 public sealed record BootDoor(
     long DoorId,
@@ -43,7 +44,9 @@ public sealed record BootDoor(
     int? KdfVersion,
     string ContentSha256,
     string? DekFingerprint,
-    bool Pending);
+    bool Pending,
+    int DoorVersion = 1,
+    byte[]? DoorPublicKey = null);
 
 /// <summary>The database key wrapped under one master DEK (spec 3.3).</summary>
 public sealed record BootDbKeyRow(string DekFingerprint, int DbkGeneration, byte[] Wrapped, byte[] Iv, DateTime CreatedAt);
@@ -98,6 +101,9 @@ public interface IBootMirrorStore
     /// <summary>An active (status 'A') mirror row, or null.</summary>
     Task<(byte[] PublicKey, bool IsSuperadmin)?> GetActivePeerAsync(Guid nodeId, CancellationToken ct = default);
 
+    /// <summary>The mirror row's recorded membership version for <paramref name="nodeId"/>, or null when the node is not in the mirror.</summary>
+    Task<RowVersion?> GetMembershipVersionAsync(Guid nodeId, CancellationToken ct = default);
+
     /// <summary>Marks a mirror row 'S' (suspended until the next rewrite) after a verified revoke or update received while closed.</summary>
     Task SuspendAsync(Guid nodeId, CancellationToken ct = default);
 }
@@ -127,4 +133,7 @@ public interface IRelayInbox
     Task<IReadOnlyList<(Guid Peer, long Sequence)>> ListReportsAsync(CancellationToken ct = default);
 
     Task ClearReportsAsync(CancellationToken ct = default);
+
+    /// <summary>Deletes queued relay events authored by <paramref name="peer"/> and any position reports it left behind.</summary>
+    Task DeleteForPeerAsync(Guid peer, CancellationToken ct = default);
 }

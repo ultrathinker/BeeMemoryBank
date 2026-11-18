@@ -39,6 +39,17 @@ public sealed class BootMirrorStore : IBootMirrorStore
         return (r.Key, r.Superadmin != 0 && !BlindNodeId.IsBlind(nodeId));
     }
 
+    public async Task<RowVersion?> GetMembershipVersionAsync(Guid nodeId, CancellationToken ct = default)
+    {
+        using var connection = _factory.Open();
+        var row = await connection.QuerySingleOrDefaultAsync<(long Ts, string? Source)?>(
+            "SELECT member_lamport_ts, member_source_node_id FROM tbl_whitelist WHERE node_id = @nodeId COLLATE NOCASE",
+            new { nodeId = nodeId.ToString("D") });
+        if (row is not { } r) return null;
+        Guid? source = Guid.TryParse(r.Source, out var parsed) ? parsed : null;
+        return RowVersion.Of(r.Ts, source);
+    }
+
     public async Task SuspendAsync(Guid nodeId, CancellationToken ct = default)
     {
         using var connection = _factory.Open();

@@ -2,33 +2,78 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:services="clr-namespace:BeeMemoryBank.FullIos.Services"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
              x:Class="BeeMemoryBank.FullIos.Pages.SearchPage"
+             x:Name="PageRoot"
              Title="Search">
-    <Grid RowDefinitions="Auto,Auto,*">
-        <SearchBar x:Name="Query" Placeholder="Search your notes" TextChanged="OnTextChanged" SearchButtonPressed="OnSearch" AutomationId="SearchBar" />
-        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Padding="20,0,20,4">
-            <Label Text="Also in the text of the notes" Style="{StaticResource Muted}" VerticalOptions="Center" />
+    <!-- The density toggle and the tags page live in the page, not the header: beside the badge
+         they squeezed the title to "Po..." on a real iPhone (15.11). The header keeps title + badge. -->
+    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*">
+        <SearchBar x:Name="Query" Margin="16,8,16,0" Placeholder="{loc:Translate SearchPlaceholder}"
+                   TextChanged="OnTextChanged" SearchButtonPressed="OnSearch" AutomationId="SearchBar" />
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Padding="16,8,16,4">
+            <Label Text="{loc:Translate SearchInText}" Style="{StaticResource SubtitleLabel}" VerticalOptions="Center" />
             <Switch Grid.Column="1" x:Name="InText" IsToggled="True" Toggled="OnInTextToggled" />
         </Grid>
-        <CollectionView Grid.Row="2" x:Name="Results" SelectionMode="None">
+        <!-- Tag filter chips: All plus every tag; the selected one narrows the result. -->
+        <ScrollView Grid.Row="2" Orientation="Horizontal" Padding="16,0,16,4" HorizontalScrollBarVisibility="Never">
+            <HorizontalStackLayout x:Name="TagChips" Spacing="8" />
+        </ScrollView>
+        <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" Margin="16,8,16,4">
+            <Label Grid.Column="0" x:Name="ResultsLabel" Style="{StaticResource SubtitleLabel}" VerticalOptions="Center" />
+            <Button Grid.Column="1" x:Name="ExpandToggle" Style="{StaticResource IconButton}"
+                    Clicked="OnToggleExpand" AutomationId="ExpandToggle" VerticalOptions="Center" />
+            <Button Grid.Column="2" Text="{loc:Translate TagList}" Style="{StaticResource TextButton}"
+                    Clicked="OnTags" AutomationId="TagsButton" VerticalOptions="Center" />
+        </Grid>
+        <RefreshView Grid.Row="4" x:Name="Refresher" Refreshing="OnRefreshing">
+        <CollectionView x:Name="Results" SelectionMode="None" Margin="16,4,16,100">
             <CollectionView.EmptyView>
-                <Label x:Name="EmptyLabel" Style="{StaticResource Muted}" HorizontalTextAlignment="Center" Margin="24,48"
-                       Text="Titles, folders and, with the switch on, the notes' text. Search by meaning runs on your computers." />
+                <VerticalStackLayout Padding="20,36" Spacing="12" HorizontalOptions="Center">
+                    <Label x:Name="EmptyTitle" Text="{loc:Translate NothingFoundTitle}" Style="{StaticResource EmptyTitle}" IsVisible="False" />
+                    <Label x:Name="EmptyDesc" Style="{StaticResource EmptyDesc}" />
+                    <Button x:Name="ResetButton" Text="{loc:Translate Reset}" Style="{StaticResource SecondaryButton}"
+                            IsVisible="False" Clicked="OnReset" AutomationId="ResetSearchButton" />
+                </VerticalStackLayout>
             </CollectionView.EmptyView>
             <CollectionView.ItemTemplate>
                 <DataTemplate x:DataType="services:NoteListItem">
-                    <Grid ColumnDefinitions="36,*" Padding="20,10" MinimumHeightRequest="56">
-                        <Grid.GestureRecognizers>
-                            <TapGestureRecognizer Tapped="OnItemTapped" />
-                        </Grid.GestureRecognizers>
-                        <Label Text="{Binding Glyph}" FontSize="20" VerticalOptions="Center" />
-                        <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
-                            <Label Text="{Binding Name}" FontSize="17" LineBreakMode="TailTruncation" />
-                            <Label Text="{Binding Path}" Style="{StaticResource Muted}" FontSize="12" />
-                        </VerticalStackLayout>
-                    </Grid>
+                    <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                            Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                            StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                            Padding="6" Margin="0,4">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" Padding="0,4" MinimumHeightRequest="48">
+                            <Grid.GestureRecognizers>
+                                <TapGestureRecognizer Tapped="OnItemTapped" />
+                            </Grid.GestureRecognizers>
+                            <Border Grid.Column="0" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                    StrokeShape="RoundRectangle 12"
+                                    BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}">
+                                <Border.Triggers>
+                                    <DataTrigger TargetType="Border" Binding="{Binding IsFolder}" Value="True">
+                                        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}" />
+                                    </DataTrigger>
+                                </Border.Triggers>
+                                <Image WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center"
+                                       Source="{AppThemeBinding Light=icon_row_file_light.png, Dark=icon_row_file_dark.png}">
+                                    <Image.Triggers>
+                                        <DataTrigger TargetType="Image" Binding="{Binding IsFolder}" Value="True">
+                                            <Setter Property="Source" Value="{AppThemeBinding Light=icon_row_folder_light.png, Dark=icon_row_folder_dark.png}" />
+                                        </DataTrigger>
+                                    </Image.Triggers>
+                                </Image>
+                            </Border>
+                            <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                <Label Text="{Binding Name}" Style="{StaticResource ItemTitle}"
+                                       LineBreakMode="{Binding Source={x:Reference PageRoot}, Path=ItemsLineBreakMode}"
+                                       MaxLines="{Binding Source={x:Reference PageRoot}, Path=ItemsMaxLines}" />
+                                <Label Text="{Binding Path, Converter={StaticResource DisplayPath}}" Style="{StaticResource ItemMeta}" LineBreakMode="TailTruncation" />
+                            </VerticalStackLayout>
+                        </Grid>
+                    </Border>
                 </DataTemplate>
             </CollectionView.ItemTemplate>
         </CollectionView>
+        </RefreshView>
     </Grid>
 </ContentPage>

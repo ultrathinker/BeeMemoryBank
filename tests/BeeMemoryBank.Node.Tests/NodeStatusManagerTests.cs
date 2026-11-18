@@ -111,7 +111,7 @@ public class NodeStatusManagerTests : IDisposable
         File.Exists(runtimePath).Should().BeFalse();
     }
 
-    // ── Этап 6, §6 пункт 1.2 — per-vault isolation ─────────────────────────────
+    // ── Per-vault isolation ─────────────────────────────
 
     /// <summary>
     /// Two <see cref="NodeStatusManager"/> instances constructed with DIFFERENT

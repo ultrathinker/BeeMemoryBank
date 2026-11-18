@@ -106,7 +106,7 @@ Api and Web remain unlisted in Core's grants, as before.
 
 Goldens after the cut: full-node routes and container identical to the S0 baseline; blind-host container identical to the S2 golden.
 
-## Review round (independent reviews of the finished cut)
+## Review findings (independent reviews of the finished cut)
 
 Findings that led to changes after S4, and the two decisions that were not changes:
 

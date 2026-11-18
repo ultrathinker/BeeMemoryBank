@@ -257,7 +257,7 @@ public class SnapshotJoinEndpointTests : IAsyncLifetime
     private sealed record AuthTokenDto(string Token);
 
     /// <summary>
-    /// Newer: this build cannot apply its events. Older than 3 (review L-stage0 #2): it accepts a
+    /// Newer: this build cannot apply its events. Older than 3: it accepts a
     /// blind node's events, so nothing from it is taken in.
     /// </summary>
     [Theory]

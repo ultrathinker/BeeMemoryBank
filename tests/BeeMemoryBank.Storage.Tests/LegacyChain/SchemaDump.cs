@@ -18,15 +18,16 @@ internal static class SchemaDump
     // What the migrations AFTER the baseline add (041 and up). The squash tests compare a database with the schema the 39-file chain built, which is the
     // baseline's, so these objects and ledger rows stay out of every dump (PostBaselineTests checks them on their own).
     private const int FirstPostBaselineVersion = MigrationRunner.BaselineVersion + 1;
-    private static readonly HashSet<string> PostBaselineTables = new(StringComparer.Ordinal) { "tbl_blind_invite", "tbl_peer_endpoint", "tbl_peer_channel" };
+    private static readonly HashSet<string> PostBaselineTables = new(StringComparer.Ordinal) { "tbl_blind_invite", "tbl_peer_endpoint", "tbl_peer_channel", "tbl_node_state", "tbl_node_key_history", "tbl_node_key_conflict", "tbl_accounts_home", "tbl_shared_doors_state", "tbl_offboarding", "tbl_offboarding_node", "tbl_removed_person" };
 
     // Columns that migrations after the baseline ADD to tables the baseline already had (043, release 2.7.5: the password
-    // hint and the node-level recovery-key flags; 045: the version of each concern of a whitelist row). They stay out of the
+    // hint and the node-level recovery-key flags; 045: the version of each concern of a whitelist row; 047: person_id and
+    // whitelist ownership; 050: tbl_user.replicated). They stay out of the
     // dump for the same reason the whole table of 041 does: the oracle is the schema the 39-file chain built, and
     // PostBaselineTests checks these columns on their own.
     private static readonly Dictionary<string, HashSet<string>> PostBaselineColumns = new(StringComparer.Ordinal)
     {
-        ["tbl_user"] = new(StringComparer.Ordinal) { "password_hint" },
+        ["tbl_user"] = new(StringComparer.Ordinal) { "password_hint", "person_id", "replicated", "account_state" },
         ["tbl_node_identity"] = new(StringComparer.Ordinal)
         {
             "recovery_key_required", "recovery_key_acknowledged_at", "recovery_key_notice_dismissed_at"
@@ -34,8 +35,21 @@ internal static class SchemaDump
         ["tbl_whitelist"] = new(StringComparer.Ordinal)
         {
             "member_lamport_ts", "member_source_node_id", "superadmin_lamport_ts", "superadmin_source_node_id", "name_lamport_ts",
-            "name_source_node_id", "address_lamport_ts", "address_source_node_id", "tls_lamport_ts", "tls_source_node_id", "undated_fields"
+            "name_source_node_id", "address_lamport_ts", "address_source_node_id", "tls_lamport_ts", "tls_source_node_id", "undated_fields",
+            "ownership", "owner_person_id", "owner_label", "ownership_lamport_ts", "ownership_source_node_id", "needs_review"
         },
+        // 046: the sealed doors (door format, public key, DEK fingerprint, owner, maker, label).
+        ["tbl_key_slot"] = new(StringComparer.Ordinal)
+        {
+            "door_version", "door_public_key", "dek_fp", "owner_user_id", "created_by_user_id", "label"
+        },
+        ["tbl_agent"] = new(StringComparer.Ordinal) { "door_public_key", "dek_fp", "created_by_user_id" },
+    };
+
+    // Triggers that migrations after the baseline add to tables the baseline already had (046: the owner of a user door).
+    private static readonly HashSet<string> PostBaselineTriggers = new(StringComparer.Ordinal)
+    {
+        "trg_key_slot_owner_user_insert", "trg_key_slot_owner_user_update"
     };
 
     private static readonly Regex Blanks = new(@"\s+", RegexOptions.Compiled);
@@ -53,6 +67,7 @@ internal static class SchemaDump
         {
             if (!withLedger && (name == "tbl_migration" || tblName == "tbl_migration")) continue;
             if (PostBaselineTables.Contains(name) || PostBaselineTables.Contains(tblName)) continue; // its indexes and triggers carry its name as tbl_name
+            if (type == "trigger" && PostBaselineTriggers.Contains(name)) continue;
             if (type == "table")
             {
                 sb.Append("TABLE ").Append(name).Append(" | ").AppendLine(sql is not null && sql.StartsWith("CREATE VIRTUAL", StringComparison.OrdinalIgnoreCase) ? Normalize(sql) : "");
@@ -93,7 +108,8 @@ internal static class SchemaDump
     public static List<string> RowTables(IDbConnection conn) =>
         conn.Query<string>(
             @"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'fts\_%' ESCAPE '\'
-                AND name <> 'tbl_migration' AND name <> 'tbl_blind_invite' AND name <> 'tbl_peer_endpoint' AND name <> 'tbl_peer_channel'
+                AND name <> 'tbl_migration' AND name <> 'tbl_blind_invite' AND name <> 'tbl_peer_endpoint' AND name <> 'tbl_peer_channel' AND name <> 'tbl_node_state' AND name <> 'tbl_node_key_history' AND name <> 'tbl_node_key_conflict' AND name <> 'tbl_accounts_home' AND name <> 'tbl_shared_doors_state'
+                AND name <> 'tbl_offboarding' AND name <> 'tbl_offboarding_node' AND name <> 'tbl_removed_person'
                 AND (sql IS NULL OR sql NOT LIKE 'CREATE VIRTUAL%') ORDER BY name").ToList();
 
     /// <summary>Per table: the row count and a digest of every row (a row is its values, a blob as hex; rows sorted as text).</summary>

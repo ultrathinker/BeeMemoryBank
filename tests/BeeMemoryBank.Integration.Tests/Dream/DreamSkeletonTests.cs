@@ -24,7 +24,7 @@ using ProxyRouteTable = WebApp::BeeMemoryBank.Web.Services.ProxyRouteTable;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The skeleton of Dream (package P0a): the six tables in chat.db with their re-key fates, the node reset, every route of plan 3.8 behind the
+/// The skeleton of Dream: the six tables in chat.db with their re-key fates, the node reset, every route of plan 3.8 behind the
 /// superadmin and non-agent gates with 409 locked on changes while locked, the services every package fills, and the Web side (proxy entry, Admin
 /// catalog row).
 /// </summary>
@@ -157,7 +157,7 @@ public class DreamSkeletonTests : IAsyncLifetime
         "GET /api/dream/advice", "GET /api/dream/advice/{id:guid}", "GET /api/dream/advice/{id:guid}/prompt",
         "POST /api/dream/advice/{id:guid}/apply", "POST /api/dream/advice/{id:guid}/dismiss", "POST /api/dream/advice/{id:guid}/status",
         "GET /api/dream/rules", "DELETE /api/dream/rules/{id:guid}", "GET /api/dream/compare",
-        // The descriptions of the "View all rules" dialog (Dream UX round 2, package A).
+        // The descriptions of the "View all rules" dialog.
         "GET /api/dream/rulebook",
     ];
 

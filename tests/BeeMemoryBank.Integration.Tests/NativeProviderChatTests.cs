@@ -38,6 +38,7 @@ public class NativeProviderChatTests : IAsyncLifetime
         // process, and the classes that chat as user 1 already use much of that budget.
         _client.DefaultRequestHeaders.Add("X-User-Id", "2102");
         await _factory.InitializeNodeAsync(password: Password);
+        await ForwardedUsers.EnsureAsync(_factory.Services, 2102);
         (await _factory.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue();
     }
 
@@ -325,7 +326,7 @@ public class NativeProviderChatTests : IAsyncLifetime
         Sent(2).GetProperty("contents")[1].GetProperty("parts")[0].GetProperty("thoughtSignature").GetString().Should().Be(GeminiClient.SkipSignature);
     }
 
-    // ── a refusal or a safety block is an answer, not a failure (review prov-r2, finding 2) ─────────────────
+    // ── a refusal or a safety block is an answer, not a failure ─────────────────
 
     /// <summary>Provider A (<paramref name="protocol"/>, two keys) holds the default text model, provider B (OpenAI format) its fallback.</summary>
     private async Task<(ChatProvider A, ChatProvider B)> RefusalChainAsync(string protocol)

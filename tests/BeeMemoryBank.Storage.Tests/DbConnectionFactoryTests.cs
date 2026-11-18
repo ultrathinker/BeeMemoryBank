@@ -10,7 +10,7 @@ namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
 /// The connection lifetime bookkeeping of <see cref="DbConnectionFactory"/>: what the drain gate
-/// counts, and — the point of review l-root5 #1 — that a connection which fails to initialize is
+/// counts, and — the point — that a connection which fails to initialize is
 /// not left counted. A leaked count never heals: the next blind seed waits the whole drain timeout
 /// for a connection nobody holds and then fails with 400.
 /// </summary>

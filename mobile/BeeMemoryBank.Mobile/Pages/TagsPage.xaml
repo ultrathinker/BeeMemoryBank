@@ -1,77 +1,93 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- The Tags list in the look of the Search list: a row with the tag icon box, the name, the article
+     count and the ⋮ actions button; the empty state like the empty folder. Rename / delete go through
+     the same actions sheet and dialogs the tree uses, and the same core services as before. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
              x:Class="BeeMemoryBank.Mobile.Pages.TagsPage"
-             Title="Tags"
-             BackgroundColor="{StaticResource BackgroundColor}">
+             Title="{loc:Translate Tags}">
 
     <Grid RowDefinitions="Auto,*">
 
         <ActivityIndicator x:Name="LoadingIndicator"
                            Grid.Row="0" Grid.RowSpan="2"
-                           IsRunning="False"
-                           IsVisible="False"
-                           Color="{StaticResource PrimaryColor}"
-                           VerticalOptions="Center"
-                           HorizontalOptions="Center"
+                           IsRunning="False" IsVisible="False"
+                           VerticalOptions="Center" HorizontalOptions="Center"
                            ZIndex="10" />
 
-        <SearchBar Grid.Row="0"
-                   x:Name="TagsSearchBar"
-                   AutomationId="TagsSearchBar"
-                   Placeholder="Search tags..."
-                   TextChanged="OnSearchTextChanged"
-                   Style="{StaticResource BaseSearchBar}"
-                   Margin="8,8,8,0" />
+        <Border Grid.Row="0"
+                BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                Stroke="{AppThemeBinding Light={StaticResource BmbBorderStrongLight}, Dark={StaticResource BmbBorderStrong}}"
+                StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                Padding="14,4,6,4" MinimumHeightRequest="48" Margin="16,10,16,0">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                <Image Grid.Column="0" WidthRequest="18" HeightRequest="18" VerticalOptions="Center"
+                       Source="{AppThemeBinding Light=icon_row_search_light.svg, Dark=icon_row_search_dark.svg}" />
+                <Entry Grid.Column="1" x:Name="TagsSearchBar" AutomationId="TagsSearchBar"
+                       Placeholder="{loc:Translate SearchTagsPlaceholder}"
+                       BackgroundColor="Transparent"
+                       TextChanged="OnSearchTextChanged"
+                       ReturnType="Search" />
+                <Button Grid.Column="2" x:Name="ClearTagSearchButton" AutomationId="ClearTagSearchButton"
+                        Style="{StaticResource IconButton}" WidthRequest="40" HeightRequest="40"
+                        IsVisible="False" SemanticProperties.Description="{loc:Translate ClearSearch}"
+                        Clicked="OnClearTagSearchClicked">
+                    <Button.ImageSource>
+                        <AppThemeBinding Light="icon_row_clear_light.svg" Dark="icon_row_clear_dark.svg" />
+                    </Button.ImageSource>
+                </Button>
+            </Grid>
+        </Border>
 
         <RefreshView Grid.Row="1" x:Name="RefreshView" Refreshing="OnRefreshing">
-            <CollectionView x:Name="TagsList"
-                            AutomationId="TagsList"
-                            SelectionMode="None"
-                            Margin="8,8,8,0">
+            <CollectionView x:Name="TagsList" AutomationId="TagsList"
+                            SelectionMode="None" Margin="16,8,16,16">
                 <CollectionView.EmptyView>
-                    <StackLayout Padding="16" VerticalOptions="Center" HorizontalOptions="Center">
-                        <Label Text="No tags found"
-                               TextColor="{StaticResource SecondaryTextColor}"
-                               FontSize="16"
-                               HorizontalOptions="Center" />
-                    </StackLayout>
+                    <VerticalStackLayout Padding="20,36" Spacing="12" HorizontalOptions="Center">
+                        <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                                StrokeShape="RoundRectangle 16" WidthRequest="52" HeightRequest="52" HorizontalOptions="Center">
+                            <Image Source="{AppThemeBinding Light=icon_row_tag_light.svg, Dark=icon_row_tag_dark.svg}"
+                                   WidthRequest="26" HeightRequest="26" HorizontalOptions="Center" VerticalOptions="Center" />
+                        </Border>
+                        <Label Text="{loc:Translate TagsEmptyTitle}" Style="{StaticResource EmptyTitle}" />
+                        <Label Text="{loc:Translate TagsEmptyDesc}" Style="{StaticResource EmptyDesc}" />
+                    </VerticalStackLayout>
                 </CollectionView.EmptyView>
                 <CollectionView.ItemTemplate>
                     <DataTemplate>
-                        <Frame Style="{StaticResource CardFrame}" Margin="0,4">
-                            <Frame.GestureRecognizers>
-                                <TapGestureRecognizer Tapped="OnTagTapped" />
-                            </Frame.GestureRecognizers>
-                            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-                                <Label Grid.Column="0"
-                                       Text="{Binding Name}"
-                                       FontAttributes="Bold"
-                                       FontSize="15"
-                                       LineBreakMode="TailTruncation"
-                                       VerticalOptions="Center" />
-                                <Label Grid.Column="1"
-                                       Text="{Binding Count}"
-                                       FontSize="14"
-                                       TextColor="{StaticResource SecondaryTextColor}"
-                                       VerticalOptions="Center" />
-                                <Button Grid.Column="2"
-                                        Text="⋮"
-                                        FontSize="18"
-                                        WidthRequest="40"
-                                        HeightRequest="36"
-                                        Padding="0"
-                                        BackgroundColor="Transparent"
-                                        TextColor="{StaticResource SecondaryTextColor}"
+                        <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                                Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                                StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                                Padding="6,6,6,12" Margin="0,4">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                                <Grid Grid.Column="0" ColumnDefinitions="Auto,*" ColumnSpacing="12"
+                                      Padding="0,4" MinimumHeightRequest="48">
+                                    <Grid.GestureRecognizers>
+                                        <TapGestureRecognizer Tapped="OnTagTapped" />
+                                    </Grid.GestureRecognizers>
+                                    <Border Grid.Column="0" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                            StrokeShape="RoundRectangle 12"
+                                            BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}">
+                                        <Image WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center"
+                                               Source="{AppThemeBinding Light=icon_row_tag_light.svg, Dark=icon_row_tag_dark.svg}" />
+                                    </Border>
+                                    <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                        <Label Text="{Binding Name}" Style="{StaticResource ItemTitle}" LineBreakMode="TailTruncation" />
+                                        <Label Text="{Binding CountText}" Style="{StaticResource ItemMeta}" LineBreakMode="TailTruncation" />
+                                    </VerticalStackLayout>
+                                </Grid>
+                                <Button Grid.Column="1" Text="⋮" Style="{StaticResource IconButton}"
+                                        AutomationId="TagMenuButton"
+                                        SemanticProperties.Description="{loc:Translate TagActions}"
                                         CommandParameter="{Binding .}"
                                         Clicked="OnTagOptionsClicked" />
                             </Grid>
-                        </Frame>
+                        </Border>
                     </DataTemplate>
                 </CollectionView.ItemTemplate>
             </CollectionView>
         </RefreshView>
 
     </Grid>
-
 </ContentPage>

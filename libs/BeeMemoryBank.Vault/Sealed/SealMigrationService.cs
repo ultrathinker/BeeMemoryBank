@@ -396,7 +396,7 @@ public sealed class SealMigrationService
                 foreach (var q in quiesce) q.Dispose();
             }
 
-            // 11. No plain file is left, and the final scan finds nothing, before anything opens (review round 1, H1). A run that cannot prove it ends
+            // 11. No plain file is left, and the final scan finds nothing, before anything opens. A run that cannot prove it ends
             // here: the node is sealed and locked, the journal keeps the retry, and no unlock opens it while a replaced plain file is readable.
             Set(new SealProgress(SealProgress.Running, 92, "scan"));
             if (await FindPlainRemainsAsync() is { } remains)
@@ -494,7 +494,7 @@ public sealed class SealMigrationService
     }
 
     /// <summary>
-    /// The end of the swap, before anything opens (review round 1, H1): the replaced plain files are wiped (a few tries: what held a file lets go), then
+    /// The end of the swap, before anything opens: the replaced plain files are wiped (a few tries: what held a file lets go), then
     /// the content scan of the data folder, the replaced files included, must find nothing. A finding of a kind the erase may take is erased first;
     /// what is still there is named. Null when no readable plain copy of the vault is on the disk.
     /// </summary>

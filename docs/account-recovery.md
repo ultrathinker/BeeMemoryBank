@@ -43,9 +43,11 @@ a recovery key is issued.
 
 ## The recovery key
 
-A **recovery key** is a second way into the vault's master key, issued once by a superadmin and kept offline
-(Admin → Recovery key → **Issue new recovery key**). It is stored as a key slot of type `recovery`; only a key
-derived from it is in the database, never the key itself.
+A **recovery key** is a second way into the vault's master key, issued by a superadmin **for themself** and kept
+offline (Admin → Recovery keys → **Issue new recovery key**). It is stored as a key slot of type `recovery`; only a
+key derived from it is in the database, never the key itself. Since 2.12 a recovery key is **personal**: it belongs to
+the superadmin who issued it (the slot records the owner) and resets only that person's password. A key issued before
+2.12 has no owner on record; see [keys with no owner](#keys-with-no-owner) below.
 
 If the only administrator forgets their password there used to be no route back in from the browser: the Sign
 In page took a username and a password, changing a password needs the old one (or another superadmin), and the
@@ -56,7 +58,7 @@ recovery key was accepted only by the `bmb` command line and by confirmation box
 **In the browser.** On the Sign In page choose **Forgot your password? Use a recovery key** (`/RecoverAccess`),
 then enter
 
-1. the **username** of the administrator account,
+1. the **username** of the administrator account — for a key issued since 2.12, the account the key belongs to,
 2. a **recovery key** of this node,
 3. a **new password**, twice (the usual rules: at least 8 characters, an upper-case letter, a lower-case letter
    and a digit),
@@ -81,6 +83,10 @@ recovery keys keep working; make a new one if a card or paper copy was lost or s
 
 - **Only superadmin accounts.** A recovery key is the owner's tool. Naming an ordinary user, an unknown user or
   a deactivated one is refused exactly like a wrong key.
+- **Only the key's owner (since 2.12).** A key issued since 2.12 resets only the password of the superadmin it
+  belongs to. Naming another superadmin is refused exactly like a wrong key, after the same work — the answer is no
+  oracle for who owns which key. A key issued **before 2.12** has no owner on record and keeps the older rule: it
+  resets any active superadmin's password.
 - **Only this node's keys.** A recovery key from another node's database does not work; neither does a password
   offered as a "recovery key".
 - **Only the one account changes.** Other superadmins' passwords and key slots, and every recovery key, are left
@@ -91,6 +97,56 @@ recovery keys keep working; make a new one if a card or paper copy was lost or s
 - **No hint.** Every refusal is the same sentence — *The username or the recovery key is not correct.* — after the
   same amount of password-hashing work, so it cannot be used to find out which usernames exist or which accounts
   are administrators.
+- **Replicated superadmins on shared nodes ([ADR 0014](adr/0014-people-and-shared-nodes.md)).** On a shared non-home
+  node whose accounts live on an **accounts node**, verifying a *wrong* recovery key still gives the exact generic
+  refusal above (preserving no-oracle parity). Once the recovery key itself proves valid, any reset targeting a
+  replicated superadmin (`replicated = 1`) is refused — HTTP 409 from `POST /api/session/recover-access`, exit code 1
+  from `bmb user reset-password` — naming the accounts node so the user resets their password there instead;
+  the subsequent `superadmin_doors_set` event pushes the updated public door to all shared nodes.
+
+## Listing and revoking keys
+
+Admin → **Recovery keys** lists every recovery key of the node: its owner (or "owner unknown" for a key issued before
+2.12), when it was issued, and the label its owner gave it. The key itself is never shown again — it is not stored in
+recoverable form. A superadmin sees all keys.
+
+- **Issue new recovery key** makes a key for the signed-in superadmin, with an optional label ("the card in the safe").
+  It is shown once; copy it before closing the window.
+- **Revoke** (the bin on a row) stops that key working at once — it can no longer reset a password or open the vault —
+  and cannot be undone. Revoking another person's key asks for a confirmation that names them.
+- **Revoke all keys with unknown owner** revokes every pre-2.12 key whose owner is unknown (below).
+
+A revoke is refused if it would leave the node with **no door a person can open**: there must remain another recovery
+key, the legacy password, or an active superadmin's password. Auto-unlock doors (OS, server, quick unlock) are machine
+secrets and do not count. The same rule holds for deleting a slot of any other kind (`KeyManagementService.RemoveSlotAsync`, the
+phones' slot cards): a superadmin's own password door cannot go while only machine doors would be left. The API is `GET /api/keys/recovery-list`, `POST /api/keys/recovery-revoke` and
+`POST /api/keys/recovery-revoke-unknown` (superadmin only). Issuing and revoking are audited (`recovery_key_issued` /
+`recovery_key_revoked`) with the slot, the owner and the actor — never the key.
+
+### Keys with no owner
+
+A key issued before 2.12 has no owner on record, so nobody can say whose it is; anyone holding it can reset any
+superadmin's password. These keys, together with the un-migrated legacy `password` slot and agents whose owner is
+missing, form the **unknown-owner set**. A removal revokes them by default (`UnknownOwnerDoors`); the Recovery keys page
+offers the same "revoke all keys with unknown owner" action. The synthetic "admin" account a migrated vault gets is an
+ordinary person (its slot and agents have an owner), so it is never in this set.
+
+Demoting or deleting a superadmin revokes that person's recovery keys along with their other doors — a recovery key is
+personal and goes with the person.
+
+## When a superadmin is removed
+
+The removal of a superadmin (2.12, ADR 0014) takes their recovery keys away in its first step, together with their password door:
+from that moment their key opens nothing and resets no password, on the Sign In page and with `bmb user reset-password` alike, and
+an account that is "being removed" is refused a reset even with a key it never owned. The recovery keys of everybody who stays keep
+working through the removal's master-key change (a sealed recovery door is re-sealed by the rotation). Ownerless keys issued before
+2.12 are in the unknown-owner set the removal's review lists, pre-selected "remove".
+
+On shared nodes the person's account is a mirror of the accounts node's list. From the first step the mirror is "being removed" too
+(the person cannot sign in there and cannot join a device); once the shared node applies the list without them (step S2) the mirror
+and its door are gone. A recovery key never resets a mirror's password (that is done on the accounts node). If the accounts node is
+lost and a superadmin takes the removal over on a shared node, their mirror there becomes an account of their own, with the password
+they typed to take it over; their recovery keys are unchanged.
 
 ## Limits and records
 
@@ -100,7 +156,7 @@ recovery keys keep working; make a new one if a card or paper copy was lost or s
 | Per username | 5 attempts per 15 minutes at the node, counted for names that do not exist exactly as for those that do |
 | Typos | A new password that breaks the rules, a missing or invalid hint, or two passwords that do not match, is said at once and costs no attempt |
 | Audit log | `user_password_recovery_reset` (user, client address) and `user_password_recovery_refused` (reason class `key` or `account`, address) — never the key, a password, a hint or a name that is not an account |
-| Other nodes | Key slots are node-local, so other nodes still accept the old password. A `master_password_changed` event tells them, as the Admin → Master Password page does |
+| Other nodes | Key slots are node-local, so other **personal** nodes still accept the old password; a `master_password_changed` event tells them, as the Admin → Master Password page does. A **shared** node is different: the reset happens on the accounts node and the updated door reaches every shared node through `superadmin_doors_set` (see the replicated-superadmin rule above) |
 
 The per-username budget means that someone who knows an administrator's username can keep that account's
 recovery locked for a while by guessing; they gain nothing else by it, and the key itself — 256 random bits — is
@@ -155,9 +211,15 @@ file is encrypted and the ways into it live twice: in the database, and as copie
 - `POST /api/session/recover-access` on the API, called only by the Web page (it requires the internal key and is
   **not** in `PublicSurface`: a keyless caller gets 404, like `/api/session/unlock`). A blind node does not map it.
 - `SessionService.TryOpenWithRecoveryKeyAsync` opens only `recovery` slots, checks the sentinel, and returns the
-  master key *without* touching the session. `UserService.ResetPasswordWithRecoveryKeyAsync` then reuses the
-  admin-reset path (`ReplacePasswordAsync`: login hash, key slot, security stamp, remote tokens) with that key.
-- The recovery key is verified first and always at full cost; a valid key with an ineligible name pays the cost
-  of a real reset too.
+  master key together with the **owner of the slot that opened** (`RecoveryKeyOpen`), *without* touching the session.
+  The owner is read from the database row, which is authoritative even when the door came from the boot store of a
+  closed node. `UserService.ResetPasswordWithRecoveryKeyAsync` then reuses the admin-reset path
+  (`ReplacePasswordAsync`: login hash, key slot, security stamp, remote tokens) with that key — but only when the named
+  account is the key's owner (or the key has no owner, a pre-2.12 key).
+- The recovery key is verified first and always at full cost; a valid key with an ineligible name — including another
+  superadmin who is not the key's owner — pays the cost of a real reset too.
+- Issuing (`KeyManagementService.IssueRecoveryKeyAsync`) records the owner and creator (the issuing superadmin) and an
+  optional label; only an active superadmin qualifies. Listing and revoking are `ListRecoveryKeysAsync`,
+  `RemoveSlotAsync` and `RevokeUnknownOwnerRecoveryKeysAsync`, guarded by `SlotDoors.EnsureAPersonDoorRemainsAsync`.
 - Throttling: `PublicRateLimitMiddleware` (per address, route class `RecoverAccess`) and `RecoveryAccessState`
   (per address and per username, plus the pending announcement).

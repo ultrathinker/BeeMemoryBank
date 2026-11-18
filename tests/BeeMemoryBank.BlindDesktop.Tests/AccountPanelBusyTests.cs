@@ -107,7 +107,7 @@ public sealed class AccountPanelBusyTests
     [Fact]
     public async Task AJobThatKeepsRunning_KeepsThePopUpUp_HoweverLongItTakes_AndSaysToNotStartItAgain()
     {
-        // BMB-311 fix round: the pop-up used to end after an hour whatever the status said, giving the commands back with the job still going.
+        // BMB-311: the pop-up used to end after an hour whatever the status said, giving the commands back with the job still going.
         var time = new ManualTimeProvider();
         var app = new FakeApp();
         var work = new FakeWorkRequests();
@@ -135,7 +135,7 @@ public sealed class AccountPanelBusyTests
         vm.IsBusy.Should().BeFalse();
     }
 
-    // ---- BMB-311 fix2 (R2): the model of the phones: a job is open until the state says otherwise ----
+    // ---- BMB-311: the model of the phones: a job is open until the state says otherwise ----
 
     [Fact]
     public async Task AJobAskedForThatHasNotShownUpAfterThirtyOneSeconds_KeepsThePopUpAndTheLock_AndEndsOnlyAsUnreportedAfterTheGrace()

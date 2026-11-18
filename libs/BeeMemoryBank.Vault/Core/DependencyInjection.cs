@@ -39,6 +39,10 @@ public static class DependencyInjection
         services.AddScoped<CommentService>();
         services.AddScoped<MediaService>();
         services.AddScoped<UserService>();
+        // The tombstones of removed people and the lock-out while a replicated removal is open (release 2.12.0, plan R1/E2).
+        services.AddScoped<RemovedPersonEnforcer>();
+        services.AddScoped<IRemovedPersonEnforcer>(sp => sp.GetRequiredService<RemovedPersonEnforcer>());
+        services.AddScoped<IOffboardingReplicaObserver>(sp => sp.GetRequiredService<RemovedPersonEnforcer>());
         services.AddScoped<RoleService>();
         services.AddScoped<ObsidianImportService>();
         services.AddScoped<BeeImportService>();

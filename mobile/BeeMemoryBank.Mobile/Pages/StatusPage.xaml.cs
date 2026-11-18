@@ -2,6 +2,7 @@ using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Mobile.Controls;
+using BeeMemoryBank.Mobile.Localization;
 using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Sync;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,79 +12,136 @@ using BeeMemoryBank.Mobile.Platforms.Android;
 
 namespace BeeMemoryBank.Mobile.Pages;
 
-public record ActivityItem(string Icon, string Summary, string ActorName, string TimeAgo);
+public record ActivityItem(string Summary, string TimeAgo);
 
+/// <summary>
+/// The mock-up's Sync screen, built from the working logic the old Status page had: the sync state,
+/// the invisible mode, the peers and their addresses, sync now, the recent events and the background
+/// sync pulse. The "waits for approval" card is the old "Action Required" state — the phone knows no
+/// way to reach a peer (<see cref="SyncStatusService.IsRegisteredOnServer"/> is false) — and it shows
+/// the device's real name and the short id the Admin page shows, not an invented code.
+/// </summary>
 public partial class StatusPage : ContentPage
 {
     private readonly SyncStatusService _statusSvc;
     private readonly IServiceProvider _services;
+    private bool _loading;
+    private List<PeerCard> _peers = [];
 
     public StatusPage(SyncStatusService statusSvc, IServiceProvider services)
     {
         InitializeComponent();
         _statusSvc = statusSvc;
         _services = services;
-        BindingContext = _statusSvc;
     }
 
     protected override void OnAppearing()
     {
         base.OnAppearing();
         _ = LoadAsync();
-        _services.GetRequiredService<Services.SyncNotificationService>().ClearPendingUpdates();
+        _services.GetRequiredService<SyncNotificationService>().ClearPendingUpdates();
     }
 
     protected override void OnDisappearing()
     {
         base.OnDisappearing();
-        _services.GetRequiredService<Services.SyncStatusService>().CancelSync();
+        _statusSvc.CancelSync();
         _statusSvc.StopPolling();
     }
 
-    // Diagnostic: show when the background sync loop last actually ran on this device (from the
-    // persisted heartbeat) — works even after the app was killed / off-charger / rebooted.
-    private void UpdateBackgroundSyncHeartbeat()
+    private static bool IsOffline()
     {
-        var (lastCycleUtc, status, count, serviceStartUtc) = Services.SyncHeartbeat.Read();
-        if (lastCycleUtc == null)
-        {
-            BgSyncLabel.Text = "No background sync has run yet on this device.";
-            BgSyncDetailLabel.Text = serviceStartUtc != null
-                ? $"Service started {Ago(serviceStartUtc.Value)}, but no cycle completed."
-                : "Service hasn't started yet.";
-            return;
-        }
-        BgSyncLabel.Text = $"Last cycle: {Ago(lastCycleUtc.Value)} — {status}";
-        BgSyncDetailLabel.Text = $"Cycles so far: {count}"
-            + (serviceStartUtc != null ? $" · service (re)started {Ago(serviceStartUtc.Value)}" : "");
-    }
-
-    private static string Ago(DateTime utc)
-    {
-        var d = DateTime.UtcNow - utc;
-        if (d < TimeSpan.Zero) d = TimeSpan.Zero;
-        if (d.TotalMinutes < 1) return $"{(int)d.TotalSeconds}s ago";
-        if (d.TotalHours < 1) return $"{(int)d.TotalMinutes}m ago";
-        if (d.TotalDays < 1) return $"{(int)d.TotalHours}h {(int)d.Minutes}m ago";
-        return $"{(int)d.TotalDays}d {(int)d.Hours}h ago";
+        var access = Connectivity.Current.NetworkAccess;
+        return access != NetworkAccess.Internet && access != NetworkAccess.ConstrainedInternet;
     }
 
     private async Task LoadAsync()
     {
-        await Task.Run(async () => await _statusSvc.RefreshAsync());
+        await Task.Run(() => _statusSvc.RefreshAsync());
         _statusSvc.StartPolling();
-        WarningBanner.IsVisible = !_statusSvc.IsRegisteredOnServer;
 
-        // Self-heal: if the ingest key never enrolled (e.g. a transient Keystore failure at first
-        // setup left background backup dead), enrol it now while unlocked. Surface a banner only if
-        // it still isn't armed afterwards, so the failure is never silent.
+        // The approval state takes over the whole screen, exactly as the mock-up draws it.
+        var registered = _statusSvc.IsRegisteredOnServer;
+        PendingCard.IsVisible = !registered;
+        NormalScreen.IsVisible = registered;
+        if (!registered)
+        {
+            PendingDeviceName.Text = _statusSvc.NodeName;
+            PendingDeviceId.Text = _statusSvc.NodeIdShort;
+            return;
+        }
+
+        var offline = IsOffline();
+        // Real failures in red, a computer that is simply away in yellow, each in the app's own words.
+        var disconnected = _statusSvc.LastProblemCode == SyncStatusService.ProblemDisconnected;
+        var error = _statusSvc.LastProblemCode is not null && !disconnected;
+        OfflineBanner.IsVisible = offline;
+        ErrorBanner.IsVisible = error;
+        DisconnectedBanner.IsVisible = disconnected;
+        if (error) ErrorText.Text = Controls.SyncText.Problem(_statusSvc.LastProblemCode, "") ?? "";
+        UnreachableBanner.IsVisible = !error && _statusSvc.LastUnreachable > 0;
+        UnreachableText.Text = _statusSvc.LastUnreachable > 0 ? Controls.SyncText.Unreachable(_statusSvc.LastUnreachablePeer ?? "") : "";
+
+        // Self-heal the ingest key (a transient Keystore failure at first setup left background backup
+        // dead); a banner only if it still isn't armed afterwards, so the failure is never silent.
         var enroller = _services.GetRequiredService<IngestKeyEnroller>();
         await enroller.TryEnrollAsync();
-        BackupWarningBanner.IsVisible = !enroller.IsArmed();
-        UpdateBackgroundSyncHeartbeat();
-        await LoadActivityAsync();
+        BgWarningBanner.IsVisible = !enroller.IsArmed();
+
+        UpdateStateCard(offline, error);
+        UpdateInvisibleSwitch();
+        UpdateBackgroundSyncValue();
         await LoadPeersAsync();
+        await LoadActivityAsync();
     }
+
+    private void UpdateStateCard(bool offline, bool error)
+    {
+        string pillKey, foreground, border, background;
+        if (offline) { pillKey = "SyncOfflineTitle"; foreground = "TextMuted"; border = "Border"; background = "Surface"; }
+        else if (error) { pillKey = "SyncStateError"; foreground = "Error"; border = "ErrorBorder"; background = "ErrorBackground"; }
+        else if (_statusSvc.LastProblemCode == SyncStatusService.ProblemDisconnected) { pillKey = "SyncStateDisconnected"; foreground = "TextMuted"; border = "Border"; background = "Surface"; }
+        else if (_statusSvc.LastUnreachable > 0) { pillKey = "SyncStateUnreachable"; foreground = "Warning"; border = "WarningBorder"; background = "WarningBackground"; }
+        else if (_statusSvc.IsInvisible) { pillKey = "SyncStateInvisible"; foreground = "TextMuted"; border = "Border"; background = "Surface"; }
+        else { pillKey = "SyncStateReady"; foreground = "Success"; border = "SuccessBorder"; background = "SuccessBackground"; }
+
+        StatePillLabel.Text = AppStrings.Get(pillKey);
+        StatePillLabel.TextColor = ThemeManager.Token(foreground);
+        StatePill.BackgroundColor = ThemeManager.Token(background);
+        StatePill.Stroke = ThemeManager.Token(border);
+
+        LastSyncRow.Label = AppStrings.Get(error ? "SyncLastSuccessSync" : "SyncLastSync");
+        LastSyncValue.Text = _statusSvc.LastSyncTime == default
+            ? AppStrings.Get("SyncNever")
+            : ContentFormat.FullDate(_statusSvc.LastSyncTime);
+
+        // The mock-up disables "sync now" only when there is no network.
+        SyncNowButton.IsEnabled = !offline;
+    }
+
+    private void UpdateInvisibleSwitch()
+    {
+        _loading = true;
+        InvisibleSwitch.IsToggled = _statusSvc.IsInvisible;
+        _loading = false;
+    }
+
+    private void UpdateBackgroundSyncValue()
+    {
+        var (lastCycleUtc, _, _, _) = SyncHeartbeat.Read();
+        BgSyncValue.Text = lastCycleUtc == null
+            ? AppStrings.Get("SyncBgNever")
+            : AppStrings.Format("SyncBgLastRunFormat", TimeAgo(lastCycleUtc.Value));
+    }
+
+    private void OnInvisibleToggled(object? sender, ToggledEventArgs e)
+    {
+        if (_loading) return;
+        _statusSvc.IsInvisible = e.Value;
+        UpdateStateCard(IsOffline(), _statusSvc.LastProblemCode is not null && _statusSvc.LastProblemCode != SyncStatusService.ProblemDisconnected);
+    }
+
+    // ---- devices ----
 
     private async Task LoadPeersAsync()
     {
@@ -96,18 +154,16 @@ public partial class StatusPage : ContentPage
                 var identity = scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>();
                 var local = await identity.GetAsync();
                 var all = await whitelist.GetAllActiveAsync();
-                // Defense-in-depth fail-closed filter: if identity read fails, show nothing
-                // rather than risk leaking the self-row. The real invariant is that self
-                // never lives in tbl_whitelist (enforced in InitializationService / NodeSetupService).
+                // Defense-in-depth fail-closed filter: if identity read fails, show nothing rather
+                // than risk leaking the self-row (self never lives in tbl_whitelist).
                 if (local == null) return new List<PeerCard>();
 
-                // How often this phone syncs now: the foreground service every 5 minutes, else the worker every 15. A direct contact counts for 2.5 of them.
 #if ANDROID
                 var interval = TimeSpan.FromMinutes(SyncForegroundService.IsRunning ? 5 : 15);
 #else
                 var interval = TimeSpan.FromMinutes(15);
 #endif
-                var (lastCycleUtc, _, _, _) = Services.SyncHeartbeat.Read();
+                var (lastCycleUtc, _, _, _) = SyncHeartbeat.Read();
                 var ownCycleRecent = lastCycleUtc is { } at && DateTime.UtcNow - at < TimeSpan.FromMinutes(20);
 
                 var channels = scope.ServiceProvider.GetRequiredService<PeerChannelService>();
@@ -116,7 +172,11 @@ public partial class StatusPage : ContentPage
                     cards.Add(await channels.CardAsync(peer, interval, ownCycleRecent));
                 return cards;
             });
-            PeersList.ItemsSource = peers;
+            _peers = peers;
+            DevicesList.Children.Clear();
+            NoDevicesLabel.IsVisible = peers.Count == 0;
+            foreach (var card in peers)
+                DevicesList.Children.Add(BuildDeviceRow(card));
         }
         catch (Exception ex)
         {
@@ -124,129 +184,294 @@ public partial class StatusPage : ContentPage
         }
     }
 
-    private async void OnRemovePeerClicked(object? sender, EventArgs e)
+    private View BuildDeviceRow(PeerCard card)
     {
-        if (sender is not Button btn || btn.CommandParameter is not WhitelistEntry entry) return;
+        var resources = Application.Current?.Resources;
+        var theme = ThemeManager.Effective == AppTheme.Light ? "light" : "dark";
+        var field = new VerticalStackLayout { Spacing = 2 };
+        field.Children.Add(new Label { Text = card.DisplayName, Style = (Style?)resources?["ItemTitle"] });
+        // The reachability line in the app's own words; a computer that is simply away in yellow.
+        if (card.ReachState is { } state)
+        {
+            var away = Controls.SyncText.IsUnreachableState(state);
+            var text = away ? Controls.SyncText.Unreachable(card.Entry.DisplayName) : Controls.SyncText.Reachability(state, card.Entry.DisplayName);
+            if (text is not null)
+                field.Children.Add(new Label
+                {
+                    Text = text,
+                    Style = (Style?)resources?["ItemMeta"],
+                    TextColor = ThemeManager.Token(away ? "Warning" : "TextSecondary"),
+                });
+        }
+        field.Children.Add(new Label
+        {
+            Text = card.AddressLine,
+            FontFamily = "monospace",
+            FontSize = 12,
+            LineBreakMode = LineBreakMode.TailTruncation,
+            TextColor = ThemeManager.Token("TextSecondary"),
+        });
 
-        bool confirmed = await DisplayAlert(
-            "Remove Node",
-            $"Remove \"{entry.DisplayName}\" from peers? They will no longer sync with this node.",
-            "Remove", "Cancel");
+        var grid = new Grid { ColumnDefinitions = [new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto)], ColumnSpacing = 8 };
+        grid.Children.Add(field);
+        Grid.SetColumn(field, 0);
+        var chevron = new Image { Source = $"icon_row_chevron_{theme}.svg", WidthRequest = 18, HeightRequest = 18, VerticalOptions = LayoutOptions.Center };
+        grid.Children.Add(chevron);
+        Grid.SetColumn(chevron, 1);
+
+        var row = new Border
+        {
+            BackgroundColor = ThemeManager.Token("Surface"),
+            Stroke = ThemeManager.Token("Border"),
+            StrokeThickness = 1,
+            StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = new CornerRadius(12) },
+            Padding = new Thickness(12),
+            Content = grid,
+        };
+        var tap = new TapGestureRecognizer();
+        tap.Tapped += async (_, _) => await ShowDeviceSheetAsync(card);
+        row.GestureRecognizers.Add(tap);
+        return row;
+    }
+
+    /// <summary>The mock-up's device sheet: change the address, remove an address typed here, or remove the device.</summary>
+    private async Task ShowDeviceSheetAsync(PeerCard card)
+    {
+        var chosen = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answered = false;
+        var resources = Application.Current?.Resources;
+        var stack = new VerticalStackLayout { Spacing = 8 };
+        stack.Children.Add(new Label { Text = card.AddressLine, FontFamily = "monospace", FontSize = 12, TextColor = ThemeManager.Token("TextSecondary") });
+        BottomSheet.BottomSheetPage? sheet = null;
+
+        void Add(string key, string styleKey, string action)
+        {
+            var button = new Button { Text = AppStrings.Get(key), Style = (Style?)resources?[styleKey] };
+            button.Clicked += async (_, _) =>
+            {
+                // Close the sheet FIRST, then answer: the address work pushes another modal right after.
+                answered = true;
+                if (sheet != null) await sheet.CloseAsync();
+                chosen.TrySetResult(action);
+            };
+            stack.Children.Add(button);
+        }
+
+        Add("DeviceChangeAddress", "SecondaryButton", "change");
+        Add("DeviceRemoveAddress", "SecondaryButton", "removeaddr");
+        Add("DeviceRemoveDevice", "DangerButton", "removedev");
+        var cancel = new Button { Text = AppStrings.Get("Cancel"), Style = (Style?)resources?["TextButton"], HorizontalOptions = LayoutOptions.Fill };
+        cancel.Clicked += async (_, _) =>
+        {
+            answered = true;
+            if (sheet != null) await sheet.CloseAsync();
+            chosen.TrySetResult("none");
+        };
+        stack.Children.Add(cancel);
+
+        sheet = new BottomSheet.BottomSheetPage(stack, card.DisplayName);
+        sheet.Disappearing += (_, _) => { if (!answered) chosen.TrySetResult("none"); };
+        await Navigation.PushModalAsync(sheet);
+        switch (await chosen.Task)
+        {
+            case "change": await ChangeAddressForPeerAsync(card.Entry); break;
+            case "removeaddr": await RemoveChannelForPeerAsync(card); break;
+            case "removedev": await RevokePeerAsync(card.Entry); break;
+        }
+    }
+
+    // busy-exempt: opens the device sheet; the address work behind its buttons runs through BusyAction below
+    private async void OnAddAddressClicked(object? sender, EventArgs e)
+    {
+        if (_peers.Count == 0)
+        {
+            await AppDialog.AlertAsync(this, AppStrings.Get("SyncDevicesCard"), AppStrings.Get("SyncNoDevices"));
+            return;
+        }
+        var entry = _peers.Count == 1 ? _peers[0].Entry : await PickDeviceAsync(_peers);
+        if (entry != null) await AddAddressForPeerAsync(entry);
+    }
+
+    private async Task<WhitelistEntry?> PickDeviceAsync(List<PeerCard> peers)
+    {
+        var chosen = new TaskCompletionSource<WhitelistEntry?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answered = false;
+        var resources = Application.Current?.Resources;
+        var stack = new VerticalStackLayout { Spacing = 8 };
+        BottomSheet.BottomSheetPage? sheet = null;
+        foreach (var peer in peers)
+        {
+            var button = new Button { Text = peer.DisplayName, Style = (Style?)resources?["SecondaryButton"] };
+            button.Clicked += async (_, _) =>
+            {
+                // Close the sheet FIRST, then answer: the caller acts on the picked device right after.
+                answered = true;
+                if (sheet != null) await sheet.CloseAsync();
+                chosen.TrySetResult(peer.Entry);
+            };
+            stack.Children.Add(button);
+        }
+        var cancel = new Button { Text = AppStrings.Get("Cancel"), Style = (Style?)resources?["TextButton"], HorizontalOptions = LayoutOptions.Fill };
+        cancel.Clicked += async (_, _) =>
+        {
+            answered = true;
+            if (sheet != null) await sheet.CloseAsync();
+            chosen.TrySetResult(null);
+        };
+        stack.Children.Add(cancel);
+        sheet = new BottomSheet.BottomSheetPage(stack, AppStrings.Get("PickDeviceTitle"));
+        sheet.Disappearing += (_, _) => { if (!answered) chosen.TrySetResult(null); };
+        await Navigation.PushModalAsync(sheet);
+        return await chosen.Task;
+    }
+
+    private async Task ChangeAddressForPeerAsync(WhitelistEntry entry)
+    {
+        var newUrl = await this.ShowInputPopupAsync(
+            AppStrings.Get("DeviceChangeAddress"),
+            AppStrings.Format("ChangeAddressPromptFormat", entry.DisplayName),
+            accept: AppStrings.Get("Save"), cancel: AppStrings.Get("Cancel"),
+            placeholder: AppStrings.Get("AddressPlaceholder"), initialValue: entry.ApiAddress ?? "");
+        if (string.IsNullOrWhiteSpace(newUrl)) return;
+
+        var typed = newUrl;
+        await BusyAction.RunAsync(null, async () =>
+        {
+            // PeerAddressService is the one writer of a peer's address (BMB-307): the same policy, the
+            // same check of what answers there, the event, the audit line. Its sentences never quote the
+            // address, so none is put in a dialog here.
+            var result = await ChangeAddressAsync(entry.NodeId, typed, saveWhenUnanswered: false);
+            if (result.Outcome == PeerAddressOutcome.NoAnswer)
+            {
+                // Nothing answered: warn but allow saving (the address may be filled in before the
+                // server is live). The first session that reaches it checks who answers.
+                var proceed = await AppDialog.ConfirmAsync(this, AppStrings.Get("WarningTitle"), result.Message,
+                    AppStrings.Get("SaveAnyway"), AppStrings.Get("Cancel"));
+                if (!proceed) return;
+                result = await ChangeAddressAsync(entry.NodeId, typed, saveWhenUnanswered: true);
+            }
+            if (!result.Succeeded)
+            {
+                await AppDialog.AlertAsync(this, AppStrings.Get("NotSavedTitle"), result.Message);
+                return;
+            }
+            var unchanged = result.Outcome == PeerAddressOutcome.Unchanged;
+            await AppDialog.AlertAsync(this,
+                AppStrings.Get(unchanged ? "NothingToChangeTitle" : "AddressAddedTitle"),
+                unchanged ? result.Message : AppStrings.Format("AddressUpdatedFormat", entry.DisplayName));
+            await LoadPeersAsync();
+        }, new BusyOptions { FailureTitle = AppStrings.Get("FailedToUpdateTitle") });
+    }
+
+    private async Task AddAddressForPeerAsync(WhitelistEntry entry)
+    {
+        var typed = await this.ShowInputPopupAsync(
+            AppStrings.Get("AddAddressTitle"),
+            AppStrings.Format("AddAddressPromptFormat", entry.DisplayName),
+            accept: AppStrings.Get("Save"), cancel: AppStrings.Get("Cancel"),
+            placeholder: AppStrings.Get("AddressPlaceholder"));
+        if (string.IsNullOrWhiteSpace(typed)) return;
+
+        var text = typed;
+        await BusyAction.RunAsync(null, async () =>
+        {
+            // The address is made canonical, then asked who it is with THIS peer's TLS anchor. Its
+            // sentences never quote the address, so none is put in a dialog here.
+            var result = await AddChannelAsync(entry.NodeId, text, saveWithoutAnswer: false);
+            if (result.CanSaveAnyway)
+            {
+                var proceed = await AppDialog.ConfirmAsync(this, AppStrings.Get("WarningTitle"), result.Message,
+                    AppStrings.Get("SaveAnyway"), AppStrings.Get("Cancel"));
+                if (!proceed) return;
+                result = await AddChannelAsync(entry.NodeId, text, saveWithoutAnswer: true);
+            }
+            if (!result.Succeeded)
+            {
+                await AppDialog.AlertAsync(this, AppStrings.Get("NotSavedTitle"), result.Message);
+                return;
+            }
+            await AppDialog.AlertAsync(this, AppStrings.Get("AddressAddedTitle"), result.Message);
+            await LoadPeersAsync();
+        }, new BusyOptions { FailureTitle = AppStrings.Get("FailedToAddAddressTitle") });
+    }
+
+    private async Task RemoveChannelForPeerAsync(PeerCard card)
+    {
+        var removable = card.Channels.Where(c => c.CanRemove).ToList();
+        if (removable.Count == 0)
+        {
+            await AppDialog.AlertAsync(this, AppStrings.Get("NoLocalAddressTitle"), AppStrings.Get("NoLocalAddressDesc"));
+            return;
+        }
+        var line = removable.Count == 1 ? removable[0] : await PickAddressAsync(removable);
+        if (line == null) return;
+
+        var confirmed = await AppDialog.ConfirmAsync(this, AppStrings.Get("DeviceRemoveAddress"),
+            AppStrings.Get("RemoveAddressDesc"), AppStrings.Get("Remove"), AppStrings.Get("Cancel"), danger: true);
         if (!confirmed) return;
 
-        // The one busy helper (BMB-311): the button is off and spins; a failure is said in full in a dialog (a list row has no room for a line).
-        await BusyAction.RunAsync(btn, async () =>
+        await BusyAction.RunAsync(null, async () =>
+        {
+            using (var scope = _services.CreateScope())
+                await scope.ServiceProvider.GetRequiredService<PeerChannelService>().RemoveAsync(line.PeerNodeId, line.Address);
+            await LoadPeersAsync();
+        }, new BusyOptions { FailureTitle = AppStrings.Get("FailedToRemoveAddressTitle") });
+    }
+
+    private async Task<PeerChannelLine?> PickAddressAsync(List<PeerChannelLine> lines)
+    {
+        var chosen = new TaskCompletionSource<PeerChannelLine?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answered = false;
+        var resources = Application.Current?.Resources;
+        var stack = new VerticalStackLayout { Spacing = 8 };
+        BottomSheet.BottomSheetPage? sheet = null;
+        foreach (var line in lines)
+        {
+            var button = new Button { Text = line.Address, Style = (Style?)resources?["SecondaryButton"] };
+            button.Clicked += async (_, _) =>
+            {
+                // Close the sheet FIRST, then answer: the caller acts on the picked address right after.
+                answered = true;
+                if (sheet != null) await sheet.CloseAsync();
+                chosen.TrySetResult(line);
+            };
+            stack.Children.Add(button);
+        }
+        var cancel = new Button { Text = AppStrings.Get("Cancel"), Style = (Style?)resources?["TextButton"], HorizontalOptions = LayoutOptions.Fill };
+        cancel.Clicked += async (_, _) =>
+        {
+            answered = true;
+            if (sheet != null) await sheet.CloseAsync();
+            chosen.TrySetResult(null);
+        };
+        stack.Children.Add(cancel);
+        sheet = new BottomSheet.BottomSheetPage(stack, AppStrings.Get("PickAddressTitle"));
+        sheet.Disappearing += (_, _) => { if (!answered) chosen.TrySetResult(null); };
+        await Navigation.PushModalAsync(sheet);
+        return await chosen.Task;
+    }
+
+    private async Task RevokePeerAsync(WhitelistEntry entry)
+    {
+        var confirmed = await AppDialog.ConfirmAsync(this, AppStrings.Get("DeviceRemoveDevice"),
+            AppStrings.Format("RemoveDeviceDescFormat", entry.DisplayName),
+            AppStrings.Get("Delete"), AppStrings.Get("Cancel"), danger: true);
+        if (!confirmed) return;
+
+        await BusyAction.RunAsync(null, async () =>
         {
             await Task.Run(async () =>
             {
                 using var scope = _services.CreateScope();
                 var whitelist = scope.ServiceProvider.GetRequiredService<IWhitelistRepository>();
                 var eventLogger = scope.ServiceProvider.GetRequiredService<IEventLogger>();
-                // Log first, then stamp the row with that version — see WhitelistEndpoints for
-                // why the order matters (a stale add must lose to this revoke).
+                // Log first, then stamp the row with that version — see WhitelistEndpoints for why
+                // the order matters (a stale add must lose to this revoke).
                 var version = await eventLogger.LogWhitelistRevokeAsync(entry.NodeId);
                 await whitelist.RevokeAsync(entry.NodeId, version);
             });
             await LoadPeersAsync();
         });
-    }
-
-    private async void OnEditPeerUrlClicked(object? sender, EventArgs e)
-    {
-        if (sender is not Button btn || btn.CommandParameter is not WhitelistEntry entry) return;
-
-        var newUrl = await this.ShowInputPopupAsync(
-            "Change address",
-            $"Enter new API address for {entry.DisplayName}:",
-            initialValue: entry.ApiAddress ?? "",
-            placeholder: "https://example.com");
-
-        if (string.IsNullOrWhiteSpace(newUrl)) return;
-
-        // The one busy helper (BMB-311): the button is off and spins through the check of the new address and the save; a failure is said in
-        // full in a dialog (a list row has no room for a line).
-        var typed = newUrl;
-        await BusyAction.RunAsync(btn, async () =>
-        {
-            // PeerAddressService is the one writer of a peer's address, the same one the node's "Change node address" calls (BMB-307): the same policy
-            // (no user name, query, link-local or metadata address), the same check of what answers there (a sync server with this node id and this key),
-            // the event, the audit line, and the loop told. Its sentences never quote the address, so none is put in a dialog here.
-            var result = await ChangeAddressAsync(entry.NodeId, typed, saveWhenUnanswered: false);
-            if (result.Outcome == PeerAddressOutcome.NoAnswer)
-            {
-                // Server unreachable - warn but allow saving (the address may be filled in before the server is live). Nothing was checked, and the
-                // first session that reaches it will: it has to be this node, with this node's key.
-                bool proceed = await DisplayAlert("Warning", result.Message + "\n\nSave the address anyway?", "Save", "Cancel");
-                if (!proceed) return;
-                result = await ChangeAddressAsync(entry.NodeId, typed, saveWhenUnanswered: true);
-            }
-            if (!result.Succeeded)
-            {
-                await DisplayAlert("Not saved", result.Message, "OK");
-                return;
-            }
-
-            await DisplayAlert(result.Outcome == PeerAddressOutcome.Unchanged ? "Nothing to change" : "Success",
-                result.Outcome == PeerAddressOutcome.Unchanged ? result.Message : $"The address of {entry.DisplayName} is updated.", "OK");
-            await LoadPeersAsync();
-        }, new BusyOptions { FailureTitle = "Failed to update" });
-    }
-
-    private async void OnAddPeerAddressClicked(object? sender, EventArgs e)
-    {
-        if (sender is not Button btn || btn.CommandParameter is not WhitelistEntry entry) return;
-
-        var typed = await this.ShowInputPopupAsync(
-            "Add an address",
-            $"Enter an IP address, a name or a URL where {entry.DisplayName} can be reached. It is kept on this phone only.",
-            accept: "Add",
-            placeholder: "192.168.1.20");
-
-        if (string.IsNullOrWhiteSpace(typed)) return;
-
-        // The one busy helper (BMB-311): the button is off and spins through the check of the address and the save; a failure is said in full in a
-        // dialog (a list row has no room for a line).
-        var text = typed;
-        await BusyAction.RunAsync(btn, async () =>
-        {
-            // The address is made canonical, then asked who it is with THIS peer's TLS anchor: the node id, the key on record and the certificate must be
-            // the peer's. Its sentences never quote the address, so none is put in a dialog here.
-            var result = await AddChannelAsync(entry.NodeId, text, saveWithoutAnswer: false);
-            if (result.CanSaveAnyway)
-            {
-                // Nothing answers there as a sync server - warn but allow saving (the device may be off, or on another network now). The first session
-                // that reaches it will check who answers.
-                bool proceed = await DisplayAlert("Warning", result.Message, "Save anyway", "Cancel");
-                if (!proceed) return;
-                result = await AddChannelAsync(entry.NodeId, text, saveWithoutAnswer: true);
-            }
-            if (!result.Succeeded)
-            {
-                await DisplayAlert("Not saved", result.Message, "OK");
-                return;
-            }
-
-            await DisplayAlert("Address added", result.Message, "OK");
-            await LoadPeersAsync();
-        }, new BusyOptions { FailureTitle = "Failed to add the address" });
-    }
-
-    private async void OnRemovePeerChannelClicked(object? sender, EventArgs e)
-    {
-        if (sender is not Button btn || btn.CommandParameter is not PeerChannelLine line) return;
-
-        bool confirmed = await DisplayAlert(
-            "Remove address",
-            "Remove this address? Only this phone forgets it; the device and its other addresses stay.",
-            "Remove", "Cancel");
-        if (!confirmed) return;
-
-        await BusyAction.RunAsync(btn, async () =>
-        {
-            using (var scope = _services.CreateScope())
-                await scope.ServiceProvider.GetRequiredService<PeerChannelService>().RemoveAsync(line.PeerNodeId, line.Address);
-            await LoadPeersAsync();
-        }, new BusyOptions { FailureTitle = "Failed to remove the address" });
     }
 
     private async Task<PeerChannelResult> AddChannelAsync(Guid nodeId, string typed, bool saveWithoutAnswer)
@@ -261,6 +486,8 @@ public partial class StatusPage : ContentPage
         return await scope.ServiceProvider.GetRequiredService<PeerAddressService>().ChangeAsync(nodeId, typed, "phone", "phone", saveWhenUnanswered);
     }
 
+    // ---- recent events ----
+
     private async Task LoadActivityAsync()
     {
         try
@@ -270,14 +497,22 @@ public partial class StatusPage : ContentPage
                 using var scope = _services.CreateScope();
                 var eventRepo = scope.ServiceProvider.GetRequiredService<IEventLogRepository>();
                 var events = await eventRepo.GetRecentAsync(5);
-                return events.Select(evt => new ActivityItem(
-                    Icon: GetEventIcon(evt.EventType),
-                    Summary: GetEventSummary(evt),
-                    ActorName: evt.ActorName ?? evt.NodeId.ToString()[..8],
-                    TimeAgo: GetTimeAgo(evt.CreatedAt)
-                )).ToList();
+                return events.Select(evt => new ActivityItem(GetEventSummary(evt), TimeAgo(evt.CreatedAt))).ToList();
             });
-            ActivityList.ItemsSource = items;
+            EventsList.Children.Clear();
+            NoEventsLabel.IsVisible = items.Count == 0;
+            var resources = Application.Current?.Resources;
+            foreach (var item in items)
+            {
+                var grid = new Grid { ColumnDefinitions = [new ColumnDefinition(GridLength.Star), new ColumnDefinition(GridLength.Auto)], ColumnSpacing = 10 };
+                var text = new Label { Text = item.Summary, Style = (Style?)resources?["ItemMeta"], TextColor = ThemeManager.Token("Text"), LineBreakMode = LineBreakMode.TailTruncation, VerticalOptions = LayoutOptions.Center };
+                var time = new Label { Text = item.TimeAgo, Style = (Style?)resources?["ItemMeta"], VerticalOptions = LayoutOptions.Center };
+                grid.Children.Add(text);
+                Grid.SetColumn(text, 0);
+                grid.Children.Add(time);
+                Grid.SetColumn(time, 1);
+                EventsList.Children.Add(grid);
+            }
         }
         catch (Exception ex)
         {
@@ -285,39 +520,30 @@ public partial class StatusPage : ContentPage
         }
     }
 
-    private static string GetEventIcon(string eventType) => eventType switch
-    {
-        "article_create" => "✏️",
-        "article_update" => "📝",
-        "article_delete" => "🗑️",
-        "comment_create" => "💬",
-        "comment_delete" => "🔇",
-        "whitelist_add"  => "🔗",
-        "whitelist_revoke" => "🚫",
-        _ => "⚡"
-    };
-
     private static string GetEventSummary(SyncEvent evt) => evt.EventType switch
     {
-        "article_create" => "Article created",
-        "article_update" => "Article updated",
-        "article_delete" => "Article deleted",
-        "comment_create" => "Comment added",
-        "comment_delete" => "Comment deleted",
-        "whitelist_add"  => "Node added to whitelist",
-        "whitelist_revoke" => "Node revoked",
+        "article_create" => AppStrings.Get("EventArticleCreated"),
+        "article_update" => AppStrings.Get("EventArticleUpdated"),
+        "article_delete" => AppStrings.Get("EventArticleDeleted"),
+        "comment_create" => AppStrings.Get("EventCommentAdded"),
+        "comment_delete" => AppStrings.Get("EventCommentDeleted"),
+        "whitelist_add" => AppStrings.Get("EventDeviceAdded"),
+        "whitelist_revoke" => AppStrings.Get("EventDeviceRemoved"),
         _ => evt.EventType
     };
 
-    private static string GetTimeAgo(DateTime dt)
+    private static string TimeAgo(DateTime utc)
     {
-        var diff = DateTime.UtcNow - dt;
-        if (diff.TotalMinutes < 1) return "just now";
-        if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}m ago";
-        if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}h ago";
-        if (diff.TotalDays < 7) return $"{(int)diff.TotalDays}d ago";
-        return dt.ToString("MM-dd");
+        var diff = DateTime.UtcNow - utc;
+        if (diff < TimeSpan.Zero) diff = TimeSpan.Zero;
+        if (diff.TotalMinutes < 1) return AppStrings.Get("TimeJustNow");
+        if (diff.TotalHours < 1) return AppStrings.Format("TimeMinutesAgoFormat", (int)diff.TotalMinutes);
+        if (diff.TotalDays < 1) return AppStrings.Format("TimeHoursAgoFormat", (int)diff.TotalHours);
+        if (diff.TotalDays < 7) return AppStrings.Format("TimeDaysAgoFormat", (int)diff.TotalDays);
+        return ContentFormat.ShortDate(utc);
     }
+
+    // ---- sync now / check again / refresh ----
 
     // busy-exempt: copies to the clipboard, nothing is sent and nothing waits
     private async void OnCopyNodeIdClicked(object? sender, EventArgs e)
@@ -325,29 +551,25 @@ public partial class StatusPage : ContentPage
         await Clipboard.Default.SetTextAsync(_statusSvc.NodeId);
     }
 
-    // busy-exempt: copies to the clipboard, nothing is sent and nothing waits
-    private async void OnCopyPublicKeyClicked(object? sender, EventArgs e)
+    // busy-exempt: re-reads the local peer channels to see whether the device was approved; nothing is sent
+    private async void OnCheckAgainClicked(object? sender, EventArgs e)
     {
-        await Clipboard.Default.SetTextAsync(_statusSvc.PublicKeyB64);
+        await LoadAsync();
     }
 
     private async void OnRefreshing(object? sender, EventArgs e)
     {
-        // Pulling the list down asks for a sync round: a request to the computer, not a read (BMB-311). The one busy helper refuses a second round while one runs;
-        // the spinner of the pull is the pull's own, so no pop-up; a failure to even ask is said in full.
+        // Pulling the screen down asks for a sync round (BMB-311); the pull's own spinner is the pull's.
         try
         {
             await BusyAction.RunAsync(RefreshView, async () =>
             {
-                var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
+                var syncNotify = _services.GetRequiredService<SyncNotificationService>();
                 if (!syncNotify.HasPendingUpdates)
-                {
                     await _statusSvc.SyncNowAsync();
-                }
-
                 await LoadAsync();
                 syncNotify.ClearPendingUpdates();
-            }, new BusyOptions { FailureTitle = "Sync" });
+            }, new BusyOptions { FailureTitle = AppStrings.Get("SyncingTitle") });
         }
         finally
         {
@@ -357,83 +579,35 @@ public partial class StatusPage : ContentPage
 
     private async void OnSyncNowClicked(object? sender, EventArgs e)
     {
-        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up, so a second tap is impossible, and says in full why
-        // a sync failed. What each peer answered is on the page below, whatever happened.
+        if (_statusSvc.IsInvisible)
+        {
+            await AppDialog.AlertAsync(this, AppStrings.Get("SyncInvisibleTitle"), AppStrings.Get("SyncInvisibleTurnOff"));
+            return;
+        }
+        // A long operation (BMB-311): the one busy helper puts up the "please wait" pop-up, so a second
+        // tap is impossible, and says in full why a sync failed.
         await BusyAction.RunAsync(SyncNowButton, async () =>
         {
-            IReadOnlyList<PeerSyncFailure> failed;
             try
             {
-                failed = await _statusSvc.SyncNowAsync();
-                var syncNotify = _services.GetRequiredService<Services.SyncNotificationService>();
-                syncNotify.ClearPendingUpdates();
+                await _statusSvc.SyncNowAsync();
+                _services.GetRequiredService<SyncNotificationService>().ClearPendingUpdates();
             }
             finally
             {
                 await LoadAsync();
             }
-            // A peer that could not be served is said in full ("no sync server at this address" for a wrong address), never as a pass (BMB-307).
-            if (failed.Count > 0) throw new InvalidOperationException(string.Join("\n", failed));
+            // A peer that really failed is said in full in the app's own words, never as a pass (BMB-307);
+            // a computer that is simply away is not an error - the yellow banner says it.
+            var problems = _statusSvc.LastProblems;
+            if (problems.Count > 0)
+                throw new InvalidOperationException(string.Join("\n", problems.Select(p => Controls.SyncText.Problem(p.Code, p.Name))));
         }, new BusyOptions
         {
             Long = true,
-            Title = "Syncing",
-            Message = "Please wait while this phone syncs with its peers. This can take a while on a slow connection.",
-            FailureTitle = "The sync did not work",
-        });
-    }
-
-    private async void OnResetNodeClicked(object? sender, EventArgs e)
-    {
-        bool confirmed = await DisplayAlert(
-            "Reset Node",
-            "This will DELETE all local data (articles, keys, sync history). You will need to rejoin the network. Are you sure?",
-            "Reset", "Cancel");
-        if (!confirmed) return;
-
-        // A long operation (BMB-311): the one busy helper puts up the pop-up until the app restarts; a failure is said in full.
-        await BusyAction.RunAsync(sender as Button, () =>
-        {
-            var dbPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "beememorybank.db");
-
-            App.StopSyncService();
-
-            // Clear biometric stored password
-            _services.GetService<IBiometricService>()?.Clear();
-            // Clear the ingest key (bound to the old node identity) so the next setup re-enrols cleanly.
-            _services.GetService<IIngestKeyStore>()?.Clear();
-
-            // Clear SQLite connection pool before deleting so no stale connections remain
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-
-            // Delete the WAL/-shm/-journal sidecars too — an orphaned -wal next to a fresh db gets
-            // replayed on next open and resurrects the wiped state.
-            foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
-            {
-                var f = dbPath + suffix;
-                if (File.Exists(f)) File.Delete(f);
-            }
-
-            // Restart the app process — the only reliable way to reinitialize all singletons
-            // and re-run migrations on the fresh database.
-#if ANDROID
-            var intent = Android.App.Application.Context.PackageManager!
-                .GetLaunchIntentForPackage(Android.App.Application.Context.PackageName!)!;
-            intent.AddFlags(Android.Content.ActivityFlags.ClearTop | Android.Content.ActivityFlags.NewTask);
-            Android.App.Application.Context.StartActivity(intent);
-            Android.OS.Process.KillProcess(Android.OS.Process.MyPid());
-            return Task.CompletedTask;
-#else
-            return Shell.Current.GoToAsync("//setup");
-#endif
-        }, new BusyOptions
-        {
-            Long = true,
-            Title = "Resetting this node",
-            Message = "Please wait. The local data is being removed and the app restarts by itself.",
-            FailureTitle = "The reset did not work",
+            Title = AppStrings.Get("SyncingTitle"),
+            Message = AppStrings.Get("SyncingMessage"),
+            FailureTitle = AppStrings.Get("SyncFailedTitle"),
         });
     }
 }

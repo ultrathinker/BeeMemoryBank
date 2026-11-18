@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -103,7 +104,7 @@ public class SealedWritersTests : SealedWriterFixture
         await Mirror.RewriteAsync();
         (await Doors.ListAsync()).Should().Contain(d => d.Kind == BootDoorKinds.Agent && d.SourceId == agent);
 
-        await Users.UpdateUserAsync(carol.Id, "Carol", UserRoles.User);
+        await Users.DemoteSuperadminAsync(carol.Id, UserRoles.User, allowOpenRole: true);
 
         await AssertDoorsEqualSealedSetAsync();
         (await Doors.ListAsync()).Should().NotContain(d => d.Kind == BootDoorKinds.Slot && d.SourceId == slot);
@@ -198,7 +199,7 @@ public class SealedWritersTests : SealedWriterFixture
 
         var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
         await Users.AdminChangePasswordAsync(carol.Id, "CarolPass2");
-        await Keys.AddRecoveryKeyAsync();
+        await Keys.AddRecoveryKeyAsync((await UserRepo.GetByUsernameAsync("admin"))!.Id);
         await Users.DeleteUserAsync(carol.Id);
 
         (await Doors.ListAsync()).Select(d => d.ContentSha256).Should().Equal(before, "a plain node never touches the boot store through the writers");
@@ -370,6 +371,68 @@ public class SealedWritersTests : SealedWriterFixture
         secrets.Read("update-unlock", "default").Should().BeNull("one use");
     }
 
+    /// <summary>
+    /// The process dies right after the boot store got the pending copies of <paramref name="slotTypes"/>, before the rotation commits: the
+    /// pending rows stay (nothing rewrites), the database rolls back.
+    /// </summary>
+    private sealed class CrashBeforeCommitMirror(IUnlockMaterialMirror inner, params string[] slotTypes) : IUnlockMaterialMirror
+    {
+        private readonly HashSet<string> _seen = [];
+        public Task RewriteAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public async Task AddPendingDoorAsync(PendingDoor door, CancellationToken ct = default)
+        {
+            await inner.AddPendingDoorAsync(door, ct);
+            if (door.SlotType is { } type && slotTypes.Contains(type)) _seen.Add(type);
+            if (_seen.Count == slotTypes.Length) throw new InvalidOperationException("crash");
+        }
+        public Task RetireDoorAsync(string kind, long sourceId, CancellationToken ct = default) => inner.RetireDoorAsync(kind, sourceId, ct);
+        public Task AddDbKeyWrapperAsync(byte[] masterDek, CancellationToken ct = default) => inner.AddDbKeyWrapperAsync(masterDek, ct);
+        public Task WriteNewBootStoreAsync(string bootPath, IDbConnectionFactory vault, byte[] databaseKey, int dbkGeneration,
+            IReadOnlyList<byte[]> masterDeks, CancellationToken ct = default) => inner.WriteNewBootStoreAsync(bootPath, vault, databaseKey, dbkGeneration, masterDeks, ct);
+    }
+
+    /// <summary>A restarted process: a locked session that judges a door and the sentinel through the database (the real unlock with a DEK).</summary>
+    private SessionService RestartedSession() => new(KeySlots, new ServiceCollection()
+        .AddSingleton<INodeIdentityRepository>(_ => new NodeIdentityRepository(Factory))
+        .AddScoped<IUserRepository>(_ => new UserRepository(Factory))
+        .AddScoped<IAgentRepository>(_ => new AgentRepository(Factory))
+        .BuildServiceProvider().GetRequiredService<IServiceScopeFactory>());
+
+    [Fact]
+    public async Task ACrashBeforeARotationCommits_LeavesPendingCopiesOfTheNewKey_AndTheSecretDoorsStillOpenThroughTheCommittedOne()
+    {
+        // the pending copy is newer than the committed one and the secret opens both; the newest yields the key that was never
+        // committed. OS auto-unlock and quick unlock must try every copy until the sealed unlock accepts one.
+        var dir = Path.Combine(BootDir, "data");
+        Directory.CreateDirectory(dir);
+        var secrets = new InMemoryUserSecretStore();
+        var os = new OsAutoUnlockService(KeySlots, Session, dir, secrets);
+        os.AttachSealedNode(Factory, Mirror, null);
+        await os.EnableAsync();
+        var oldDek = Session.GetMasterDek();
+        var quickSecret = QuickUnlockDoors.NewSecret();
+        var quickSlot = await QuickUnlockDoors.CreateAsync(KeySlots, Factory, Mirror, quickSecret, oldDek);
+
+        var act = () => BeeMemoryBank.Sync.DekRotation.DekRewrapper.RewrapAllAsync(Factory, Session, (byte[])oldDek.Clone(), RandomNumberGenerator.GetBytes(32), 2,
+            Guid.NewGuid().ToString(), false, sealedHooks: new SealedRotationHooks(new CrashBeforeCommitMirror(Mirror, "os_auto_unlock", KeySlotTypes.QuickUnlock), null));
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        (await Doors.ListAsync()).Where(d => d.Pending).Select(d => d.SlotType).Should().Contain(["os_auto_unlock", KeySlotTypes.QuickUnlock],
+            "the crash left the pending copies of the rotation that did not commit");
+
+        var restarted = RestartedSession();
+        var host = new SealedAutoUnlockHost(new FakeGate(VaultState.Closed), Doors, (dek, door, ct) => restarted.TryUnlockWithDekAsync(dek, door, ct));
+        var osRestarted = new OsAutoUnlockService(KeySlots, restarted, dir, secrets);
+        osRestarted.AttachSealedNode(Factory, Mirror, host);
+        (await osRestarted.TryAutoUnlockAsync(new NodeIdentityRepository(Factory))).Should().BeTrue();
+        restarted.GetMasterDek().Should().Equal(oldDek);
+
+        var phone = RestartedSession();
+        (await QuickUnlockDoors.TryUnlockThroughBootDoorsAsync(Doors, quickSlot, quickSecret, (dek, door, ct) => phone.TryUnlockWithDekAsync(dek, door, ct)))
+            .Should().BeTrue();
+        phone.GetMasterDek().Should().Equal(oldDek);
+        Array.Clear(oldDek);
+    }
+
     // --- helpers ---------------------------------------------------------------------------------------------------------
 
     private FolderAccessService ServiceFor() => new(new ServiceCollection()
@@ -399,6 +462,10 @@ public class SealedWritersTests : SealedWriterFixture
         public virtual Task<int> CreateAsync(MasterKeyStore slot, System.Data.IDbTransaction? transaction = null) => inner.CreateAsync(slot, transaction);
         public virtual Task DeleteAsync(int slotId, System.Data.IDbTransaction? transaction = null) => inner.DeleteAsync(slotId, transaction);
         public virtual Task UpdateSlotKeyAsync(int slotId, byte[] encryptedDek, byte[] iv) => inner.UpdateSlotKeyAsync(slotId, encryptedDek, iv);
+        public virtual Task<bool> ReplaceDoorAsync(MasterKeyStore door, byte[]? expectedEncryptedMasterDek, System.Data.IDbTransaction? transaction = null) =>
+            inner.ReplaceDoorAsync(door, expectedEncryptedMasterDek, transaction);
+        public virtual Task SetDekFingerprintIfUnknownAsync(int slotId, byte[] encryptedMasterDek, string dekFingerprint) =>
+            inner.SetDekFingerprintIfUnknownAsync(slotId, encryptedMasterDek, dekFingerprint);
         public virtual Task EnsureOsAutoUnlockUniqueIndexAsync() => inner.EnsureOsAutoUnlockUniqueIndexAsync();
     }
 

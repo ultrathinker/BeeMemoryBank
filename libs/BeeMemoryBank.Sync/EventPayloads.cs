@@ -39,6 +39,23 @@ public static class EventTypes
     // Travels only between nodes that advertise peer-endpoints-v1 (Metadata.MetadataCapabilities.PeerEndpointsV1).
     public const string NodeEndpoints = "node_endpoints";
 
+    // Self-authored node state (release 2.12.0): version, platform, runtime kind, key fingerprints, attention flags.
+    public const string NodeState = "node_state";
+
+    // Node identity re-key (release 2.12.0, plan WS-D): a node's own announcement of its new identity key, signed by the key it retires, and a
+    // superadmin's settlement of two competing rotations of another node. See NodeKeyRotatedPayload and NodeKeyConfirmPayload.
+    public const string NodeKeyRotated = "node_key_rotated";
+    public const string NodeKeyConfirm = "node_key_confirm";
+    // Shared-node accounts home and replicated superadmin doors (release 2.12.0).
+    public const string AccountsHomeSet = "accounts_home_set";
+    public const string SuperadminDoorsSet = "superadmin_doors_set";
+    // The removal of a superadmin (release 2.12.0, plan WS-E and R1): the tombstone of a removed person (person id, outcome, time; no names)
+    // and the state of a removal process, so shared full nodes see it and can finish it when the accounts node is lost.
+    public const string PersonRemoved = "person_removed";
+    public const string OffboardingState = "offboarding_state";
+    // Step S1 of a removal (release 2.12.0): the driver asks the shared full nodes to give themselves a new identity key, once per process.
+    public const string NodeRekeyRequest = "node_rekey_request";
+
     // Step A (docs/design/step-a-spec.md 3.1, 4.3, 5.4): the outer type of a protocol-4 content event and the two
     // control events of the metadata key. Aliases of Metadata.EventClasses, which classifies every type here.
     public const string Sealed = Metadata.EventClasses.Sealed;
@@ -83,6 +100,19 @@ public static class EventAuthorization
         // seals with, and the activation cuts 2.5 peers off; both are vault-wide decisions of a superadmin.
         EventTypes.MetadataKeySet,
         EventTypes.MetadataActivation,
+        // Who signs for a node from now on (plan WS-D): a re-key changes the key every peer trusts for that node, and a confirm decides which
+        // of two competing keys holds. Both are trust decisions of a superadmin node; the applier adds its own rules (a node re-keys only
+        // itself, a confirm is never about its signer).
+        EventTypes.NodeKeyRotated,
+        EventTypes.NodeKeyConfirm,
+        // Shared-node accounts home and sealed superadmin doors (release 2.12.0).
+        EventTypes.AccountsHomeSet,
+        EventTypes.SuperadminDoorsSet,
+        // The removal of a superadmin (release 2.12.0): a tombstone deletes a person's account and doors wherever it applies, and the process
+        // state is what a shared node may take over. Both are decisions only a superadmin makes.
+        EventTypes.PersonRemoved,
+        EventTypes.OffboardingState,
+        EventTypes.NodeRekeyRequest,
     };
 
     /// <summary>
@@ -119,6 +149,8 @@ public static class EventAuthorization
         // A node's record of its own endpoints: always the SIGNER's own (checked by the applier, as for a recovery box), so any full node may
         // publish one; a forged one can only add candidates, which a peer accepts only after the TLS anchor and the node key match.
         EventTypes.NodeEndpoints,
+        // Self-authored node state (author == subject checked by EventInvariants and EventApplier). Allowed from blind nodes too (without dek_fp).
+        EventTypes.NodeState,
     };
 
     /// <summary>
@@ -189,7 +221,8 @@ public record DekRotationProposedPayload(
     [property: JsonPropertyName("originator_node_id")] string OriginatorNodeId,
     [property: JsonPropertyName("encrypted_new_dek")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EncryptedNewDek = null,
     [property: JsonPropertyName("iv")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]                string? Iv = null,
-    [property: JsonPropertyName("dek_envelopes")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]     DekEnvelopesPayload? DekEnvelopes = null
+    [property: JsonPropertyName("dek_envelopes")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]     DekEnvelopesPayload? DekEnvelopes = null,
+    [property: JsonPropertyName("reason")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]            string? Reason = null
 );
 
 /// <summary>
@@ -207,7 +240,10 @@ public record DekRotationCommitPayload(
     [property: JsonPropertyName("originator_node_id")] string OriginatorNodeId,
     [property: JsonPropertyName("encrypted_new_dek")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EncryptedNewDek = null,
     [property: JsonPropertyName("iv")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]                string? Iv = null,
-    [property: JsonPropertyName("dek_envelopes")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]     DekEnvelopesPayload? DekEnvelopes = null
+    [property: JsonPropertyName("dek_envelopes")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]     DekEnvelopesPayload? DekEnvelopes = null,
+    // 2.12 (plan WS-A5): "offboarding:<process id>" marks a removal rotation, which every unlocked full node applies by itself
+    // (DekRotationReasons). Absent for every other rotation; an older node ignores it.
+    [property: JsonPropertyName("reason")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]            string? Reason = null
 );
 
 /// <summary>Payload for physical/hard deletion of articles or folders.</summary>
@@ -302,7 +338,12 @@ public record WhitelistAddPayload(
     // How blind copies trust this node's TLS endpoint: "pin" or "public-ca" (BlindTrust, ADR 0007).
     // Optional and ignored by an older node, which then reads the row as it always did (a pin is a
     // pin; nothing else is callable) — sync protocol 3 is unchanged.
-    [property: JsonPropertyName("tls_trust")]        string? TlsTrust = null
+    [property: JsonPropertyName("tls_trust")]        string? TlsTrust = null,
+    // Device ownership (release 2.12, offboarding): optional "shared" | "personal" | "unknown", owner person_id, and display label.
+    // Omitted when unknown or from pre-2.12 senders; receivers without these fields leave ownership unknown with needs_review.
+    [property: JsonPropertyName("ownership")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Ownership = null,
+    [property: JsonPropertyName("owner_person_id")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? OwnerPersonId = null,
+    [property: JsonPropertyName("owner_label")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? OwnerLabel = null
 );
 
 /// <summary>Payload for revoking a node from the whitelist.</summary>
@@ -327,7 +368,11 @@ public record WhitelistUpdatePayload(
     [property: JsonPropertyName("tls_spki")]      string? TlsSpki = null,
     // Null = unchanged. "pin" / "public-ca" set the mode (public-ca also clears the pin); "none" takes
     // the mode and the pin away (BlindTrust, ADR 0007). A value this build does not know changes nothing.
-    [property: JsonPropertyName("tls_trust")]     string? TlsTrust = null
+    [property: JsonPropertyName("tls_trust")]     string? TlsTrust = null,
+    // Null = unchanged: events without ownership leave the stored ownership untouched.
+    [property: JsonPropertyName("ownership")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Ownership = null,
+    [property: JsonPropertyName("owner_person_id")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? OwnerPersonId = null,
+    [property: JsonPropertyName("owner_label")][property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? OwnerLabel = null
 );
 
 /// <summary>Payload for comment creation (supports both plaintext and encrypted).</summary>
@@ -449,4 +494,118 @@ public record NodeEndpointsPayload(
 public record NodeEndpointEntry(
     [property: JsonPropertyName("url")] string Url,
     [property: JsonPropertyName("scope")] string Scope);
+
+/// <summary>
+/// Self-authored node state control event payload (<see cref="EventTypes.NodeState"/>): version, platform, runtime kind,
+/// identity and DEK fingerprints, attention flags, and optional extensible metadata. Author (<c>SyncEvent.NodeId</c>) must equal <see cref="NodeId"/>.
+/// </summary>
+public record NodeStatePayload(
+    [property: JsonPropertyName("node_id")] string NodeId,
+    [property: JsonPropertyName("app_version")] string AppVersion,
+    [property: JsonPropertyName("platform")] string? Platform,
+    [property: JsonPropertyName("runtime_kind")] string RuntimeKind,
+    [property: JsonPropertyName("identity_key_fp")] string IdentityKeyFp,
+    [property: JsonPropertyName("dek_fp")] string? DekFp,
+    [property: JsonPropertyName("attention_flags")] List<string>? AttentionFlags = null,
+    [property: JsonPropertyName("extra")] Dictionary<string, string>? Extra = null);
+
+/// <summary>
+/// A node's new identity key (<see cref="EventTypes.NodeKeyRotated"/>, plan WS-D D1, D3). Signed by the OLD key: it is the node's last event under
+/// it. Keys and proofs are base64. <see cref="NewKeyProof"/> and <see cref="OldKeyProof"/> are the two keys' signatures over
+/// <see cref="BeeMemoryBank.Core.Models.NodeKeyTransition.Statement"/>; <see cref="OwnEventIds"/> is <see cref="BeeMemoryBank.Core.Models.EventIdSet"/>.
+/// </summary>
+public record NodeKeyRotatedPayload(
+    [property: JsonPropertyName("node_id")] string NodeId,
+    [property: JsonPropertyName("old_public_key")] string OldPublicKey,
+    [property: JsonPropertyName("new_public_key")] string NewPublicKey,
+    [property: JsonPropertyName("counter")] long Counter,
+    [property: JsonPropertyName("rotated_at")] string RotatedAt,
+    [property: JsonPropertyName("reason")] string? Reason,
+    [property: JsonPropertyName("new_key_proof")] string NewKeyProof,
+    [property: JsonPropertyName("old_key_proof")] string OldKeyProof,
+    [property: JsonPropertyName("checkpoint_lamport_ts")] long CheckpointLamportTs,
+    [property: JsonPropertyName("own_event_ids")] string OwnEventIds);
+
+/// <summary>
+/// A superadmin's settlement of an identity conflict (<see cref="EventTypes.NodeKeyConfirm"/>, plan WS-D D2): "node <see cref="NodeId"/>'s key is
+/// <see cref="ConfirmedPublicKey"/> as of rotation <see cref="RotationEventId"/>, counter <see cref="Counter"/>". Never about its signer.
+/// </summary>
+public record NodeKeyConfirmPayload(
+    [property: JsonPropertyName("node_id")] string NodeId,
+    [property: JsonPropertyName("rotation_event_id")] string RotationEventId,
+    [property: JsonPropertyName("counter")] long Counter,
+    [property: JsonPropertyName("confirmed_public_key")] string ConfirmedPublicKey);
+
+/// <summary>
+/// Control event setting which node manages user accounts and issues superadmin doors
+/// (<see cref="EventTypes.AccountsHomeSet"/>). Newest by (Lamport time, author node id) wins.
+/// </summary>
+public record AccountsHomeSetPayload(
+    [property: JsonPropertyName("node_id")] Guid NodeId);
+
+/// <summary>
+/// Full-state control event from the accounts node carrying an encrypted list of active superadmin
+/// v2 user doors (<see cref="EventTypes.SuperadminDoorsSet"/>). Only active non-blind shared full nodes
+/// receive an envelope in <see cref="ListEnvelopes"/>; personal and blind copies never receive one.
+/// </summary>
+public record SuperadminDoorsSetPayload(
+    [property: JsonPropertyName("version")] long Version,
+    [property: JsonPropertyName("issued_at")] string IssuedAt,
+    [property: JsonPropertyName("ciphertext")] string CiphertextB64,
+    [property: JsonPropertyName("iv")] string IvB64,
+    [property: JsonPropertyName("list_envelopes")] DekEnvelopesPayload ListEnvelopes);
+
+/// <summary>Decrypted content of <see cref="SuperadminDoorsSetPayload"/> (never placed on wire in clear).</summary>
+public sealed record SuperadminDoorsDocument(
+    [property: JsonPropertyName("version")] long Version,
+    [property: JsonPropertyName("issued_at")] string IssuedAt,
+    [property: JsonPropertyName("people")] List<SuperadminDoorDescriptor> People);
+
+/// <summary>One active superadmin's door descriptor replicated from the accounts node to shared nodes.</summary>
+public sealed record SuperadminDoorDescriptor(
+    [property: JsonPropertyName("person_id")] Guid PersonId,
+    [property: JsonPropertyName("username")] string Username,
+    [property: JsonPropertyName("display_name")] string DisplayName,
+    [property: JsonPropertyName("password_hint")] string? PasswordHint,
+    [property: JsonPropertyName("salt")] string SaltB64,
+    [property: JsonPropertyName("argon_m")] int ArgonMemory,
+    [property: JsonPropertyName("argon_t")] int ArgonIterations,
+    [property: JsonPropertyName("argon_p")] int ArgonParallelism,
+    [property: JsonPropertyName("door_pk")] string DoorPublicKeyB64);
+
+/// <summary>
+/// The tombstone of a removed person (<see cref="EventTypes.PersonRemoved"/>, release 2.12.0, plan R1): who (the person id of the accounts node,
+/// which a shared node's mirror row carries too), what became of them (<c>deleted</c> or <c>demoted</c>) and when. No name, no folder, no role:
+/// the target role and folders of a demotion stay in the accounts node's process record. Every full node keeps it in <c>tbl_removed_person</c>.
+/// </summary>
+public record PersonRemovedPayload(
+    [property: JsonPropertyName("person_id")] string PersonId,
+    [property: JsonPropertyName("outcome")] string Outcome,
+    [property: JsonPropertyName("removed_at")] DateTime RemovedAt);
+
+/// <summary>
+/// The state of one removal process (<see cref="EventTypes.OffboardingState"/>, release 2.12.0, plan E2), newest event wins. Ids, the kind of
+/// target, the step and the times only: no names, no role, no folder rules. A shared full node shows it, refuses the person while it is open, and a
+/// superadmin there may take it over (<see cref="DriverNodeId"/> then names that node) when the accounts node was revoked.
+/// </summary>
+/// <summary>
+/// The driver of a removal asks nodes for a new identity key (<see cref="EventTypes.NodeRekeyRequest"/>, release 2.12.0, step S1). Ids and the reason
+/// only: <see cref="Reason"/> is <c>offboarding:&lt;process id&gt;</c>, the reason the asked node gives its own re-key, which is how the request is
+/// idempotent per process. Accepted only from the node that drives that process.
+/// </summary>
+public record NodeRekeyRequestPayload(
+    [property: JsonPropertyName("process_id")] string ProcessId,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("nodes")] List<string> Nodes);
+
+public record OffboardingStatePayload(
+    [property: JsonPropertyName("process_id")] string ProcessId,
+    [property: JsonPropertyName("person_id")] string PersonId,
+    [property: JsonPropertyName("accounts_node_id")] string AccountsNodeId,
+    [property: JsonPropertyName("driver_node_id")] string DriverNodeId,
+    [property: JsonPropertyName("target")] string Target,
+    [property: JsonPropertyName("step")] int Step,
+    [property: JsonPropertyName("started_at")] DateTime StartedAt,
+    [property: JsonPropertyName("closed_at")] DateTime? ClosedAt = null,
+    [property: JsonPropertyName("outcome")] string? Outcome = null);
 

@@ -151,16 +151,25 @@ public sealed class NodeEndpointsOnACopyTests : IDisposable
     // ---- the schema ------------------------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task ACopyLastOpenedBeforeMigration044_IsMigratedToSchema45_BeforeItsFirstPull()
+    public async Task ACopyLastOpenedBeforeMigration044_IsMigratedToTheCurrentSchema_BeforeItsFirstPull()
     {
         _net.AddNodeEndpoints(HubNetwork.Pairing);
         _net.AddFolder("one");
         var (first, id) = await PairedAsync();
-        // The database of an app of the release before this one: schema 43, none of the two tables of 044 and none of the whitelist columns of 045.
+        // The database of an app of an older release: schema 43, none of the two tables of 044, none of the whitelist columns of 045 and none of
+        // the door columns of 046.
         using (var conn = Db(first, id).CreateConnection())
         {
-            await conn.ExecuteAsync("DROP TABLE tbl_peer_endpoint; DROP TABLE tbl_peer_channel; DROP TRIGGER trg_migration_ledger_guard; DELETE FROM tbl_migration WHERE version IN (44, 45)");
+            await conn.ExecuteAsync("DROP TABLE tbl_peer_endpoint; DROP TABLE tbl_peer_channel; DROP TABLE tbl_node_state; DROP TABLE tbl_node_key_history; DROP TABLE tbl_node_key_conflict; DROP TABLE tbl_accounts_home; DROP TABLE tbl_shared_doors_state; DROP TABLE tbl_offboarding; DROP TABLE tbl_offboarding_node; DROP TABLE tbl_removed_person; DROP TRIGGER trg_migration_ledger_guard; DELETE FROM tbl_migration WHERE version IN (44, 45, 46, 47, 49, 50, 51)");
+            await conn.ExecuteAsync("ALTER TABLE tbl_user DROP COLUMN account_state");
             foreach (var column in Migration045Columns) await conn.ExecuteAsync($"ALTER TABLE tbl_whitelist DROP COLUMN {column}");
+            await conn.ExecuteAsync("DROP TRIGGER trg_key_slot_owner_user_insert; DROP TRIGGER trg_key_slot_owner_user_update");
+            foreach (var column in new[] { "door_version", "door_public_key", "dek_fp", "owner_user_id", "created_by_user_id", "label" })
+                await conn.ExecuteAsync($"ALTER TABLE tbl_key_slot DROP COLUMN {column}");
+            foreach (var column in new[] { "door_public_key", "dek_fp", "created_by_user_id" })
+                await conn.ExecuteAsync($"ALTER TABLE tbl_agent DROP COLUMN {column}");
+            foreach (var column in Migration047WhitelistColumns) await conn.ExecuteAsync($"ALTER TABLE tbl_whitelist DROP COLUMN {column}");
+            await conn.ExecuteAsync("ALTER TABLE tbl_user DROP COLUMN replicated");
             (await conn.ExecuteScalarAsync<long>("SELECT MAX(version) FROM tbl_migration")).Should().Be(43);
         }
         await first.DisposeAsync();
@@ -170,9 +179,10 @@ public sealed class NodeEndpointsOnACopyTests : IDisposable
         await using var _ = host;
         using (var conn = Db(host, id).CreateConnection())
         {
-            (await conn.ExecuteScalarAsync<long>("SELECT MAX(version) FROM tbl_migration")).Should().Be(45);
+            (await conn.ExecuteScalarAsync<long>("SELECT MAX(version) FROM tbl_migration")).Should().Be(51);
             (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('tbl_peer_endpoint', 'tbl_peer_channel')")).Should().Be(2);
             (await conn.QueryAsync<string>("SELECT name FROM pragma_table_info('tbl_whitelist')")).Should().Contain(Migration045Columns);
+            (await conn.QueryAsync<string>("SELECT name FROM pragma_table_info('tbl_whitelist')")).Should().Contain(Migration047WhitelistColumns);
         }
 
         (await host.For(id).RequestSyncAsync()).Should().Be("Synced.");
@@ -185,6 +195,12 @@ public sealed class NodeEndpointsOnACopyTests : IDisposable
     [
         "member_lamport_ts", "member_source_node_id", "superadmin_lamport_ts", "superadmin_source_node_id", "name_lamport_ts", "name_source_node_id",
         "address_lamport_ts", "address_source_node_id", "tls_lamport_ts", "tls_source_node_id", "undated_fields",
+    ];
+
+    /// <summary>The columns migration 047 adds to tbl_whitelist (047_ownership_and_node_state.sql).</summary>
+    private static readonly string[] Migration047WhitelistColumns =
+    [
+        "ownership", "owner_person_id", "owner_label", "ownership_lamport_ts", "ownership_source_node_id", "needs_review",
     ];
 
     [Fact]

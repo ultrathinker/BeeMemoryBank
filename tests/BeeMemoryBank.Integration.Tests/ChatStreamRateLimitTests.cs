@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Integration.Tests;
 
@@ -26,9 +27,26 @@ public class ChatStreamRateLimitTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
-    private HttpClient CreateUserClient(int userId)
+    /// <summary>
+    /// A client for a REAL user, as the Web layer sends one: the API reads the caller's role from its own table (a forwarded id that names nobody is not signed in),
+    /// so each test has the user it rate-limits. The limiter is a process-wide singleton keyed by user id, and ids restart at 1 in every database, so the row is
+    /// written with an id of its own (the high ids these tests always used) to keep the budget isolated from every other test in the process.
+    /// </summary>
+    private async Task<HttpClient> CreateUserClientAsync(int userId)
     {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<BeeMemoryBank.Core.Interfaces.IDbConnectionFactory>();
+            using var conn = db.CreateConnection();
+            await Dapper.SqlMapper.ExecuteAsync(conn,
+                @"INSERT INTO tbl_user (id, username, display_name, password_hash, role, is_active, created_at, security_stamp, chat_access)
+                  VALUES (@userId, @name, @name, 'not-a-hash', 'user', 1, @now, 'stamp', 1)",
+                new { userId, name = "limit-user-" + userId, now = DateTime.UtcNow.ToString("o") });
+        }
+
         var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Remove("X-User-Role");
+        client.DefaultRequestHeaders.Add("X-User-Role", "user");
         client.DefaultRequestHeaders.Add("X-User-Id", userId.ToString());
         return client;
     }
@@ -36,7 +54,7 @@ public class ChatStreamRateLimitTests : IAsyncLifetime
     [Fact]
     public async Task Stream_OverLongMessage_Returns400_BeforeAnyOtherCheck()
     {
-        using var client = CreateUserClient(1);
+        using var client = await CreateUserClientAsync(1000);
         var hugeMessage = new string('a', 100_001); // MaxMessageLength + 1
 
         var resp = await client.PostAsJsonAsync("/api/chat/stream", new { message = hugeMessage });
@@ -51,7 +69,7 @@ public class ChatStreamRateLimitTests : IAsyncLifetime
         // vault is deliberately left locked so this test needs no OpenRouter key/model config.
         // A distinct user id keeps this test's budget isolated from any other test sharing the
         // process-wide singleton limiter.
-        using var client = CreateUserClient(1001);
+        using var client = await CreateUserClientAsync(1001);
 
         HttpResponseMessage? last = null;
         for (var i = 0; i < 30; i++)
@@ -67,8 +85,8 @@ public class ChatStreamRateLimitTests : IAsyncLifetime
     [Fact]
     public async Task Stream_RateLimit_IsIsolatedPerUser()
     {
-        using var userA = CreateUserClient(1002);
-        using var userB = CreateUserClient(1003);
+        using var userA = await CreateUserClientAsync(1002);
+        using var userB = await CreateUserClientAsync(1003);
 
         for (var i = 0; i < 30; i++)
             await userA.PostAsJsonAsync("/api/chat/stream", new { message = "hi" });

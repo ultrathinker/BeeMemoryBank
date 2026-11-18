@@ -167,7 +167,7 @@ public class SyncSchedulerPausedPeerTests : IAsyncLifetime
     [Fact]
     public async Task ABusyBlindNode_IsSaidToBeBusyAndAskedAgainInAMinute_NotPausedByItsOwner_InTheLogAndInTheContact()
     {
-        // srvfix8 (RV6-03): "busy" is the node's room held by other transfers, not a limit its owner set.
+        // "busy" is the node's room held by other transfers, not a limit its owner set.
         var (scheduler, peer, log, contacts, id) = await NodeAsync();
         peer.Paused = "busy";
         peer.RetryAfterSeconds = 60;

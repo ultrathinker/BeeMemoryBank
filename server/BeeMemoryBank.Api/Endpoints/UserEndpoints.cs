@@ -3,7 +3,9 @@
 
 using BeeMemoryBank.Api.Helpers;
 using BeeMemoryBank.Api.Models;
+using BeeMemoryBank.Api.Services.Offboarding;
 using BeeMemoryBank.Api.Services.Recovery;
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
@@ -12,6 +14,19 @@ namespace BeeMemoryBank.Api.Endpoints;
 
 public static class UserEndpoints
 {
+    /// <summary>The answer to a demotion or deletion of a superadmin that does not carry the administrator's password: nothing was changed.</summary>
+    internal const string RemovalNeedsPassword =
+        "Removing a superadmin is a process that locks the person out at once and closes the account at its end. Start it from the Users page, " +
+        "or send your own password with the request (adminPassword). Nothing was changed.";
+
+    private static async Task<DeleteUserRequest?> ReadDeleteBodyAsync(HttpContext ctx)
+    {
+        if (ctx.Request.ContentLength is null or 0 && !ctx.Request.Headers.ContainsKey("Transfer-Encoding")) return null;
+        try { return await ctx.Request.ReadFromJsonAsync<DeleteUserRequest>(ctx.RequestAborted); }
+        catch (System.Text.Json.JsonException) { return null; }
+        catch (InvalidOperationException) { return null; }   // not JSON
+    }
+
     public static void MapUserEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/api/users").WithTags("Users").RequireInternalKey();
@@ -26,8 +41,14 @@ public static class UserEndpoints
         group.MapGet("/", async (IUserRepository repo, HttpContext ctx) =>
         {
             var users = await repo.ListActiveAsync();
+            // An account a removal holds says so ("being removed, step k of n"): never "removed" or "user" while a way back is still open (decision 4).
+            var removals = ctx.RequestServices.GetService<OffboardingService>() is { } offboarding
+                ? await offboarding.OpenByPersonAsync(ctx.RequestAborted)
+                : new Dictionary<Guid, OffboardingView>();
             return Results.Ok(users.Select(u => new UserListItemResponse(
-                u.Id, u.Username, u.DisplayName, u.Role, u.CreatedAt, u.LastLoginAt, u.ChatAccess)));
+                u.Id, u.Username, u.DisplayName, u.Role, u.CreatedAt, u.LastLoginAt, u.ChatAccess, u.PersonId,
+                u.AccountState, removals.TryGetValue(u.PersonId, out var removal) ? removal.Status : null,
+                removals.TryGetValue(u.PersonId, out var r2) ? r2.ProcessId : null, u.Replicated)));
         }).RequireSuperadmin();
 
         // GET /api/users/me/stamp — returns this caller's node-local security stamp.
@@ -75,21 +96,42 @@ public static class UserEndpoints
         {
             try
             {
+                var target = await userRepo.GetByIdAsync(id);
+                if (target is null) return Results.NotFound(new ErrorResponse("User not found"));
+
                 // A promotion that sets a password is also a password creation point, so it needs a hint too.
-                if (!string.IsNullOrWhiteSpace(req.Password))
+                if (!string.IsNullOrWhiteSpace(req.Password)
+                    && PasswordHintPolicy.Validate(req.PasswordHint, req.Password, target.Username) is { } hintProblem)
+                    return Results.BadRequest(new ErrorResponse(hintProblem));
+
+                var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
+
+                // Taking superadmin rights away is a removal process (release 2.12.0, plan E1): it STARTS here, with the administrator's own password, and
+                // the account changes inside it (locked out at once, an ordinary user only at its end). Without the password nothing is touched.
+                if (target.Role == UserRoles.Superadmin
+                    && !string.IsNullOrWhiteSpace(req.Role)
+                    && !string.Equals(req.Role.Trim(), UserRoles.Superadmin, StringComparison.OrdinalIgnoreCase))
                 {
-                    var target = await userRepo.GetByIdAsync(id);
-                    if (target is null) return Results.NotFound(new ErrorResponse("User not found"));
-                    if (PasswordHintPolicy.Validate(req.PasswordHint, req.Password, target.Username) is { } hintProblem)
-                        return Results.BadRequest(new ErrorResponse(hintProblem));
+                    if (string.IsNullOrEmpty(req.AdminPassword))
+                        return Results.Json(new ErrorResponse(RemovalNeedsPassword), statusCode: 409);
+                    return await OffboardingEndpoints.RunAsync(async () =>
+                    {
+                        var service = ctx.RequestServices.GetRequiredService<OffboardingService>();
+                        var acting = await OffboardingEndpoints.ActorAsync(ctx, userRepo, null);
+                        var processId = await service.StartAsync(new OffboardingStartRequest(id, "demote", req.Role.Trim(),
+                            OffboardingEndpoints.ToRules(req.FolderRules), req.AllowOpenRole == true, req.AdminPassword), acting, ctx.RequestAborted);
+                        return Results.Accepted($"/api/offboarding/{processId:D}", await service.GetAsync(processId));
+                    });
                 }
 
                 var appliedPw = await userService.UpdateUserAsync(id, req.DisplayName, req.Role, req.Password, req.ChatAccess, req.PasswordHint);
-                var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
                 // Report what actually happened, not what was asked: a password is only applied
-                // when it provisions a key slot for a promotion, and is ignored otherwise.
+                // when it provisions a key slot for a promotion, and is ignored otherwise; the role is the canonical one the account now has, and a
+                // change of role is named as such (the review of a removal reads "role changed from X to superadmin").
+                var applied = (await userRepo.GetByIdAsync(id))?.Role ?? target.Role;
+                var roleChange = applied != target.Role ? $", role changed from {target.Role} to {applied}" : "";
                 await auditRepo.LogAsync("user", id.ToString(), "user_updated", "web",
-                    $"User #{id} updated (role={req.Role}, displayName changed={req.DisplayName != null}, password changed={appliedPw}) by user {actor}");
+                    $"User #{id} updated (role={applied}{roleChange}, displayName changed={req.DisplayName != null}, password changed={appliedPw}) by user {actor}");
                 return Results.Ok();
             }
             catch (KeyNotFoundException)
@@ -108,11 +150,27 @@ public static class UserEndpoints
             }
         }).RequireSuperadmin();
 
-        group.MapDelete("/{id:int}", async (int id, UserService userService, HttpContext ctx, IAuditLogRepository auditRepo) =>
+        group.MapDelete("/{id:int}", async (int id, UserService userService, IUserRepository userRepo, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
             try
             {
-                await userService.DeleteUserAsync(id);
+                // Deleting a superadmin is a removal process (release 2.12.0, plan E1): it starts with the administrator's own password (JSON body with
+                // adminPassword); the account is locked out at once and deleted at the end. An ordinary user's deletion stays immediate.
+                if (await userRepo.GetByIdAsync(id) is { Role: UserRoles.Superadmin })
+                {
+                    var body = await ReadDeleteBodyAsync(ctx);
+                    if (body is null || string.IsNullOrEmpty(body.AdminPassword))
+                        return Results.Json(new ErrorResponse(RemovalNeedsPassword), statusCode: 409);
+                    return await OffboardingEndpoints.RunAsync(async () =>
+                    {
+                        var service = ctx.RequestServices.GetRequiredService<OffboardingService>();
+                        var acting = await OffboardingEndpoints.ActorAsync(ctx, userRepo, body.ActingUser);
+                        var processId = await service.StartAsync(new OffboardingStartRequest(id, "delete", null, null, false, body.AdminPassword), acting, ctx.RequestAborted);
+                        return Results.Accepted($"/api/offboarding/{processId:D}", await service.GetAsync(processId));
+                    });
+                }
+
+                await userService.DeleteUserAsync(id, CallerIdentity.Extract(ctx).UserId?.ToString());
                 var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
                 await auditRepo.LogAsync("user", id.ToString(), "user_deleted", "web", $"User #{id} deleted by user {actor}");
                 return Results.NoContent();
@@ -167,6 +225,10 @@ public static class UserEndpoints
             {
                 return Results.BadRequest(new ErrorResponse(ex.Message));
             }
+            catch (ReplicatedUserException ex)
+            {
+                return Results.Json(new ErrorResponse(ex.Message), statusCode: 409);
+            }
         });
 
         // Self-service password change — any authenticated user can change their own password.
@@ -211,7 +273,7 @@ public static class UserEndpoints
             }
         })
         // A password replacement is Argon2 and a rewrite of the key slot: once at a time per user, whoever starts it (the user, or a superadmin for them), so that
-        // two of them never race over one slot (BMB-311 fix round). The same key as the admin route below.
+        // two of them never race over one slot (BMB-311). The same key as the admin route below.
         .SingleFlight("user-password:{userId}", "The password change of this user", ctx =>
             int.TryParse(ctx.HttpContext.Request.Headers["X-User-Id"].FirstOrDefault(), out var userId) ? "user-password:" + userId : null);
 

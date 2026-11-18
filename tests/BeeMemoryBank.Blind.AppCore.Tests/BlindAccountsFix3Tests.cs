@@ -9,7 +9,7 @@ namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
 /// Hardening of the accounts, part 3: the record that an account was set up is written before its identity can exist, an unwritable record stops that account's start, and a
-/// folder that is gone from an account that holds any trace of an identity is repaired by hand whatever the record says. Written against what round 2 had, so that they can be run before the fix.
+/// folder that is gone from an account that holds any trace of an identity is repaired by hand whatever the record says. Written against what the earlier round had, so that they can be run before the fix.
 /// </summary>
 public sealed class BlindAccountsFix3Tests : IDisposable
 {

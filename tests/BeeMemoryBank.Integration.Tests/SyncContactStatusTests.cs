@@ -268,7 +268,7 @@ public sealed class SyncContactStatusTests : IAsyncLifetime
             .Should().BeFalse("a refused POST must not have switched Invisible Mode on");
     }
 
-    // ---- BMB-313 fix round ----
+    // ---- BMB-313 ----
 
     [Fact]
     public async Task A_second_check_of_one_node_within_the_gap_is_busy_and_asks_nobody()

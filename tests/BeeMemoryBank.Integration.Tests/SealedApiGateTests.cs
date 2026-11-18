@@ -92,7 +92,9 @@ public sealed class SealedApiGateTests(SealedNodeTemplate template) : IClassFixt
         [
             "SyncScheduler", "CleanupService", "PendingIndexProcessor", "PendingEmbeddingProcessor", "AuditLogPruningHostedService",
             "RemoteAccountSyncScheduler", "ChatHistoryBackfillProcessor", "RecoveryReconcileWatcher", "StateAnchorScheduler", "MdnsAnnouncer",
-            "BaselineScheduler", "BlindInviteSweeper",
+            "BaselineScheduler", "BlindInviteSweeper", "NodeStateAnnouncer",
+            // The removal of a superadmin (release 2.12.0): it moves the open removals, which live in the vault.
+            "OffboardingDriver",
             // Dream: its nightly run and sweep read chat.db and the vault.
             "DreamScheduler",
         ];
@@ -304,6 +306,20 @@ public sealed class SealedApiGateTests(SealedNodeTemplate template) : IClassFixt
         (await node.LoginAsync(client, SealedNodeTemplate.Password)).EnsureSuccessStatusCode();
         File.Exists(staging).Should().BeTrue("a second open of the same process sweeps nothing");
         steps.Should().Equal("first", "again");
+    }
+
+    [Fact]
+    public async Task The_migrations_are_the_first_open_step_so_no_step_reads_a_table_of_an_older_schema()
+    {
+        // The first open of a sealed database written by an older release has that release's columns until the migrations step ran. The
+        // stand (2.10.2 -> 2.12.0) found StaleServerSlot at order 50 reading tbl_key_slot with the 2.12 door columns before the
+        // migrations (100): every sign-in of every updated sealed node answered 500 "no such column: door_version". No open step but the
+        // migrations may run before them.
+        using var node = await SealedApiNode.StartAsync(template);
+        var steps = node.Services.GetServices<IVaultOpenStep>().OrderBy(s => s.Order).ToList();
+        var migrations = steps.Should().ContainSingle(s => s.GetType().Name == "MigrationsOpenStep").Subject;
+        steps.Where(s => !ReferenceEquals(s, migrations)).Should().OnlyContain(s => s.Order > migrations.Order,
+            "a step that ran before the migrations would read the tables of an older schema at the first open after an update");
     }
 
     private sealed class RecordingStep(List<string> log) : IVaultOpenStep

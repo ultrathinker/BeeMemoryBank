@@ -72,7 +72,9 @@ public static class InitCommand
             var session = scope.ServiceProvider.GetRequiredService<SessionService>();
             if (await session.UnlockAsync(password))
             {
-                recoveryKey = await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
+                // The key belongs to the administrator this command just created (release 2.12: a recovery key is personal).
+                var admin = await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetByUsernameAsync(name);
+                recoveryKey = await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync(admin?.Id);
                 session.Lock();
             }
         }

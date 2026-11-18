@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// The row-level check of a package's control.db (docs/design/step-a-spec.md 8.4, 8.6 step 4; review round 3): one valid row in
+/// The row-level check of a package's control.db (docs/design/step-a-spec.md 8.4, 8.6 step 4): one valid row in
 /// every control table is accepted, and every kind of row the live appliers would never write is refused with the table, the
 /// row and the column named - never a value. The reader-level cases (a signed package with such a row) are in
 /// <see cref="Format2PackageTests"/>; the rows the real appliers write are checked in their own test classes.

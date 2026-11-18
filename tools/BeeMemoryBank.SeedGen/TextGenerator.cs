@@ -6,7 +6,7 @@ namespace BeeMemoryBank.SeedGen;
 /// Generates plausible-ish prose by sampling words from a Zipf pool and punctuating them into
 /// sentences and paragraphs. Output is plain markdown-ish text (occasional headings/bullets) so
 /// it resembles real notes rather than a flat word dump. Length is measured in UTF-8 bytes to
-/// honour the brief's byte-size targets (Russian text is 2 bytes/char, hence byte-based sizing).
+/// honour the byte-size targets (Russian text is 2 bytes/char, hence byte-based sizing).
 ///
 /// Deterministic given the supplied <see cref="Random"/>; caches per-word byte lengths because
 /// Zipf reuse makes popular words repeat many thousands of times.

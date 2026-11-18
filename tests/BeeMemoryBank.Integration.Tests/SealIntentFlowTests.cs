@@ -63,7 +63,7 @@ internal sealed class CrashImages : IDisposable
 }
 
 /// <summary>
-/// BMB-306 fix round, findings B and C: a fresh setup, a join and a restore write in the open before the node is encrypted, and the process can die in
+/// BMB-306: a fresh setup, a join and a restore write in the open before the node is encrypted, and the process can die in
 /// between. The seal intent (a marker written before the first write; see <see cref="SealIntent"/>) makes the next start wipe what was written, so no start
 /// ever serves a node that holds data in the open. The tests take an image of the data folder at every checkpoint of each flow and judge what the next
 /// start makes of it: whatever the flow had written is either encrypted or gone, never readable.

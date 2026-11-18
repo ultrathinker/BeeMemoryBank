@@ -36,7 +36,7 @@ public sealed class FileNodeKeyTests : IDisposable
     }
 
     /// <summary>
-    /// Review release-a #7: on Windows the seed used to take over the data folder's inherited ACL, so in a folder
+    /// On Windows the seed used to take over the data folder's inherited ACL, so in a folder
     /// outside the user's profile every account of the computer could read the node's identity.
     /// </summary>
     [WindowsAclFact]
@@ -108,7 +108,7 @@ public sealed class FileNodeKeyTests : IDisposable
     }
 
     /// <summary>
-    /// Review A2-d: two first starts on one volume at the same instant. Both used to see "no seed", both wrote one and
+    /// Two first starts on one volume at the same instant. Both used to see "no seed", both wrote one and
     /// renamed it over the other's, so one returned a public key that was no longer in the file - its identity row then
     /// failed "does not belong to node" at every later start. Now the second rename does not replace, and the loser takes
     /// the winner's key.
@@ -367,8 +367,8 @@ public sealed class FileNodeKeyTests : IDisposable
     /// <summary>
     /// A key path that is a link is refused rather than followed: reading through one adopts a seed
     /// from outside the data volume, and a rename onto one replaces the link while its target keeps
-    /// the old contents — the node would come back with the identity it thought it had replaced
-    /// (review release-a2 sec#9).
+    /// the old contents — the node would come back with the identity it thought it had replaced.
+    ///
     /// </summary>
     [Fact]
     public void AKeyPathThatIsALink_IsRefused_NotFollowed()

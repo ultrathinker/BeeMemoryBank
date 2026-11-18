@@ -6,7 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-merge #4: /api/blind/status carries pairing.code_active (CONTRACTS §5) — true while a pair
+/// /api/blind/status carries pairing.code_active (CONTRACTS §5) — true while a pair
 /// code someone could still use exists, false before one is issued and once it is spent or expired.
 /// </summary>
 public class BlindPairingStatusTests : IDisposable

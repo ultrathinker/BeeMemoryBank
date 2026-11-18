@@ -5,7 +5,7 @@ using System.Collections.Concurrent;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// Tests for <see cref="SearchQueryCache"/> (WP-17): single-flight coalescing, ACL-safe cache
+/// Tests for <see cref="SearchQueryCache"/> : single-flight coalescing, ACL-safe cache
 /// keying, TTL expiry, bounded eviction, and fault handling.
 ///
 /// <para>
@@ -18,7 +18,7 @@ namespace BeeMemoryBank.Core.Tests;
 /// </summary>
 public class SearchQueryCacheTests
 {
-    // Matches the brief's example target concurrency (~20 concurrent users/agents).
+    // Matches the target concurrency (~20 concurrent users/agents).
     private const int ConcurrentCallers = 20;
 
     private static SearchResults MakeResult(params (Guid id, string title)[] articles)
@@ -29,7 +29,7 @@ public class SearchQueryCacheTests
     private static readonly Guid SecretId = Guid.NewGuid();
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // 1. Single-flight coalescing — the load-bearing test for this WP.
+    // 1. Single-flight coalescing — the load-bearing test for this work.
     // ─────────────────────────────────────────────────────────────────────────────
 
     [Fact]

@@ -237,7 +237,7 @@ public class DbConnectionFactory : IDbConnectionFactory, ISealableConnections, I
         catch
         {
             // The lease is released for failures AFTER the open too, not just for the open itself
-            // (review l-root5 #1). A PRAGMA that fails on a transient lock - journal_mode=WAL needs
+            //. A PRAGMA that fails on a transient lock - journal_mode=WAL needs
             // a moment of exclusivity - used to leave the connection open and _open permanently
             // incremented: the caller saw an error, but every later seed then waited the whole
             // drain timeout for a connection that no longer existed and failed with 400.
@@ -431,7 +431,7 @@ public class DbConnectionFactory : IDbConnectionFactory, ISealableConnections, I
     /// connection waits until the returned handle is disposed, except in the flow that called this,
     /// which goes on opening connections for its own work. Follow it with <see cref="WaitDrainedAsync"/>
     /// before the file is touched: a connection opened before the switch keeps the old file open, and
-    /// on Linux it would go on reading — and writing — the file the switch moved away (review l-root4 #1).
+    /// on Linux it would go on reading — and writing — the file the switch moved away.
     /// </summary>
     public IDisposable BeginQuiesce()
     {
@@ -478,7 +478,7 @@ public class DbConnectionFactory : IDbConnectionFactory, ISealableConnections, I
     {
         if (!IsKeyed) return true;
         // The generation ends first, whoever else holds the quiesce: from this line no connection is handed out for it and the drain below converges
-        // without a barrier of our own. A close must never wait for, or give up because of, a file switch that is under way (review round 1, H4).
+        // without a barrier of our own. A close must never wait for, or give up because of, a file switch that is under way.
         lock (_keyLock) _closedGeneration = _keys!.OpenGeneration;
         IDisposable? ownQuiesce = null;
         if (Quiescer.Value != this)

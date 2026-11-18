@@ -39,7 +39,7 @@ public class UserServiceTests : TestFixture
             .AddScoped(_ => ScopeHolder)
             .BuildServiceProvider());
         AgentRepo = new AgentRepository(Factory);
-        Users = new UserService(UserRepo, KeySlots, Session, Roles, FolderAccess, agentRepo: AgentRepo);
+        Users = new UserService(UserRepo, KeySlots, Session, Roles, FolderAccess, agentRepo: AgentRepo, factory: Factory);
     }
 
     private async Task<User> CreateRegularUserAsync(string username = "bob", string password = "BobPass1")
@@ -231,26 +231,33 @@ public class UserServiceTests : TestFixture
 
     // ---- H6: agent wrapped-DEK lifecycle on promotion/demotion --------------------------------
 
+    /// <summary>What tbl_agent says about one agent, the revoked ones included (AgentRepository.GetByIdAsync answers for active rows only).</summary>
+    private async Task<(string Status, bool HasWrappedDek)> AgentRowAsync(int agentId)
+    {
+        using var conn = Factory.CreateConnection();
+        var row = await Dapper.SqlMapper.QuerySingleAsync<(string Status, int Wrapped)>(conn,
+            "SELECT status AS Status, CASE WHEN encrypted_dek IS NULL AND dek_iv IS NULL AND salt IS NULL THEN 0 ELSE 1 END AS Wrapped FROM tbl_agent WHERE id = @agentId", new { agentId });
+        return (row.Status, row.Wrapped == 1);
+    }
+
     [Fact]
-    public async Task Demote_ClearsWrappedDekFromTheDemotedUsersAgents()
+    public async Task Demote_RevokesTheDemotedUsersAgents_AndWipesTheirWrappedDek()
     {
         var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
         var agentId = await CreateWrappedAgentAsync(carol.Id);
         (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeTrue("sanity check on the fixture");
 
-        await Users.UpdateUserAsync(carol.Id, "Carol", UserRoles.User);
+        await Users.DemoteSuperadminAsync(carol.Id, UserRoles.User, allowOpenRole: true);
 
-        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeFalse(
-            "a demoted user must not keep an agent that can auto-unlock the vault");
+        (await AgentRowAsync(agentId)).Should().Be(("D", false), "a demoted user must not keep an agent: revoked, and no wrapped key left to unlock the vault with");
+        (await AgentRepo.GetByIdAsync(agentId)).Should().BeNull("a revoked agent no longer authenticates");
     }
 
     [Fact]
-    public async Task DeleteUser_ClearsWrappedDekFromTheDeletedUsersAgents()
+    public async Task DeleteUser_RevokesTheDeletedUsersAgents_AndWipesTheirWrappedDek()
     {
-        // Deleting a superadmin leaves their agent rows behind (owner_user_id is ON DELETE
-        // RESTRICT, and DeleteAsync only flips is_active), so without an explicit wipe the
-        // account is gone while its agent keys stay vault keys — the same hole demotion closes,
-        // reached through a different door.
+        // Deleting a user leaves their agent rows behind (owner_user_id is ON DELETE RESTRICT, and the delete only flips is_active), so without an explicit
+        // revocation the account is gone while its agent keys stay vault keys - the same hole demotion closes, reached through a different door.
         await Users.CreateUserAsync("keeper", "Keeper", "KeeperPass1", UserRoles.Superadmin);
         var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
         var agentId = await CreateWrappedAgentAsync(carol.Id);
@@ -258,8 +265,7 @@ public class UserServiceTests : TestFixture
 
         await Users.DeleteUserAsync(carol.Id);
 
-        (await AgentRepo.GetByIdAsync(agentId))!.CanAutoUnlock.Should().BeFalse(
-            "a deleted user's agents must not keep unwrapping the master DEK");
+        (await AgentRowAsync(agentId)).Should().Be(("D", false), "a deleted user's agents are revoked and no longer unwrap the master DEK");
     }
 
     [Fact]
@@ -284,7 +290,7 @@ public class UserServiceTests : TestFixture
         var dave = await Users.CreateUserAsync("dave", "Dave", "DavePass1", UserRoles.Superadmin);
         var daveAgentId = await CreateWrappedAgentAsync(dave.Id);
 
-        await Users.UpdateUserAsync(carol.Id, "Carol", UserRoles.User);
+        await Users.DemoteSuperadminAsync(carol.Id, UserRoles.User, allowOpenRole: true);
 
         (await AgentRepo.GetByIdAsync(daveAgentId))!.CanAutoUnlock.Should().BeTrue(
             "demoting Carol must never reach Dave's agents");
@@ -296,7 +302,7 @@ public class UserServiceTests : TestFixture
         var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
         await CreateWrappedAgentAsync(carol.Id);
 
-        await Users.UpdateUserAsync(carol.Id, "Carol", UserRoles.User);
+        await Users.DemoteSuperadminAsync(carol.Id, UserRoles.User, allowOpenRole: true);
 
         (await UserRepo.GetByIdAsync(carol.Id))!.Role.Should().Be(UserRoles.User);
     }
@@ -315,7 +321,7 @@ public class UserServiceTests : TestFixture
         var admin = (await UserRepo.GetByUsernameAsync("admin"))!;
         var agentId = await CreateWrappedAgentAsync(admin.Id);
 
-        var act = async () => await Users.UpdateUserAsync(admin.Id, "admin", UserRoles.User);
+        var act = async () => await Users.DemoteSuperadminAsync(admin.Id, UserRoles.User, allowOpenRole: true);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*only remaining way to unlock*");
@@ -356,7 +362,7 @@ public class UserServiceTests : TestFixture
         var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
         carol.KeySlotId.Should().NotBeNull();
 
-        await Users.UpdateUserAsync(carol.Id, "Carol", UserRoles.User);
+        await Users.DemoteSuperadminAsync(carol.Id, UserRoles.User, allowOpenRole: true);
 
         (await UserRepo.GetByIdAsync(carol.Id))!.KeySlotId.Should().BeNull();
         Session.Lock();
@@ -373,7 +379,7 @@ public class UserServiceTests : TestFixture
         await Users.UpdateUserAsync(bob.Id, "Bob", UserRoles.Superadmin);
 
         var admin = (await UserRepo.GetByUsernameAsync("admin"))!;
-        var act = async () => await Users.UpdateUserAsync(admin.Id, "admin", UserRoles.User);
+        var act = async () => await Users.DemoteSuperadminAsync(admin.Id, UserRoles.User, allowOpenRole: true);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*only remaining way to unlock*");
@@ -392,7 +398,7 @@ public class UserServiceTests : TestFixture
         (await KeySlots.GetAllAsync()).Should().HaveCount(2, "admin's slot + the recovery slot");
 
         var admin = (await UserRepo.GetByUsernameAsync("admin"))!;
-        var act = async () => await Users.UpdateUserAsync(admin.Id, "admin", UserRoles.User);
+        var act = async () => await Users.DemoteSuperadminAsync(admin.Id, UserRoles.User, allowOpenRole: true);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*only remaining way to unlock*");
@@ -422,7 +428,7 @@ public class UserServiceTests : TestFixture
         await Users.ProvisionMissingKeySlotAsync((await UserRepo.GetByIdAsync(bob.Id))!, "BobPass1");
 
         var admin = (await UserRepo.GetByUsernameAsync("admin"))!;
-        await Users.UpdateUserAsync(admin.Id, "admin", UserRoles.User);
+        await Users.DemoteSuperadminAsync(admin.Id, UserRoles.User, allowOpenRole: true);
 
         (await UserRepo.GetByIdAsync(admin.Id))!.KeySlotId.Should().BeNull();
         Session.Lock();
@@ -457,7 +463,7 @@ public class UserServiceTests : TestFixture
         var stale = (await UserRepo.GetByIdAsync(bob.Id))!;
 
         // An admin demotes Bob while his login is still deriving the KEK.
-        await Users.UpdateUserAsync(bob.Id, "Bob", UserRoles.User);
+        await Users.DemoteSuperadminAsync(bob.Id, UserRoles.User, allowOpenRole: true);
         var slotsBefore = (await KeySlots.GetAllAsync()).Count;
 
         (await Users.ProvisionMissingKeySlotAsync(stale, "BobPass1")).Should().BeFalse();
@@ -500,7 +506,7 @@ public class UserServiceTests : TestFixture
     {
         var admin = (await UserRepo.GetByUsernameAsync("admin"))!;
 
-        var act = async () => await Users.UpdateUserAsync(admin.Id, "admin", UserRoles.User);
+        var act = async () => await Users.DemoteSuperadminAsync(admin.Id, UserRoles.User, allowOpenRole: true);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*last superadmin*");
@@ -599,7 +605,7 @@ public class UserServiceTests : TestFixture
         await CreateCustomRoleAsync();
         var admin = (await UserRepo.GetByUsernameAsync("admin"))!;
 
-        var act = async () => await Users.UpdateUserAsync(admin.Id, "admin", "user-developer");
+        var act = async () => await Users.DemoteSuperadminAsync(admin.Id, "user-developer", allowOpenRole: true);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*last superadmin*");
@@ -612,7 +618,7 @@ public class UserServiceTests : TestFixture
         var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
         var slotId = carol.KeySlotId!.Value;
 
-        await Users.UpdateUserAsync(carol.Id, "Carol", "user-developer");
+        await Users.DemoteSuperadminAsync(carol.Id, "user-developer", allowOpenRole: true);
 
         var updated = (await UserRepo.GetByIdAsync(carol.Id))!;
         updated.Role.Should().Be("user-developer");

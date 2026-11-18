@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review release-a #7: the blind node's three secrets in clear - the identity seed, the TLS key, the backup credentials -
+/// The blind node's three secrets in clear - the identity seed, the TLS key, the backup credentials -
 /// took over the data folder's inherited ACL on Windows, so in a folder outside the user's profile (C:\BMB\data, a service
 /// install) every account of the computer could read them. They are now created owner-only, and the files an older build
 /// left are repaired in place at start - never refused, so no existing node stops starting.

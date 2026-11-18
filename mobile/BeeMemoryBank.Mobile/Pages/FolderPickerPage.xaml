@@ -1,76 +1,94 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- The folder picker in the app's look: the Search page's search field, the Tree row style (folder
+     icon box and a chevron that turns when expanded), the page margin, a clear selected-folder line
+     and full-text app buttons. The tab bar is hidden, like the editor that opens it. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
              x:Class="BeeMemoryBank.Mobile.Pages.FolderPickerPage"
-             Title="Choose Folder"
-             BackgroundColor="{StaticResource BackgroundColor}">
+             Title="{loc:Translate ChooseFolderTitle}"
+             Shell.TabBarIsVisible="False">
 
-    <Grid RowDefinitions="Auto,*,Auto">
+    <Grid RowDefinitions="Auto,*,Auto" Padding="16,10,16,16">
 
-        <SearchBar Grid.Row="0" x:Name="SearchBar"
-                   AutomationId="FolderSearchBar"
-                   Placeholder="Search folders..."
-                   TextChanged="OnSearchTextChanged"
-                   Style="{StaticResource BaseSearchBar}"
-                   Margin="8,8,8,0" />
+        <!-- The Search page's search field, not the stock SearchBar. -->
+        <Border Grid.Row="0"
+                BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                Stroke="{AppThemeBinding Light={StaticResource BmbBorderStrongLight}, Dark={StaticResource BmbBorderStrong}}"
+                StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                Padding="14,4,6,4" MinimumHeightRequest="48">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                <Image Grid.Column="0" WidthRequest="18" HeightRequest="18" VerticalOptions="Center"
+                       Source="{AppThemeBinding Light=icon_row_search_light.svg, Dark=icon_row_search_dark.svg}" />
+                <Entry Grid.Column="1" x:Name="SearchBar" AutomationId="FolderSearchBar"
+                       Placeholder="{loc:Translate SearchFoldersPlaceholder}"
+                       BackgroundColor="Transparent"
+                       TextChanged="OnSearchTextChanged"
+                       ReturnType="Search" />
+                <Button Grid.Column="2" x:Name="ClearFolderSearchButton" AutomationId="ClearFolderSearchButton"
+                        Style="{StaticResource IconButton}" WidthRequest="40" HeightRequest="40"
+                        IsVisible="False" SemanticProperties.Description="{loc:Translate ClearSearch}"
+                        Clicked="OnClearSearchClicked">
+                    <Button.ImageSource>
+                        <AppThemeBinding Light="icon_row_clear_light.svg" Dark="icon_row_clear_dark.svg" />
+                    </Button.ImageSource>
+                </Button>
+            </Grid>
+        </Border>
 
-        <CollectionView Grid.Row="1" x:Name="FolderList"
-                        AutomationId="FolderPickerList"
-                        SelectionMode="None"
-                        Margin="8,8,8,0">
+        <!-- Folder rows in the Tree row style; the chevron turns when the folder is expanded. -->
+        <CollectionView Grid.Row="1" x:Name="FolderList" AutomationId="FolderPickerList"
+                        SelectionMode="None" Margin="0,10,0,0">
             <CollectionView.ItemTemplate>
                 <DataTemplate>
-                    <Frame x:Name="NodeFrame" Margin="{Binding DepthMargin}" Padding="12,8">
-                        <Frame.Triggers>
-                            <DataTrigger TargetType="Frame" Binding="{Binding IsSelected}" Value="True">
-                                <Setter Property="BackgroundColor" Value="#1ae91e63" />
+                    <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                            Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                            StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                            Padding="6,6,6,12" Margin="{Binding DepthMargin}">
+                        <Border.Triggers>
+                            <DataTrigger TargetType="Border" Binding="{Binding IsSelected}" Value="True">
+                                <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}" />
+                                <Setter Property="Stroke" Value="{AppThemeBinding Light={StaticResource BmbAccentBorderLight}, Dark={StaticResource BmbAccentBorder}}" />
                             </DataTrigger>
-                            <DataTrigger TargetType="Frame" Binding="{Binding IsSelected}" Value="False">
-                                <Setter Property="BackgroundColor" Value="{StaticResource SurfaceColor}" />
-                            </DataTrigger>
-                        </Frame.Triggers>
-                        <Frame.GestureRecognizers>
+                        </Border.Triggers>
+                        <Border.GestureRecognizers>
                             <TapGestureRecognizer Tapped="OnFolderTapped" />
-                        </Frame.GestureRecognizers>
-                        <HorizontalStackLayout Spacing="6" VerticalOptions="Center">
-                            <Label Text="{Binding Arrow}"
-                                   FontSize="14"
-                                   VerticalOptions="Center"
-                                   WidthRequest="16" />
-                            <Label Text="{Binding Icon}" FontSize="16" VerticalOptions="Center" />
-                            <Label Text="{Binding Name}"
-                                   FontSize="15"
-                                   FontAttributes="Bold"
-                                   VerticalOptions="Center" />
-                        </HorizontalStackLayout>
-                    </Frame>
+                        </Border.GestureRecognizers>
+                        <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="10" Padding="0,4" MinimumHeightRequest="48">
+                            <Image Grid.Column="0" WidthRequest="16" HeightRequest="16" VerticalOptions="Center"
+                                   Source="{AppThemeBinding Light=icon_row_chevron_light.svg, Dark=icon_row_chevron_dark.svg}">
+                                <Image.Triggers>
+                                    <DataTrigger TargetType="Image" Binding="{Binding IsExpanded}" Value="True">
+                                        <Setter Property="Rotation" Value="90" />
+                                    </DataTrigger>
+                                </Image.Triggers>
+                            </Image>
+                            <Border Grid.Column="1" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                    StrokeShape="RoundRectangle 12"
+                                    BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}">
+                                <Image WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center"
+                                       Source="{AppThemeBinding Light=icon_row_folder_light.svg, Dark=icon_row_folder_dark.svg}" />
+                            </Border>
+                            <Label Grid.Column="2" Text="{Binding Name}" Style="{StaticResource ItemTitle}"
+                                   VerticalOptions="Center" LineBreakMode="TailTruncation" />
+                        </Grid>
+                    </Border>
                 </DataTemplate>
             </CollectionView.ItemTemplate>
         </CollectionView>
 
-        <Grid Grid.Row="2" ColumnDefinitions="*,*,*" Padding="12,8" RowDefinitions="48">
-            <Button Grid.Column="0" Text="New Folder"
-                    AutomationId="NewFolderButton"
-                    Style="{StaticResource SecondaryButton}"
-                    Clicked="OnNewFolderClicked"
-                    HorizontalOptions="Fill" />
-            <Label Grid.Column="1" x:Name="SelectedPathLabel"
-                   AutomationId="SelectedPathLabel"
-                   Text="/"
-                   FontSize="13"
-                   LineBreakMode="MiddleTruncation"
-                   HorizontalOptions="Center"
-                   VerticalOptions="Center"
-                   TextColor="{StaticResource SecondaryTextColor}" />
-            <Button Grid.Column="2" x:Name="SelectButton"
-                    AutomationId="SelectFolderButton"
-                    Text="Select"
-                    Style="{StaticResource PrimaryButton}"
-                    IsEnabled="False"
-                    Clicked="OnSelectClicked"
-                    HorizontalOptions="Fill" />
-        </Grid>
+        <!-- A clear selected-folder line, then the two full-text app buttons. -->
+        <VerticalStackLayout Grid.Row="2" Spacing="10" Margin="0,10,0,0">
+            <Label x:Name="SelectedPathLabel" AutomationId="SelectedPathLabel"
+                   Style="{StaticResource ItemMeta}" LineBreakMode="MiddleTruncation" />
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                <Button Grid.Column="0" Text="{loc:Translate NewFolder}" AutomationId="NewFolderButton"
+                        Style="{StaticResource SecondaryButton}" Clicked="OnNewFolderClicked" HorizontalOptions="Fill" />
+                <Button Grid.Column="1" x:Name="SelectButton" AutomationId="SelectFolderButton"
+                        Text="{loc:Translate Select}" Style="{StaticResource PrimaryButton}"
+                        IsEnabled="False" Clicked="OnSelectClicked" HorizontalOptions="Fill" />
+            </Grid>
+        </VerticalStackLayout>
 
     </Grid>
-
 </ContentPage>

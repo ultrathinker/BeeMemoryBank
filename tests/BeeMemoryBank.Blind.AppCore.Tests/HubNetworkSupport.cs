@@ -97,6 +97,19 @@ internal sealed class HubNetwork : HttpMessageHandler
     public SyncEvent AddForgedNodeEndpoints(Guid about, string url) => Add(EventTypes.NodeEndpoints,
         JsonSerializer.Serialize(new NodeEndpointsPayload(about.ToString(), 1, [new NodeEndpointEntry(url, "lan")], null, null, 5311)));
 
+    /// <summary>The hub re-keys (release 2.12, plan WS-D): <c>node_key_rotated</c> signed by its current key, carrying <paramref name="newSeed"/>'s key.</summary>
+    public SyncEvent AddRotation(byte[] newSeed, long counter = 1)
+    {
+        lock (_gate)
+        {
+            var (evt, _) = NodeKeyRotationEvents.Rotation(NodeId, PublicKey, b => Ed25519Signer.Sign(_privateKey, b), newSeed, counter, ++_lamport, 0, [],
+                "test", 3, "Hub");
+            evt.SequenceNum = _events.Count + 1;
+            _events.Add(evt);
+            return evt;
+        }
+    }
+
     public SyncEvent Add(string type, string payload)
     {
         var evt = new SyncEvent

@@ -11,8 +11,41 @@ public static class MetadataCapabilities
     /// </summary>
     public const string PeerEndpointsV1 = "peer-endpoints-v1";
 
+    /// <summary>
+    /// The node opens sealed (v2) doors and v2 device recovery boxes (docs/adr/0012-sealed-doors.md): a peer without it cannot open a device box
+    /// that is the copy of a sealed door. Advertised from 2.12; what waits for it on every active peer is decided where v2 boxes are gated.
+    /// </summary>
+    public const string DoorBoxV1 = "door-box-v1";
+
+    /// <summary>Supports ownership fields on whitelist events and join/invite metadata (release 2.12.0).</summary>
+    public const string OwnershipV1 = "ownership-v1";
+
+    /// <summary>Understands self-authored <c>node_state</c> control events (release 2.12.0); never withheld from older relay nodes.</summary>
+    public const string NodeStateV1 = "node-state-v1";
+
+    /// <summary>
+    /// Follows a node's identity re-key (release 2.12.0, plan WS-D): applies <c>node_key_rotated</c> and <c>node_key_confirm</c>, verifies through the
+    /// key history and walks the key transition chain. A node re-keys only when every active peer shows it.
+    /// </summary>
+    public const string IdentityRekeyV1 = "identity-rekey-v1";
+
+    /// <summary>Understands <c>accounts_home_set</c> and <c>superadmin_doors_set</c> control events (release 2.12.0).</summary>
+    public const string SharedDoorsV1 = "shared-doors-v1";
+
     /// <summary>What this build advertises in identity, authenticate, report-position, my-standing and join.</summary>
-    public static readonly IReadOnlyList<string> Advertised = [EnvelopeV1, PeerEndpointsV1];
+    public static readonly IReadOnlyList<string> Advertised = [EnvelopeV1, PeerEndpointsV1, DoorBoxV1, OwnershipV1, NodeStateV1, IdentityRekeyV1, SharedDoorsV1];
+
+    public static bool HasDoorBoxV1(IReadOnlyCollection<string>? capabilities) =>
+        capabilities is not null && capabilities.Contains(DoorBoxV1);
+
+    public static bool HasOwnershipV1(IReadOnlyCollection<string>? capabilities) =>
+        capabilities is not null && capabilities.Contains(OwnershipV1);
+
+    public static bool HasNodeStateV1(IReadOnlyCollection<string>? capabilities) =>
+        capabilities is not null && capabilities.Contains(NodeStateV1);
+
+    public static bool HasSharedDoorsV1(IReadOnlyCollection<string>? capabilities) =>
+        capabilities is not null && capabilities.Contains(SharedDoorsV1);
 
     public static bool HasEnvelopeV1(IReadOnlyCollection<string>? capabilities) =>
         capabilities is not null && capabilities.Contains(EnvelopeV1);

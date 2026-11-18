@@ -145,7 +145,7 @@ public sealed class BlindNodeAlarmsTests : IAsyncLifetime
         status.Protocol.Should().Be(SyncProtocolVersion.Current, "the page said \"Protocol: unknown\" for every server blind node");
         status.LastContact.Should().Be(Now, "an answered my-standing call is contact, even when nothing was pulled");
         status.Alarms.Should().BeEmpty();
-        // BMB-313 fix round: it is a call THIS PC made, recorded as outbound contact; the protocol column it also stamps is not the node calling in.
+        // BMB-313: it is a call THIS PC made, recorded as outbound contact; the protocol column it also stamps is not the node calling in.
         status.Contact!.LastContactDirection.Should().Be("outbound");
         status.Contact.LastInboundAt.Should().BeNull("the node did not call this PC: this PC called it");
         status.Contact.LastOutboundAt.Should().Be(Now);

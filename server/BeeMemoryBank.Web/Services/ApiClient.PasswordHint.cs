@@ -83,17 +83,48 @@ public partial class ApiClient
 
     /// <summary>
     /// Issues a new recovery key to the vault (the existing /api/keys/add-recovery, superadmin and an unlocked
-    /// session). The key is returned to the caller once and is never stored in recoverable form anywhere.
+    /// session). The key belongs to the signed-in superadmin who issues it (2.12); <paramref name="label"/> is an
+    /// optional memory aid. The key is returned to the caller once and is never stored in recoverable form anywhere.
     /// </summary>
-    public async Task<(string? Key, string? Error)> AddRecoveryKeyAsync()
+    public async Task<(string? Key, string? Error)> AddRecoveryKeyAsync(string? label = null)
     {
-        var resp = await http.PostAsync("/api/keys/add-recovery", content: null);
+        var resp = await http.PostAsync("/api/keys/add-recovery", Body(new { label }));
         if (!resp.IsSuccessStatusCode)
             return (null, await ReadErrorAsync(resp) ?? "The node refused to issue a recovery key.");
         var body = await resp.Content.ReadFromJsonAsync<RecoveryKeyDto>(JsonOpts);
         return body?.RecoveryKey is { Length: > 0 } key
             ? (key, null)
             : (null, "The node did not return a recovery key.");
+    }
+
+    /// <summary>Every recovery key of this node for the Admin "Recovery keys" page (2.12); null when the node did not answer. Never key material.</summary>
+    public async Task<List<RecoveryKeyListItemDto>?> GetRecoveryKeysAsync()
+    {
+        try
+        {
+            return await http.GetFromJsonAsync<List<RecoveryKeyListItemDto>>("/api/keys/recovery-list", JsonOpts);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Revokes one recovery key (its slot). The node refuses if it is the last door a person can open.</summary>
+    public async Task<(bool Ok, string? Error)> RevokeRecoveryKeyAsync(int slotId)
+    {
+        var resp = await http.PostAsync("/api/keys/recovery-revoke", Body(new { slotId }));
+        return resp.IsSuccessStatusCode ? (true, null) : (false, await ReadErrorAsync(resp) ?? "The node refused to revoke the recovery key.");
+    }
+
+    /// <summary>Revokes every recovery key with no owner (issued before 2.12). Returns how many were revoked, or an error.</summary>
+    public async Task<(int Count, string? Error)> RevokeUnknownRecoveryKeysAsync()
+    {
+        var resp = await http.PostAsync("/api/keys/recovery-revoke-unknown", content: null);
+        if (!resp.IsSuccessStatusCode)
+            return (0, await ReadErrorAsync(resp) ?? "The node refused to revoke the keys with no owner.");
+        var body = await resp.Content.ReadFromJsonAsync<RevokedCountDto>(JsonOpts);
+        return (body?.Revoked ?? 0, null);
     }
 
     /// <summary>The person confirmed they saved the key; idempotent on the node.</summary>
@@ -113,4 +144,9 @@ public partial class ApiClient
     private sealed record PasswordHintResponseDto(string? Hint, string? Message);
     private sealed record CurrentPasswordHintDto(string? PasswordHint);
     private sealed record RecoveryKeyDto(string RecoveryKey);
+    private sealed record RevokedCountDto(int Revoked);
 }
+
+/// <summary>One recovery key as GET /api/keys/recovery-list reports it (2.12). Never key material: the slot, its owner (null = issued before
+/// 2.12, owner unknown), when it was issued, and the label its owner gave it.</summary>
+public sealed record RecoveryKeyListItemDto(int SlotId, int? OwnerUserId, string? OwnerUsername, string? OwnerDisplayName, DateTime CreatedAt, string? Label);

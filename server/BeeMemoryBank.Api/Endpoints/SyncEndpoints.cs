@@ -17,6 +17,12 @@ using BeeMemoryBank.Sync.Metadata;
 
 namespace BeeMemoryBank.Api.Endpoints;
 
+/// <summary>
+/// Said when a join's starting vault is about to be served (a desktop node then shows itself on the network by itself).
+/// Registered by the full Api only; the blind node links SyncEndpoints without it, so there nothing is said.
+/// </summary>
+public delegate Task JoinCompletedNotice();
+
 public static class SyncEndpoints
 {
     /// <summary>
@@ -70,10 +76,14 @@ public static class SyncEndpoints
     public static void MapSyncEndpoints(this WebApplication app)
     {
         // ─── Identity (no auth) ─────────────────────────────────────────────────
-        app.MapGet("/api/sync/identity", async (INodeIdentityRepository nodeRepo, ISyncProtocolPolicy policy) =>
+        app.MapGet("/api/sync/identity", async (INodeIdentityRepository nodeRepo, ISyncProtocolPolicy policy, HttpContext ctx) =>
         {
             var identity = await nodeRepo.GetAsync();
             if (identity == null) return Results.Problem("Node is not initialized.", statusCode: 503);
+            // The key transition chain (plan WS-D D4): a caller that pinned an older key of this node walks it to the current one.
+            var chain = ctx.RequestServices.GetService<BeeMemoryBank.Storage.Sqlite.NodeKeyHistoryStore>() is { } history
+                ? (await history.ChainAsync(identity.NodeId)).Select(BeeMemoryBank.Sync.NodeKeyLinkDto.Of).ToList()
+                : null;
             // The protocol this node declares (3 until it applied the metadata activation, 4 after) and what this build
             // advertises (docs/design/step-a-spec.md 5.1); older nodes ignore the two new fields.
             return Results.Ok(new SyncIdentityResponse(
@@ -84,7 +94,8 @@ public static class SyncEndpoints
                 MetadataCapabilities.Advertised,
                 BuildVersion.Current,
                 NodePlatform.Current,
-                NodePlatform.InContainer));
+                NodePlatform.InContainer,
+                chain is { Count: > 0 } ? chain : null));
         }).WithTags("Sync");
 
         // ─── Sentinel (no auth — encrypted, useless without DEK) ───────────────
@@ -151,6 +162,10 @@ public static class SyncEndpoints
             {
                 logger.LogWarning("Auth 401 from {Ip} for {NodeId}: whitelist entry={HasEntry} status={Status}",
                     remoteIp, req.NodeId, entry != null, entry?.Status);
+                // A revoked device that proves it is itself is told so, signed (2.12): it then says one calm sentence instead of a sync error.
+                if (entry is null && await whitelist.GetByNodeIdAsync(req.NodeId, includeDeleted: true) is { Status: "R" } revokedRow
+                    && await RevokedRefusalAsync(revokedRow, req, serverNodeId, httpCtx.RequestServices, logger) is { } revoked)
+                    return revoked;
                 return Results.Unauthorized();
             }
 
@@ -187,7 +202,22 @@ public static class SyncEndpoints
             // node in the mesh must run this build or newer to authenticate.
             var domainTagV2 = "BMB-CHALLENGE-V2\0"u8.ToArray();
             var taggedPayloadV2 = domainTagV2.Concat(serverNodeId.ToByteArray()).Concat(challengeBytes).ToArray();
-            var sigOk = Ed25519Signer.Verify(entry.Ed25519PublicKey, taggedPayloadV2, signature);
+            // Only the peer's CURRENT key authenticates (plan WS-D D1): after a re-key the retired one cannot open a session (the helper's
+            // current-key check, which never throws for a key or signature of the wrong size).
+            var sigOk = BeeMemoryBank.Sync.NodeEventVerifier.SignatureVerifies(entry.Ed25519PublicKey, taggedPayloadV2, signature);
+            // A caller that re-keyed and whose re-key this node has not applied yet (plan WS-D D4): its chain must lead from the key on record to a key
+            // that verifies the signature. Nothing is recorded from it - the whitelist row moves only with the node_key_rotated event the caller pushes
+            // next. Never for a node in an identity conflict: there the old key is in doubt.
+            if (!sigOk && req.KeyChain is { Count: > 0 }
+                && BeeMemoryBank.Sync.PeerKey.Follow(req.NodeId, entry.Ed25519PublicKey, LastKeyOf(req.KeyChain), req.KeyChain) is { } followed
+                && BeeMemoryBank.Sync.NodeEventVerifier.SignatureVerifies(followed, taggedPayloadV2, signature)
+                && (httpCtx.RequestServices.GetService<BeeMemoryBank.Storage.Sqlite.NodeKeyHistoryStore>() is not { } keyHistory
+                    || await keyHistory.GetConflictAsync(req.NodeId) is not { IsOpen: true }))
+            {
+                logger.LogInformation("Auth for {NodeId} ({Display}) with the key its transition chain leads to; its re-key is applied when it arrives",
+                    req.NodeId, entry.DisplayName);
+                sigOk = true;
+            }
             if (!sigOk)
             {
                 logger.LogWarning("Auth 401 for {NodeId} ({Display}): Ed25519 signature verify failed (pubkey {PubLen}b, sig {SigLen}b)",
@@ -202,6 +232,8 @@ public static class SyncEndpoints
             // What it advertises (docs/design/step-a-spec.md 5.2), recorded even when it is nothing: a 2.5 node sends no
             // capabilities, and the readiness report of the activation must see it as one.
             await whitelist.RecordCapabilitiesAsync(req.NodeId, req.Capabilities ?? [], req.AppVersion, DateTime.UtcNow);
+            if (httpCtx.RequestServices.GetService<ISuperadminDoorsNotifier>() is { } authDoorsNotifier)
+                await authDoorsNotifier.NotifyChangedAsync(immediate: false);
 
             // Protocol 3 is a boundary, not a hint (SyncProtocolVersion.MinPeer): an older peer
             // would accept a blind node's events and seal the DEK for it, so it gets no token and
@@ -444,6 +476,11 @@ public static class SyncEndpoints
             ctx.Response.Headers["X-BMB-Snapshot-Producer"] = producerId.ToString();
             ctx.Response.Headers["X-BMB-Snapshot-Signature"] = signatureB64;
 
+            // The joiner is about to have its starting vault: the join completed, so the node shows itself on the network
+            // by itself. Best effort, and while the door is mid-download its own finish callback does it after.
+            // Only the full Api registers the notice (a desktop node's front acts on it); the blind node links this file without it.
+            if (ctx.RequestServices.GetService<JoinCompletedNotice>() is { } joined) await joined();
+
             return Results.File(filePath, "application/gzip", Path.GetFileName(filePath));
         }).WithTags("Sync");
 
@@ -468,7 +505,7 @@ public static class SyncEndpoints
             // The number is a claim about how far this peer has read OUR log, and it is what lets the
             // log be cut: a blind node trims up to the position every active peer has reached, and
             // ordinary compaction reads the same rows. So it is checked rather than recorded on trust
-            // (Codex #5). Above the head it is a claim the peer cannot have read — with a single peer
+            //. Above the head it is a claim the peer cannot have read — with a single peer
             // the minimum IS that number, and the log is then cut past what the peer really holds.
             // Below what is already recorded for it, the peer contradicts itself, and taking the
             // lower value would move the cut-off back over events the peer has already passed.
@@ -497,7 +534,7 @@ public static class SyncEndpoints
 
             // The peer's own word about its position — the number the log may be trimmed by — and,
             // separately, the delivery watermark, which says a peer has been *sent* this far (the
-            // status page and the push cursor read it). Only the first may delete events (security #3).
+            // status page and the push cursor read it). Only the first may delete events.
             await pushPositionRepo.RecordReportedPositionAsync(nodeId, sequence);
             await pushPositionRepo.UpdatePositionAsync(nodeId, sequence);
             // Also here, not only at authenticate: a token lives an hour, and a peer that upgraded
@@ -507,7 +544,11 @@ public static class SyncEndpoints
             // Refreshed only when sent (spec 5.2): authentication, which always comes first, records what a peer that sends
             // nothing has.
             if (capabilities is not null)
+            {
                 await whitelist.RecordCapabilitiesAsync(nodeId, MetadataCapabilities.Parse(capabilities), appVersion, DateTime.UtcNow);
+                if (ctx.RequestServices.GetService<ISuperadminDoorsNotifier>() is { } posDoorsNotifier)
+                    await posDoorsNotifier.NotifyChangedAsync(immediate: false);
+            }
             // A blind copy stopped by its owner's limits says so (release 2.7: paused, pausedUntil - additive; an older copy sends neither and is not paused).
             // Memory only, closed set of reasons, blind copies only: it is what turns "silent" into "paused" on the owner's page.
             if (BlindNodeId.IsBlind(nodeId))
@@ -1404,6 +1445,50 @@ public static class SyncEndpoints
     /// Truncate an IP for logs. v4: last octet → "x" (1.2.3.x). v6: last 80 bits → "::x".
     /// Preserves enough resolution for abuse-pattern detection while reducing PII surface.
     /// </summary>
+    /// <summary>The newest key of a caller's transition chain (the link with the highest counter), or null.</summary>
+    private static string? LastKeyOf(IReadOnlyList<BeeMemoryBank.Sync.NodeKeyLinkDto> chain) =>
+        chain.Where(l => l is not null).MaxBy(l => l.Counter)?.NewPublicKeyB64;
+
+    /// <summary>
+    /// The 401 a caller whose whitelist row is revoked gets once its challenge signature verified under that row's key (release 2.12): a body naming
+    /// the refusal and this node's signature of it (<see cref="DeviceRevokedProof"/>, bound to this node, the caller and the challenge), so the
+    /// device can tell "an administrator disconnected this device" from any other refusal and nobody else can make it believe so. Null - the plain
+    /// 401 - when the signature does not verify, or this node cannot sign now (a locked vault): it says no more than before.
+    /// </summary>
+    private static async Task<IResult?> RevokedRefusalAsync(WhitelistEntry entry, SyncAuthRequest req, Guid serverNodeId, IServiceProvider services, ILogger logger)
+    {
+        byte[] challenge, signature;
+        try
+        {
+            challenge = Convert.FromBase64String(req.ChallengeB64);
+            signature = Convert.FromBase64String(req.SignatureB64);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        var payload = "BMB-CHALLENGE-V2\0"u8.ToArray().Concat(serverNodeId.ToByteArray()).Concat(challenge).ToArray();
+        // The key on record only, through the helper (plan WS-D D3): a revoked node that re-keyed since gets the plain 401.
+        if (!BeeMemoryBank.Sync.NodeEventVerifier.SignatureVerifies(entry.Ed25519PublicKey, payload, signature)) return null;
+
+        if (services.GetService<INodeAuthSigner>() is not { } signer || services.GetService<INodeIdentityRepository>() is not { } nodes) return null;
+        try
+        {
+            var identity = await nodes.GetAsync();
+            if (identity is null || identity.NodeId != serverNodeId) return null;
+            var proof = signer.SignChallenge(identity, DeviceRevokedProof.Payload(serverNodeId, entry.NodeId, challenge));
+            logger.LogInformation("Auth 401 for {NodeId} ({Display}): its row is revoked; it was told so", entry.NodeId, entry.DisplayName);
+            return Results.Json(new { refusal = DeviceRevokedProof.Refusal, proofB64 = Convert.ToBase64String(proof) },
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.Security.Cryptography.CryptographicException or VaultSealedException)
+        {
+            // A locked vault cannot sign: the plain refusal, as before.
+            logger.LogDebug("Auth 401 for {NodeId}: revoked, and this node cannot sign the refusal now", entry.NodeId);
+            return null;
+        }
+    }
+
     private static string MaskIp(System.Net.IPAddress? ip)
     {
         if (ip == null) return "?";

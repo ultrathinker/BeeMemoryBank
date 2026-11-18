@@ -9,10 +9,10 @@ namespace BeeMemoryBank.Storage.Sqlite;
 public class UserRepository(DbConnectionFactory factory) : BaseRepository(factory), IUserRepository
 {
     private const string SelectColumns =
-        @"id AS Id, username AS Username, display_name AS DisplayName,
+        @"id AS Id, COALESCE(NULLIF(person_id, ''), '00000000-0000-0000-0000-000000000000') AS PersonId, username AS Username, display_name AS DisplayName,
           password_hash AS PasswordHash, role AS Role, key_slot_id AS KeySlotId,
           is_active AS IsActive, chat_access AS ChatAccess, created_at AS CreatedAt, last_login_at AS LastLoginAt,
-          security_stamp AS SecurityStamp, password_hint AS PasswordHint";
+          security_stamp AS SecurityStamp, password_hint AS PasswordHint, replicated AS Replicated, account_state AS AccountState";
 
     public async Task<User?> GetByUsernameAsync(string username)
     {
@@ -42,11 +42,13 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
         // Stamp every new user immediately so the login cookie has a claim to validate against.
         if (string.IsNullOrEmpty(user.SecurityStamp))
             user.SecurityStamp = GenerateStamp();
+        if (user.PersonId == Guid.Empty)
+            user.PersonId = Guid.NewGuid();
 
         using var conn = OpenConnection();
         return await conn.ExecuteScalarAsync<int>(
-            @"INSERT INTO tbl_user (username, display_name, password_hash, role, key_slot_id, is_active, chat_access, created_at, last_login_at, security_stamp, password_hint)
-              VALUES (@Username, @DisplayName, @PasswordHash, @Role, @KeySlotId, @IsActive, @ChatAccess, @CreatedAt, @LastLoginAt, @SecurityStamp, @PasswordHint);
+            @"INSERT INTO tbl_user (person_id, username, display_name, password_hash, role, key_slot_id, is_active, chat_access, created_at, last_login_at, security_stamp, password_hint, replicated)
+              VALUES (@PersonId, @Username, @DisplayName, @PasswordHash, @Role, @KeySlotId, @IsActive, @ChatAccess, @CreatedAt, @LastLoginAt, @SecurityStamp, @PasswordHint, @Replicated);
               SELECT last_insert_rowid()",
             user);
     }
@@ -112,8 +114,20 @@ public class UserRepository(DbConnectionFactory factory) : BaseRepository(factor
         using var conn = OpenConnection();
         var rows = await conn.ExecuteAsync(
             @"UPDATE tbl_user SET key_slot_id = @slotId
-              WHERE id = @userId AND key_slot_id IS NULL AND role = 'superadmin' AND is_active = 1",
+              WHERE id = @userId AND key_slot_id IS NULL AND role = 'superadmin' AND is_active = 1 AND account_state = 'active'",
             new { userId, slotId });
+        return rows > 0;
+    }
+
+    // Writes only the columns a password replacement owns, and only while the row is what the replacement loaded (see the interface).
+    public async Task<bool> TryReplacePasswordAsync(int userId, string expectedRole, int? expectedKeySlotId, int? newKeySlotId, string passwordHash, bool setHint, string? passwordHint)
+    {
+        using var conn = OpenConnection();
+        var rows = await conn.ExecuteAsync(
+            @"UPDATE tbl_user SET password_hash = @passwordHash, key_slot_id = @newKeySlotId,
+                  password_hint = CASE WHEN @setHint = 1 THEN @passwordHint ELSE password_hint END
+              WHERE id = @userId AND role = @expectedRole AND key_slot_id IS @expectedKeySlotId AND is_active = 1 AND account_state = 'active'",
+            new { userId, expectedRole, expectedKeySlotId, newKeySlotId, passwordHash, setHint = setHint ? 1 : 0, passwordHint });
         return rows > 0;
     }
 

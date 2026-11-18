@@ -24,6 +24,11 @@ public static class HoldReasons
     public const string Locked = "locked";
     public const string Key = "key";
     public const string Order = "order";
+    /// <summary>
+    /// Quarantined, not held: an event an older build stored, signed by a retired identity key of its author that the author's rotation does not
+    /// acknowledge. Never applied.
+    /// </summary>
+    public const string RetiredKey = "retired_key";
 }
 
 /// <summary>Keys and flags of an originator, for an apply that must not read tbl_whitelist (restore replay).</summary>
@@ -33,11 +38,15 @@ public sealed record OriginatorInfo(byte[] PublicKey, bool IsSuperadmin);
 /// <param name="ReceivedSeq">The event's sequence number in that peer's log; stored as origin_seq.</param>
 /// <param name="Originators">Restore replay only: resolves originators instead of tbl_whitelist.</param>
 /// <param name="EventKeys">Restore replay only: the 32-byte event key (spec 3.5) of a MEK key id, or null.</param>
+/// <param name="KeyHistory">A package's own key history (plan WS-D D4): the retired keys its producer and authors had, carried in its control part.</param>
+/// <param name="KeyMode">Which rule a retired key is held to (<see cref="NodeKeyMode"/>); by default Live, and Package for a restore replay.</param>
 public sealed record ApplyContext(
     Guid? ReceivedFrom = null,
     long? ReceivedSeq = null,
     Func<Guid, OriginatorInfo?>? Originators = null,
-    Func<string, byte[]?>? EventKeys = null);
+    Func<string, byte[]?>? EventKeys = null,
+    IReadOnlyList<BeeMemoryBank.Core.Models.NodeKeyHistoryEntry>? KeyHistory = null,
+    NodeKeyMode? KeyMode = null);
 
 /// <summary>
 /// Called by EventApplier after the invariants, the originator lookup, the signature and the envelope shape passed.

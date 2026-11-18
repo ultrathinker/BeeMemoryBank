@@ -25,7 +25,7 @@ public static class Program
     private static BeeMemoryBank.AppPaths.VaultLease? s_vaultLease;
 
     /// <summary>
-    /// The vault gate for both start modes (review release-b R1-3): refused while a re-key runs, an interrupted swap
+    /// The vault gate for both start modes: refused while a re-key runs, an interrupted swap
     /// finished or rolled back, and vault.lease held shared. Returns the data directory to use, or null after printing
     /// why the start is refused.
     /// </summary>
@@ -35,7 +35,7 @@ public static class Program
         {
             var (resolution, lease) = BeeMemoryBank.AppPaths.VaultStartup.Enter(Path.GetFullPath(dataDirectory));
             // A setup, join or restore that was cut off (or is pending in another process) and could not be settled is refused HERE, before the Api child is
-            // started: the child joins this process's lease, and what the operation left in the open must not be served by it (BMB-306 fix round 2). The other
+            // started: the child joins this process's lease, and what the operation left in the open must not be served by it (BMB-306). The other
             // refusals of the vault gate are left to the Api, which stays up only to say why.
             if (resolution.Intent?.Refusal is { } refusal)
             {
@@ -368,7 +368,7 @@ public static class Program
             Console.WriteLine($"[Node] Launching children with lock on data dir: '{resolvedDataDirectory}'...");
             await orchestrator.StartAsync(stopToken);
             // Every child is up: the first start on a swapped-in vault succeeded, so its journal and re-key lock go
-            // (the Api child does the same; whichever comes second finds nothing to do). Review release-b R1-4.
+            // (the Api child does the same; whichever comes second finds nothing to do). 
             BeeMemoryBank.AppPaths.RekeySwapResolver.CompleteFirstStart(resolvedDataDirectory);
 
             if (isAutoMode && apiConfig != null && webConfig != null)
@@ -484,6 +484,10 @@ public static class Program
                         if (local is null) return;
                         trusted.TrustNetworkOf(local.IsIPv4MappedToIPv6 ? local.MapToIPv4() : local, "paired");
                         _ = listener.RefreshAsync();
+                    }, finished: () =>
+                    {
+                        // The joined device has its snapshot: show this node on the network by itself.
+                        if (lanNetwork is { } sw) _ = sw.TurnOnForJoinAsync(Console.WriteLine);
                     });
                 }
                 // Rebuilt for every front (it holds references, no state of its own): a front that had to give up the

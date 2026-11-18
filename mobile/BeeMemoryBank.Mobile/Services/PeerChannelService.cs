@@ -54,7 +54,7 @@ public sealed record PeerChannelLine(Guid PeerNodeId, string Address, string Det
 /// <summary>A peer as the Status page's list draws it.</summary>
 /// <param name="Entry">The whitelist row (the buttons act on it).</param>
 /// <param name="Status">"Direct, on this network", "Not on this network" ...; null when there is nothing to say yet.</param>
-public sealed record PeerCard(WhitelistEntry Entry, string AddressLine, string? Status, IReadOnlyList<PeerChannelLine> Channels)
+public sealed record PeerCard(WhitelistEntry Entry, string AddressLine, string? Status, IReadOnlyList<PeerChannelLine> Channels, string? ReachState = null)
 {
     public string DisplayName => Entry.DisplayName;
     public bool HasStatus => Status is not null;
@@ -143,14 +143,16 @@ public sealed class PeerChannelService(
         var (plan, _) = await PeerSessions.PlanAsync(services, peer);
         var rows = await channels.GetAsync(peer.NodeId);
         var contact = services.GetService<PeerContactLog>()?.Get(peer.NodeId, peer.ApiAddress);
-        var status = PhonePeers.StatusText(peer, plan, rows, services.GetService<PeerReachability>(), contact, syncInterval, ownCycleRecent, now);
+        var reachability = services.GetService<PeerReachability>();
+        var status = PhonePeers.StatusText(peer, plan, rows, reachability, contact, syncInterval, ownCycleRecent, now);
+        var reachState = PhonePeers.ReachStateOf(peer, plan, rows, reachability, contact, syncInterval, ownCycleRecent, now);
 
         var dialled = plan.Dialable.Select(c => c.Url).ToHashSet(StringComparer.Ordinal);
         var first = plan.First.FirstOrDefault()?.Url;
         var lines = plan.All.Select(c => new PeerChannelLine(
             peer.NodeId, c.Url, Detail(c, dialled.Contains(c.Url), c.Url == first, now),
             rows.Any(r => r.Source == ChannelSources.Manual && r.Address == c.Url))).ToList();
-        return new PeerCard(peer, string.IsNullOrWhiteSpace(peer.ApiAddress) ? "No address of its own" : peer.ApiAddress, status, lines);
+        return new PeerCard(peer, string.IsNullOrWhiteSpace(peer.ApiAddress) ? "No address of its own" : peer.ApiAddress, status, lines, reachState);
     }
 
     private static string Detail(ChannelCandidate c, bool dialled, bool usedFirst, DateTime now)
@@ -179,7 +181,7 @@ public sealed class PeerChannelService(
         {
             var identity = await SyncAddress.ReadIdentityAsync(session.Client, address, ct);
             if (identity.NodeId != peer.NodeId) return ChannelFailures.WrongPeer;
-            if (peer.Ed25519PublicKey is { Length: 32 } && !PeerKey.Matches(peer.Ed25519PublicKey, identity.Ed25519PublicKeyB64)) return ChannelFailures.WrongPeer;
+            if (peer.Ed25519PublicKey is { Length: 32 } && !PeerKey.MatchesOrFollows(peer.NodeId, peer.Ed25519PublicKey, identity)) return ChannelFailures.WrongPeer;  // a re-keyed peer: its signed chain leads from the pinned key (plan WS-D D4)
             return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)

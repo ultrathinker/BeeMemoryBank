@@ -5,6 +5,7 @@ using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
+using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
 using BeeMemoryBank.Sync.Channels;
@@ -61,6 +62,29 @@ public sealed class HubChannelsTests : IDisposable
     [
         "GET /api/sync/identity", "POST /api/sync/challenge", "POST /api/sync/authenticate", "GET /api/sync/events", "POST /api/sync/report-position",
     ];
+
+    // ---- the hub re-keyed (release 2.12, plan WS-D D4) -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task AHubThatRekeyed_MovesTheCopysPinAfterTheRoundThatAppliedItsRotation_WithNoRequestOfItsOwn()
+    {
+        _net.Answer(HubNetwork.PairingAuthority, HubNetwork.Mode.Hub);
+        var copy = await PairedAsync();
+        await using var _ = copy.Host;
+        (await copy.App.RequestSyncAsync()).Should().Be("Synced.");
+        copy.State.CallCode!.PublicKey.Should().Equal(_net.PublicKey);
+
+        var (newKey, newSeed) = Ed25519Signer.GenerateKeyPair();
+        _net.AddRotation(newSeed);
+        var before = _net.Calls.Count;
+
+        (await copy.App.RequestSyncAsync()).Should().Be("Synced.");
+
+        copy.State.CallCode!.PublicKey.Should().Equal(newKey, "the packages the hub signs now are checked by its new key");
+        copy.State.PairedCallCode!.PublicKey.Should().Equal(_net.PublicKey, "the code as paired is kept for its MAC");
+        _net.Calls.Skip(before).Select(c => $"{c.Method} {c.Path}").Should().NotContain("GET /api/sync/identity",
+            "the pin moves by the rotation the copy applied, not by asking");
+    }
 
     // ---- the hub moved ---------------------------------------------------------------------------------------------------------
 

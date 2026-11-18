@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Task P7, the Setup page's "Connect to another device": the join code the other computer's Connect a device card shows is pasted, the
+/// the Setup page's "Connect to another device": the join code the other computer's Connect a device card shows is pasted, the
 /// address comes from it (not from what is typed), a damaged code is refused on the page, and what the Api answers reaches the person
 /// in words. The Api behind the page is the real one; the other computer is a closed port, so a valid code ends at "did not answer".
 /// The join itself, against a real door, is <see cref="JoinByCodeThroughTheDoorTests"/>.

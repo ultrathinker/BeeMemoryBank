@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- The mock-up's trash: deleted articles with a way back for each (the core's RestoreService, the
+     same one the iPhone TrashPage uses), and the empty state. -->
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
+             x:Class="BeeMemoryBank.Mobile.Pages.TrashPage"
+             Title="{loc:Translate SettingsTrash}">
+
+    <CollectionView x:Name="TrashList" AutomationId="TrashList" SelectionMode="None" Margin="16">
+        <CollectionView.EmptyView>
+            <VerticalStackLayout Padding="20,48" Spacing="12" HorizontalOptions="Center">
+                <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                        StrokeShape="RoundRectangle 16" WidthRequest="52" HeightRequest="52" HorizontalOptions="Center">
+                    <Image Source="{AppThemeBinding Light=icon_trash_light.svg, Dark=icon_trash_dark.svg}"
+                           WidthRequest="26" HeightRequest="26" HorizontalOptions="Center" VerticalOptions="Center" />
+                </Border>
+                <Label Text="{loc:Translate TrashEmptyTitle}" Style="{StaticResource EmptyTitle}" />
+                <Label Text="{loc:Translate TrashEmptyDesc}" Style="{StaticResource EmptyDesc}" />
+            </VerticalStackLayout>
+        </CollectionView.EmptyView>
+        <CollectionView.ItemTemplate>
+            <DataTemplate>
+                <Border Style="{StaticResource CardBorder}" Margin="0,4">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2" VerticalOptions="Center">
+                            <Label Text="{Binding Title}" Style="{StaticResource ItemTitle}" LineBreakMode="TailTruncation" />
+                            <Label Text="{Binding DeletedAtText}" Style="{StaticResource ItemMeta}" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="1" Text="{loc:Translate TrashRestore}" Style="{StaticResource SecondaryButton}"
+                                VerticalOptions="Center" CommandParameter="{Binding .}" Clicked="OnRestoreClicked" />
+                    </Grid>
+                </Border>
+            </DataTemplate>
+        </CollectionView.ItemTemplate>
+    </CollectionView>
+</ContentPage>

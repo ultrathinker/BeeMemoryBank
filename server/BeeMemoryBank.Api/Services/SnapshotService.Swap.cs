@@ -10,7 +10,7 @@ public partial class SnapshotService
     internal TimeSpan LiveSwapDrainTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Every replacement of the live vault database goes through here, plain node and encrypted node alike (review round 1, H3): the factory's file-switch
+    /// Every replacement of the live vault database goes through here, plain node and encrypted node alike: the factory's file-switch
     /// barrier first (<see cref="DbConnectionFactory.BeginQuiesce"/>: from now on a connection that wants the file waits at the factory), then the wait for
     /// every connection still in use to be returned (<see cref="DbConnectionFactory.WaitDrainedAsync"/>, which closes the idle pooled handles too), then the
     /// swap (<see cref="SwapDbFileWithRetryAsync"/>), then the barrier is lifted and the next connection opens the new file. Without it a connection opened
@@ -74,7 +74,7 @@ public partial class SnapshotService
                 // the swap (a request allowed through maintenance, a background reader) went back to
                 // the pool still open on the file that was just moved away or deleted. Reused, it reads
                 // the old database and fails every write with SQLITE_READONLY_DBMOVED — the "read-only
-                // database" a reseed hit under load (review L-merge round 3 #3).
+                // database" a reseed hit under load.
                 clearPools();
                 return;
             }

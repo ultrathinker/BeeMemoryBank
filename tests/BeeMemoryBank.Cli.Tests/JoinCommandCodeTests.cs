@@ -15,7 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Cli.Tests;
 
 /// <summary>
-/// Task P7 for <c>bmb join --code</c>: the join code another computer's Connect a device card shows replaces the address, the join
+/// <c>bmb join --code</c>: the join code another computer's Connect a device card shows replaces the address, the join
 /// goes only to the server holding the key the code pins, <c>/api/join</c> carries the code's one-time token, and the pinned key is
 /// recorded on the host's whitelist row so the later sync can dial it. The other computer is a small TLS server that behaves like the
 /// node's join door (a certificate nobody trusts, a token check) and records what reached it; after the join it answers the
@@ -104,7 +104,7 @@ public class JoinCommandCodeTests : IDisposable
     [Fact]
     public async Task ADoorThatAnswersWithText_AnythingElse_IsToldByStatusOnly_AndItsOwnWordsAreNeverShown()
     {
-        // BMB-306/307 fix round 2 (T3): the other computer's body is its own text (a URL, a token, markup).
+        // BMB-306/307: the other computer's body is its own text (a URL, a token, markup).
         const string Hostile = "{\"error\":\"Pay at https://evil.example/pay?token=abc123 <b>now</b>\"}";
         await using var door = new TlsDoor(_cert, expectedToken: Token, new FakeJoinHost(Guid.NewGuid()), refusalBody: Hostile);
         var code = new JoinCode(door.Address, OtherToken, SpkiPin.Of(_cert)).ToString();

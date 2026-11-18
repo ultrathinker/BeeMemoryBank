@@ -143,6 +143,28 @@ public static class RecoveryKeyResolver
         var epochByFp = new Dictionary<string, int>(StringComparer.Ordinal);
         var triedPerKey = new Dictionary<string, int>(StringComparer.Ordinal);
         var skipped = new List<RecoverySetBox>();
+        var verifiedLinks = new List<RecoverySetLink>();
+
+        // Unwind: repeat until no link adds a key. Run right after each opened box (2.12, plan WS-A4), so that the keys a newer box reaches
+        // through the links are open before an older box of the same key would spend a derivation of the budget.
+        void Unwind()
+        {
+            bool progress;
+            do
+            {
+                progress = false;
+                foreach (var link in set.Links)
+                {
+                    if (!keys.TryGetValue(link.NewFingerprint, out var newer)) continue;
+                    var opened = TryOpenLink(link, newer);
+                    if (opened == null) continue;
+                    if (!verifiedLinks.Contains(link)) verifiedLinks.Add(link);
+                    if (keys.ContainsKey(link.OldFingerprint)) { Array.Clear(opened); continue; }
+                    keys[link.OldFingerprint] = opened;
+                    progress = true;
+                }
+            } while (progress);
+        }
 
         foreach (var box in AttemptOrder(set.Boxes))
         {
@@ -175,27 +197,11 @@ public static class RecoveryKeyResolver
             if (DekFingerprint.Of(dek) != box.DekFingerprint) { Array.Clear(dek); continue; }
             keys[box.DekFingerprint] = dek;
             KeyOpened.Value?.Invoke(dek);
+            Unwind();
         }
         if (keys.Count == 0)
             return skipped.Count > 0 ? throw new RecoveryBoxesRemainingException(skipped.Count) : null;
-
-        // Unwind: repeat until no link adds a key.
-        var verifiedLinks = new List<RecoverySetLink>();
-        bool progress;
-        do
-        {
-            progress = false;
-            foreach (var link in set.Links)
-            {
-                if (!keys.TryGetValue(link.NewFingerprint, out var newer)) continue;
-                var opened = TryOpenLink(link, newer);
-                if (opened == null) continue;
-                if (!verifiedLinks.Contains(link)) verifiedLinks.Add(link);
-                if (keys.ContainsKey(link.OldFingerprint)) { Array.Clear(opened); continue; }
-                keys[link.OldFingerprint] = opened;
-                progress = true;
-            }
-        } while (progress);
+        Unwind();
 
         // Heads: keys no verified link retires. A cycle of links (only possible with forged keys the
         // password opened, which the fingerprint check rules out) would leave none: then nothing is proven.
@@ -212,11 +218,14 @@ public static class RecoveryKeyResolver
     }
 
     /// <summary>
-    /// The order boxes are tried in, decided by nothing a crafted set can use to push the real box out of
-    /// the budget: no anchor, link or epoch (all unauthenticated at this point). Strong boxes first (their
-    /// preset class is enforced), then round-robin over the claimed key fingerprints — every key's first box
-    /// before any key's second. Exact duplicates (every field the unwrap reads equal) appear once. The
-    /// per-key cap and the budget are applied by the caller, which counts what they leave out.
+    /// The order boxes are tried in. Newest epoch first (2.12, plan WS-A4): after a rotation the device box of a sealed door holds the new key,
+    /// and with the links unwound right after it, the older keys are open before the stale strong boxes of an older key use up the budget.
+    /// Within one epoch, strong boxes first (their preset class is enforced), then round-robin over the claimed key fingerprints — every
+    /// key's first box before any key's second. Exact duplicates (every field the unwrap reads equal) appear once. The per-key cap and the
+    /// budget are applied by the caller, which counts what they leave out.
+    /// <para>The epoch hint is unauthenticated: a crafted set with many boxes under a high epoch can spend the budget first. That proves
+    /// nothing and locks nobody out: a skipped box voids the proof and the caller offers to try the remaining boxes
+    /// (<see cref="RecoveryAttemptBudget.Unlimited"/>), as before; the per-key cap still applies.</para>
     /// </summary>
     internal static IEnumerable<RecoverySetBox> AttemptOrder(IEnumerable<RecoverySetBox> boxes)
     {
@@ -224,18 +233,19 @@ public static class RecoveryKeyResolver
             .Where(b => RecoveryBoxKdf.IsAllowed(b.Kind, b.KdfPreset)) // the separate box validator
             .DistinctBy(b => (b.Kind, b.AuthorNodeId, b.DekFingerprint, b.KdfPreset, b.Salt, b.Wrapped, b.Iv))
             .ToList();
-        foreach (var kind in new[] { RecoveryBoxKdf.KindStrong, RecoveryBoxKdf.KindDevice })
-        {
-            var byKey = allowed.Where(b => b.Kind == kind)
-                .GroupBy(b => b.DekFingerprint, StringComparer.Ordinal)
-                .OrderBy(g => g.Key, StringComparer.Ordinal)
-                .Select(g => g.OrderBy(b => b.BoxId, StringComparer.Ordinal).ToList())
-                .ToList();
-            var rounds = byKey.Count == 0 ? 0 : byKey.Max(k => k.Count);
-            for (var round = 0; round < rounds; round++)
-                foreach (var key in byKey)
-                    if (round < key.Count) yield return key[round];
-        }
+        foreach (var epoch in allowed.GroupBy(b => b.EpochHint).OrderByDescending(g => g.Key))
+            foreach (var kind in new[] { RecoveryBoxKdf.KindStrong, RecoveryBoxKdf.KindDevice })
+            {
+                var byKey = epoch.Where(b => b.Kind == kind)
+                    .GroupBy(b => b.DekFingerprint, StringComparer.Ordinal)
+                    .OrderBy(g => g.Key, StringComparer.Ordinal)
+                    .Select(g => g.OrderBy(b => b.BoxId, StringComparer.Ordinal).ToList())
+                    .ToList();
+                var rounds = byKey.Count == 0 ? 0 : byKey.Max(k => k.Count);
+                for (var round = 0; round < rounds; round++)
+                    foreach (var key in byKey)
+                        if (round < key.Count) yield return key[round];
+            }
     }
 
     private static byte[]? TryOpenLink(RecoverySetLink link, byte[] newer)

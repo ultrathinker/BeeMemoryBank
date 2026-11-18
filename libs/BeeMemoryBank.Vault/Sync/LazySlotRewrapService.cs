@@ -107,30 +107,41 @@ public class LazySlotRewrapService(
                 return new LazyRewrapResult(false, null);
             }
 
-            var (newEncDek, newIv) = MasterKeyManager.WrapMasterDek(currentCandidate, kek);
-            var rewrapped = new MasterKeyStore
+            // ADR 0012: the door is written again as a sealed (v2) door for the same secret, through SlotDoors so that a sealed node gets
+            // the pending copy before the commit and the rewrite after it. The legacy single slot keeps the v1 wrap: its type changes when
+            // LegacyPasswordSlotMigrationService migrates it, and a box is bound to its kind. The row is replaced only while it still holds
+            // the door that was opened (a concurrent rewrap wins).
+            MasterKeyStore rewrapped;
+            if (Doors.NeedsUpgrade(slot) || slot.DoorVersion == Doors.V2)
             {
-                SlotId = slot.SlotId, SlotType = slot.SlotType, Salt = slot.Salt,
-                ArgonMemory = slot.ArgonMemory, ArgonIterations = slot.ArgonIterations,
-                ArgonParallelism = slot.ArgonParallelism, CreatedAt = slot.CreatedAt,
-                EncryptedMasterDek = [.. newEncDek], IV = [.. newIv],
-            };
-            try
-            {
-                await keySlotRepo.UpdateSlotKeyAsync(slot.SlotId, newEncDek, newIv);
+                rewrapped = Doors.WithDoor(slot, Doors.Seal(slot.SlotType, kek, slot.Salt, currentCandidate));
             }
-            finally
+            else
             {
-                Array.Clear(newEncDek, 0, newEncDek.Length);
-                Array.Clear(newIv, 0, newIv.Length);
+                var (newEncDek, newIv) = MasterKeyManager.WrapMasterDek(currentCandidate, kek);
+                rewrapped = new MasterKeyStore
+                {
+                    SlotId = slot.SlotId, SlotType = slot.SlotType, Salt = slot.Salt,
+                    ArgonMemory = slot.ArgonMemory, ArgonIterations = slot.ArgonIterations,
+                    ArgonParallelism = slot.ArgonParallelism, CreatedAt = slot.CreatedAt,
+                    EncryptedMasterDek = newEncDek, IV = newIv, DoorVersion = Doors.V1,
+                    DekFingerprint = DekFingerprint.Of(currentCandidate),
+                };
+            }
+            var mirror = scope.ServiceProvider.GetService<BeeMemoryBank.Vault.Sealed.IUnlockMaterialMirror>();
+            if (!await BeeMemoryBank.Vault.Sealed.SlotDoors.ReplaceSlotDoorAsync(keySlotRepo, mirror, rewrapped, slot.EncryptedMasterDek, logger))
+            {
+                // Someone replaced the door meanwhile: the DEK reached is still the current one, the door is theirs.
+                logger.LogInformation("Key slot {SlotId} was replaced while it was rewrapped; the other write stays", slot.SlotId);
+                return new LazyRewrapResult(true, currentCandidate);
             }
 
-            logger.LogInformation("Lazy-rewrapped key slot {SlotId} to current DEK epoch", slot.SlotId);
+            logger.LogInformation("Lazy-rewrapped key slot {SlotId} to current DEK epoch (door format {Version})", slot.SlotId, rewrapped.DoorVersion);
 
             // The rewrapped slot holds the NEW DEK: publish it as this device's box, or the blind
             // nodes keep only a box for the retired key (plan 6.5).
             await scope.ServiceProvider.GetRequiredService<IRecoveryBoxPublisher>()
-                .PublishDeviceBoxAsync(rewrapped, currentCandidate);
+                .PublishDeviceBoxAsync(rewrapped, currentCandidate, kek);
 
             return new LazyRewrapResult(true, currentCandidate);
         }

@@ -201,7 +201,7 @@ public class EndToEndIntegrationTests : IDisposable
         // shutdown path (the Task.Run callback that awaits orchestrator.StopAsync() then
         // tcs.TrySetResult(0), plus Main's own finally block, which redundantly calls
         // app.StopAsync()/DisposeAsync() again on an already-stopped IHost - see the existing
-        // "Codex-reviewed finding" comment nearby about racing IHost lifecycles in this exact
+        // the comment nearby about racing IHost lifecycles in this exact
         // area). Needs a dedicated instrumented repro (capture stdout/stderr unconditionally,
         // not just on failure) rather than a guess - skipping on non-Windows for now rather than
         // fixing blind under a CI-unblocking pass. Runs normally on Windows.

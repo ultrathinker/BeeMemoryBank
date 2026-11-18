@@ -32,6 +32,10 @@ public abstract class SyncTestFixture : IAsyncLifetime
     public IArticleRepository ArticleRepo { get; private set; } = null!;
     public IArticleBodyRepository BodyRepo { get; private set; } = null!;
     public IWhitelistRepository WhitelistRepo { get; private set; } = null!;
+    public IAccountsHomeRepository AccountsHomeRepo { get; private set; } = null!;
+    public ISharedDoorsStateRepository SharedDoorsStateRepo { get; private set; } = null!;
+    public IUserRepository UserRepo { get; private set; } = null!;
+    public IKeySlotRepository KeySlotRepo { get; private set; } = null!;
     public ISyncQuarantineRepository QuarantineRepo { get; private set; } = null!;
     public IConflictVersionRepository ConflictRepo { get; private set; } = null!;
     public ITombstoneRepository TombstoneRepo { get; private set; } = null!;
@@ -59,10 +63,14 @@ public abstract class SyncTestFixture : IAsyncLifetime
         ArticleRepo = new ArticleRepository(Factory, new CallerScopeHolder());
         BodyRepo = new ArticleBodyRepository(Factory);
         var keySlotRepo = new KeySlotRepository(Factory);
+        KeySlotRepo = keySlotRepo;
         NodeRepo = new NodeIdentityRepository(Factory);
         WhitelistRepo = new WhitelistRepository(Factory);
+        AccountsHomeRepo = new AccountsHomeRepository(Factory);
+        SharedDoorsStateRepo = new SharedDoorsStateRepository(Factory);
         QuarantineRepo = new SyncQuarantineRepository(Factory);
         var userRepo = new UserRepository(Factory);
+        UserRepo = userRepo;
         EventLogRepo = new EventLogRepository(Factory);
         var syncPositionRepo = new SyncPositionRepository(Factory);
         TombstoneRepo = new TombstoneRepository(Factory);
@@ -109,7 +117,9 @@ public abstract class SyncTestFixture : IAsyncLifetime
             replayShieldRepo, restoreEventStateRepo, CreateRestoreInitiator(),
             dekRotationStateRepo, new NullDekRotationApplier(), folderAccess, Factory, new BlobRepository(Factory),
             CreateApplierLogger(),
-            ProtocolPolicy, Drain, ActivationObservers, CreateEnvelopeOpener(), BaselineScheduler, PeerState);
+            ProtocolPolicy, Drain, ActivationObservers, CreateEnvelopeOpener(), BaselineScheduler, PeerState, relayInbox: CreateRelayInbox(),
+            accountsHomeRepo: AccountsHomeRepo,
+            sharedDoorsStateRepo: SharedDoorsStateRepo);
     }
 
     /// <summary>
@@ -122,6 +132,9 @@ public abstract class SyncTestFixture : IAsyncLifetime
     protected virtual DbConnectionFactory CreateFactory() => DbConnectionFactory.CreateInMemory($"bmb_sync_{Guid.NewGuid():N}");
 
     protected virtual bool OwnsFactory => true;
+
+    /// <summary>The boot relay inbox the applier cleans for a revoked or re-keyed peer; none by default.</summary>
+    protected virtual BeeMemoryBank.Storage.Boot.IRelayInbox? CreateRelayInbox() => null;
 
     /// <summary>The applier's logger; a log canary test (step-a-spec 16.2 item 9) overrides it with a capturing one.</summary>
     protected virtual Microsoft.Extensions.Logging.ILogger<EventApplier> CreateApplierLogger() =>

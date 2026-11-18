@@ -139,6 +139,7 @@ public sealed class NodeResetService(
                 // node re-initialized inside the cache TTL would hand the new account the wiped
                 // account's permissions.
                 FolderAccessService.InvalidateAll();
+                CallerStateCache.InvalidateAll();   // the same for who a forwarded user id is: ids restart at 1, the cached roles are the wiped people's
 
                 // The node is empty again: a setup, join or restore that was waiting for its encryption has nothing left to wait for.
                 BeeMemoryBank.AppPaths.SealIntent.Complete(dataPath);
@@ -183,6 +184,7 @@ public sealed class NodeResetService(
                 catch (Exception ex) { logger.LogWarning(ex, "Reset hook {Hook} failed while taking back a setup (non-fatal)", hook.GetType().Name); }
             }
             FolderAccessService.InvalidateAll();
+            CallerStateCache.InvalidateAll();
             return BeeMemoryBank.AppPaths.SealIntent.Complete(dataPath);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

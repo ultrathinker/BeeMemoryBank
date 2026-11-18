@@ -54,7 +54,7 @@ public class FullVaultTests
 
         var opened = await test.Services.GetRequiredService<SessionService>().TryOpenWithRecoveryKeyAsync(recovery);
         opened.Should().NotBeNull("the recovery key shown at creation is a working key slot of this vault");
-        Array.Clear(opened!);
+        Array.Clear(opened!.Dek);
     }
 
     [Fact]
@@ -136,6 +136,17 @@ public class FullVaultTests
 
         await act.Should().ThrowAsync<ArgumentException>().WithMessage("*https*");
         (await test.Vault.GetStateAsync()).Should().Be(VaultState.NoVault);
+    }
+
+    [Fact]
+    public async Task AJoinWithoutAHint_IsNotStoppedByTheHintRule()
+    {
+        // The join page asks for no hint: an empty one must pass, so the next check the join meets is the code's own.
+        await using var test = await TestVault.PrepareAsync("join-no-hint");
+
+        var act = () => test.Vault.JoinAsync("iPhone", "bmb-join:?a=https%3A%2F%2F192.168.1.5%3A5311&s=short", TestVault.Password, "");
+
+        await act.Should().ThrowAsync<ArgumentException>().WithMessage(JoinCode.NotValidMessage);
     }
 
     private static bool Contains(byte[] haystack, byte[] needle) => haystack.AsSpan().IndexOf(needle) >= 0;

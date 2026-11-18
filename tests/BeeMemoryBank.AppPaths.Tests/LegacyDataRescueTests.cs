@@ -11,7 +11,7 @@ using Xunit;
 namespace BeeMemoryBank.AppPaths.Tests;
 
 /// <summary>
-/// Full test matrix for <see cref="LegacyDataRescue.TryRescue"/> as specified in TASK_BRIEF §6 / §98-111.
+/// Full test matrix for <see cref="LegacyDataRescue.TryRescue"/>.
 /// All tests use isolated temp directories; none touch the real BeeMemoryBankData root.
 /// </summary>
 [Collection("LocalAppData")] // some tests set LOCALAPPDATA: never run them next to another class that does (see BmbPathsTests)

@@ -9,7 +9,7 @@ using Xunit;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// BMB-306/307 fix round 3 (G3): the generic busy helper of the phone apps used to put the message of an exception and of everything inside it on the screen, so that the
+/// BMB-306/307: the generic busy helper of the phone apps used to put the message of an exception and of everything inside it on the screen, so that the
 /// whole story of a LOCAL failure was there - and with it the address, the token and the page a proxy sent when the failure was a CALL to another device. The story is now
 /// <see cref="FailureText.Story"/>: the kinds of failure that can carry the other side's words are told by <see cref="PeerContactLog.Describe"/>, by TYPE, and nothing inside
 /// them is read; every other failure says what it says.

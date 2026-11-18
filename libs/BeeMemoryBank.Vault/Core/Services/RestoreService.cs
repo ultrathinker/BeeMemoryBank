@@ -11,7 +11,7 @@ namespace BeeMemoryBank.Core.Services;
 /// normal create paths, so sync to other nodes and all side effects (embeddings,
 /// event log, audit) happen for free.
 ///
-/// Stopping (BMB-311 fix round 3): both restores look at the caller's token before their first write and not after it. An article restore is that one write; a folder
+/// Stopping (BMB-311): both restores look at the caller's token before their first write and not after it. An article restore is that one write; a folder
 /// restore that has created its root runs to the end of the (cheap) subtree, so a stop never leaves half a restored tree.
 /// </summary>
 public class RestoreService(

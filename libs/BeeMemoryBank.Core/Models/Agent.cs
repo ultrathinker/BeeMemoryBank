@@ -23,8 +23,22 @@ public class Agent
     public byte[]? EncryptedDek { get; set; }
     public byte[]? DekIV { get; set; }
 
-    /// <summary>V0 = SHA256(key + "bmb-encrypt"), V1 = HKDF-SHA256(key, salt, info)</summary>
+    /// <summary>
+    /// V0 = SHA256(key + "bmb-encrypt"), V1 = HKDF-SHA256(key, salt, info), V2 = a sealed door (migration 046): the V1 key is the KEK of a
+    /// DoorBox and <see cref="EncryptedDek"/> holds the 93-byte box sealed to <see cref="DoorPublicKey"/>.
+    /// </summary>
     public int KdfVersion { get; set; }
+
+    /// <summary>The value of <see cref="KdfVersion"/> that marks a sealed (v2) agent door.</summary>
+    public const int SealedDoorKdfVersion = 2;
+
+    /// <summary>The X25519 public key of a sealed agent door; null otherwise.</summary>
+    public byte[]? DoorPublicKey { get; set; }
+
+    /// <summary>DekFingerprint of the master DEK the door yields; null when unknown.</summary>
+    public string? DekFingerprint { get; set; }
+
+    public int? CreatedByUserId { get; set; }
     public byte[]? Salt { get; set; }
 
     public DateTime CreatedAt { get; set; }

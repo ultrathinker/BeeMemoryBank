@@ -418,7 +418,7 @@ public class EventApplierTests : IAsyncLifetime
     [Fact]
     public async Task ApplyAsync_accepts_cosmetic_double_slash_for_compat_with_old_peers()
     {
-        // gemini review feedback: don't permanently diverge from peers running
+        // review feedback: don't permanently diverge from peers running
         // pre-canonicalisation code. "//" is non-canonical but not strictly illegal.
         var evt = await BuildArticleCreateEventOnNodeA(treePath: "/Work//Notes");
 

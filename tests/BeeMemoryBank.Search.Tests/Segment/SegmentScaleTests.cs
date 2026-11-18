@@ -7,7 +7,7 @@ namespace BeeMemoryBank.Search.Tests.Segment;
 /// <summary>
 /// Validates the segment format at a realistic corpus scale: roundtrip correctness across every
 /// term in a large synthetic corpus, construction performance, and the segment-size-vs-plaintext
-/// ratio the design brief targets (roughly 15-25% of plaintext body size).
+/// ratio targeted (roughly 15-25% of plaintext body size).
 ///
 /// The corpus is generated with a Zipfian term-frequency distribution (a small number of very
 /// common terms, a long tail of rare ones) because that is the realistic shape for natural-
@@ -20,7 +20,7 @@ namespace BeeMemoryBank.Search.Tests.Segment;
 /// </summary>
 public class SegmentScaleTests(Xunit.Abstractions.ITestOutputHelper output)
 {
-    // Chosen to land within the brief's "~10,000-50,000 documents" realistic-scale range while
+    // Chosen to land within the "~10,000-50,000 documents" realistic-scale range while
     // keeping this a fast unit test (well under a second to generate + build).
     private const int DocumentCount = 20_000;
     private const int VocabularySize = 12_000;
@@ -99,18 +99,18 @@ public class SegmentScaleTests(Xunit.Abstractions.ITestOutputHelper output)
 
         // Reported for the write-up regardless of pass/fail; xUnit surfaces Console.WriteLine
         // output on request (`dotnet test -v n` or a failure), and it is also captured directly
-        // into the WP-08 report by hand from a manual run.
+        // by hand from a manual run.
         Console.WriteLine($"Documents: {DocumentCount}, distinct terms: {reader.TermCount}");
         Console.WriteLine($"Plaintext estimate: {plaintextEstimateBytes:N0} bytes");
         Console.WriteLine($"Segment size: {segment.Length:N0} bytes");
         Console.WriteLine($"Ratio (segment / plaintext estimate): {ratio:P1}");
         Console.WriteLine($"Build time: {stopwatch.ElapsedMilliseconds} ms");
 
-        // Generous band around the brief's 15-25% target: this is a sanity check on a synthetic
-        // corpus, not a tight guarantee -- see the WP-08 report for the exact measured numbers and
+        // Generous band around the 15-25% target: this is a sanity check on a synthetic
+        // corpus, not a tight guarantee -- the exact measured numbers and
         // the estimation method.
         ratio.Should().BeInRange(0.05, 0.40,
-            "the packed segment should be a small fraction of the estimated plaintext size, per the design brief's 15-25% target");
+            "the packed segment should be a small fraction of the estimated plaintext size, per the 15-25% target");
     }
 
     /// <summary>
@@ -120,7 +120,7 @@ public class SegmentScaleTests(Xunit.Abstractions.ITestOutputHelper output)
     /// byte (as if the terms were space-joined into a body of text). This is a deliberately simple
     /// proxy -- real prose also has punctuation and original (pre-stemming, generally longer)
     /// surface word forms -- but it is a real, reproducible measurement of this corpus rather than
-    /// a guess, which is what the design brief asks for.
+    /// a guess, which is what is asked for.
     /// </summary>
     private static (List<SegmentDocument> Documents, long PlaintextEstimateBytes) GenerateZipfianCorpus(
         int documentCount, int vocabularySize, int minTermsPerDoc, int maxTermsPerDoc, double zipfExponent, int seed)
@@ -217,7 +217,7 @@ public class SegmentScaleTests(Xunit.Abstractions.ITestOutputHelper output)
         // Build an expected term -> distinct-doc-count model in one linear pass, then spot-check
         // a sample of terms against it (the main realistic-scale test above already does a full
         // check of every term) to keep this test fast while still exercising the 10k-document end
-        // of the brief's stated range.
+        // of the stated range.
         var expectedDocFrequency = new Dictionary<string, int>();
         foreach (SegmentDocument doc in docs)
         {

@@ -13,7 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-307 and its fix round: changing the address of a trusted node. The route is a thin gate (superadmin, NOT an agent, the master password) in front of
+/// BMB-307: changing the address of a trusted node. The route is a thin gate (superadmin, NOT an agent, the master password) in front of
 /// <see cref="PeerAddressService"/>, the one writer of a peer's address - so what is tested here is the whole door, with a real node, a real event log and a
 /// fake network: an address that is not a sync server is refused in the shared words, the policy comes before any request, the peer's key must be the one on
 /// record, the same address is a no-op, what the loop learned about the old address is forgotten, the audit line carries fingerprints, and no answer ever

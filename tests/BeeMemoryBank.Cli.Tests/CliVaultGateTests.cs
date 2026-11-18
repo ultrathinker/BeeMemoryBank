@@ -3,7 +3,7 @@ using BeeMemoryBank.AppPaths;
 namespace BeeMemoryBank.Cli.Tests;
 
 /// <summary>
-/// Review release-b R1-2: every bmb command that opens a data directory passes the vault gate. It refuses while a
+/// Every bmb command that opens a data directory passes the vault gate. It refuses while a
 /// re-key runs, finishes an interrupted swap before it opens anything (instead of creating a fresh database in a D that
 /// is between two renames), and holds the vault lease so the re-key refuses while the command runs.
 /// </summary>

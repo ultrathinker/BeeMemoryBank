@@ -20,6 +20,215 @@
 | `BMB_TRUSTED_PROXIES` | API, Web | **Set this whenever a reverse proxy (including Docker port publishing) sits in front of the node.** Comma- or whitespace-separated IP addresses and/or CIDR networks whose `X-Forwarded-For` header is believed — e.g. `172.16.0.0/12` for the Docker bridge range. Without it every per-IP rate limit keys on the proxy's own address, so all clients share one bucket: a single anonymous caller can exhaust the sync-challenge budget and stall synchronization for the whole mesh, or the login budget for every user at once. Only one hop is trusted (`ForwardLimit = 1`), and an unparsable entry is logged and ignored rather than failing startup. Trust here is transitive — anything that can reach the port from a listed address can claim any client IP — so name the proxy or its network and nothing wider. Both processes announce what they ended up trusting on startup — `[forwarded-headers] Trusting X-Forwarded-For from: …`, or a line saying nothing is configured — so check the log after changing this rather than assuming it took. |
 | `BMB_TRUST_LOOPBACK_FORWARDED_HEADERS` | API, Web | Optional, `true`/unset. Believe `X-Forwarded-For` from loopback. For a proxy sharing the host with the node (the desktop app sets this itself). Independent of `BMB_TRUSTED_PROXIES`; either or both may be set. Not sufficient under Docker — published-port traffic arrives on the bridge interface, never on loopback. |
 
+## Upgrading to 2.12.0
+
+2.12.0 ("People leave") changes how doors, recovery keys and removals work, adds shared server nodes and the node
+identity re-key, and carries the redesigned phone apps and the self-encrypting plain node. The database schema goes to
+51 (migrations 046, 047, 049, 050 and 051, all additive; the boot store of an encrypted node takes B003 and B004). Everything
+below is for the administrator of a network that already runs an earlier version. **A one-person bank has nothing to do
+beyond the update itself** — no review is ever asked of it, and the shared-node machinery is never offered to it.
+
+### Before you update
+
+1. **Take a snapshot of every full node** (Admin → Snapshots, `bmb snapshot create`) and keep it offline if you want a
+   way back. Data migrations only go forward, and **there is no downgrade once a node holds a door in the new format**:
+   an older program cannot open a sealed (v2) door. The snapshot taken before the update is the only way back to the
+   old version (restore it, on every node you roll back).
+2. A database older than 2.6 still updates to 2.6.1 first and to this version after that (this version refuses an older
+   database and leaves it unchanged).
+3. A node whose database is still **plain** (set up before 2.6.2 and never encrypted) encrypts itself after the update:
+   at its next unlock, once the network has metadata encryption on, the same migration runs in the background with no
+   button to press. It needs free space about 3.5 times the size of the databases, and the node is in maintenance mode
+   while it runs — do not interrupt it; a node closed mid-run is finished or undone at the next start. The Database
+   encryption page shows the progress, or one calm line saying what is in the way (a blocker is retried at the next
+   unlock). `bmb vault seal` remains for the command line. Phones encrypt themselves too, right after a create or a
+   join (no button); a plain phone copy left by an older build is set up again, not converted.
+
+### Update every node
+
+**Servers, desktops, phones and blind copies — all of them**, then let each one sync once so the network sees what it
+runs. Ordinary sync between versions keeps working during the upgrade (the changes are additive; an older node stores
+and relays what it does not know). What each capability means, and what waits for every active peer to show it:
+
+| Capability | What it carries |
+|---|---|
+| `door-box-v1` | sealed (v2) doors and v2 device recovery boxes — a v2 box is published only once every active peer shows it; until then the old box shape is published from the password |
+| `ownership-v1` | device ownership on joins, invitations and whitelist events (additive: an older node ignores the fields, and a node upgraded later repairs what it stored while old) |
+| `node-state-v1` | the `node_state` announcements (never withheld: older relays pass them through intact) |
+| `identity-rekey-v1` | changing a node's identity key in place — a re-key is refused while any active peer lacks it, and names those peers |
+| `shared-doors-v1` | shared nodes opening with the superadmins' usual passwords — the accounts node publishes the doors list only once every shared node shows it |
+
+The readiness card names the devices that hold a feature back ("update or revoke these nodes"); a device you no longer
+use is revoked, and then no longer counts. Nothing an old node cannot follow is used before every active peer shows the
+capability. The removal process has no capability of its own: its identity-key step waits for `identity-rekey-v1` on
+every active peer and its shared-door step for `shared-doors-v1` on every shared node
+([Removing a superadmin](#removing-a-superadmin-the-removal-process) below).
+
+A node not yet updated from 2.10 may list a quarantined `node_state` event of a 2.12 blind node under Admin → Sync
+("blind nodes never author events"). It is harmless, waits on nothing, and stops once that node is updated (the entry
+stays in its quarantine list until cleared).
+
+### Shared nodes and the accounts node
+
+A node marked `shared` belongs to the organisation: it accepts the current superadmins' usual passwords instead of
+accounts of its own. One `shared` full node is designated the network's **accounts node** — the place where superadmin
+accounts live and where passwords are changed:
+
+1. After every node has updated and synced, mark the organisation's server nodes `shared` (Admin → Devices, from
+   another node — a node cannot change its own ownership) and designate one of them the accounts node (the "set as
+   accounts node" action on Admin → Devices, or `bmb accounts-home set --node-id <guid>`). A bank with fewer than two
+   active superadmins and no other shared full node is never offered this.
+2. The accounts node publishes the superadmins' doors as a versioned list, sealed to each shared node. Every listed
+   superadmin can then sign in, unlock and accept new devices (`/api/join`) on every shared node with their own current
+   password. A shared node that is locked applies the list at its next unlock.
+3. **Change superadmin passwords on the accounts node only.** A shared node refuses password changes, account edits and
+   the creation of local superadmins, and names the accounts node. Promotions, demotions and removals on the accounts
+   node propagate to every shared node by themselves.
+4. The list is published only while every active shared node shows `shared-doors-v1`; while one has not updated,
+   Admin → Devices (and `GET /api/shared-doors/status`) names the nodes holding it back. Personal devices and blind
+   copies never receive the list; a blind copy can never be the accounts node.
+
+A node can also **designate itself** the accounts node, and the other nodes then take it as `shared` by definition
+rather than requiring an administrator to mark it first (a row explicitly marked `personal` is still refused; the full
+rule, including the window after the accounts node was revoked, is in [ADR 0014](adr/0014-people-and-shared-nodes.md)).
+The accounts node can only **move** to a node where a superadmin has an account of their own; when it changes, every
+shared node raises "the accounts node changed", which an administrator acknowledges on the Devices page. A doors list a
+shared node could not apply for long raises an attention flag (`shared_doors_apply_stuck`), cleared by the next
+successful apply.
+
+Turning a shared node back into a personal one removes the replicated accounts and their doors. If the accounts node
+is lost, the shared nodes still open with the superadmins' passwords; designate a new accounts node and restore the
+accounts data from a snapshot when it is back.
+
+### Changing a node's identity key (the re-key)
+
+A full node whose identity key may be compromised can get a new one **in place** — Admin → Node identity key,
+`POST /api/node/identity/rekey` or `bmb node rekey --reason "..."`. The node keeps its id, its data and its devices.
+
+- **Every active peer must have updated** (`identity-rekey-v1`); the page names the ones that have not, and the re-key
+  is refused until they do (or are revoked). It also never runs during a key rotation or an offline re-key.
+- The rotation event is signed by the old key and carries the node's own recent event ids; after every device has
+  synced it, the old key signs nothing new anywhere. Events signed by the retired key that the rotation does not list
+  are refused, and a node that received such events raises an attention flag on the identity page (acknowledge it
+  after checking; it clears on revoke or re-join).
+- Two competing new keys for one node are an **identity conflict**: the node's events are refused until another
+  superadmin device confirms the right key on the identity page.
+- Devices that were away follow up to 16 re-keys through the signed chain at the handshake; a device away across more
+  is paired or joined again. Blind copies move their hub pin by themselves; Android pairing records are signed again.
+- A node whose seed lives in an external key store (a blind node, a phone) cannot be re-keyed here — the refusal says
+  what to do instead (remove it from another superadmin's device and set it up again).
+- A restore can no longer bring a retired key back: the `keep-identity` mode is gone, and a network restore keeps the
+  node's current identity and merges the key history.
+- **A node that was old across an earlier removal may show one retired-key warning at its first start** after the
+  update: an event an older build stored, signed by a key since retired, which the node cannot tell from a back-dated
+  forgery. Check it and acknowledge it on the identity page; a later removal's close waits for it.
+
+### After the update: every superadmin signs in once
+
+Every door converts to the new sealed format **the first time its secret is used**. So each superadmin signs in once on
+every node they use (a password check, an unlock or a recovery reset counts too). Until then:
+
+- A node with a door still in the old format keeps a **bridge from the old key**: the chain that lets an old-format door
+  reach the current master key. The rotation page — Admin → **DEK Rotation** (`/Admin/DekRotation`), the "Master key
+  page" of the encryption docs — shows the bridge (whose doors, since which rotation) and can remove it at once; those
+  people then set their passwords again, as after a rotation before 2.12.
+  The bridge ends by itself when the last old-format door is used or deleted. While it is there, somebody with the old
+  master key and a *later* copy of that node's database can still reach the new key through it — that is what removing
+  the bridge closes.
+- Old-format **auto-unlock doors and agent keys** that were never used since the update are deleted by the first key
+  rotation (nothing can re-seal them without their secret): re-enable OS / server auto-unlock and re-issue the agent
+  keys after the rotation. Auto-unlock doors whose secret the node can read convert themselves right after an unlock,
+  so in practice only a door whose secret is gone is deleted.
+- **"Start unlocked after a restart" stays on after a key rotation** (before 2.12 a rotation switched it off). The
+  enable record follows the re-sealed door; a crash mid-rotation leaves the server armed and the next unlock settles it.
+
+### Review device ownership (banks with more than one superadmin)
+
+The update does not guess who owns a device: blind copies become `shared`, and every existing full peer starts as
+`unknown` with a review flag. Open **Admin → Devices** and confirm or correct each device's ownership (`shared`,
+`personal` of one person, or leave it for later). A single-superadmin bank is never asked. New joins and invitations say
+whose device it is (`bmb join --login <name>`, `--shared` for an organisation server; the invitation's maker chooses).
+A removal cannot start while an active device still needs review.
+
+### Removing a superadmin (the removal process)
+
+Taking a superadmin's rights away is a process that closes every way back in, in order. It starts on the **accounts
+node** (or on any full node while no accounts node is designated): the Users page's **"Remove superadmin rights..."**
+asks whether to demote (and to what role and folders) or delete, and your own password; the API and
+`bmb user remove-superadmin <name> --demote-to <role>|--delete --as <admin>` do the same. `bmb offboarding status [id]`
+and `bmb offboarding continue <id>` follow and drive it; **Admin → People being removed** shows every open removal, its
+steps and what each waits for.
+
+The steps, and what each waits for:
+
+1. **Lock out (S0).** At once: every session ends, the password door, recovery keys, agents, remote tokens and
+   invitations go, the personal devices are revoked, and the person's mirror on a shared node can no longer sign in.
+   The account stays as "being removed, step k of n" until the process closes it. Nothing here waits for another node.
+2. **Identity re-key (S1).** The accounts node and every shared server change their identity keys, so a stolen backup
+   of an old seed can no longer sign as the node. This waits for **every active peer to show `identity-rekey-v1`**: a
+   2.10/2.11 node holds the step back until it is updated or revoked — the page names it ("update it, or revoke it"). A
+   node whose seed lives outside its database (a phone, a blind copy) cannot re-key in place; it is named until it is
+   paired again or revoked.
+3. **Shared doors (S2).** The accounts node publishes the superadmins' doors list without the person; every shared node
+   applies it and deletes the person's mirror and door. This waits for every shared node to show `shared-doors-v1` and
+   to apply the exact list the accounts node published. With no shared full node it is done at once.
+4. **Review (S3).** Everything the person created or that has no owner — devices, keys, agents, invitations, accounts,
+   the accounts-node designation — is listed, pre-selected remove; keeping anything needs a reason. The review follows
+   the network: it is rebuilt when the whitelist, users or slots change, and a device that joined after the removal
+   began (or through an invitation the person made) is pre-selected remove. "Accept defaults" never decides a
+   superadmin by itself.
+5. **Rotate (S4).** The master key changes on every full node; the rotation is applied by every node by itself,
+   whatever the auto-accept toggle says. Snapshots from before it are refused afterwards; the v2 doors are re-sealed.
+6. **Close (S5).** The account is deleted or demoted to the role and folders chosen at the start. The close refuses
+   while any node reports an unacknowledged warning — a retired-key or signed-as-this-node flag
+   (`retired_key_unacknowledged_events`, `signed_as_this_node`), a doors-list error (`shared_doors_error`), or an
+   accounts-node change — and lists its reminders (old snapshots, hosting credentials, a stolen device of somebody who
+   stays).
+
+A removed person's **tombstone is kept for ever** and applied on every node — also after a restore and after a join — so
+a copy the person still holds loses them at its first sync and its next start; a restore cannot bring them back. If the
+accounts node is lost mid-process, a superadmin **takes the removal over** on another node (their mirror there becomes
+an account of their own, with the password they prove to take it over).
+
+### Recovery keys issued before 2.12 have no owner
+
+A recovery key is personal since 2.12: it belongs to the superadmin who issued it and resets only that person's
+password. Keys issued before 2.12 have no owner on record and keep the older rule — **any holder can reset any active
+superadmin's password**. So:
+
+1. Each superadmin issues a personal key (Admin → **Recovery keys** → Issue new recovery key, with a label).
+2. Revoke the old ones — one by one, or **Revoke all keys with unknown owner**. A revoke is refused if it would leave
+   the node with no door a person can open. (A removal's unknown-owner step goes further: it also revokes the
+   un-migrated legacy password slot and ownerless agents.)
+
+### No downgrade, and what a removal does to snapshots
+
+- **No downgrade after the update.** An older program cannot open a v2 door, and the migrations only go forward. To go
+  back, restore the snapshot taken before the update (on every node you roll back).
+- A snapshot opens only with the master key current at the restore: **one made before a key rotation is refused** ("made
+  by a different vault"), as before 2.12. Every removal ends with a key rotation, so after a finished removal no
+  snapshot from before it can be restored on a node of the network — the removal's last step says so. Restores from a
+  blind copy or a backup folder walk the retired-key links and still open older material.
+- **A restore cannot bring a removed person back.** The tombstones (`tbl_removed_person`) are merged by a network
+  restore, never dropped, and the removed-person rule is enforced again after the restore and at the next start; a
+  snapshot from before a removal still loses the person at its first sync.
+- The API-only `keep-identity` restore mode is **removed** (refused with a fixed sentence): after a re-key it would put
+  back the identity key the node retired. A restore that keeps the node's identity is the network restore, which keeps
+  the CURRENT identity row and merges the key history. Standalone and network restores are otherwise unchanged.
+
+### What changes for phone users
+
+- **Face ID / Touch ID converts at the next unlock.** The iPhone's biometric unlock becomes a `quick_unlock` door: the
+  Keychain keeps only a secret, and a key rotation no longer turns Face ID off. An older Face ID setup is converted the
+  next time it unlocks; if a key rotation came first, the password is asked once and Face ID is offered again. Nothing
+  else is asked of the phone.
+- **A disconnected device says so.** A device an administrator revoked shows one calm sentence — "An administrator
+  disconnected this device from the bank. What is already on it stays readable here; it no longer receives changes." —
+  instead of a sync error, and stops asking every minute (it asks again about once an hour; any successful sync clears
+  the state). The node tells the device so only after it proves who it is, in a refusal signed with the node's own key.
+- The phones show **whose device this is** when more than one person holds a personal superadmin device, and the owner
+  of each key slot; a recovery key issued on a phone is issued for its owner.
+
 ## Example Node Setup (Docker)
 
 ```
@@ -65,7 +274,9 @@ Behind your own reverse proxy: copy `docker-compose.reverse-proxy.yml` and repla
 
 Updating: make a snapshot (Admin → Snapshots), then `docker compose pull && docker compose up -d`. Data migrations only go
 forward, so going back to an older tag means restoring that snapshot. A node on a version before 2.6 updates to 2.6.1 first and
-to this version after that (this version refuses an older database and leaves it unchanged). The in-app "Apply update" button belongs to a
+to this version after that (this version refuses an older database and leaves it unchanged). **Upgrading a network to
+2.12.0 has its own checklist** — update every node, sign in once as every superadmin, review device ownership, re-issue
+personal recovery keys, and no downgrade afterwards: see [Upgrading to 2.12.0](#upgrading-to-2120). The in-app "Apply update" button belongs to a
 source deployment with its own update script (`scripts/bmb-self-update.sh`); with the image, update with `docker compose pull`.
 
 The images are built by `.github/workflows/docker-publish.yml` when a release is published (the maintainer's approval of
@@ -370,8 +581,10 @@ again if you want it*). This holds **even when the key file is still mounted**.
 | A snapshot restore, a restore from a blind copy or an Android backup, a join, a baseline | The slot is removed on the way in: the option is off afterwards, whatever the key file says. |
 | A backup taken **without** the two `--exclude` lines | A plain copy. It carries the key file and the record; restoring it is the same as the stolen disk the warning describes. |
 
-A DEK rotation also switches the option off (the slot is deleted with the other slots; the record and a node-created key file are
-removed at once), and so does a node reset. A key file that appears by itself, or a `BMB_AUTO_UNLOCK_KEY_FILE` pointing at a file,
+A DEK rotation keeps the option on (2.12): the server slot is sealed to the new master key inside the rotation, and the enable record
+follows it (it names the old and the new slot while the rotation commits, so a crash leaves the server armed; the next unlock settles
+it). Only a slot in the format of an older release that was never used since the update (a v1 slot) is deleted by a rotation, which
+switches the option off as before (the record and a node-created key file are removed at once). A node reset switches it off too. A key file that appears by itself, or a `BMB_AUTO_UNLOCK_KEY_FILE` pointing at a file,
 does nothing without the slot and the matching record; no environment variable, setting, flag or installer option turns the
 option on.
 
@@ -547,7 +760,14 @@ The database is built by one migration, the baseline (`040_baseline.sql`, the wh
 migrations numbered `041` and up. A database written by 2.6.0 or 2.6.1 is adopted at its first start with this version (the structure is
 checked, nothing is re-run, the migration history is replaced by the baseline's single row). **A database older than 2.6 must be updated to
 2.6.1 first, then to this version**: this version refuses it, and leaves it unchanged, with a message that says so. The same goes for a
-backup: one made by a release before 2.6 is refused by the restore, before anything is replaced. Key tables include:
+backup: one made by a release before 2.6 is refused by the restore, before anything is replaced. 2.12.0 adds migration 046
+(sealed doors: the door format, public key, DEK fingerprint and owner on key slots and agents), 047 (person ids, device
+ownership on the whitelist and blind invitations, `tbl_node_state`), 049 (the node key history and conflicts), 050
+(shared doors: `tbl_user.replicated`, `tbl_accounts_home`, `tbl_shared_doors_state`) and 051 (the removal process:
+`tbl_user.account_state`, `tbl_offboarding`, `tbl_offboarding_node`, `tbl_removed_person`), bringing the schema to **51**;
+the boot store takes B003 and B004.
+
+Key tables include:
 
 | Table | Purpose |
 |---|---|
@@ -559,14 +779,22 @@ backup: one made by a release before 2.6 is refused by the restore, before anyth
 | `tbl_article_version` | Encrypted article version history |
 | `tbl_comment` | Comments with soft-delete and Lamport LWW |
 | `tbl_event` | Sync event log (signed with Ed25519, actor tracking) |
-| `tbl_key_slot` | Encrypted Master DEK (per-user / per-recovery slot) |
+| `tbl_key_slot` | Encrypted Master DEK (per-user / per-recovery slot); since 2.12 a sealed door (v2) with its public key, DEK fingerprint and owner |
 | `tbl_node_identity` | Node public key, **encrypted Ed25519 private key (v=1, master-DEK wrapped)**, sentinel value |
-| `tbl_user` | User accounts with per-user key slots |
-| `tbl_agent` | API agent keys with encrypted DEK, owner_user_id, **kdf_version (0 legacy SHA256 / 1 HKDF-SHA256), salt** |
+| `tbl_user` | User accounts with per-user key slots; since 2.12 a `person_id` — the person behind the account, used by device ownership and the shared doors list — a `replicated` flag (a shared node's mirror of an accounts-node superadmin, read-only) and an `account_state` (`active`, or `offboarding` while being removed) |
+| `tbl_agent` | API agent keys with encrypted DEK, owner_user_id, **kdf_version (0 legacy SHA256 / 1 HKDF-SHA256 / 2 sealed door), salt** |
+| `tbl_node_state` | The newest `node_state` announcement per node (version, platform, runtime kind, key fingerprints, attention flags); replicated |
+| `tbl_node_key_history` | Retired identity keys per node (`valid_until_lamport`, rotation event); replicated, merged (never replaced) by a restore; compaction keeps the newest 16 per node |
+| `tbl_node_key_conflict` | An open identity conflict (two competing new keys); node-local |
+| `tbl_accounts_home` | The designated accounts node (singleton); replicated, merged by newest version on a restore |
+| `tbl_shared_doors_state` | A shared node's doors-list state (received/applied version, pending apply, last error); node-local |
+| `tbl_offboarding` | One row per removal process — the accounts node's working record (`local`), or a shared node's replicated copy it may take over; a demotion's target role and folders live only in the local row |
+| `tbl_offboarding_node` | What each removal step waits for, per node (S1 re-key, S2 doors list, S4 rotation): waiting / confirmed / revoked; node-local |
+| `tbl_removed_person` | The tombstones of removed people (person id, outcome, time; no names, no folders); replicated and monotonic — a restore merges them, never drops them |
 | `tbl_folder` | First-class folders with Lamport timestamps |
 | `tbl_folder_acl_entry` | Per-folder access control entries (allow/deny per user+folder) |
 | `tbl_media` | Uploaded images (encrypted, same envelope pattern) |
-| `tbl_audit_log` | Operation audit trail (covers DEK rotation + snapshot create/restore/upload/delete + user CRUD + admin password reset + agent create/delete; pruned by `AuditLogPruningHostedService` after 90 days) |
+| `tbl_audit_log` | Operation audit trail (covers DEK rotation + snapshot create/restore/upload/download/delete + user CRUD and demotion + admin password reset + agent create/delete + recovery key issue/revoke + node join; pruned by `AuditLogPruningHostedService` after 90 days) |
 | `tbl_hard_delete_audit` | Per-entity hard-delete record with `lamport_ts`. Survives event-log compaction; gates against late `article_update`/`folder_*` events from peers that didn't see the hard-delete |
 | `tbl_concept_tag` | Concept tag vocabulary |
 | `tbl_article_concept_tag` | Article-to-tag associations |
@@ -588,10 +816,10 @@ sees. `PRAGMA application_id = 0x424D4253`. Its tables, all of them allow-listed
 | Table | Purpose |
 |---|---|
 | `tbl_boot_meta` | `node_id` (written once), `dbk_generation`, `seq_floor`, `sealed_head`, `clean_close`, `unlock_material_version`, … |
-| `tbl_boot_door` | Copies of the ways in: key slots and auto-unlock agents (wrapped master key, iv, salt, Argon2 parameters, key hash), never a user or agent name |
-| `tbl_boot_db_key` | The database key wrapped under a master key (one row per master-key fingerprint and generation) |
+| `tbl_boot_door` | Copies of the ways in: key slots and auto-unlock agents (wrapped or sealed master key, iv, salt, Argon2 parameters, key hash; since 2.12 also the door format, its public key and the DEK fingerprint it names), never a user or agent name |
+| `tbl_boot_db_key` | The database key wrapped under a master key (one row per master-key fingerprint and generation); keeps the wrapper of the current DEK and of every DEK a door names, all candidates while some door's DEK is unknown |
 | `tbl_boot_identity` | The node's id, name and public key |
-| `tbl_whitelist` | Mirror of the vault's peer list, same columns; status `S` = suspended while locked |
+| `tbl_whitelist` | Mirror of the vault's peer list, same columns (since 2.12 the ownership columns too); status `S` = suspended while locked |
 | `tbl_relay_event`, `tbl_relay_blob`, `tbl_relay_report` | The holding area of a locked node (events, attachments, position reports) |
 
 The schema of an encrypted node (migration 40 of the 2.6 series, now part of the baseline) adds only triggers to the vault: any change to a key slot, a user's slot reference, an

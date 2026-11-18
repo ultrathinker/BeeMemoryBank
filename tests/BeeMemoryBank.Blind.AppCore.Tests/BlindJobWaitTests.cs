@@ -5,7 +5,7 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// BMB-311 fix round (F3): the screens of the blind apps keep a button locked for as long as the job it started is open, judged from the state of the phone
+/// BMB-311: the screens of the blind apps keep a button locked for as long as the job it started is open, judged from the state of the phone
 /// and not from a timer. The old screens waited 20 seconds for the job to be seen and an hour for it to end (Android) or 30 minutes (iPhone) and then let
 /// the button go while the job might still run; these tests are the rules that replace the clocks.
 /// </summary>

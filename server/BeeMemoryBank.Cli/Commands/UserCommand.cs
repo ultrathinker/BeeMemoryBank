@@ -1,3 +1,4 @@
+using BeeMemoryBank.Core.Exceptions;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -122,6 +123,13 @@ public static class UserCommand
 
         if (!result.Succeeded)
         {
+            if (result.Outcome == RecoveryResetOutcome.ReplicatedUser)
+            {
+                await audit.LogAsync("user", result.UserId?.ToString() ?? "-", "user_password_recovery_refused", "cli",
+                    "Password reset with a recovery key refused on the command line (replicated)");
+                await output.WriteLineAsync(ReplicatedUserException.ForReplicatedUser(result.AccountsHomeName, result.AccountsHomeNodeId).Message);
+                return 1;
+            }
             await audit.LogAsync("user", result.UserId?.ToString() ?? "-", "user_password_recovery_refused", "cli",
                 $"Password reset with a recovery key refused on the command line ({(result.Outcome == RecoveryResetOutcome.WrongKey ? "key" : "account")})");
             await output.WriteLineAsync(Refused);

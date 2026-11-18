@@ -35,6 +35,14 @@
         </sl-alert>
     }
 
+    @if (Model.IsSharedNonHome)
+    {
+        <sl-alert id="shared-node-users-notice" variant="primary" open style="margin-bottom:20px;">
+            <sl-icon slot="icon" name="info-circle"></sl-icon>
+            Superadmin accounts on this shared node are replicated from <strong>@Model.AccountsHomeLabel</strong> and are read-only here.
+        </sl-alert>
+    }
+
     @if (Model.Users != null && Model.Users.Count > 0)
     {
         <div class="card" style="padding:0;overflow:hidden;">
@@ -53,13 +61,24 @@
                 <tbody>
                     @foreach (var user in Model.Users)
                     {
+                        var readOnlyMsg = $"Managed on {Model.AccountsHomeLabel}";
                         <tr>
-                            <td><strong>@user.Username</strong></td>
+                            <td>
+                                <strong>@user.Username</strong>
+                                @if (user.Replicated)
+                                {
+                                    <sl-badge variant="neutral" pill style="margin-left:6px;" title="@readOnlyMsg">replicated</sl-badge>
+                                }
+                            </td>
                             <td>@user.DisplayName</td>
                             <td>
                                 <sl-badge variant="@(user.Role == "superadmin" ? "warning" : user.Role == "user" ? "neutral" : "primary")" pill>
                                     @user.Role
                                 </sl-badge>
+                                @if (user.RemovalStatus is not null && user.RemovalProcessId is { } removalId)
+                                {
+                                    <a href="/Admin/Offboarding?id=@removalId" class="user-removal-status"><sl-badge variant="danger" pill>@user.RemovalStatus</sl-badge></a>
+                                }
                             </td>
                             <td>
                                 <sl-icon name="@(user.ChatAccess ? "check-circle" : "dash-circle")"
@@ -69,28 +88,73 @@
                             <td class="text-muted text-sm">@user.CreatedAt.ToString("g")</td>
                             <td class="text-muted text-sm">@(user.LastLoginAt?.ToString("g") ?? "—")</td>
                             <td style="text-align:right;">
-                                @if (user.Role != "superadmin")
+                                @if (user.RemovalStatus is not null)
                                 {
-                                    <sl-icon-button name="shield-lock" label="Folder access"
-                                        data-uid="@user.Id" data-name="@user.Username" data-role="@user.Role"
-                                        class="btn-user-folder-access">
-                                    </sl-icon-button>
+                                    <span class="text-muted text-sm">The removal decides what happens to this account.</span>
                                 }
-                                <sl-icon-button name="key" label="Change Password"
-                                    data-uid="@user.Id" data-name="@user.Username"
-                                    class="btn-user-change-pw">
-                                </sl-icon-button>
-                                <sl-icon-button name="pencil" label="Edit"
-                                    data-uid="@user.Id" data-display="@user.DisplayName" data-role="@user.Role" data-chat-access="@user.ChatAccess.ToString().ToLower()"
-                                    class="btn-user-edit">
-                                </sl-icon-button>
-                                <sl-icon-button name="trash" label="Delete"
-                                    data-name="@user.Username" data-form-id="form-del-@user.Id"
-                                    class="btn-user-delete">
-                                </sl-icon-button>
-                                <form data-busy="short" id="form-del-@user.Id" method="post" asp-page-handler="Delete" style="display:none;">
-                                    <input type="hidden" name="id" value="@user.Id" />
-                                </form>
+                                else if (user.Replicated)
+                                {
+                                    <sl-icon-button name="key" label="@readOnlyMsg" disabled></sl-icon-button>
+                                    <sl-icon-button name="pencil" label="@readOnlyMsg" disabled></sl-icon-button>
+                                    <sl-icon-button name="shield-minus" label="@readOnlyMsg" disabled></sl-icon-button>
+                                    <sl-icon-button name="trash" label="@readOnlyMsg" disabled></sl-icon-button>
+                                }
+                                else
+                                {
+                                    @if (user.Role != "superadmin")
+                                    {
+                                        <sl-icon-button name="shield-lock" label="Folder access"
+                                            data-uid="@user.Id" data-name="@user.Username" data-role="@user.Role"
+                                            class="btn-user-folder-access">
+                                        </sl-icon-button>
+                                    }
+                                    <sl-icon-button name="key" label="Change Password"
+                                        data-uid="@user.Id" data-name="@user.Username"
+                                        class="btn-user-change-pw">
+                                    </sl-icon-button>
+                                    <sl-icon-button name="pencil" label="Edit"
+                                        data-uid="@user.Id" data-display="@user.DisplayName" data-role="@user.Role" data-chat-access="@user.ChatAccess.ToString().ToLower()"
+                                        class="btn-user-edit">
+                                    </sl-icon-button>
+                                    @if (user.Role == "superadmin")
+                                    {
+                                        var ownRow = user.Id.ToString() == Model.CurrentUserId;
+                                        var lastOne = Model.SuperadminCount <= 1;
+                                        <sl-icon-button name="shield-minus"
+                                            label="@(ownRow ? "You cannot remove your own superadmin rights - ask another superadmin" : lastOne ? "The last superadmin cannot lose superadmin rights" : "Remove superadmin rights...")"
+                                            data-uid="@user.Id" data-name="@user.Username" data-display="@user.DisplayName" data-chat-access="@user.ChatAccess.ToString().ToLower()"
+                                            class="btn-user-remove-superadmin" disabled="@(ownRow || lastOne)">
+                                        </sl-icon-button>
+                                    }
+                                    else
+                                    {
+                                        var cannotPromote = Model.IsSharedNonHome;
+                                        <sl-icon-button name="shield-plus" label="@(cannotPromote ? $"Create or promote superadmins on {Model.AccountsHomeLabel}" : "Make superadmin...")"
+                                            data-uid="@user.Id" data-name="@user.Username" data-display="@user.DisplayName" data-chat-access="@user.ChatAccess.ToString().ToLower()"
+                                            class="btn-user-make-superadmin" disabled="@cannotPromote">
+                                        </sl-icon-button>
+                                    }
+                                    @if (user.Role == "superadmin")
+                                    {
+                                        // Deleting a superadmin is the same removal process, ending with the account deleted.
+                                        var ownRow = user.Id.ToString() == Model.CurrentUserId;
+                                        var lastOne = Model.SuperadminCount <= 1;
+                                        <sl-icon-button name="trash" label="@(ownRow ? "You cannot delete your own account here" : lastOne ? "The last superadmin cannot be deleted" : "Delete (a removal process)...")"
+                                            data-uid="@user.Id" data-name="@user.Username" data-display="@user.DisplayName" data-end="delete"
+                                            class="btn-user-remove-superadmin" disabled="@(ownRow || lastOne)">
+                                        </sl-icon-button>
+                                    }
+                                    else
+                                    {
+                                        <sl-icon-button name="trash" label="Delete"
+                                            data-name="@user.Username" data-form-id="form-del-@user.Id"
+                                            class="btn-user-delete">
+                                        </sl-icon-button>
+                                        <form data-busy="short" id="form-del-@user.Id" method="post" asp-page-handler="Delete" style="display:none;">
+                                            <input type="hidden" name="id" value="@user.Id" />
+                                        </form>
+                                    }
+                                }
                             </td>
                         </tr>
                     }
@@ -138,10 +202,18 @@
             </div>
             <div style="margin-bottom:16px;">
                 <sl-select id="add-role" name="role" label="Role" value="user"
-                    help-text="Custom roles carry their own folder rules — manage them on the Roles page.">
-                    <sl-option value="superadmin">Superadmin</sl-option>
+                    help-text="@(Model.IsSharedNonHome ? $"Superadmins can only be added on {Model.AccountsHomeLabel}." : "Custom roles carry their own folder rules — manage them on the Roles page.")">
+                    @if (!Model.IsSharedNonHome)
+                    {
+                        <sl-option value="superadmin">Superadmin</sl-option>
+                    }
                     <sl-option value="user">User</sl-option>
                 </sl-select>
+                <sl-alert id="add-superadmin-warning" variant="warning" open style="display:none;margin-top:8px;">
+                    <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                    A superadmin holds the key to all data on this node, sees every folder and can connect full copies of the bank.
+                    Taking that back later is a multi-step removal, not a single click.
+                </sl-alert>
             </div>
         </form>
         <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-add-user">Cancel</sl-button>
@@ -185,16 +257,21 @@
                 <sl-input id="edit-display-name" name="displayName" label="Display Name" required></sl-input>
             </div>
             <div style="margin-bottom:16px;">
-                <sl-select id="edit-role" name="role" label="Role">
-                    <sl-option value="superadmin">Superadmin</sl-option>
-                    <sl-option value="user">User</sl-option>
-                </sl-select>
-                <p id="edit-role-hint" class="text-muted text-sm" style="margin:6px 0 0 0;display:none;"></p>
-                <p id="edit-promote-hint" class="text-muted text-sm" style="margin:6px 0 0 0;display:none;">
-                    They keep their current password. The key that lets them unlock this server is
-                    created the next time they log in — until then they can work as usual, but
-                    can't unlock the server if it's locked.
-                </p>
+                <div id="edit-role-fixed" style="display:none;">
+                    <label class="text-sm text-muted" style="display:block;margin-bottom:4px;">Role</label>
+                    <sl-badge variant="warning" pill>superadmin</sl-badge>
+                    <p class="text-muted text-sm" style="margin:6px 0 0 0;">
+                        The role of a superadmin is not changed here. To take superadmin rights away, use the
+                        <sl-icon name="shield-minus"></sl-icon> button of this person's row: it asks what they may see afterwards.
+                    </p>
+                </div>
+                <div id="edit-role-choice">
+                    <sl-select id="edit-role" name="role" label="Role"
+                        help-text="To make this person a superadmin, use the shield button of their row.">
+                        <sl-option value="user">User</sl-option>
+                    </sl-select>
+                    <p id="edit-role-hint" class="text-muted text-sm" style="margin:6px 0 0 0;display:none;"></p>
+                </div>
             </div>
             <div style="margin-bottom:8px;">
                 <sl-checkbox id="edit-chat-access">Can use AI chat</sl-checkbox>
@@ -205,6 +282,87 @@
         </form>
         <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-edit-user">Cancel</sl-button>
         <sl-button id="btn-edit-user-submit" slot="footer" variant="primary">Save</sl-button>
+    </sl-dialog>
+
+    <sl-dialog id="dlg-make-superadmin" label="Make superadmin">
+        <sl-alert id="make-superadmin-error" variant="danger" closable style="display:none;margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <span class="msg"></span>
+        </sl-alert>
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Make <span id="make-sa-name"></span> a superadmin?</strong>
+            <p style="margin:8px 0 0 0;">A superadmin is a person you trust with <strong>the key to all data</strong> on this node. They will:</p>
+            <ul style="margin:6px 0 0 18px;padding:0;">
+                <li>see every folder, whatever its rules say;</li>
+                <li>hold a key that opens the whole bank with their own password, and be able to unlock it;</li>
+                <li>be able to connect <strong>full copies of the bank</strong> (other computers and phones that hold all of it), manage users, roles and agents, and take snapshots.</li>
+            </ul>
+            <p style="margin:8px 0 0 0;">
+                Taking this back is <strong>not one click</strong>: it is a multi-step removal. Their key, tokens and agents have to be revoked, you choose what they may still see,
+                and the full copies they connected, the recovery keys they hold and the encryption key all have to be dealt with afterwards.
+            </p>
+        </sl-alert>
+        <p class="text-muted text-sm" style="margin:0;">They keep their current password. The key that lets them unlock this server is created the next time they log in; until then they can work as usual, but cannot unlock the server if it is locked.</p>
+        <input type="hidden" id="make-sa-user-id" />
+        <input type="hidden" id="make-sa-display" />
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-make-superadmin">Cancel</sl-button>
+        <sl-button id="btn-make-sa-confirm" slot="footer" variant="warning">Make superadmin</sl-button>
+    </sl-dialog>
+
+    <sl-dialog id="dlg-remove-superadmin" label="Remove superadmin rights" style="--width:620px;">
+        <sl-alert id="remove-superadmin-error" variant="danger" closable style="display:none;margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <span class="msg"></span>
+        </sl-alert>
+        <sl-alert variant="warning" open style="margin-bottom:16px;">
+            <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+            <strong>Remove the superadmin rights of <span id="remove-sa-name"></span>?</strong>
+            <p style="margin:8px 0 0 0;">This starts a removal that cannot be cancelled. <strong>Taken away now:</strong> their password (it no longer signs in or unlocks anything), their recovery keys,
+                their remote access tokens, their AI agents, their signed-in browser sessions and the devices that are personally theirs.</p>
+            <p style="margin:8px 0 0 0;"><strong>Then, step by step</strong> (<a href="/Admin/Offboarding">Admin &rarr; People being removed</a>): new identity keys for this node and the shared nodes, the shared nodes stop
+                accepting their password, you review the remaining devices and every way in they could have planted, and the master key is changed for everybody, by itself.
+                Until then the account shows as <em>being removed</em>. What they have already received and copied stays theirs.</p>
+        </sl-alert>
+
+        <p style="margin:0 0 6px 0;font-weight:600;">At the end of the removal:</p>
+        <sl-radio-group id="remove-sa-end" name="endChoice" style="margin-bottom:10px;">
+            <sl-radio value="demote">They stay as an ordinary user</sl-radio>
+            <sl-radio value="delete">The account is deleted</sl-radio>
+        </sl-radio-group>
+
+        <div id="remove-sa-panel-access" style="display:none;">
+        <p style="margin:0 0 6px 0;font-weight:600;">What may they see afterwards? Choose one - nothing is changed until you do.</p>
+        <sl-radio-group id="remove-sa-choice" name="accessChoice" style="margin-bottom:10px;">
+            <sl-radio value="folders">Only these folders</sl-radio>
+            <sl-radio value="role">A role that hides folders by default</sl-radio>
+            <sl-radio value="open">Every folder an ordinary user sees (the open <em>User</em> role)</sl-radio>
+        </sl-radio-group>
+
+        <div id="remove-sa-panel-folders" style="display:none;margin-bottom:10px;position:relative;">
+            <sl-input id="remove-sa-folder-search" label="Add a folder" placeholder="Type to search folders..." autocomplete="off"></sl-input>
+            <div id="remove-sa-folder-dropdown" style="display:none;position:absolute;z-index:1000;left:0;right:0;max-height:220px;overflow-y:auto;background:var(--sl-color-neutral-0);border:1px solid var(--sl-color-neutral-300);border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);margin-top:2px;"></div>
+            <div id="remove-sa-folder-list" style="margin-top:8px;"></div>
+            <p class="text-muted text-sm" style="margin:6px 0 0 0;">They will become an ordinary user who sees only these folders and what is inside them.</p>
+        </div>
+        <div id="remove-sa-panel-role" style="display:none;margin-bottom:10px;">
+            <sl-select id="remove-sa-role" label="Role" placeholder="Pick a role"></sl-select>
+            <p id="remove-sa-role-empty" class="text-muted text-sm" style="margin:6px 0 0 0;display:none;">
+                No role hides folders by default yet. Make one on the <a href="/Roles">Roles</a> page, or pick folders instead.
+            </p>
+        </div>
+        <div id="remove-sa-panel-open" style="display:none;margin-bottom:10px;">
+            <sl-checkbox id="remove-sa-open-ack">I know that this person will be able to see every folder an ordinary user sees.</sl-checkbox>
+        </div>
+        </div>
+
+        <sl-input id="remove-sa-password" label="Your own password, to confirm" type="password" password-toggle autocomplete="off" data-1p-ignore data-lpignore="true"
+                  style="margin-top:6px;"></sl-input>
+
+        <input type="hidden" id="remove-sa-user-id" />
+        <input type="hidden" id="remove-sa-display" />
+        <sl-button slot="footer" variant="default" data-dlg-cancel="dlg-remove-superadmin">Cancel</sl-button>
+        <sl-button id="btn-remove-sa-confirm" slot="footer" variant="danger" disabled>Start the removal</sl-button>
     </sl-dialog>
 
     <partial name="_FolderAccessDialog" />

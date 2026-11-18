@@ -213,14 +213,14 @@ public class AutoDiscoveryTests : IDisposable
         apiEnv["BMB_BEHIND_LOOPBACK_PROXY"].Should().Be("1");
         apiEnv["BMB_DATA_PATH"].Should().Be(dataDir);
 
-        // Codex-reviewed regression: Api's Program.cs fail-fasts in Production if
+        // Regression: Api's Program.cs fail-fasts in Production if
         // BMB_INTERNAL_KEY is absent, and auto-discovery is the only path both the Desktop
         // tray and the MSI service use — without this, a clean machine (no stray
         // ASPNETCORE_ENVIRONMENT=Development lying around) crash-loops Api to death.
         apiEnv.Should().ContainKey("BMB_INTERNAL_KEY");
         apiEnv["BMB_INTERNAL_KEY"].Should().NotBeNullOrEmpty();
 
-        // Codex-reviewed regression: AddLoopbackForwardedHeaders actually reads
+        // Regression: AddLoopbackForwardedHeaders actually reads
         // BMB_TRUST_LOOPBACK_FORWARDED_HEADERS, not BMB_BEHIND_LOOPBACK_PROXY (which nothing
         // consumes). Without it, ForwardedHeadersMiddleware never runs, every front-proxied
         // request looks like it came from 127.0.0.1, and RateLimitMiddleware's localhost-skip
@@ -280,10 +280,10 @@ public class AutoDiscoveryTests : IDisposable
         }
     }
 
-    // ── Этап 6 final-review fix — reuse an inherited BMB_INTERNAL_KEY ──────────
+    // ── Reuse an inherited BMB_INTERNAL_KEY ──────────
 
     /// <summary>
-    /// Regression guard for the final-review finding: when bmbd itself was spawned by a parent
+    /// Regression guard for a review finding: when bmbd itself was spawned by a parent
     /// (Desktop's <c>NodeLifecycleService</c>) that already set <c>BMB_INTERNAL_KEY</c> on bmbd's
     /// own environment, <c>Discover</c> must REUSE that value for Api/Web rather than generating
     /// a different one. Desktop authenticates its own <c>/node/update/*</c> guard requests with

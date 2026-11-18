@@ -7,7 +7,7 @@ using BeeMemoryBank.Node;
 namespace BeeMemoryBank.Node.Tests;
 
 /// <summary>
-/// Review release-b R1-3 and R1-4: a node started from a node.config.json (the configured mode, which used to skip it)
+/// A node started from a node.config.json (the configured mode, which used to skip it)
 /// passes the vault gate. It refuses while a re-key runs, and finishes an interrupted swap before it starts anything.
 /// Once its children are up, the first start on a swapped-in vault is complete, and its journal and re-key lock go.
 /// The real node binary runs, with the stub process as its child.
@@ -137,7 +137,7 @@ public sealed class NodeVaultGateTests : IDisposable
     }
 
     /// <summary>
-    /// R1-4: once the node's children are up, the first start on the swapped-in vault succeeded, and the node clears
+    /// Once the node's children are up, the first start on the swapped-in vault succeeded, and the node clears
     /// the journal and the re-key lock itself. The child here is the stub, not the real Api, so only the node can.
     /// </summary>
     [Fact]

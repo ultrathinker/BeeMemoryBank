@@ -444,7 +444,7 @@ public sealed class SealSwapResolverTests : IClassFixture<SealSwapResolverTests.
         using (lease2) second.Seal.Should().BeNull("a start with nothing to resolve reports nothing");
     }
 
-    // ---- review round 1, H1: another try at the wipe while the node runs ------------------------------------------------------------------
+    // ---- another try at the wipe while the node runs ------------------------------------------------------------------
 
     [Fact]
     public void RetryWipe_wipes_the_leftovers_beside_a_sealed_pair_and_takes_the_swapping_journal_with_the_last_of_them()

@@ -4,7 +4,7 @@ using BeeMemoryBank.Search.Segment;
 namespace BeeMemoryBank.Search.Tests.Segment;
 
 /// <summary>
-/// WP-13 Task 1: "format-version-from-the-future" -- simulates a downgrade scenario where a newer
+/// "format-version-from-the-future" -- simulates a downgrade scenario where a newer
 /// node version wrote a "BMBI" segment using a format version this codebase does not understand,
 /// and an older version now tries to read it. Checked before writing this: none of
 /// SegmentRoundtripTests.cs, SegmentCollisionTests.cs, or SegmentScaleTests.cs in this same
@@ -18,7 +18,7 @@ namespace BeeMemoryBank.Search.Tests.Segment;
 /// INNER "BMBI" segment format checked here.
 ///
 /// <para>
-/// Finding (see wp-13-report.md for the full writeup): in isolation, <see cref="SegmentReader"/>'s
+/// Finding: in isolation, <see cref="SegmentReader"/>'s
 /// constructor DOES correctly reject a future format version -- it throws
 /// <see cref="NotSupportedException"/> rather than silently misinterpreting newer-format bytes as
 /// the current format. That part of the system is safe by design. The real gap is one layer up:

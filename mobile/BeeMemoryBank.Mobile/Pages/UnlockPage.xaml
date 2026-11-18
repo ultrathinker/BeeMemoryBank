@@ -1,73 +1,66 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- The mock-up's Unlock screen: the master password with the show/hide eye, the wrong-password error,
+     "Open vault", and - when a fingerprint is enrolled - the system biometric prompt below an "or".
+     There is no "forgot password" link and no hint button: the phone has no recovery-key reset flow and
+     wires no pre-unlock hint reader (a deliberate decision is needed first). -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.Mobile.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
              x:Class="BeeMemoryBank.Mobile.Pages.UnlockPage"
              Title="Unlock"
-             BackgroundColor="{StaticResource BackgroundColor}"
              Shell.FlyoutBehavior="Disabled"
              Shell.NavBarIsVisible="False">
 
-    <VerticalStackLayout Padding="32" Spacing="16" VerticalOptions="Center">
+    <!-- The card is centred when it fits (portrait) and the page scrolls when it is taller than the
+         viewport (landscape). The Grid's minimum height follows the ScrollView's height (code-behind,
+         display only): the centred card sits in the middle when there is room, and the Grid grows to
+         the card's full height when there is not, so nothing is clipped. The card keeps a sensible
+         width and stays horizontally centred. -->
+    <ScrollView x:Name="UnlockScroll">
+        <Grid x:Name="UnlockRoot">
+        <VerticalStackLayout Padding="32" Spacing="18"
+                             MaximumWidthRequest="400"
+                             HorizontalOptions="Center" VerticalOptions="Center">
 
-        <Label Text="BeeMemoryBank"
-               FontSize="28"
-               FontAttributes="Bold"
-               HorizontalOptions="Center"
-               TextColor="{StaticResource PrimaryColor}" />
+            <Label Text="{loc:Translate AppTitle}"
+                   Style="{StaticResource BrandTitle}"
+                   HorizontalOptions="Center" />
 
-        <Label x:Name="SubtitleLabel"
-               Text="Enter password to unlock"
-               FontSize="16"
-               HorizontalOptions="Center"
-               TextColor="{StaticResource SecondaryTextColor}" />
+            <Label x:Name="SubtitleLabel"
+                   Text="{loc:Translate UnlockSubtitle}"
+                   Style="{StaticResource SubtitleLabel}"
+                   HorizontalOptions="Center" />
 
-        <!-- Fingerprint button — shown only when biometric is enrolled and password is stored -->
-        <Button x:Name="FingerprintButton"
-                AutomationId="FingerprintButton"
-                Text="🔑  Use Fingerprint"
-                Style="{StaticResource PrimaryButton}"
-                IsVisible="False"
-                Clicked="OnFingerprintClicked" />
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="14">
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="{loc:Translate MasterPasswordLabel}" Style="{StaticResource FieldLabel}" />
+                        <controls:PasswordBox x:Name="PasswordEntry" AutomationId="PasswordEntry"
+                                              Placeholder="{loc:Translate UnlockPasswordPlaceholder}"
+                                              ReturnType="Done" />
+                    </VerticalStackLayout>
 
-        <Label x:Name="OrLabel"
-               Text="— or enter password —"
-               FontSize="13"
-               HorizontalOptions="Center"
-               TextColor="{StaticResource SecondaryTextColor}"
-               IsVisible="False" />
+                    <Label x:Name="ErrorLabel" Style="{StaticResource FieldError}" IsVisible="False" />
 
-        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-            <Entry x:Name="PasswordEntry"
-                   Grid.Column="0"
-                   AutomationId="PasswordEntry"
-                   Style="{StaticResource BaseEntry}"
-                   Placeholder="Password"
-                   IsPassword="True"
-                   ReturnType="Done"
-                   ReturnCommand="{Binding Source={x:Reference UnlockButton}, Path=Command}" />
-            <Button x:Name="TogglePasswordButton"
-                    Grid.Column="1"
-                    AutomationId="TogglePasswordButton"
-                    Text="Show"
-                    VerticalOptions="Center"
-                    Clicked="OnTogglePasswordClicked" />
+                    <Button x:Name="UnlockButton" AutomationId="UnlockButton"
+                            Text="{loc:Translate UnlockButton}" Style="{StaticResource PrimaryButton}"
+                            Clicked="OnUnlockClicked" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label x:Name="OrLabel" Text="{loc:Translate UnlockOr}"
+                   FontSize="13" HorizontalOptions="Center"
+                   TextColor="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}"
+                   IsVisible="False" />
+
+            <Button x:Name="FingerprintButton" AutomationId="FingerprintButton"
+                    Text="{loc:Translate UnlockFingerprint}" Style="{StaticResource BiometricButton}"
+                    IsVisible="False" Clicked="OnFingerprintClicked" />
+
+            <ActivityIndicator x:Name="LoadingIndicator" IsRunning="False" IsVisible="False" />
+
+        </VerticalStackLayout>
         </Grid>
-
-        <Label x:Name="ErrorLabel"
-               TextColor="{StaticResource ErrorColor}"
-               IsVisible="False" />
-
-        <Button x:Name="UnlockButton"
-                AutomationId="UnlockButton"
-                Text="Unlock"
-                Style="{StaticResource PrimaryButton}"
-                Clicked="OnUnlockClicked" />
-
-        <ActivityIndicator x:Name="LoadingIndicator"
-                           IsRunning="False"
-                           IsVisible="False"
-                           Color="{StaticResource PrimaryColor}" />
-
-    </VerticalStackLayout>
-
+    </ScrollView>
 </ContentPage>

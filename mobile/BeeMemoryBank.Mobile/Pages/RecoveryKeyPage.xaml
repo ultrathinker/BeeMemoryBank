@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- The mock-up's new-recovery-key flow: confirm the master password, a note that the new key is added
+     alongside the others, then the new key with copy / save to a file / the "I saved it" tick before
+     Done. The key is the core's AddRecoveryKeyAsync (the same the iPhone and the web admin use): the
+     new key works together with the old ones; only a data-key rotation in the admin invalidates them. -->
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.Mobile.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
+             x:Class="BeeMemoryBank.Mobile.Pages.RecoveryKeyPage"
+             Title="{loc:Translate SettingsRecovery}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="12">
+
+            <!-- Step 1: confirm the master password -->
+            <Border x:Name="Step1" Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate RecoveryStep1Title}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate RecoveryStep1Desc}" Style="{StaticResource DialogBody}" />
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="{loc:Translate MasterPasswordLabel}" Style="{StaticResource FieldLabel}" />
+                        <controls:PasswordBox x:Name="PasswordEntry" AutomationId="RecoveryPasswordEntry"
+                                              Placeholder="{loc:Translate MasterPasswordPlaceholder}" />
+                    </VerticalStackLayout>
+                    <Label x:Name="PasswordError" Style="{StaticResource FieldError}" IsVisible="False" />
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                        <Button Grid.Column="0" Text="{loc:Translate Cancel}" Style="{StaticResource SecondaryButton}"
+                                Clicked="OnCancelClicked" />
+                        <Button Grid.Column="1" Text="{loc:Translate RecoveryContinue}" Style="{StaticResource PrimaryButton}"
+                                AutomationId="RecoveryContinueButton" Clicked="OnContinueClicked" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Step 2: the new key is added alongside the others (informational, not a warning) -->
+            <VerticalStackLayout x:Name="Step2" Spacing="12" IsVisible="False">
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="4">
+                        <Label Text="{loc:Translate RecoveryStep2Title}" Style="{StaticResource CardTitle}" />
+                        <Label Text="{loc:Translate RecoveryStep2Desc}" Style="{StaticResource DialogBody}" />
+                    </VerticalStackLayout>
+                </Border>
+                <Border Style="{StaticResource CardBorder}">
+                    <VerticalStackLayout Spacing="12">
+                        <Label Text="{loc:Translate RecoveryStep2Note}" Style="{StaticResource ItemMeta}" />
+                        <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                            <Button Grid.Column="0" Text="{loc:Translate Back}" Style="{StaticResource SecondaryButton}"
+                                    Clicked="OnBackClicked" />
+                            <Button Grid.Column="1" Text="{loc:Translate RecoveryCreateKey}" Style="{StaticResource PrimaryButton}"
+                                    AutomationId="RecoveryCreateButton" Clicked="OnCreateKeyClicked" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Border>
+            </VerticalStackLayout>
+
+            <!-- Step 3: the new key, shown once -->
+            <Border x:Name="Step3" Style="{StaticResource CardBorder}" IsVisible="False">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate RecoveryStep3Title}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate RecoveryStep3Desc}" Style="{StaticResource DialogBody}" />
+                    <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                            StrokeThickness="0" StrokeShape="RoundRectangle 12" Padding="14">
+                        <Label x:Name="KeyLabel" AutomationId="RecoveryKeyLabel"
+                               FontFamily="monospace" FontSize="14" LineBreakMode="CharacterWrap" />
+                    </Border>
+                    <Button Text="{loc:Translate RecoveryCopy}" Style="{StaticResource SecondaryButton}"
+                            AutomationId="RecoveryCopyButton" Clicked="OnCopyClicked" />
+                    <Button Text="{loc:Translate RecoverySaveFile}" Style="{StaticResource SecondaryButton}"
+                            AutomationId="RecoverySaveButton" Clicked="OnSaveFileClicked" />
+                    <HorizontalStackLayout Spacing="8">
+                        <CheckBox x:Name="SavedCheck" AutomationId="RecoverySavedCheck" VerticalOptions="Center"
+                                  CheckedChanged="OnSavedCheckedChanged" />
+                        <Label Text="{loc:Translate RecoverySavedCheck}" VerticalOptions="Center"
+                               LineBreakMode="WordWrap" />
+                    </HorizontalStackLayout>
+                    <Button x:Name="DoneButton" Text="{loc:Translate RecoveryDone}" Style="{StaticResource PrimaryButton}"
+                            AutomationId="RecoveryDoneButton" IsEnabled="False" Clicked="OnDoneClicked" />
+                </VerticalStackLayout>
+            </Border>
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

@@ -99,7 +99,7 @@ public sealed class AccountPanelViewModelTests
         vm.BackupText.Should().Be("Last backup: never");
     }
 
-    // ---- the first-load line says what is really going on (fix round 1) ------------------------------------------------------------
+    // ---- the first-load line says what is really going on ------------------------------------------------------------
 
     private static readonly DateTimeOffset FailedAt = new(2026, 10, 4, 12, 0, 0, TimeSpan.Zero);
 
@@ -234,7 +234,7 @@ public sealed class AccountPanelViewModelTests
         seen[4].Should().Be("First load: done.");
     }
 
-    // ---- the key store (fix round 1) -----------------------------------------------------------------------------------------------
+    // ---- the key store -----------------------------------------------------------------------------------------------
 
     [Fact]
     public async Task AKeyStoreThatDoesNotAnswer_IsANotice_NotALostKey_AndNothingAsksForARemoval()
@@ -268,7 +268,7 @@ public sealed class AccountPanelViewModelTests
         vm.HasKeyStoreNotice.Should().BeFalse();
     }
 
-    // ---- failures of the view model's own callbacks (fix round 1) ----------------------------------------------------------------
+    // ---- failures of the view model's own callbacks ----------------------------------------------------------------
 
     [Fact]
     public async Task ACommandThatThrows_BecomesANotice_AndTheProblemIsLogged_NothingEscapes()

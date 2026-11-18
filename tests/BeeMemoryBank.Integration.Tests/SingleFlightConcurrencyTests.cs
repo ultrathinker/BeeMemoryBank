@@ -20,7 +20,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-311 fix round (F1, F8, F9): the gate is proved with REAL concurrent requests and a latch that holds the work, not with a lease the test holds itself.
+/// BMB-311: the gate is proved with REAL concurrent requests and a latch that holds the work, not with a lease the test holds itself.
 /// The filter is tried on a small host of its own (exactly one of many concurrent requests runs, the rest are refused at once; the lease comes back after an
 /// exception, after the client went away, and after a background operation the handler handed it to), and the two routes the review named are tried
 /// end to end: the network restore (it answers 202 and goes on in the background) and "Add a blind node".

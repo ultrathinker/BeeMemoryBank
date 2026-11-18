@@ -68,6 +68,49 @@ public static class LanJoinExchange
     }
 
     /// <summary>
+    /// Tells the node front that a join completed (the joiner is about to have its snapshot): the front turns "Show this node to devices
+    /// in my network" ON by itself, through the same switch the Network settings page uses. Only a desktop node has a front;
+    /// elsewhere nothing is sent. Best effort: the join never fails for it, and a front that cannot be reached leaves the setting as it was.
+    /// </summary>
+    public static async Task NotifyJoinedAsync(IServiceProvider services, ILogger logger)
+    {
+        if (!IsDesktopNode) return;
+        try
+        {
+            var front = ReadFrontUrl(DataPath(services));
+            var key = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");
+            if (front is null || string.IsNullOrEmpty(key)) return;
+            using var http = services.GetRequiredService<IHttpClientFactory>().CreateClient();
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{front.TrimEnd('/')}/node/lan/joined");
+            req.Headers.TryAddWithoutValidation("X-Internal-Key", key);
+            using var resp = await http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode)
+                logger.LogWarning("The node front answered {Status} to the join notice; the network setting stays as it was", (int)resp.StatusCode);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "The node could not be told that a join completed; the network setting stays as it was");
+        }
+    }
+
+    /// <summary>The front's loopback URL from the node's <c>.runtime.json</c> (the same file the Web's NodeLanClient reads).</summary>
+    private static string? ReadFrontUrl(string? dataPath)
+    {
+        if (string.IsNullOrEmpty(dataPath)) return null;
+        try
+        {
+            var path = Path.Combine(dataPath, ".runtime.json");
+            if (!File.Exists(path)) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            return doc.RootElement.TryGetProperty("frontUrl", out var url) ? url.GetString() : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The network a device was paired through is trusted (decision D1): on a Mac or Linux desktop the person's answer is written for it; on Windows the
     /// category Windows gives it decides, and nothing is written. Best effort.
     /// </summary>

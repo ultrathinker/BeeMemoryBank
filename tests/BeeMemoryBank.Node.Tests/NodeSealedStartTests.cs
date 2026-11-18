@@ -107,7 +107,7 @@ public sealed class NodeSealedStartTests
     [Fact]
     public async Task A_node_over_a_cut_setup_whose_leftover_cannot_be_wiped_refuses_to_start_its_api_and_says_which_file()
     {
-        // BMB-306 fix round 2 (N1): the parent used to discard the refusal of the seal intent, and its Api child - which joins the parent's lease - went on to a plain start.
+        // BMB-306: the parent used to discard the refusal of the seal intent, and its Api child - which joins the parent's lease - went on to a plain start.
         var db = Path.Combine(_d, "beememorybank.db");
         File.WriteAllBytes(db, Sqlite(3));
         SealIntent.Begin(_d, SealIntent.KindSetup);

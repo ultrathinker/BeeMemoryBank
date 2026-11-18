@@ -6,8 +6,8 @@ namespace BeeMemoryBank.Search.Tests;
 /// Golden-file tests for <see cref="RussianStemmer"/>: exact expected stems, pinned so future
 /// rule changes show up as reviewable diffs. Covers noun case endings, the adjective ending
 /// families (hard/soft, all genders and plural), and the three common verb conjugation shapes
-/// (-ать, -ить, -ять infinitives with their present/past tense forms) called out in the WP-05
-/// brief.
+/// (-ать, -ить, -ять infinitives with their present/past tense forms) called out by name.
+///
 /// </summary>
 public class RussianStemmerGoldenTests
 {
@@ -15,7 +15,7 @@ public class RussianStemmerGoldenTests
 
     [Theory]
     // "server" (a common loanword) across its full case paradigm — this is the exact example
-    // from the WP-05 brief: "сервера"/"серверов"/"сервером" must all be prefix-compatible with
+    // From the spec: "сервера"/"серверов"/"сервером" must all be prefix-compatible with
     // "сервер". This stemmer goes further and makes them all stem to the *identical* value.
     [InlineData("сервер", "сервер")]
     [InlineData("сервера", "сервер")]
@@ -98,7 +98,7 @@ public class RussianStemmerGoldenTests
         // "окон" (genitive plural of "окно") loses its final vowel entirely in this declension
         // pattern, so it doesn't end in any suffix this deletion-only stemmer recognizes. It
         // therefore does NOT converge with "окно"/"окна" above. This is an accepted recall gap,
-        // not a bug: the brief explicitly scopes this to "common declension patterns", not full
+        // not a bug: this is explicitly scoped to "common declension patterns", not full
         // academic-grade morphology, and a deletion-only design cannot special-case every
         // irregular paradigm without inventing a substitution (which would break the prefix
         // invariant). Pinned here so the gap is documented and visible, not silently rediscovered.

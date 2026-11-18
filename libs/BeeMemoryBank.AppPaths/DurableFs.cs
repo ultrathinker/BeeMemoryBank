@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace BeeMemoryBank.AppPaths;
 
 /// <summary>
-/// Renames and directory entries that survive a power cut (review release-b R1-5). Flushing a file's contents does not
+/// Renames and directory entries that survive a power cut. Flushing a file's contents does not
 /// make its directory entry durable: after a rename, the entry lives in the parent directory's metadata.
 /// <list type="bullet">
 /// <item>Linux and macOS: the parent directory is opened and <c>fsync</c>ed after every rename that matters.</item>
