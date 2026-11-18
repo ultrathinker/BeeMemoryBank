@@ -6,20 +6,23 @@ using Security;
 namespace BeeMemoryBank.FullIos.Platforms.iOS;
 
 /// <summary>
-/// The quick unlock's two Keychain items (generic passwords of this app's own access group, service <see cref="Service"/>):
-/// <list type="bullet">
-/// <item><c>unlock-key-v1</c>, the random unlock key: access control "biometry, current set" with "when passcode set, this device only" -
-/// iOS releases it only after Face ID or Touch ID succeeds, drops it when faces or fingers are added or removed or the passcode is turned
-/// off, and never puts it in a backup or the iCloud Keychain;</item>
-/// <item><c>unlock-slot-v1</c>, the master key wrapped under that unlock key: "when unlocked, this device only", not synchronisable.</item>
-/// </list>
-/// Neither item ever holds the password, and neither is written to a file or a log.
+/// The quick unlock's Keychain item (a generic password of this app's own access group, service <see cref="Service"/>):
+/// <c>door-secret-v2</c>, the 32-byte secret of the vault's <c>quick_unlock</c> door (2.12), with access control "biometry, current set" and
+/// "when passcode set, this device only" - iOS releases it only after Face ID or Touch ID succeeds, drops it when faces or fingers are added
+/// or removed or the passcode is turned off, and never puts it in a backup or the iCloud Keychain. The master key is in the door, not here.
+/// <para>A phone set up before 2.12 has <c>unlock-key-v1</c> (its unlock key, behind the biometry the same way) and <c>unlock-slot-v1</c> (the
+/// master key wrapped under it) instead. They are only read (once, at the next unlock, which turns them into a door) and removed, never written
+/// again - and removed only after the new secret is stored, so a Keychain that refuses the new item leaves the old way in working.</para>
+/// None of the items ever holds the password, and none is written to a file or a log.
 /// </summary>
 internal sealed class KeychainUnlockKeyStore : IUnlockKeyStore
 {
     public const string Service = "com.beememorybank.mobile.quick-unlock";
-    private const string KeyAccount = "unlock-key-v1";
-    private const string SlotAccount = "unlock-slot-v1";
+    private const string SecretAccount = "door-secret-v2";
+    /// <summary>The unlock key of a phone set up before 2.12: read and removed, never written.</summary>
+    private const string LegacyKeyAccount = "unlock-key-v1";
+    /// <summary>The wrapped master key of a phone set up before 2.12: read and removed, never written.</summary>
+    private const string LegacySlotAccount = "unlock-slot-v1";
 
     public bool IsAvailable
     {
@@ -45,45 +48,46 @@ internal sealed class KeychainUnlockKeyStore : IUnlockKeyStore
         }
     }
 
-    public bool IsEnrolled => ReadSlot() is not null && Exists(KeyAccount);
+    public bool IsEnrolled => Exists(SecretAccount) || (Exists(LegacyKeyAccount) && ReadLegacySlot() is not null);
 
-    public void Save(byte[] unlockKey, byte[] slot)
+    public void Save(byte[] secret)
     {
-        Forget();
+        // This store's own earlier secret goes (a renewal), the new one is added - the step a Keychain can refuse - and only then do an older
+        // version's two items go: a refusal leaves them, and with them the old way in, working.
+        Remove(SecretAccount);
         using var access = new SecAccessControl(SecAccessible.WhenPasscodeSetThisDeviceOnly, SecAccessControlCreateFlags.BiometryCurrentSet);
-        using (var keyData = NSData.FromArray(unlockKey))
-        using (var keyRecord = new SecRecord(SecKind.GenericPassword)
+        using var keyData = NSData.FromArray(secret);
+        using var keyRecord = new SecRecord(SecKind.GenericPassword)
         {
             Service = Service,
-            Account = KeyAccount,
+            Account = SecretAccount,
             Label = "Bee Memory Bank quick unlock",
             AccessControl = access,
             Synchronizable = false,
             ValueData = keyData,
-        })
-            Check(SecKeyChain.Add(keyRecord), "store the unlock key");
-
-        using var slotData = NSData.FromArray(slot);
-        using var slotRecord = new SecRecord(SecKind.GenericPassword)
-        {
-            Service = Service,
-            Account = SlotAccount,
-            Label = "Bee Memory Bank quick unlock",
-            Accessible = SecAccessible.WhenUnlockedThisDeviceOnly,
-            Synchronizable = false,
-            ValueData = slotData,
         };
-        Check(SecKeyChain.Add(slotRecord), "store the wrapped master key");
+        Check(SecKeyChain.Add(keyRecord), "store the quick-unlock secret");
+        RemoveLegacyItems();
     }
 
-    public byte[]? ReadSlot()
+    public byte[]? ReadLegacySlot()
     {
-        using var query = Query(SlotAccount);
+        using var query = Query(LegacySlotAccount);
         using var data = SecKeyChain.QueryAsData(query, false, out var status);
         return status == SecStatusCode.Success && data is not null ? data.ToArray() : null;
     }
 
-    public async Task<byte[]?> ReadUnlockKeyAsync(string reason)
+    public Task<byte[]?> ReadSecretAsync(string reason) => ReadBehindBiometryAsync(SecretAccount, reason);
+
+    public Task<byte[]?> ReadLegacyKeyAsync(string reason) => ReadBehindBiometryAsync(LegacyKeyAccount, reason);
+
+    public void Forget()
+    {
+        Remove(SecretAccount);
+        RemoveLegacyItems();
+    }
+
+    private static async Task<byte[]?> ReadBehindBiometryAsync(string account, string reason)
     {
         // The face or finger is asked for once, here; the same context then opens the item without a second prompt.
         using var context = new LAContext { LocalizedFallbackTitle = "" };
@@ -91,28 +95,33 @@ internal sealed class KeychainUnlockKeyStore : IUnlockKeyStore
         if (!ok) return null;
         return await Task.Run(() =>
         {
-            using var query = Query(KeyAccount);
+            using var query = Query(account);
             query.AuthenticationContext = context;
             using var data = SecKeyChain.QueryAsData(query, false, out var status);
             return status == SecStatusCode.Success && data is not null ? data.ToArray() : null;
         });
     }
 
-    public void Forget()
+    private static void RemoveLegacyItems()
     {
-        foreach (var account in new[] { KeyAccount, SlotAccount })
-        {
-            using var query = Query(account);
-            var status = SecKeyChain.Remove(query);
-            if (status != SecStatusCode.Success && status != SecStatusCode.ItemNotFound) Check(status, "remove the quick unlock");
-        }
+        Remove(LegacyKeyAccount);
+        Remove(LegacySlotAccount);
+    }
+
+    private static void Remove(string account)
+    {
+        using var query = Query(account);
+        var status = SecKeyChain.Remove(query);
+        if (status != SecStatusCode.Success && status != SecStatusCode.ItemNotFound) Check(status, "remove the quick unlock");
     }
 
     private static bool Exists(string account)
     {
-        // Asks only whether the item is there: no data is returned, so no Face ID prompt.
+        // Asks only whether the item is there, without a Face ID prompt. "Fail", not "Skip": with Skip iOS leaves out every item that
+        // needs Face ID, so the unlock key always looked missing - the quick unlock never counted as on, the unlock page offered no Face ID
+        // and iOS was never asked for it (found on the wife's iPhone 15 Pro, 15.11). With Fail such an item answers "interaction not allowed".
         using var query = Query(account);
-        query.AuthenticationUI = SecAuthenticationUI.Skip;
+        query.AuthenticationUI = SecAuthenticationUI.Fail;
         SecKeyChain.QueryAsRecord(query, out var status)?.Dispose();
         return status == SecStatusCode.Success || status == SecStatusCode.InteractionNotAllowed;
     }

@@ -89,11 +89,13 @@ public partial class ApiClient
     }
 
     /// <summary>Makes an invitation. The error is the Api's own sentence (it names what to fix: the address, the lifetime, a certificate).</summary>
-    public async Task<(BlindInviteIssuedDto? Invite, string? Error)> IssueBlindInviteAsync(string? label, string? sourceName, int lifetimeMinutes, string? address)
+    public async Task<(BlindInviteIssuedDto? Invite, string? Error)> IssueBlindInviteAsync(string? label, string? sourceName, int lifetimeMinutes, string? address,
+        string? ownership = null, Guid? ownerPersonId = null)
     {
         try
         {
-            var resp = await http.PostAsJsonAsync("/api/blind-nodes/invites/", new { label, sourceName, lifetimeMinutes, address, trust = "auto" }, JsonOpts);
+            var resp = await http.PostAsJsonAsync("/api/blind-nodes/invites/",
+                new { label, sourceName, lifetimeMinutes, address, trust = "auto", ownership, ownerPersonId }, JsonOpts);
             return resp.IsSuccessStatusCode
                 ? (await resp.Content.ReadFromJsonAsync<BlindInviteIssuedDto>(JsonOpts), null)
                 : (null, await ErrorSentenceAsync(resp));

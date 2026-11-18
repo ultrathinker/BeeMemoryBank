@@ -87,6 +87,10 @@ var joinSavedKeyOpt = new Option<bool>("--i-saved-the-key",
     "Confirm that you wrote down the recovery key this command prints. Without it the command asks on the terminal; " +
     "an unattended run with redirected stdin cannot answer, so the node stays gated, the first web sign-in shows a new " +
     "key (a second recovery slot) and asks again.");
+var joinLoginOpt = new Option<string?>("--login",
+    "Username on the remote node whose password you are entering (used when multiple superadmins share the same password).");
+var joinSharedOpt = new Option<bool>("--shared",
+    "Register this node as a shared server of the organisation instead of a personal device.");
 
 var joinCmd = new Command("join", "Join a node to an existing BeeMemoryBank network");
 joinCmd.AddOption(joinRemoteOpt);
@@ -97,6 +101,8 @@ joinCmd.AddOption(joinNameOpt);
 joinCmd.AddOption(joinAllowInsecureOpt);
 joinCmd.AddOption(joinHintOpt);
 joinCmd.AddOption(joinSavedKeyOpt);
+joinCmd.AddOption(joinLoginOpt);
+joinCmd.AddOption(joinSharedOpt);
 // One InvocationContext instead of nine handler parameters: this beta of System.CommandLine has no overload that wide.
 joinCmd.SetHandler(async (System.CommandLine.Invocation.InvocationContext context) =>
 {
@@ -111,7 +117,9 @@ joinCmd.SetHandler(async (System.CommandLine.Invocation.InvocationContext contex
     Environment.Exit(await JoinCommand.HandleAsync(data, parsed.GetValueForOption(joinRemoteOpt) ?? "", resolved!,
         parsed.GetValueForOption(joinNameOpt), parsed.GetValueForOption(joinAllowInsecureOpt),
         joinCode: parsed.GetValueForOption(joinCodeOpt), passwordHint: resolvedHint,
-        iSavedTheKey: parsed.GetValueForOption(joinSavedKeyOpt)));
+        iSavedTheKey: parsed.GetValueForOption(joinSavedKeyOpt),
+        login: parsed.GetValueForOption(joinLoginOpt),
+        shared: parsed.GetValueForOption(joinSharedOpt)));
 });
 root.AddCommand(joinCmd);
 
@@ -263,6 +271,19 @@ root.AddCommand(snapshotCmd);
 
 BlindCommand.AddTo(root, dataOption);
 
+// ─── bmb node rekey ─────────────────────────────────────────────────────────
+
+var nodeCmd = new Command("node", "This node's identity");
+var nodeRekeyReasonOption = new Option<string?>("--reason", "Why (kept in the audit log and the rotation event)");
+var nodeRekeyCmd = new Command("rekey", "Give this node a new identity key in place; it keeps its id, data and peers");
+nodeRekeyCmd.AddOption(nodeRekeyReasonOption);
+nodeRekeyCmd.SetHandler(async (reason) =>
+{
+    Environment.Exit(await NodeRekeyCommand.HandleAsync(reason));
+}, nodeRekeyReasonOption);
+nodeCmd.AddCommand(nodeRekeyCmd);
+root.AddCommand(nodeCmd);
+
 // ─── bmb dek-rotate ─────────────────────────────────────────────────────────
 
 var dekRotateCmd = new Command("dek-rotate", "DEK rotation management (Phase B6)");
@@ -337,7 +358,64 @@ userResetPasswordCmd.SetHandler(async (data, user, keyStdin, hint) =>
 
 var userCmd = new Command("user", "User management");
 userCmd.AddCommand(userResetPasswordCmd);
+
+// bmb user remove-superadmin (release 2.12.0): starts the removal process of a superadmin through the running node, with the acting
+// administrator's own password (a prompt with no echo, or --password-stdin; never an argument).
+var removeNameArg = new Argument<string>("name", "User name of the superadmin to remove");
+var removeDemoteOpt = new Option<string?>("--demote-to", "They stay as an ordinary user with this role at the end of the removal");
+var removeDeleteOpt = new Option<bool>("--delete", "The account is deleted at the end of the removal");
+var removeAsOpt = new Option<string?>("--as", "Your user name: the superadmin who removes them (your own password confirms it)");
+var removeOpenRoleOpt = new Option<bool>("--open-role", "With --demote-to an open role: yes, they may see everything that role sees");
+var removeFolderOpt = new Option<string[]>("--folder", "With --demote-to user: a folder id they may see (append ':ro' for read-only); repeat for more")
+    { AllowMultipleArgumentsPerToken = false };
+var removePasswordStdinOpt = new Option<bool>("--password-stdin", "Read your password from the first line of stdin");
+var userRemoveSuperadminCmd = new Command("remove-superadmin", "Start the removal of a superadmin (it cannot be cancelled once it starts)");
+userRemoveSuperadminCmd.AddArgument(removeNameArg);
+userRemoveSuperadminCmd.AddOption(removeDemoteOpt);
+userRemoveSuperadminCmd.AddOption(removeDeleteOpt);
+userRemoveSuperadminCmd.AddOption(removeAsOpt);
+userRemoveSuperadminCmd.AddOption(removeOpenRoleOpt);
+userRemoveSuperadminCmd.AddOption(removeFolderOpt);
+userRemoveSuperadminCmd.AddOption(removePasswordStdinOpt);
+userRemoveSuperadminCmd.SetHandler(async context =>
+{
+    var r = context.ParseResult;
+    Environment.Exit(await OffboardingCommand.RemoveSuperadminAsync(
+        r.GetValueForOption(dataOption)!, r.GetValueForArgument(removeNameArg), r.GetValueForOption(removeDemoteOpt), r.GetValueForOption(removeDeleteOpt),
+        r.GetValueForOption(removeAsOpt), r.GetValueForOption(removeOpenRoleOpt), r.GetValueForOption(removeFolderOpt), r.GetValueForOption(removePasswordStdinOpt)));
+});
+userCmd.AddCommand(userRemoveSuperadminCmd);
 root.AddCommand(userCmd);
+
+// ─── bmb offboarding ────────────────────────────────────────────────────────
+
+var offboardingCmd = new Command("offboarding", "The removal of a superadmin: where it stands, and running it on");
+var offboardingIdArg = new Argument<string?>("process-id", () => null, "The removal (all removals when left out)");
+var offboardingStatusCmd = new Command("status", "Where a removal stands and what it waits for");
+offboardingStatusCmd.AddArgument(offboardingIdArg);
+offboardingStatusCmd.SetHandler(async (data, id) =>
+{
+    Environment.Exit(await OffboardingCommand.StatusAsync(data, id));
+}, dataOption, offboardingIdArg);
+offboardingCmd.AddCommand(offboardingStatusCmd);
+
+var continueIdArg = new Argument<string>("process-id", "The removal to run on");
+var continueAsOpt = new Option<string?>("--as", "Your user name, when the review or the master-key change needs a superadmin");
+var continueAcceptReviewOpt = new Option<bool>("--accept-review", "Take the pre-selected choice of every review item still open, except the superadmins");
+var continueKeepOpt = new Option<string[]>("--keep", "Keep this review item (e.g. superadmin:12); repeat for several") { AllowMultipleArgumentsPerToken = false };
+var continuePasswordStdinOpt = new Option<bool>("--password-stdin", "Read your password from the first line of stdin");
+var offboardingContinueCmd = new Command("continue", "Run every step of a removal that can run now");
+offboardingContinueCmd.AddArgument(continueIdArg);
+offboardingContinueCmd.AddOption(continueAsOpt);
+offboardingContinueCmd.AddOption(continueAcceptReviewOpt);
+offboardingContinueCmd.AddOption(continuePasswordStdinOpt);
+offboardingContinueCmd.AddOption(continueKeepOpt);
+offboardingContinueCmd.SetHandler(async (data, id, actingUser, acceptReview, passwordStdin, keep) =>
+{
+    Environment.Exit(await OffboardingCommand.ContinueAsync(data, id, actingUser, acceptReview, passwordStdin, keep: keep));
+}, dataOption, continueIdArg, continueAsOpt, continueAcceptReviewOpt, continuePasswordStdinOpt, continueKeepOpt);
+offboardingCmd.AddCommand(offboardingContinueCmd);
+root.AddCommand(offboardingCmd);
 
 // ─── bmb vault ──────────────────────────────────────────────────────────────
 
@@ -381,6 +459,23 @@ activateCmd.SetHandler(async (data, passwordStdin, yes) =>
 }, dataOption, activatePasswordStdinOpt, activateYesOpt);
 syncCmd.AddCommand(activateCmd);
 root.AddCommand(syncCmd);
+
+var accountsHomeCmd = new Command("accounts-home", "View or set the network's single accounts node");
+var accountsHomeGetCmd = new Command("get", "Show the current accounts node");
+accountsHomeGetCmd.SetHandler(async (data) =>
+{
+    Environment.Exit(await AccountsHomeCommand.GetAsync(data));
+}, dataOption);
+var accountsHomeNodeIdOpt = new Option<Guid>("--node-id", "Node ID of the full node where accounts are managed") { IsRequired = true };
+var accountsHomeSetCmd = new Command("set", "Set the accounts node (takes effect once unlocked)");
+accountsHomeSetCmd.AddOption(accountsHomeNodeIdOpt);
+accountsHomeSetCmd.SetHandler(async (data, nodeId) =>
+{
+    Environment.Exit(await AccountsHomeCommand.SetAsync(data, nodeId));
+}, dataOption, accountsHomeNodeIdOpt);
+accountsHomeCmd.AddCommand(accountsHomeGetCmd);
+accountsHomeCmd.AddCommand(accountsHomeSetCmd);
+root.AddCommand(accountsHomeCmd);
 
 // A refusal of an encrypted folder is one sentence and exit code 1, not an unhandled exception.
 return await new CommandLineBuilder(root)

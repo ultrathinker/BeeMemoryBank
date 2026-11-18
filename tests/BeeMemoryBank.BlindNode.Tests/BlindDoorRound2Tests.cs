@@ -15,7 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The second round on the node's door (srvfix7, RV5-02, RV5-05, RV5-06): what a client that has not authenticated may hold, what an answer caused only by other requests'
+/// The second round on the node's door: what a client that has not authenticated may hold, what an answer caused only by other requests'
 /// reservations says, and a download that announces its length.
 /// </summary>
 public sealed class BlindDoorRound2Tests : IDisposable
@@ -58,7 +58,7 @@ public sealed class BlindDoorRound2Tests : IDisposable
         return false;
     }
 
-    // ── RV5-02: nobody who has not authenticated can hold the node's budget ──
+    // ── Nobody who has not authenticated can hold the node's budget ──
 
     [Fact]
     public async Task RV5_02_twenty_unauthenticated_trickling_posts_do_not_stop_an_authenticated_peers_pull()
@@ -253,7 +253,7 @@ public sealed class BlindDoorRound2Tests : IDisposable
         int.Parse(context.Response.Headers.RetryAfter.ToString()).Should().BeGreaterThan(3600);
     }
 
-    // ── RV5-05: a refusal caused only by other requests' reservations is a short busy answer ──
+    // ── A refusal caused only by other requests' reservations is a short busy answer ──
 
     [Fact]
     public async Task RV5_05_a_request_refused_only_because_others_hold_the_budget_is_told_to_come_back_soon_not_after_midnight()
@@ -281,7 +281,7 @@ public sealed class BlindDoorRound2Tests : IDisposable
         int.Parse(other.Response.Headers.RetryAfter.ToString()).Should().BeLessThanOrEqualTo(120);
     }
 
-    // ── RV5-06: a download that announces its length is judged when it announces it ──
+    // ── A download that announces its length is judged when it announces it ──
 
     [Fact]
     public async Task RV5_06_a_response_that_announces_more_than_the_day_has_left_is_refused_while_it_has_not_started()

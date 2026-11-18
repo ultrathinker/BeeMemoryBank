@@ -10,8 +10,8 @@ using BeeMemoryBank.Sync.Blind;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Fix round 2 of the limits: what the limits do when time, other accounts, other threads and untrusted lengths are in play. Every test here goes through the account's real HTTP pipeline
-/// (or the guard, for a decision) and states its expectation as an outcome, so that it can be run against the code of fix round 1 and fail there:
+/// What the limits do when time, other accounts, other threads and untrusted lengths are in play. Every test here goes through the account's real HTTP pipeline
+/// (or the guard, for a decision) and states its expectation as an outcome, so that it can be run against the earlier code and fail there:
 /// storage that is live (several blobs within one minute), usage files that exist and cannot be trusted (a damaged file is not a fresh budget), the decision and the charge as ONE step
 /// (two callers racing on the last request, two accounts racing on the device's last bytes), a stored size that cannot be measured (unknown is not zero), lengths nobody can trust
 /// (near <c>long.MaxValue</c>, missing, understated), reads that never pass a 256 KB check, request bodies counted by the writes that succeed, and sizes that overflow.

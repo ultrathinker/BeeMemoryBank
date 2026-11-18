@@ -15,7 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The repair of the server-side review of <c>bmb blind join</c> (srvfix6): a redemption whose answer is lost (R4-01), a wipe racing a join that waits for the full node (R4-02), the
+/// The repair of the server-side review of <c>bmb blind join</c>: a redemption whose answer is lost, a wipe racing a join that waits for the full node, the
 /// route gate and the file the join is kept in. Each test names the claim it pins; the stub hub is the one of <see cref="BlindJoinNodeTests"/>.
 /// </summary>
 [Collection(HeavyOperationCollection.Name)]
@@ -63,7 +63,7 @@ public sealed class BlindJoinRepairTests : IAsyncLifetime
         return (await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync())!;
     }
 
-    // ── R4-01: the redemption and the node's own record ───────────────────
+    // ── The redemption and the node's own record ───────────────────
 
     [Fact]
     public async Task R4_01_the_join_record_and_the_secret_are_on_disk_when_the_redemption_reaches_the_hub()
@@ -195,7 +195,7 @@ public sealed class BlindJoinRepairTests : IAsyncLifetime
         (await State.GetPairingSecretAsync()).Should().NotBeNull();
     }
 
-    // ── RV5-01: a refused REPEAT of a join whose answer was lost says nothing about the first request ──
+    // ── A refused REPEAT of a join whose answer was lost says nothing about the first request ──
 
     [Theory]
     [InlineData(410)]
@@ -225,7 +225,7 @@ public sealed class BlindJoinRepairTests : IAsyncLifetime
         view.GetProperty("state").GetString().Should().Be("awaiting");
     }
 
-    // ── R4-02: a wipe while a join waits for the hub ──────────────────────
+    // ── A wipe while a join waits for the hub ──────────────────────
 
     [Fact]
     public async Task R4_02_a_join_waiting_for_the_hub_when_the_node_is_wiped_writes_nothing_after_the_wipe()

@@ -201,7 +201,8 @@ public sealed class SealedRelay : ISealedRelay
 
         // The same domain-separated payload as the open node verifies, bound to OUR node id (SyncEndpoints.cs, M6); an unbound V1 signature is never honoured.
         var payload = "BMB-CHALLENGE-V2\0"u8.ToArray().Concat(serverNodeId.ToByteArray()).Concat(challengeBytes).ToArray();
-        if (!Ed25519Signer.Verify(peer.PublicKey, payload, signature))
+        // Authentication takes only the peer's CURRENT key: a retired key never opens a session (plan WS-D D1, the helper's current-key check).
+        if (!BeeMemoryBank.Sync.NodeEventVerifier.SignatureVerifies(peer.PublicKey, payload, signature))
         {
             _logger?.LogWarning("Relay auth 401 for {NodeId}: Ed25519 signature verify failed", req.NodeId);
             return Results.Unauthorized();
@@ -402,7 +403,9 @@ public sealed class SealedRelay : ISealedRelay
         }
 
         // 4. signature and the wire shape of the envelope
-        if (!Ed25519Signer.Verify(originator.PublicKey, EventSignature.BuildPayload(evt), evt.Signature))
+        // The mirror holds the current keys only, not the key history (plan WS-D D3): while the database is closed, an event of a key its author
+        // retired is refused here and reaches this node through the live sync once the database is open, where EventApplier applies the full rule.
+        if (!BeeMemoryBank.Sync.NodeEventVerifier.Verify(evt, originator.PublicKey, [], BeeMemoryBank.Sync.NodeKeyMode.Live))
         {
             _logger?.LogWarning("Relay refused event {EventId} from {NodeId}: invalid signature.", evt.EventId, evt.NodeId);
             return Receipt.Refused;
@@ -432,12 +435,33 @@ public sealed class SealedRelay : ISealedRelay
 
         if (!await HasCapacityForAsync(Encoding.UTF8.GetByteCount(evt.Payload), ct).ConfigureAwait(false)) return Receipt.InsufficientStorage;
 
-        // 6. a revoke or an update from an active superadmin suspends its target in the mirror (6.4), then the event is stored
+        // 6. a revoke or an update from an active superadmin suspends its target in the mirror (6.4), then the event is stored.
+        // A stale whitelist_revoke (older than the mirror row's membership version) must not suspend the target or purge its tokens/inbox.
         if (originator.IsSuperadmin && evt.EventType is EventTypes.WhitelistRevoke or EventTypes.WhitelistUpdate
             && TargetOf(evt) is { } target)
         {
-            await _mirror.SuspendAsync(target, ct);
-            _logger?.LogInformation("Relay suspended node {Target} in the whitelist mirror after event {EventId}.", target, evt.EventId);
+            if (evt.EventType == EventTypes.WhitelistRevoke)
+            {
+                var mirrorVersion = await _mirror.GetMembershipVersionAsync(target, ct);
+                var incoming = new RowVersion(evt.LamportTs, evt.NodeId);
+                if (mirrorVersion is { } current && ConflictResolver.IncomingWins(current, incoming))
+                {
+                    await _mirror.SuspendAsync(target, ct);
+                    _tokens.RevokeNode(target);
+                    await _inbox.DeleteForPeerAsync(target, ct);
+                    _logger?.LogInformation("Relay suspended node {Target} in the whitelist mirror after event {EventId}.", target, evt.EventId);
+                }
+                else
+                {
+                    _logger?.LogInformation("Relay skipped stale or unmirrored whitelist_revoke {EventId} for node {Target} (incoming ts={LamportTs}).",
+                        evt.EventId, target, evt.LamportTs);
+                }
+            }
+            else
+            {
+                await _mirror.SuspendAsync(target, ct);
+                _logger?.LogInformation("Relay suspended node {Target} in the whitelist mirror after event {EventId}.", target, evt.EventId);
+            }
         }
 
         // 7. stored with the pusher and its sequence number

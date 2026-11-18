@@ -3,7 +3,7 @@ using BeeMemoryBank.Core.Services;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// WP-12 integration coverage for <see cref="SearchService.SearchIndexedContentAsync"/>: the
+/// Integration coverage for <see cref="SearchService.SearchIndexedContentAsync"/>: the
 /// wiring between <c>IndexBuilder.SearchRanked</c>, <c>ArticleRepository.GetByIdsAsync</c>, and
 /// folder-scope ACL filtering (<c>ICallerScope.FilterArticles</c>). The BM25 ranking math itself is
 /// covered exhaustively (and independently hand-checked) by
@@ -11,7 +11,7 @@ namespace BeeMemoryBank.Core.Tests;
 /// prove <see cref="SearchService"/> hydrates and filters <c>IndexBuilder</c>'s results correctly.
 ///
 /// <para>
-/// This fixture does not run <c>PendingIndexProcessor</c> (WP-11's background indexer), so each
+/// This fixture does not run <c>PendingIndexProcessor</c> (the background indexer), so each
 /// test feeds <see cref="TestFixture.IndexBuilder"/> directly with the same plaintext it just wrote
 /// via <see cref="TestFixture.ArticleService"/> -- simulating what that background processor would
 /// eventually do, without depending on it.

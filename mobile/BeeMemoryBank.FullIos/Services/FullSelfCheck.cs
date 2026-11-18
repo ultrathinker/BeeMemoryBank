@@ -75,7 +75,9 @@ public static class FullSelfCheck
             using (var scope = services.CreateScope())
             {
                 sw.Restart();
-                var recovery = await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
+                var sp = scope.ServiceProvider;
+                var recovery = await PhoneOwner.IssueRecoveryKeyAsync(sp.GetRequiredService<KeyManagementService>(),
+                    await PhoneOwner.ForPasswordAsync(sp, Password), "self-check");
                 Report("recovery_key_ms", sw.ElapsedMilliseconds);
                 Report("recovery_key_chars", recovery.Length);
             }

@@ -4,7 +4,7 @@ using BeeMemoryBank.Core.Services.BlindPhone;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Fix round 2, the accounts host: an account that cannot be started, removed or added from an invitation says the KIND of the failure on its card, in the add result and in the exception the
+/// The accounts host: an account that cannot be started, removed or added from an invitation says the KIND of the failure on its card, in the add result and in the exception the
 /// removal throws - and nothing a head can show holds the path, the key alias, the address or the words that the underlying exception carried.
 /// </summary>
 public sealed class BlindAccountFailureTextTests : IDisposable

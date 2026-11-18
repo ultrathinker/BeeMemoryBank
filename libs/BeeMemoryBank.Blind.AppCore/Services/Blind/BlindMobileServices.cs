@@ -187,6 +187,7 @@ public static partial class BlindMobileServices
                 Reporter = sp.GetRequiredService<BlindPauseReporter>(),
                 Usage = sp.GetRequiredService<BlindUsageLedger>(),
                 Stored = sp.GetRequiredService<BlindStoredBytes>(),
+                Services = sp,
             })
             // A backup's body: the listening node's current signed package (fetched pinned and verified, not
             // installed), its signature and the phone's own logged events. Its header: the recovery set of

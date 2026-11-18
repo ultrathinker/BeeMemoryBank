@@ -79,8 +79,8 @@ public sealed class BlindPhonePairingService(
             {
                 // Log first, like every whitelist write: the row carries the version the mesh is told.
                 var version = await sp.GetRequiredService<IEventLogger>().LogWhitelistAddAsync(phone);
-                // An add writes every field of the row, and its membership.
-                phone.StampLocal(version, BeeMemoryBank.Sync.WhitelistEventConcerns.OfAdd);
+                // An add writes every field of the row it carries (Ownership only when known), and its membership.
+                phone.StampLocal(version, BeeMemoryBank.Sync.WhitelistEventConcerns.OfAddFor(phone));
                 if (existing is null) await whitelist.CreateAsync(phone);
                 else await whitelist.UpdateAsync(phone);
             }

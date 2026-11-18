@@ -51,7 +51,7 @@ BeeMemoryBank uses a LUKS-style multi-slot key system stored in `tbl_key_slot`:
 - Each key slot contains: Argon2id salt, wrapped Master DEK ciphertext, IV, and iteration parameters
 - Passwords can be added or changed without re-encrypting any article content
 - A sentinel value (`AES-256-GCM("BeeMemoryBank", masterDEK)`) is used to verify correct password entry
-- A `recovery` slot opens with a recovery key a superadmin issued and keeps offline. Besides unlocking from the command line, it lets the owner of a forgotten superadmin password set a new one **without signing in** (Sign In page → *Forgot your password? Use a recovery key*, or `bmb user reset-password`). That path is built so it can only help the owner: it opens `recovery` slots only and checks the sentinel; it is limited to superadmin accounts; every refusal (unknown user, ordinary user, wrong or foreign key) is one identical answer after identical Argon2id work; it is throttled per client address and per username and audited (`user_password_recovery_reset` / `_refused`, never the key); it replaces only that user's key slot and ends their web sessions and remote tokens; and it never unlocks the shared session or signs anyone in. Whoever holds a recovery key is as powerful as an administrator who knows the password — keep the key as carefully as the password. See [docs/account-recovery.md](docs/account-recovery.md). A **password hint** is a plaintext, node-local memory aid: it is shown on the anonymous sign-in page to anyone who types the username (rate limited), so the product's rule is that it must not contain the password or the username, and the create/change forms cannot be completed without one. Because a restart leaves the encrypted database closed, a derived copy of the hints is kept in `beememorybank.hints.json` beside the boot store: it holds each hint in clear and an HMAC-SHA-256 of the lower-cased user name under a random salt (never the names themselves), is rewritten from `tbl_user` at every unlock and close of an encrypted node, is not carried by a backup, and is readable by anyone who can read the data folder - the hint forms say so, and no hint may contain a secret.
+- A `recovery` slot opens with a recovery key a superadmin issued and keeps offline. Besides unlocking from the command line, it lets the owner of a forgotten superadmin password set a new one **without signing in** (Sign In page → *Forgot your password? Use a recovery key*, or `bmb user reset-password`). That path is built so it can only help the owner: it opens `recovery` slots only and checks the sentinel; it is limited to superadmin accounts and, since 2.12, a key resets only its **owner's** password — a key issued before 2.12 has no owner on record and keeps the older rule (any active superadmin); every refusal (unknown user, ordinary user, another superadmin who is not the key's owner, wrong or foreign key) is one identical answer after identical Argon2id work; it is throttled per client address and per username and audited (`user_password_recovery_reset` / `_refused`, never the key); it replaces only that user's key slot and ends their web sessions and remote tokens; and it never unlocks the shared session or signs anyone in. Whoever holds a recovery key can open the vault — keep the key as carefully as the password. Since 2.12 a recovery key is personal (its slot names its owner), and the Admin "Recovery keys" page lists and revokes keys; ownerless pre-2.12 keys, the un-migrated legacy `password` slot and ownerless agents form the unknown-owner set a removal revokes by default. See [docs/account-recovery.md](docs/account-recovery.md). A **password hint** is a plaintext, node-local memory aid: it is shown on the anonymous sign-in page to anyone who types the username (rate limited), so the product's rule is that it must not contain the password or the username, and the create/change forms cannot be completed without one. Because a restart leaves the encrypted database closed, a derived copy of the hints is kept in `beememorybank.hints.json` beside the boot store: it holds each hint in clear and an HMAC-SHA-256 of the lower-cased user name under a random salt (never the names themselves), is rewritten from `tbl_user` at every unlock and close of an encrypted node, is not carried by a backup, and is readable by anyone who can read the data folder - the hint forms say so, and no hint may contain a secret.
 
 ### Agent Key Encryption
 
@@ -69,8 +69,10 @@ API agent keys use a separate wrapping mechanism:
   already-decrypted content, not by the key material. An ordinary user's agent still authenticates
   and works normally whenever the vault is already unlocked by someone else; it just can't unlock
   it by itself, and a stolen database file yields nothing usable from its row alone. Demoting a
-  superadmin strips the wrapped DEK from every agent they own; a revoked agent's key material is
-  wiped regardless of the owner's role.
+  superadmin, or deleting any user, revokes every agent they own, deletes their remote API
+  tokens and — since 2.12 — revokes their recovery keys, in the same transaction as the change
+  (a demotion also deletes their key slot and writes the folders they may still see, and is refused
+  unless it says which); a revoked agent's key material is wiped regardless of the owner's role.
 
 ### Data at Rest
 
@@ -78,7 +80,7 @@ API agent keys use a separate wrapping mechanism:
 - Titles, folder paths/names, tag names, and timestamps are stored in plaintext — see [ADR-0005](docs/adr/0005-plaintext-metadata.md); on a full node this stays so after metadata encryption is switched on, while the event log and blind copies then hold them only sealed
 - Keys are never persisted in plaintext
 - The Master DEK exists only in memory during an active session
-- Since 2.6.0 the owner can also encrypt the database files themselves, per node, on purpose: see [Encrypted database](#encrypted-database-260-opt-in-per-node) below
+- Since 2.6.0 the database files themselves can be encrypted, per node; a node set up since 2.6.2 is encrypted from its first day, and a still-plain node encrypts itself after its next unlock (2.12): see [Encrypted database](#encrypted-database-260-per-node) below
 - Salt and wrapped key material are stored per-slot for offline brute-force resistance
 
 ### iPhone Regular App
@@ -87,7 +89,7 @@ The source-only iPhone regular app keeps the vault in its app container, exclude
 is never stored; the Master DEK exists only while the app is unlocked. Optional Face ID / Touch ID unlock uses a random key in the
 device-only Keychain, gated by the current biometric set, to wrap the DEK rather than storing the password. The app has no listener or
 server surface: it calls pinned peers while open and for the short time iOS grants as it leaves the foreground. The phones' own database
-encryption (2.6.0) is built and tested but stays hidden until its native release gate has been run on a device
+encryption (2.6.0) runs with no button since 2.12 — right after a create or a join — and has been checked on a real device
 ([docs/sealed-database.md](docs/sealed-database.md#phones)); neither phone ever hands a database key or a page key to the Keystore or the Keychain.
 
 ### Online DEK Rotation
@@ -108,7 +110,7 @@ hasn't upgraded past this change yet.
 **Initiator flow** (one superadmin, one node):
 
 1. **Propose** — verify the master password against the current DEK; generate a fresh 32-byte DEK; seal it into a per-peer X25519 envelope for every currently-trusted peer (a peer with an unusable/malformed identity key is excluded from this rotation rather than aborting it for everyone); emit a signed `dek_rotation_proposed` sync event.
-2. **Accept** — emit a signed `dek_rotation_commit` event referencing the proposed event; create a **pre-rotation snapshot** automatically (so the rotation is rollback-able to disk); verify the master password a second time before any destructive work; in a single SQLite transaction, walk every per-item DEK in `tbl_article_body` / `tbl_article_version` / `tbl_conflict_version` / `tbl_media` plus the embedding projection matrix, the node's own Ed25519 identity seed, the remote-account bearer tokens, and the node data keys (`tbl_node_data_key` — the key chat.db is sealed under, so AI-chat history, attachments and stored LLM provider keys survive the rotation; chat rows still sealed directly under the Master DEK are moved onto it first, and the rotation refuses to start if any remain), unwrap with the old DEK and re-wrap with the new one (a row already re-wrapped by a peer that raced ahead is recognized and left alone, rather than aborting the whole rotation); delete the `tbl_agent` rows that carry a wrapped Master DEK — superadmin-owned auto-unlock agents, whose wrap is keyed by an API key the server never stores and which a rotation treats as part of the retired key material (every other agent holds no key material and keeps working); re-wrap the initiator's key slot; update the sentinel and the monotonic `dek_epoch`. Atomicity guarantees the database is never left with a mix of old- and new-keyed rows that genuinely needed rewrapping. Then `SwapMasterDek` rolls the in-memory DEK over with a 2-second drain window for in-flight readers.
+2. **Accept** — emit a signed `dek_rotation_commit` event referencing the proposed event; create a **pre-rotation snapshot** automatically (so the rotation is rollback-able to disk); verify the master password a second time before any destructive work; in a single SQLite transaction, walk every per-item DEK in `tbl_article_body` / `tbl_article_version` / `tbl_conflict_version` / `tbl_media` plus the embedding projection matrix, the node's own Ed25519 identity seed, the remote-account bearer tokens, and the node data keys (`tbl_node_data_key` — the key chat.db is sealed under, so AI-chat history, attachments and stored LLM provider keys survive the rotation; chat rows still sealed directly under the Master DEK are moved onto it first, and the rotation refuses to start if any remain), unwrap with the old DEK and re-wrap with the new one (a row already re-wrapped by a peer that raced ahead is recognized and left alone, rather than aborting the whole rotation); seal every sealed (v2) door — superadmin passwords, recovery keys, OS/server auto-unlock, quick unlock and v2 auto-unlock agents — to the new DEK from its public key (2.12, the quiet rotation: nobody who stays has to do anything); delete the `tbl_agent` rows that still carry a v0/v1 wrapped Master DEK and v1 auto-unlock doors, which only their secret could re-seal; keep v1 password and recovery doors and, only while such a door exists, the chain (NEW under OLD) that lets it reach the new key (the "bridge", shown and removable on the Master key page); write the rotation's own retired link (OLD under NEW); re-seal the initiator's key slot; update the sentinel and the monotonic `dek_epoch`. Atomicity guarantees the database is never left with a mix of old- and new-keyed rows that genuinely needed rewrapping. Then `SwapMasterDek` rolls the in-memory DEK over with a 2-second drain window for in-flight readers.
 
 The HTTP `/accept` returns 202 immediately and the work runs in the background; the UI polls `/progress` for status.
 
@@ -117,7 +119,7 @@ The HTTP `/accept` returns 202 immediately and the work runs in the background; 
 - **Auto-accept = true** — the peer applies the rotation autonomously the moment the COMMIT event arrives. Strictly necessary checks (PROPOSED was delivered first, signature verifies against the originator's whitelisted public key, peer is not revoked) gate the auto-apply.
 - **Auto-accept = false** — the rotation lands in `tbl_dek_rotation_state` as `Committing`; the Admin UI surfaces a banner with **Apply** / **Reject — leave network** buttons. Reject permanently disconnects this node from the rotated network (its DEK now diverges from peers').
 
-**Lazy slot rewrap.** When a peer auto-applies a rotation, it deliberately preserves user key slots (only `recovery`-type slots are dropped); the initiator-side flow drops every other user slot. On the next login on the peer, `SessionService.UnlockAsync` detects a sentinel mismatch and walks the chain of `Applied` rotations in `tbl_dek_rotation_state` — at each step decrypting the next DEK with the previous one — until the candidate matches the current sentinel. The user's slot is then re-wrapped against the latest DEK using their existing KEK. Transparent: no password re-prompt, no admin intervention.
+**Lazy slot rewrap.** Since 2.12 every v2 door is re-sealed by the rotation itself; only a v1 password or recovery door (a straggler that has not been used since the update) is left holding an older key. On its next use, `SessionService.UnlockAsync` detects a sentinel mismatch and walks the chain of `Applied` rotations in `tbl_dek_rotation_state` — at each step decrypting the next DEK with the previous one — until the candidate matches the current sentinel. The user's slot is then re-written as a sealed (v2) door against the latest DEK. Transparent: no password re-prompt, no admin intervention.
 
 **Sentinel mismatch does not block sync.** When two nodes' Master DEKs differ (a peer rotated, this node hasn't applied yet), the sync layer logs a warning and continues pulling events anyway — otherwise the COMMIT event that would bring the node back into sync could never be delivered (catch-22).
 
@@ -147,6 +149,39 @@ open the new envelope even if it already held the old DEK.
 
 **A rotation is also not safe on a mesh where anyone writes during it** — see the `dek_epoch` note in [docs/encryption.md](docs/encryption.md); a peer that receives a post-rotation article before it applies the rotation cannot afterwards apply that rotation at all.
 
+### Removing a superadmin (2.12)
+
+Taking superadmin rights away, or deleting a superadmin, is a process ([ADR 0014](docs/adr/0014-people-and-shared-nodes.md)), never
+one call: the API, the Users page and `bmb user remove-superadmin` all start it, with the acting administrator's own password and an
+explicit end (deleted, or an ordinary user with folders chosen now). Its first step, in one transaction on the node that holds the
+accounts, makes the account "being removed": no sign-in, no rights, no new door, no password reset with a recovery key; every browser
+session of the person ends; their password door, recovery keys, agents (with the auto-unlock doors they carried), remote tokens,
+invitations and personal devices go; a `person_removed` tombstone is published, which every full node enforces for ever, also after
+a restore and at the first sync after a join. Later steps change the identity keys of the accounts node and of every shared full node
+(the accounts node re-keys itself and asks the shared nodes with a signed request only it may send; a node seed copied before is then
+useless: it opens no sync session and an event it signs is refused), take the person's doors off those nodes (the accounts node
+publishes the list of superadmins without them; each shared node confirms it applied the list and keeps no superadmin door of its own;
+the list goes out only from the accounts node, and the step says so when that is another node), review everything the person created
+or that has no owner on record (pre-selected "remove"; what the person did is read from the audit log, which keeps 90 days by default,
+so older actions are not marked - every superadmin, device and key is listed all the same), and rotate the master key on every full
+node; the account is deleted or demoted only at the end. A blind copy is never waited for. A node that keeps its identity key outside
+its database cannot be given a new one: the removal names it, and it has to be paired again as a new node or revoked.
+
+What stays open while a step waits, and what the process cannot close: until the rotation, a copy of the database or the master key the
+person already took still opens the data of that time; a snapshot or a database copy from before the removal keeps that data readable for
+whoever holds it (the rotation only makes sure it opens nothing NEW, and a restore of such a snapshot is refused); v1 doors of people
+who stay reach the new key through the bridge until they sign in or the bridge is removed (the close lists the nodes that keep one);
+and nothing in the bank can change passwords the person knew outside it (hosting accounts, backup storage) - the close reminds you.
+Until the shared nodes apply the new list, the person's door there still opens that node's database with their password (sign-in and
+joins are refused from the first step). A node that a step waits for is waited for or revoked; there is no way to skip a step or to
+cancel after the first one.
+
+If the accounts node itself is lost, a superadmin on a shared node revokes it and takes the removal over there; that node becomes the
+accounts node (only a node where a superadmin has an account of their own can be one, so a superadmin who holds only a copy of the lost
+node's list gets it as their own account with the password they prove). One take-over at a time: it is refused while another node
+drives the removal or is the accounts node already. If two happened anyway, revoke the stale accounts node and set the accounts node
+again on the one that stays ([ADR 0014](docs/adr/0014-people-and-shared-nodes.md)).
+
 ## Trust Model
 
 Read this before you invite a second node onto your network. See also [docs/sync.md](docs/sync.md#trust-model)
@@ -158,6 +193,8 @@ for the same picture from the sync layer's side.
 
 A joiner whose join fails after the node answered it can take its row back with `POST /api/join/abort`. It is authorised by the same master password (the same check, so the same slots and the same superadmin rule), is rate-limited like the join, and can remove only the never-synced row of that attempt: the node id with the key the join used, active, recorded within the last hour, with no sync position, never the node's own or a blind id. The removal is a signed `whitelist_revoke` that the mesh applies like an admin's. Anyone holding the master password could already revoke that row as a superadmin, so the route grants nothing new; it only gives the joiner, which has no session, a way to do it for its own failed attempt. It logs an audit entry `join_aborted` without any secret.
 
+Every join that succeeds is written to the audit log as `node_joined` (a repeat with the same key as `re-joined`): the node id, the name it gave (one printable line of at most 100 characters), and whose password opened the door, that is the user whose key slot it unwrapped (a legacy slot from before the user table has no user, and the entry says so). Never the password, the slot's bytes or a key. A recovery key that is issued (`POST /api/keys/add-recovery`) is written as `recovery_key_issued` and one that is revoked (its slot deleted) as `recovery_key_revoked`, each with the slot, its **owner** (or "owner unknown" for a pre-2.12 key) and the person who did it, never the key; revoking the un-migrated legacy password slot is `legacy_slot_revoked` and revoking an ownerless agent is `agent_deleted`; a snapshot taken away is `snapshot_downloaded` (see [docs/snapshot-restore.md](docs/snapshot-restore.md#on-the-record)).
+
 The new peer is stored with `is_superadmin = 1`: whoever knows the master password is a superadmin (a deliberate decision). The password already hands over the DEK, so withholding the flag protected nothing and only split the mesh — such a node applied its own hard delete or password-change notice locally while every peer refused the event. A blind node (NodeId with the blind mark) is never a superadmin and is refused by `/api/join`. `EventApplier` consults the flag before applying the cluster-state-modifying event types — `whitelist_add`, `whitelist_revoke`, `whitelist_update`, `hard_delete`, `restore_network` and `master_password_changed` — and rejects one signed by a peer whose flag is unset. Concretely, only a node whose `is_superadmin` bit is set on the *receiving* node's own whitelist row can:
 
 - **Revoke another peer.** A `whitelist_revoke` event it signs is applied by every node that receives it and accepts it. A node never revokes *itself* on a remote event, so the revoked peer keeps its own copy of the vault — but every other node stops accepting its events, which is the same thing as being cut out.
@@ -166,7 +203,21 @@ The new peer is stored with `is_superadmin = 1`: whoever knows the master passwo
 
 So a device that joined only to read notes can also revoke any other peer, hard-delete content network-wide, or trigger a destructive restore. If that is not wanted for a particular device, demote it (below); the web, CLI and mobile join flows all apply the same rule (`JoinAuthority`).
 
-A node's Ed25519 identity key is pinned to its NodeId at join and there is no way to rotate it: every peer verifies signatures against the public key stored in its own whitelist row, and nothing accepts a replacement for an existing NodeId. So if a node's *identity* key is believed compromised — as distinct from the master password or the DEK — the only remedy is a new NodeId, which means wiping that node and rejoining it. Revoking the old NodeId is what stops the compromised key being useful; it does not give the machine a way back under the same identity.
+A node's Ed25519 identity key is pinned to its NodeId at join: every peer verifies signatures against the public key
+stored in its own whitelist row. Since 2.12 a node whose *identity* key is believed compromised — as distinct from the
+master password or the DEK — can **change that key in place** (Admin → Node identity key, `bmb node rekey`), keeping its
+NodeId, its data and its devices, through a signed `node_key_rotated` event with a key history (`tbl_node_key_history`)
+so old events still verify and devices that were away follow the signed transition chain ([ADR 0013](docs/adr/0013-identity-rekey.md)).
+Every signature is checked by one rule: an event a retired key signed after its rotation is refused unless it is the
+node's own listed event from before the rotation, and a node that received unlisted ones raises an attention flag
+(`retired_key_unacknowledged_events`, acknowledged on the identity page). Two competing new keys for one node are an
+**identity conflict**: its events are refused until another superadmin device confirms the right key. A re-key is
+refused while any active peer has not updated (`identity-rekey-v1`) and never runs during a key rotation or an offline
+re-key; a node whose seed lives outside its database (a phone, a blind node) cannot re-key in place and is paired again
+or revoked. A removal re-keys the accounts node and the shared nodes as its identity step. The `keep-identity` restore
+mode is gone, so a restore cannot bring a retired key back. Before 2.12 the only remedy was a new NodeId — wiping the
+node and rejoining it; revoking the old NodeId is still what stops a compromised key being useful on a peer that has not
+updated.
 
 Authority is granted the same deliberate way it is taken away: `PUT /api/whitelist/{nodeId}/superadmin` (Admin → Trusted Nodes) sets or clears `is_superadmin`, and the flag travels in a `whitelist_update` event so the whole mesh agrees. Demoting removes the three powers above without cutting the peer off from content; promoting gives them back (and is how a peer recorded before that rule gets them). Two limits are worth knowing. Each node enforces the flag from *its own* whitelist row, so a change that reaches only some nodes only takes effect on those nodes — and a node running a build older than this feature ignores the flag entirely and keeps treating every peer as it always has. The affected node itself is not told: it has no whitelist row for itself, so its own UI still offers actions that every other node may now reject (or, for a promotion issued by a node that is not itself superadmin anywhere else, that no other node will ever accept in the first place — see [docs/sync.md](docs/sync.md#trust-model) for which workflows that touches). Revoking (`DELETE /api/whitelist/{nodeId}`) remains the answer for a peer you no longer want syncing at all.
 
@@ -329,10 +380,13 @@ rotation, a network restore and the switch are refused. Unwrapped metadata keys 
 lock; a node that cannot open any key refuses to write rather than write in clear. No log line carries a title, path,
 tag or name from a sealed event (a test scans the logs of the whole sealed path for canaries).
 
-### Encrypted database (2.6.0, opt-in per node)
+### Encrypted database (2.6.0, per node)
 
-Off until the owner presses "Encrypt this node" (Admin → Database encryption, or `bmb vault seal`); no update, start, join or restore
-encrypts anything by itself. The operator guide is [docs/sealed-database.md](docs/sealed-database.md); the design is
+A node set up since 2.6.2 is encrypted from its first day (setup, `bmb init`, a join, the restore wizard). A node set up
+by an earlier version that is still plain **encrypts itself** since 2.12: right after the next unlock, once the network
+has metadata encryption on, the same migration runs in the background (`AutoSealService`, one attempt per unlock, no
+button; `bmb vault seal` remains for the command line). Phones do the same right after a create or a join. A restore
+never produces an unencrypted node. The operator guide is [docs/sealed-database.md](docs/sealed-database.md); the design is
 [docs/design/step-b-spec.md](docs/design/step-b-spec.md).
 
 What it protects against: a stolen disk, a copied data folder, a backup of it, or a cloud snapshot of the volume. The vault and chat
@@ -361,6 +415,11 @@ that opens them. `bmb vault verify` is the check after a restore.
 Every consequence above still follows from one credential, just not in a single step anymore. Anyone who has the master password can stand up their own node and join — none of which requires access to any machine you own — and from there read and write every article, exactly as any other synced peer can. Because a join is recorded as a superadmin, they can also revoke your peers, hard-delete your content everywhere, or restore the entire mesh to a snapshot of their choosing. Guard the master password accordingly; if it leaks, change it on every device and revoke any node you do not recognise. `/api/join` is also one of the few endpoints that has to be reachable through a reverse proxy (see [docs/deployment.md](docs/deployment.md)), so it is exposed on purpose.
 
 Treat the master password as a root credential shared by every machine in the mesh, and note two things about changing it. Key slots are node-local — `tbl_key_slot` is neither synced nor included in a join snapshot — so a password change applies to the one node you made it on; every other node still accepts the old password at its own `/api/join`. And changing it does not evict a node that already holds the Master DEK, because the DEK itself is unchanged: that needs a revoke, plus a DEK rotation if the DEK may have leaked.
+
+**The shared-node exception (2.12):** on a node marked `shared`, the superadmins' doors arrive as a replicated list
+from the accounts node, so a password change made there follows to every shared node, and a shared node accepts the
+current superadmins' usual passwords at sign-in and at `/api/join`. A removal takes the person off that list, and every
+shared node deletes their mirror and door in one transaction. Personal devices keep the node-local rule above.
 
 ### "Lock" is advisory
 

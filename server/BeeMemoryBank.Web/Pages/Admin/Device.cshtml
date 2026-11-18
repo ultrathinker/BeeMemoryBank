@@ -17,15 +17,19 @@
 }
 
 @section About {
-    <p>
-        One device of this network. The top says who it is (its ID and public key), how this node reaches it right now, and lets you revoke it. <strong>Ways to reach it</strong>
-        lists every address this node knows for it, with where each came from and when it last worked; the one that worked last is tried first, and an address of a network
-        this computer is not on is not tried at all. <strong>Rights</strong> decide what the device may do without asking you.
-    </p>
-    <p>
-        <strong>Revoking is not eviction.</strong> It stops this network accepting the device, but a device that already holds the vault key still holds it. To
-        lock such a device out for good, revoke it and then <a href="/Admin/DekRotation">rotate the data key</a>.
-    </p>
+    <p>One of your devices: how it is doing, and how to remove it.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            One device of this network. The top says who it is (its ID and public key), how this node reaches it right now, and lets you revoke it. <strong>Ways to reach it</strong>
+            lists every address this node knows for it, with where each came from and when it last worked; the one that worked last is tried first, and an address of a network
+            this computer is not on is not tried at all. <strong>Rights</strong> decide what the device may do without asking you.
+        </p>
+        <p>
+            <strong>Revoking is not eviction.</strong> It stops this network accepting the device, but a device that already holds the vault key still holds it. To
+            lock such a device out for good, revoke it and then <a href="/Admin/DekRotation">rotate the data key</a>.
+        </p>
+    </details>
 }
 
 <p class="devices-back"><sl-button size="small" variant="text" href="@AdminRoutes.Devices"><sl-icon slot="prefix" name="arrow-left"></sl-icon> All devices</sl-button></p>
@@ -136,8 +140,11 @@ else
             @if (blind.Alarms.Contains("stale_baseline"))
             {
                 <sl-alert variant="warning" open style="margin-top:8px;">
-                    This blind node's restore point is more than a week old. A restore from it would replay everything since. A new one is made
-                    by a computer that holds the vault key; use Reseed once one of them has been running for a while.
+                    This blind node&rsquo;s restore point is more than a week old.
+                    <details class="admin-more">
+                        <summary>More details</summary>
+                        <p>A restore from it would replay everything since. A new one is made by a computer that holds the vault key; use Reseed once one of them has been running for a while.</p>
+                    </details>
                 </sl-alert>
             }
             @if (blind.Alarms.Contains("silent"))
@@ -169,10 +176,11 @@ else
                     <span title="This node held no position for the blind node's log, and took the point where the log starts as its own.">Adopted checkpoint @adopted</span>
                 }
             </div>
-            <p class="text-muted text-sm" style="margin:8px 0;">
-                It keeps an encrypted copy of this network and cannot read it. A blind node is called at the address from its pairing; to change it, pair it again.
-                Reseed sends it a fresh copy.
-            </p>
+            <p class="text-muted text-sm" style="margin:8px 0;">It keeps an encrypted copy of this network and cannot read it.</p>
+            <details class="admin-more">
+                <summary>More details</summary>
+                <p>A blind node is called at the address from its pairing; to change it, pair it again. Reseed sends it a fresh copy.</p>
+            </details>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <form data-busy="long" data-busy-title="Reseeding the blind node" method="post" asp-page-handler="Reseed">
                     <sl-button type="submit" size="small"><sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Reseed</sl-button>
@@ -185,8 +193,11 @@ else
     {
         <div class="card" id="ways-to-reach">
             <h3 class="devices-card-title"><sl-icon name="signpost-split"></sl-icon> Ways to reach it</h3>
-            <p class="text-muted text-sm" style="margin:0 0 12px;">Every address this node knows for this device: the one on record, the ones the device announced about itself,
-                the ones seen on this network, and the ones typed here. The one that worked last is tried first; an address of a network this computer is not on is not tried.</p>
+            <p class="text-muted text-sm" style="margin:0 0 12px;">Addresses where this computer looks for the device.</p>
+            <details class="admin-more">
+                <summary>More details</summary>
+                <p>Every address this node knows for this device: the one on record, the ones the device announced about itself, the ones seen on this network, and the ones typed here. The one that worked last is tried first; an address of a network this computer is not on is not tried.</p>
+            </details>
             @if (Model.Channels is { Channels.Count: > 0 } channels)
             {
                 <div class="device-table-wrap">
@@ -265,6 +276,35 @@ else
 
     <div class="card" id="device-rights">
         <h3 class="devices-card-title"><sl-icon name="shield-check"></sl-icon> Rights</h3>
+        <div class="device-right">
+            @{
+                var ownChoice = BeeMemoryBank.Web.Pages.Admin.DevicesModel.OwnershipChoiceValue(entry);
+            }
+            <span>
+                <strong>Ownership:</strong>
+                @(entry.Ownership == "shared"
+                    ? "shared infrastructure"
+                    : entry.Ownership == "personal"
+                        ? $"personal ({entry.OwnerLabel ?? "assigned"})"
+                        : "unassigned")
+                @if (entry.NeedsReview)
+                {
+                    <sl-badge variant="warning" pill>needs review</sl-badge>
+                }
+            </span>
+            <form data-busy="short" method="post" asp-page-handler="SetPeerOwnership" style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:8px;">
+                <select name="choice" class="form-control" style="max-width:240px;">
+                    <option value="shared" selected="@(ownChoice == "shared")">Shared infrastructure</option>
+                    @foreach (var user in Model.Users)
+                    {
+                        var val = $"personal:{user.PersonId}";
+                        var label = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Username : user.DisplayName;
+                        <option value="@val" selected="@(ownChoice == val)">Personal: @label</option>
+                    }
+                </select>
+                <sl-button type="submit" size="small" id="btn-save-ownership">Save ownership</sl-button>
+            </form>
+        </div>
         <div class="device-right">
             <span><strong>Superadmin:</strong> @(entry.IsSuperadmin ? "yes" : "no")</span>
             @* A blind node can never be promoted (the Api refuses it too); demoting one stays possible. *@
@@ -351,9 +391,11 @@ else
     <sl-dialog id="dlg-change-url" label="Change internet address">
         <form data-busy="short" method="post" asp-page-handler="ChangeNodeAddress" class="sl-form">
             <p id="change-url-node-name" style="margin:0 0 16px;color:var(--text-secondary);"></p>
-            <p id="change-url-announce" class="text-muted text-sm" style="margin:0 0 16px;">
-                The new address is announced to the other nodes only when this node is a superadmin of the network. On any other node the other nodes refuse the change and keep the old address.
-            </p>
+            <p id="change-url-announce" class="text-muted text-sm" style="margin:0 0 16px;">Other devices accept the new address only from a superadmin.</p>
+            <details class="admin-more">
+                <summary>More details</summary>
+                <p>The new address is announced to the other nodes only when this node is a superadmin of the network. On any other node the other nodes refuse the change and keep the old address.</p>
+            </details>
             <div style="margin-bottom:16px;">
                 <sl-input id="change-url-input" name="newApiAddress" label="New API Address" placeholder="https://example.com" required></sl-input>
             </div>
@@ -373,10 +415,11 @@ else
         <sl-dialog id="dlg-hub" label="Let blind copies call this node">
             <form data-busy="short" method="post" asp-page-handler="SetBlindCallable" class="sl-form">
                 <p id="hub-node-name" style="margin:0 0 12px;color:var(--text-secondary);"></p>
-                <p class="text-muted text-sm" style="margin:0 0 16px;">
-                    A blind copy (the Windows, macOS or Android app) never listens: it calls a node over https. Choose how it should trust
-                    this node's certificate. This server checks the address and the certificate before it saves anything.
-                </p>
+                <p class="text-muted text-sm" style="margin:0 0 16px;">Choose how encrypted copies should check this computer&rsquo;s certificate.</p>
+                <details class="admin-more">
+                    <summary>More details</summary>
+                    <p>A blind copy (the Windows, macOS or Android app) never listens: it calls a node over https. Choose how it should trust this node's certificate. This server checks the address and the certificate before it saves anything.</p>
+                </details>
                 <div id="hub-address-row" style="margin-bottom:16px;">
                     <sl-input id="hub-address" name="address" label="Address (https)" placeholder="https://bmb.example.org"
                               help-text="Replaces this node's address for every device in the network."></sl-input>
@@ -389,20 +432,28 @@ else
                     </sl-select>
                 </div>
                 <sl-alert id="hub-help-public-ca" variant="primary" open style="margin-bottom:16px;">
-                    Use this for a node behind a reverse proxy with a real certificate. A blind copy accepts only a certificate that a public
+                    For a server behind a proxy with a regular certificate.
+                    <details class="admin-more">
+                        <summary>More details</summary>
+                        <p>Use this for a node behind a reverse proxy with a real certificate. A blind copy accepts only a certificate that a public
                     authority vouches for, issued for exactly this name. Because anyone a public authority can be made to issue a certificate for
                     this name to could impersonate the node to a blind copy, "Pinned certificate" is stronger. Make sure the proxy forwards
-                    <code>/api/sync/</code> and <code>/api/blind/replica</code> to this node (see the Internet Access guide).
+                    <code>/api/sync/</code> and <code>/api/blind/replica</code> to this node (see the Internet Access guide).</p>
+                    </details>
                 </sl-alert>
                 <sl-alert id="hub-help-pin" variant="warning" open style="margin-bottom:16px;display:none;">
-                    Use this for a node with a certificate of its own. This server connects once, reads the key the node presents and pins it:
-                    every device then accepts only that key for this node. That key is taken on trust from this one connection, so compare it
-                    with the key the node shows for itself if you can (paste it below). A certificate from a public authority that is renewed
-                    with a new key breaks the pin; use "Normal certificate" for those.
+                    For a server with a certificate of its own. This is the safer choice.
+                    <details class="admin-more">
+                        <summary>More details</summary>
+                        <p>Use this for a node with a certificate of its own. This server connects once, reads the key the node presents and pins it: every device then accepts only that key for this node. That key is taken on trust from this one connection, so compare it with the key the node shows for itself if you can (paste it below). A certificate from a public authority that is renewed with a new key breaks the pin; use "Normal certificate" for those.</p>
+                    </details>
                 </sl-alert>
                 <sl-alert id="hub-help-off" variant="neutral" open style="margin-bottom:16px;display:none;">
-                    Blind copies can no longer be paired to call this node. Copies that are already paired keep calling it until it stops
-                    answering them; revoke a lost copy from its own page.
+                    Encrypted copies can no longer be paired to call this node.
+                    <details class="admin-more">
+                        <summary>More details</summary>
+                        <p>Copies that are already paired keep calling it until it stops answering them; revoke a lost copy from its own page.</p>
+                    </details>
                 </sl-alert>
                 <div id="hub-pin-row" style="margin-bottom:16px;display:none;">
                     <sl-input name="expectedPin" label="Expected key pin (optional)" placeholder="43 characters" autocomplete="off"></sl-input>

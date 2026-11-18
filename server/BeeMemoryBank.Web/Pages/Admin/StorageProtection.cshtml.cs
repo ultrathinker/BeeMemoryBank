@@ -5,10 +5,11 @@ using Microsoft.AspNetCore.Mvc;
 namespace BeeMemoryBank.Web.Pages.Admin;
 
 /// <summary>
-/// Database encryption (docs/design/step-b-spec.md 10.1, 11; BMB-305): the state of the node's database and what can be done about it. While the database is a
-/// plain file the page offers "Encrypt this node" with its preflight and its erase of unencrypted copies; once it is encrypted there is nothing left to switch on and
-/// the page is the status of the node's storage protection, which on a server also holds the switch "Start unlocked after a restart" with its two steps. The page is
-/// called "Database encryption" in both states (the index says the same: a person who clicks it lands on a page of that name). (Whether a desktop opens by itself is <c>/Admin/OsAutoUnlock</c>.) Every change asks for the master password again.
+/// Database encryption (docs/design/step-b-spec.md 10.1, 11; BMB-305): the state of the node's database. An old plain database encrypts ITSELF after the unlock,
+/// with no button: the page says so in one plain sentence, names a blocker or a failure as one calm line, and keeps the erase of unencrypted copies.
+/// Once it is encrypted there is nothing left to switch on and the page is the status of the node's storage protection, which on a server also holds the switch
+/// "Start unlocked after a restart" with its two steps. The page is called "Database encryption" in both states (the index says the same: a person who clicks it
+/// lands on a page of that name). (Whether a desktop opens by itself is <c>/Admin/OsAutoUnlock</c>.) Every change asks for the master password again.
 /// </summary>
 public class StorageProtectionModel(ApiClient api) : AdminPageModel(api)
 {
@@ -30,7 +31,7 @@ public class StorageProtectionModel(ApiClient api) : AdminPageModel(api)
     /// <summary>The words of a blocker, and where in them the name of the Admin section stands (-1: it is not named).</summary>
     public static int SectionAt(string message) => message.IndexOf(ActivationSection, StringComparison.Ordinal);
 
-    /// <summary>Follows "Encrypt this node" while it runs, and walks the two steps of the server switch.</summary>
+    /// <summary>Follows the self-encryption while it runs, and walks the two steps of the server switch.</summary>
     public override IReadOnlyList<string> PageScripts => ["/js/pages/vault-encryption.js"];
 
     /// <summary>What the node says about its database (docs/design/step-b-spec.md 6.7); null when it did not answer.</summary>
@@ -40,6 +41,9 @@ public class StorageProtectionModel(ApiClient api) : AdminPageModel(api)
 
     /// <summary>True when the node says it is encrypting right now: the page then only follows the progress.</summary>
     public bool Running => VaultStatus?.Migration?.Phase == "running";
+
+    /// <summary>The last failure of the self-encryption, in one calm line; null when there is none.</summary>
+    public string? AutoSealNote => VaultStatus?.AutoSealNote;
 
     /// <summary>The role of this node (spec 11.0): <c>server</c> sets whether it opens by itself here; a <c>desktop</c> does it on the page OS Auto-Unlock.</summary>
     public string Role => VaultStatus?.AutoUnlock?.Role ?? "server";
@@ -51,16 +55,6 @@ public class StorageProtectionModel(ApiClient api) : AdminPageModel(api)
         // While the node encrypts it is in maintenance mode and answers only the status and the progress.
         if (!VaultStatus.IsSealed && !Running) Preflight = await Api.GetSealPreflightAsync();
         if (!Running && Role == "server") ServerAutoUnlock = await Api.GetServerAutoUnlockAsync();
-    }
-
-    public async Task<IActionResult> OnPostSealAsync(string? password)
-    {
-        if (string.IsNullOrEmpty(password))
-            return Back(err: "Enter the master password to encrypt this node.");
-        var (ok, error) = await Api.StartSealAsync(password);
-        return ok
-            ? Back(msg: "Encrypting the database. This page follows it; do not close the node.")
-            : Back(err: error);
     }
 
     public async Task<IActionResult> OnPostEraseAsync(string? password, string[]? paths)

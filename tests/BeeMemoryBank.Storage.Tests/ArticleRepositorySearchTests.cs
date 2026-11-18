@@ -7,7 +7,7 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
-/// Differential tests for the WP-04 perf refactor of ArticleRepository.SearchAsync and
+/// Differential tests for the perf refactor of ArticleRepository.SearchAsync and
 /// SearchByEmbeddingAsync: both methods were rewritten to stop materializing full/duplicated
 /// Article rows (with the embedding_projection BLOB) as an intermediate step, but must return
 /// the exact same result *set* (and, for the embedding search, the same ranked order) as before.

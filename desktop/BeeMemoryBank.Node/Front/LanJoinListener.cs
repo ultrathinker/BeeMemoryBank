@@ -73,6 +73,7 @@ public sealed class LanJoinListener : IAsyncDisposable
     private readonly Func<X509Certificate2?> _certificate;
     private readonly TimeProvider _time;
     private readonly Action<IPAddress?>? _joined;
+    private readonly Action? _finished;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private bool _open;       // the join surface is up on the host (guarded by _gate)
@@ -89,30 +90,39 @@ public sealed class LanJoinListener : IAsyncDisposable
     /// <param name="apiUrl">The Api child's loopback URL the joins are forwarded to.</param>
     /// <param name="certificate">The node's TLS leaf (the one the Connect page pins).</param>
     /// <param name="endpoint">Where to listen.</param>
-    public LanJoinListener(string apiUrl, Func<X509Certificate2?> certificate, IPEndPoint endpoint, TimeProvider time)
+    public LanJoinListener(string apiUrl, Func<X509Certificate2?> certificate, IPEndPoint endpoint, TimeProvider time, Action? finished = null)
         : this(new LanListener(apiUrl ?? throw new ArgumentNullException(nameof(apiUrl)), () => null,
                 certificate ?? throw new ArgumentNullException(nameof(certificate)),
                 new FixedBindPlanner((endpoint ?? throw new ArgumentNullException(nameof(endpoint))).Address), endpoint.Port),
-            certificate, time, joined: null, ownsHost: true)
+            certificate, time, joined: null, ownsHost: true, finished)
     {
     }
 
     /// <param name="host">The node's LAN listener: the door is its join surface.</param>
     /// <param name="certificate">The node's TLS leaf (the one the Connect page pins).</param>
     /// <param name="joined">Told the local address a join came in on, once it succeeded: the network a device was paired on is trusted (decision D1).</param>
-    public LanJoinListener(LanListener host, Func<X509Certificate2?> certificate, TimeProvider time, Action<IPAddress?>? joined = null)
-        : this(host, certificate, time, joined, ownsHost: false)
+    /// <param name="finished">Told once the joined device has its snapshot (the join really completed): the node turns "Show this node to
+    /// devices in my network" on by itself then, after the download, never mid-stream.</param>
+    public LanJoinListener(LanListener host, Func<X509Certificate2?> certificate, TimeProvider time, Action<IPAddress?>? joined = null, Action? finished = null)
+        : this(host, certificate, time, joined, ownsHost: false, finished)
     {
     }
 
-    private LanJoinListener(LanListener host, Func<X509Certificate2?> certificate, TimeProvider time, Action<IPAddress?>? joined, bool ownsHost)
+    private LanJoinListener(LanListener host, Func<X509Certificate2?> certificate, TimeProvider time, Action<IPAddress?>? joined, bool ownsHost, Action? finished = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _certificate = certificate ?? throw new ArgumentNullException(nameof(certificate));
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _joined = joined;
+        _finished = finished;
         _ownsHost = ownsHost;
     }
+
+    /// <summary>A join through this door is between its successful <c>/api/join</c> and the end of its snapshot download: the
+    /// setting's auto-on is left to the finish callback then, so the switch never closes the door mid-stream. Once the snapshot
+    /// is served the callback has run, and a later join notice may act at once.</summary>
+    public bool JoinUnderway =>
+        Current is not null && Volatile.Read(ref _tokenState) == (int)TokenState.Spent;
 
     /// <summary>The open session, or null when the listener is off.</summary>
     public LanJoinSession? Current => Volatile.Read(ref _session);
@@ -203,6 +213,9 @@ public sealed class LanJoinListener : IAsyncDisposable
             _expiry = _time.CreateTimer(_ => _ = CloseFinishedAsync(finished), null, AbortGrace, Timeout.InfiniteTimeSpan);
         }
         finally { _gate.Release(); }
+        // The join really completed (the device has its snapshot): the node may show itself on the network now.
+        try { _finished?.Invoke(); }
+        catch { /* the setting is a convenience; the join itself succeeded */ }
     }
 
     private async Task CloseFinishedAsync(LanJoinSession finished)

@@ -9,10 +9,15 @@ using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.Infrastructure.AutoUnlock;
 
-/// <summary>The open step <c>StaleServerSlot</c> (docs/design/step-b-spec.md 11.2, order 50, every open): deletes a stale server slot of a sealed node at the first unlock.</summary>
+/// <summary>
+/// The open step <c>StaleServerSlot</c> (docs/design/step-b-spec.md 11.2, order 150, every open): deletes a stale server slot of a sealed node at
+/// the first unlock. It reads <c>tbl_key_slot</c> with the columns of the current schema, so it runs after the migrations step (order 100): the
+/// first open of a database written by an older release still has the old columns until the migrations ran (a 2.10 node updated to 2.12 failed
+/// every sign-in with "no such column: door_version" while this step ran at order 50).
+/// </summary>
 public sealed class StaleServerSlotOpenStep(ServerAutoUnlockService service) : IVaultOpenStep
 {
-    public const int StepOrder = 50;
+    public const int StepOrder = 150;
 
     public int Order => StepOrder;
 
@@ -75,6 +80,8 @@ public static class ServerAutoUnlockServiceCollectionExtensions
             sp.GetService<ILogger<ServerAutoUnlockService>>(),
             sp.GetService<IServerKeyFileStore>()));
         services.TryAddSingleton<IServerAutoUnlockLocalState>(sp => sp.GetRequiredService<ServerAutoUnlockService>());
+        // ADR 0012: an armed v1 server slot is sealed again as a v2 door after an unlock (with its enable record).
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IUnlockedDoorUpgrade, ServerAutoUnlockService>(sp => sp.GetRequiredService<ServerAutoUnlockService>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IVaultOpenStep, StaleServerSlotOpenStep>());
         services.TryAddEnumerable(ServiceDescriptor.Scoped<INodeResetHook, ServerAutoUnlockResetHook>());
         if (startAtHostStart) services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ServerAutoUnlockStartup>());

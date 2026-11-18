@@ -105,7 +105,7 @@ public static class VaultVerifier
             {
                 KeyDerivation.ValidateUntrustedParameters(door.ArgonMemory.Value, door.ArgonIterations.Value, door.ArgonParallelism.Value);
                 kek = KeyDerivation.DeriveKek(password, door.Salt, door.ArgonMemory.Value, door.ArgonIterations.Value, door.ArgonParallelism.Value);
-                return MasterKeyManager.UnwrapMasterDek(door.EncryptedMasterDek, door.Iv, kek);
+                return Doors.OpenBootDoor(door, kek);
             }
             catch (CryptographicException)
             {
@@ -143,18 +143,22 @@ public static class VaultVerifier
     {
         var have = doors.Where(d => !d.Pending).Select(d => d.ContentSha256).ToHashSet(StringComparer.Ordinal);
         using var connection = SealedSqlite.OpenKeyed(vaultPath, vaultKey, readOnly: true, busyTimeoutSeconds: 5);
-        foreach (var s in await connection.QueryAsync<(long SlotId, string SlotType, byte[] Wrapped, byte[] Iv, byte[]? Salt, long? Mem, long? It, long? Par)>(
-                     "SELECT slot_id, slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot ORDER BY slot_id"))
+        // A set from before migration 046 has no door columns: every door there is a v1 door, hashed as before (ADR 0012).
+        var doorColumns = await connection.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM pragma_table_info('tbl_key_slot') WHERE name = 'door_version'") > 0;
+        var slotDoor = doorColumns ? "door_version, door_public_key" : "1, NULL";
+        var agentDoor = doorColumns ? "door_public_key" : "NULL";
+        foreach (var s in await connection.QueryAsync<(long SlotId, string SlotType, byte[] Wrapped, byte[] Iv, byte[]? Salt, long? Mem, long? It, long? Par, long Version, byte[]? Pk)>(
+                     $"SELECT slot_id, slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, {slotDoor} FROM tbl_key_slot ORDER BY slot_id"))
         {
-            var hash = BootDoorHash.OfSlot(s.SlotId, s.SlotType, s.Wrapped, s.Iv, s.Salt, (int?)s.Mem, (int?)s.It, (int?)s.Par);
+            var hash = BootDoorHash.OfSlot(s.SlotId, s.SlotType, s.Wrapped, s.Iv, s.Salt, (int?)s.Mem, (int?)s.It, (int?)s.Par, (int)s.Version, s.Pk);
             if (!have.Contains(hash))
                 return VaultVerifyResult.Failed(DoorCheck, $"The boot store has no door for the key slot #{s.SlotId} ({s.SlotType}): that way of opening this node does not work while it is closed.");
         }
-        foreach (var a in await connection.QueryAsync<(long Id, string KeyHash, byte[]? Salt, long? Kdf, byte[] Dek, byte[] Iv)>(
-                     @"SELECT id, key_hash, salt, kdf_version, encrypted_dek, dek_iv FROM tbl_agent
+        foreach (var a in await connection.QueryAsync<(long Id, string KeyHash, byte[]? Salt, long? Kdf, byte[] Dek, byte[] Iv, byte[]? Pk)>(
+                     $@"SELECT id, key_hash, salt, kdf_version, encrypted_dek, dek_iv, {agentDoor} FROM tbl_agent
                        WHERE encrypted_dek IS NOT NULL AND dek_iv IS NOT NULL AND status = 'A' ORDER BY id"))
         {
-            var hash = BootDoorHash.OfAgent(a.Id, a.KeyHash, (int?)a.Kdf, a.Salt, a.Dek, a.Iv);
+            var hash = BootDoorHash.OfAgent(a.Id, a.KeyHash, (int?)a.Kdf, a.Salt, a.Dek, a.Iv, a.Pk);
             if (!have.Contains(hash))
                 return VaultVerifyResult.Failed(DoorCheck, $"The boot store has no door for the auto-unlock agent #{a.Id}: its key cannot open this node while it is closed.");
         }

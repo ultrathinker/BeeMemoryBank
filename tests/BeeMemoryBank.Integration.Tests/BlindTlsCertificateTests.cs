@@ -5,7 +5,7 @@ using BeeMemoryBank.Api.Services;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The blind node's TLS certificate file (review release-a #8, PFX half): written whole or not at all, never
+/// The blind node's TLS certificate file: written whole or not at all, never
 /// silently replaced, and a damaged one is named in a clear error instead of a raw CryptographicException.
 /// </summary>
 public class BlindTlsCertificateTests : IDisposable

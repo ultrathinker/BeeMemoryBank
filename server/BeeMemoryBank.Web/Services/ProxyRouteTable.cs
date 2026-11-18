@@ -203,6 +203,9 @@ public static class ProxyRouteTable
         ["users/me/password-hint"] = new("/api/users/me/password-hint", [new("POST", null)]),
         ["users"] = new("/api/users",
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin), new("PUT", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
+        // The removal of a superadmin (release 2.12.0): the Users page starts one and follows it.
+        ["offboarding"] = new("/api/offboarding",
+            [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin)]),
         ["restrictions"] = new("/api/restrictions",
             [new("GET", UserRoles.Superadmin), new("POST", UserRoles.Superadmin), new("PATCH", UserRoles.Superadmin), new("DELETE", UserRoles.Superadmin)]),
         ["roles"] = new("/api/roles",

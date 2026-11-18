@@ -3,7 +3,7 @@ using Dapper;
 
 namespace BeeMemoryBank.Storage.Tests;
 
-/// <summary>WP-15: correctness tests for tbl_article_chunk_embedding's repository.</summary>
+/// <summary>Correctness tests for tbl_article_chunk_embedding's repository.</summary>
 public class ArticleChunkEmbeddingRepositoryTests : IAsyncLifetime
 {
     private DbConnectionFactory _factory = null!;

@@ -3,9 +3,13 @@ using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Mobile.Controls;
+using BeeMemoryBank.Mobile.Localization;
+using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Sync;
 using Indiko.Maui.Controls.Markdown.Theming;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Maui.Layouts;
 
 namespace BeeMemoryBank.Mobile.Pages;
 
@@ -16,11 +20,10 @@ public partial class ArticleDetailPage : ContentPage
     private Guid _parsedId;
     private string _rawContent = "";
     private bool _showingRaw = false;
-    // Phase-1 data-loss guard: a protected article's body is a passphrase-encrypted BMBENC1 blob.
-    // The mobile app has no unlock UI yet, so we show a read-only placeholder and block editing —
-    // otherwise the user would edit/overwrite the ciphertext and destroy the data on next sync.
+    // A protected article's body is a passphrase-encrypted BMBENC1 blob: it is unwrapped
+    // on-device after the passphrase is entered, never edited as ciphertext.
     private bool _isProtected = false;
-    private string? _protectedBlob; // the BMBENC1 body; unwrapped on-device after the user enters the passphrase
+    private string? _protectedBlob; // the BMBENC1 body; decrypted locally after the user enters the passphrase
     // The passphrase verified by this page's unlock; opens and seals the protected article's comments.
     private string? _unlockedPassphrase;
     private CancellationTokenSource? _cts;
@@ -52,7 +55,31 @@ public partial class ArticleDetailPage : ContentPage
         _services = services;
         // Native markdown rendering (no WebView): avoids the hardware-accelerated WebView GL
         // crash on old GPUs, the blank-render in a ScrollView, and the auto-height problems.
-        ContentMarkdown.Theme = MarkdownThemeDefaults.Dark;
+        ApplyMarkdownTheme();
+        if (Application.Current is { } app) app.RequestedThemeChanged += OnRequestedThemeChanged;
+        ConceptTagsLayout.ShowAllRequested += OnShowAllTagsRequested;
+    }
+
+    // The "+N" chip of the one-line tag row: a bottom sheet with every tag as wrapping chips, titled
+    // with the tag count. A chip in the sheet behaves like a chip in the line (it opens nothing).
+    private async void OnShowAllTagsRequested(object? sender, EventArgs e)
+    {
+        var tags = ConceptTagsLayout.Tags;
+        if (tags.Count == 0) return;
+        // A wrap layout of our own measures each chip at its whole width and wraps whole chips, so the
+        // first row is never cut into "#alph" the way a FlexLayout squeezed it. No FlexLayout here.
+        var wrap = new WrapLayout { Spacing = 8 };
+        foreach (var tag in tags)
+            wrap.Children.Add(TagLine.CreateChip(tag, new Thickness(0)));
+        await BottomSheet.ShowAsync(this, wrap, AppStrings.Format("TagsCountFormat", tags.Count));
+    }
+
+    private void OnRequestedThemeChanged(object? sender, AppThemeChangedEventArgs e) => ApplyMarkdownTheme();
+
+    private void ApplyMarkdownTheme()
+    {
+        ContentMarkdown.Theme = ThemeManager.Effective == AppTheme.Light ? MarkdownThemeDefaults.Light : MarkdownThemeDefaults.Dark;
+        ContentMarkdown.ApplyAppFonts();
     }
 
     private bool _appearedBefore;
@@ -100,15 +127,15 @@ public partial class ArticleDetailPage : ContentPage
             }
             if (article == null)
             {
-                await DisplayAlert("Error", "Article not found.", "OK");
+                await AppDialog.AlertAsync(this, AppStrings.Get("ErrorTitle"), AppStrings.Get("ArticleNotFound"));
                 await Shell.Current.GoToAsync("..");
                 return;
             }
 
             Title = article.Title;
-            TitleLabel.Text = (article.Protected ? "🔒 " : "") + article.Title;
+            TitleLabel.Text = article.Title;
             PathLabel.Text = article.TreePath;
-            UpdatedLabel.Text = article.UpdatedAt.ToString("yyyy-MM-dd HH:mm");
+            UpdatedLabel.Text = ContentFormat.FullDate(article.UpdatedAt);
 
             TitleLabel.IsVisible = true;
 
@@ -116,7 +143,7 @@ public partial class ArticleDetailPage : ContentPage
             if (ct.IsCancellationRequested) return;
             if (conceptTags.Count > 0)
             {
-                BindableLayout.SetItemsSource(ConceptTagsLayout, conceptTags);
+                ConceptTagsLayout.SetTags(conceptTags);
                 ConceptTagsLayout.IsVisible = true;
             }
 
@@ -131,16 +158,21 @@ public partial class ArticleDetailPage : ContentPage
                 _protectedBlob = content; // keep the encrypted blob; decrypted locally after Unlock
                 if (!string.IsNullOrWhiteSpace(article.ProtectionHint))
                 {
-                    LockHintLabel.Text = "💡 Hint: " + article.ProtectionHint;
+                    LockHintLabel.Text = AppStrings.Format("ProtectedHintFormat", article.ProtectionHint);
+                    LockHintLabel.IsVisible = true;
+                }
+                else
+                {
+                    LockHintLabel.Text = AppStrings.Get("EnterArticlePassword");
                     LockHintLabel.IsVisible = true;
                 }
                 // Show the unlock card; the content stays hidden until the passphrase is entered.
                 LockCard.IsVisible = true;
-                EnsureRemovePasswordItem(true);
+                PasswordItem.Text = AppStrings.Get("RemovePassword");
             }
             else
             {
-                EnsureRemovePasswordItem(false);
+                PasswordItem.Text = AppStrings.Get("SetPassword");
                 _rawContent = content;
 
                 var mediaService = scope.ServiceProvider.GetService<MediaService>();
@@ -169,7 +201,7 @@ public partial class ArticleDetailPage : ContentPage
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            RenderContent($"**Error loading content:** {ex.Message}");
+            RenderContent($"**{AppStrings.Get("ErrorLoadingContent")}:** {ex.Message}");
             ContentCard.IsVisible = true;
         }
         finally
@@ -183,7 +215,7 @@ public partial class ArticleDetailPage : ContentPage
     private void UpdateRelatedView()
     {
         int total = _relatedAll.Count;
-        RelatedHeaderLabel.Text = $"Related Articles ({total})";
+        RelatedHeaderLabel.Text = $"{AppStrings.Get("RelatedTitle")} ({total})";
         BindableLayout.SetItemsSource(RelatedArticlesList, _relatedAll.Take(_relatedShown).ToList());
 
         bool hasMore = _relatedShown < total;
@@ -219,6 +251,16 @@ public partial class ArticleDetailPage : ContentPage
         }
     }
 
+    // busy-exempt: opens the folder of the article in the tree, nothing is sent
+    private async void OnPathChipTapped(object? sender, TappedEventArgs e)
+    {
+        var path = PathLabel.Text;
+        if (string.IsNullOrEmpty(path) || path == "/")
+            await Shell.Current.GoToAsync("//tree");
+        else
+            await Shell.Current.GoToAsync($"treeFolder?path={Uri.EscapeDataString(path)}");
+    }
+
     private void OnToggleViewClicked(object? sender, EventArgs e)
     {
         _showingRaw = !_showingRaw;
@@ -227,13 +269,13 @@ public partial class ArticleDetailPage : ContentPage
             ContentMarkdown.IsVisible = false;
             ContentRawLabel.Text = _rawContent;
             ContentRawLabel.IsVisible = true;
-            ToggleViewItem.Text = "MD";
+            ToggleViewItem.Text = AppStrings.Get("ShowRendered");
         }
         else
         {
             ContentRawLabel.IsVisible = false;
             ContentMarkdown.IsVisible = true;
-            ToggleViewItem.Text = "Raw";
+            ToggleViewItem.Text = AppStrings.Get("ShowRaw");
         }
     }
 
@@ -251,7 +293,7 @@ public partial class ArticleDetailPage : ContentPage
                 var content = await mediaService.GetContentAsync(mediaId);
                 if (content == null)
                 {
-                    markdown = markdown.Replace(match.Value, $"*[Image unavailable: {match.Groups[1].Value}]*");
+                    markdown = markdown.Replace(match.Value, $"*{AppStrings.Format("ImageUnavailableFormat", match.Groups[1].Value)}*");
                     continue;
                 }
                 var (data, contentType, _) = content.Value;
@@ -261,32 +303,15 @@ public partial class ArticleDetailPage : ContentPage
             }
             catch (Exception)
             {
-                markdown = markdown.Replace(match.Value, $"*[Image: {match.Groups[1].Value}]*");
+                markdown = markdown.Replace(match.Value, $"*{AppStrings.Format("ImageUnavailableFormat", match.Groups[1].Value)}*");
             }
         }
         return markdown;
     }
 
-    // Strip non-data: image links and dangerous raw HTML before native rendering. Articles can be
-    // authored on any peer; without this an external image (e.g. ![](http://attacker/pixel.png))
-    // would be auto-fetched by the native Image control, leaking the reader's IP/read-activity and
-    // defeating the E2E privacy of the vault. Media is already inlined as data: URIs upstream.
-    private static readonly Regex _externalImage =
-        new(@"!\[([^\]]*)\]\(\s*(?!data:)[^)]*\)", RegexOptions.Compiled);
-    private static readonly Regex _dangerousHtml =
-        new(@"<\s*/?\s*(script|iframe|object|embed|form|meta|link|style|base)\b[^>]*>",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    private static string SanitizeMarkdown(string markdown)
-    {
-        markdown = _externalImage.Replace(markdown, "*[external image removed]*");
-        markdown = _dangerousHtml.Replace(markdown, string.Empty);
-        return markdown;
-    }
-
     private void RenderContent(string markdown)
     {
-        ContentMarkdown.MarkdownText = SanitizeMarkdown(markdown);
+        ContentMarkdown.MarkdownText = ContentFormat.SanitizeMarkdown(markdown);
     }
 
     // Through CommentService, not the repository: comments are encrypted with the article's key,
@@ -301,9 +326,12 @@ public partial class ArticleDetailPage : ContentPage
             // A protected article's comments are sealed under its passphrase too; without the
             // unlock they read as CommentService.LockedText.
             try { c.Text = await commentSvc.DecryptTextAsync(c, _unlockedPassphrase); }
-            catch (Exception) { c.Text = "[cannot decrypt this comment]"; }
+            catch (Exception) { c.Text = AppStrings.Get("CommentDecryptError"); }
         }
-        CommentsList.ItemsSource = comments.OrderBy(c => c.CreatedAt).ToList();
+        var ordered = comments.OrderBy(c => c.CreatedAt).ToList();
+        BindableLayout.SetItemsSource(CommentsList, ordered);
+        NoCommentsLabel.IsVisible = ordered.Count == 0;
+        CommentsHeaderLabel.Text = AppStrings.Format("CommentsFormat", ordered.Count);
     }
 
     private async void OnAddCommentClicked(object? sender, EventArgs e)
@@ -321,24 +349,24 @@ public partial class ArticleDetailPage : ContentPage
 
             CommentEntry.Text = "";
             await LoadCommentsAsync(_parsedId, scope.ServiceProvider);
-        }, new BusyOptions { FailureTitle = "Error" });
+        }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
     }
 
     private async void OnDeleteCommentClicked(object? sender, EventArgs e)
     {
-        if (sender is not Button btn) return;
-        if (btn.BindingContext is not Comment comment) return;
+        if ((sender as Button)?.CommandParameter is not Comment comment) return;
 
-        bool confirmed = await DisplayAlert("Delete Comment", "Delete this comment?", "Delete", "Cancel");
+        bool confirmed = await AppDialog.ConfirmAsync(this, AppStrings.Get("DeleteCommentTitle"), AppStrings.Get("DeleteCommentDesc"),
+            AppStrings.Get("Delete"), AppStrings.Get("Cancel"), danger: true);
         if (!confirmed) return;
 
-        await BusyAction.RunAsync(btn, async () =>
+        await BusyAction.RunAsync(sender as Button, async () =>
         {
             using var scope = _services.CreateScope();
             await scope.ServiceProvider.GetRequiredService<CommentService>().DeleteAsync(comment.Id);
 
             await LoadCommentsAsync(_parsedId, scope.ServiceProvider);
-        }, new BusyOptions { FailureTitle = "Error" });
+        }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
     }
 
     private async void OnUnlockClicked(object? sender, EventArgs e)
@@ -365,7 +393,7 @@ public partial class ArticleDetailPage : ContentPage
         }
         catch (System.Security.Cryptography.CryptographicException)
         {
-            UnlockErrorLabel.Text = "Wrong password.";
+            UnlockErrorLabel.Text = AppStrings.Get("WrongArticlePassword");
             UnlockErrorLabel.IsVisible = true;
             return;
         }
@@ -383,7 +411,7 @@ public partial class ArticleDetailPage : ContentPage
         _showingRaw = false;
         ContentRawLabel.IsVisible = false;
         ContentMarkdown.IsVisible = true;
-        ToggleViewItem.Text = "Raw";
+        ToggleViewItem.Text = AppStrings.Get("ShowRaw");
 
         var rendered = plaintext;
         try
@@ -413,35 +441,24 @@ public partial class ArticleDetailPage : ContentPage
     // busy-exempt: opens the edit page, nothing is sent and nothing waits
     private async void OnEditClicked(object? sender, EventArgs e)
     {
-        // Protected articles are now editable on mobile: the edit page unlocks (or reuses the handoff
+        // Protected articles are editable on mobile: the edit page unlocks (or reuses the handoff
         // passphrase) and re-wraps on save.
         await Shell.Current.GoToAsync($"articleEdit?id={_parsedId}");
     }
 
-    // "Remove password" lives in the ⋮ overflow next to Delete, shown only for protected articles.
-    private ToolbarItem? _removePasswordItem;
-    private void EnsureRemovePasswordItem(bool show)
+    // The ⋮ menu's password entry: remove the protection of a protected article, or open the
+    // editor to set one on a plain article (the mock-up's "set a password").
+    private async void OnPasswordClicked(object? sender, EventArgs e)
     {
-        if (show)
+        if (!_isProtected)
         {
-            if (_removePasswordItem == null)
-            {
-                _removePasswordItem = new ToolbarItem { Text = "Remove password", Order = ToolbarItemOrder.Secondary };
-                _removePasswordItem.Clicked += OnRemovePasswordClicked;
-            }
-            if (!ToolbarItems.Contains(_removePasswordItem)) ToolbarItems.Add(_removePasswordItem);
+            await Shell.Current.GoToAsync($"articleEdit?id={_parsedId}");
+            return;
         }
-        else if (_removePasswordItem != null && ToolbarItems.Contains(_removePasswordItem))
-        {
-            ToolbarItems.Remove(_removePasswordItem);
-        }
-    }
 
-    private async void OnRemovePasswordClicked(object? sender, EventArgs e)
-    {
-        var pass = await DisplayPromptAsync("Remove password",
-            "Enter the article password to remove its protection. The article will become readable without a password.",
-            accept: "Remove", cancel: "Cancel", placeholder: "Password");
+        var pass = await this.ShowInputPopupAsync(AppStrings.Get("RemovePasswordTitle"), AppStrings.Get("RemovePasswordDesc"),
+            accept: AppStrings.Get("Remove"), cancel: AppStrings.Get("Cancel"),
+            placeholder: AppStrings.Get("ArticlePasswordPlaceholder"), isPassword: true);
         if (string.IsNullOrEmpty(pass)) return;
 
         // The one busy helper (BMB-311): the menu entry is off and says it is working; a failure is said in full in a dialog.
@@ -460,14 +477,30 @@ public partial class ArticleDetailPage : ContentPage
             }
             catch (System.Security.Cryptography.CryptographicException)
             {
-                await DisplayAlert("Wrong password", "The password is incorrect.", "OK");
+                await AppDialog.AlertAsync(this, AppStrings.Get("WrongPasswordTitle"), AppStrings.Get("WrongPasswordDesc"));
             }
-        }, new BusyOptions { FailureTitle = "Error" });
+        }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
+    }
+
+    private async void OnMoveClicked(object? sender, EventArgs e)
+    {
+        var destination = await MoveSheet.ShowAsync(this, _services);
+        if (destination is null) return;
+
+        await BusyAction.RunAsync(sender as BindableObject, async () =>
+        {
+            using var scope = _services.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<ArticleService>().MoveAsync(_parsedId, destination);
+            _cts = new CancellationTokenSource();
+            await LoadAsync(_parsedId, _cts.Token, isInitial: false);
+        }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
     }
 
     private async void OnDeleteClicked(object? sender, EventArgs e)
     {
-        bool confirmed = await DisplayAlert("Delete", "Delete this article?", "Delete", "Cancel");
+        // What the core does: a soft delete that syncs to every device; the trash can restore it.
+        bool confirmed = await AppDialog.ConfirmAsync(this, AppStrings.Get("DeleteArticleTitle"), AppStrings.Get("DeleteArticleDesc"),
+            AppStrings.Get("Delete"), AppStrings.Get("Cancel"), danger: true);
         if (!confirmed) return;
 
         await BusyAction.RunAsync(sender as BindableObject, async () =>
@@ -476,7 +509,7 @@ public partial class ArticleDetailPage : ContentPage
             var articleSvc = scope.ServiceProvider.GetRequiredService<ArticleService>();
             await articleSvc.DeleteAsync(_parsedId);
             await Shell.Current.GoToAsync("..");
-        }, new BusyOptions { FailureTitle = "Error" });
+        }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
     }
 
     protected override void OnAppearing()
@@ -522,7 +555,7 @@ public partial class ArticleDetailPage : ContentPage
 
                 await LoadAsync(_parsedId, _cts.Token, isInitial: false);
                 syncNotify.ClearPendingUpdates();
-            }, new BusyOptions { FailureTitle = "Sync" });
+            }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
         }
         finally
         {

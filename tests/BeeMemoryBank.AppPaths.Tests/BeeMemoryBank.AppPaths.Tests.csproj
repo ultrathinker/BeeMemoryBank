@@ -22,7 +22,7 @@
     <Using Include="FluentAssertions" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Windows-ACL facts and helpers (review release-a #7): one source in tests/shared. -->
+    <!-- Windows-ACL facts and helpers: one source in tests/shared. -->
     <Compile Include="..\shared\WindowsAcl.cs" Link="Shared\WindowsAcl.cs" />
     <!-- Step B red tests: the key walk, real sealed and plain files, platform-specific facts, one source in tests/shared. -->
     <Compile Include="..\shared\KeyGraphWalker.cs" Link="Shared\KeyGraphWalker.cs" />

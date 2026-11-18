@@ -12,7 +12,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// The sources of Admin -> Dream (package U2, plan 3.9) against the settings contract of plan 3.8: the script names every field of
 /// <see cref="DreamSettingsUpdateRequest"/> and no field it does not have, the ranges it checks before sending and the defaults it shows
 /// while the endpoints are not there yet equal <see cref="DreamSettings"/>' own, and every element the script touches exists on the page.
-/// The real save and its out-of-range refusal arrive with the Dream service (P0b) on these same names and ranges.
+/// The real save and its out-of-range refusal arrive with the Dream service on these same names and ranges.
 /// </summary>
 public sealed class DreamSettingsPageSourceTests
 {
@@ -218,7 +218,7 @@ public sealed class DreamSettingsPageTests : IAsyncLifetime
     public async Task TheSettingsSave_WithThePageToken_AndFiftyAdvicePerNightIsKept()
     {
         var settings = await _admin.GetAsync("/api-proxy/dream/settings");
-        settings.StatusCode.Should().Be(HttpStatusCode.OK, "the Dream service (P0b) is merged");
+        settings.StatusCode.Should().Be(HttpStatusCode.OK, "the Dream service is merged");
         var current = JsonSerializer.Deserialize<JsonElement>(await settings.Content.ReadAsStringAsync());
 
         (await _admin.GetAsync("/api-proxy/dream/rules")).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -252,6 +252,6 @@ public sealed class DreamSettingsPageTests : IAsyncLifetime
         saved.StatusCode.Should().Be(HttpStatusCode.OK, await saved.Content.ReadAsStringAsync());
 
         var after = JsonSerializer.Deserialize<JsonElement>(await _admin.GetStringAsync("/api-proxy/dream/settings"));
-        after.GetProperty("maxAdviceScheduled").GetInt32().Should().Be(50, "the owner asked that 50 advice a night be possible");
+        after.GetProperty("maxAdviceScheduled").GetInt32().Should().Be(50, "50 advice a night must be possible");
     }
 }

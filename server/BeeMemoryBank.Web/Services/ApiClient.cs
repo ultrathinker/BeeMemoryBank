@@ -55,10 +55,10 @@ public partial class ApiClient(HttpClient http)
     }
 
     /// <param name="joinCode">The join code from the other computer's "Connect a device" card; when given it replaces <paramref name="remoteUrl"/>.</param>
-    public async Task<(bool Ok, string? Error)> InitJoinAsync(string adminUsername, string displayName, string remoteUrl, string password, string passwordHint, string? joinCode = null)
+    public async Task<(bool Ok, string? Error)> InitJoinAsync(string adminUsername, string displayName, string remoteUrl, string password, string passwordHint, string? joinCode = null, bool shared = false, string? login = null)
     {
         var resp = await http.PostAsync("/api/init/join",
-            Body(new { adminUsername, displayName, remoteUrl, password, joinCode, passwordHint }));
+            Body(new { adminUsername, displayName, remoteUrl, password, joinCode, passwordHint, shared, login }));
         if (resp.IsSuccessStatusCode)
             return (true, null);
         var body = await resp.Content.ReadAsStringAsync();

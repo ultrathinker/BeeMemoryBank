@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-311 fix2 (R1): a network restore answers 202 and goes on in the background. That work is TRACKED (one task the service knows), linked to the token of the
+/// BMB-311: a network restore answers 202 and goes on in the background. That work is TRACKED (one task the service knows), linked to the token of the
 /// application's stopping so that a node that shuts down cancels it before it replaces anything, ends in a terminal state when it is cancelled, and gives the
 /// lease of the route back when - and only when - the work is over (no timer).
 /// </summary>

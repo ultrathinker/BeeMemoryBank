@@ -33,7 +33,7 @@ public class WhitelistConcernVersionsMigrationTests : SquashTestBase
     {
         var path = await CurrentSchemaDbAsync(NewDbPath());
 
-        Query<string>(path, "SELECT group_concat(name) FROM (SELECT name FROM pragma_table_info('tbl_whitelist') WHERE name LIKE '%\\_lamport\\_ts' ESCAPE '\\' OR name LIKE '%\\_source\\_node\\_id' ESCAPE '\\' ORDER BY cid)")
+        Query<string>(path, "SELECT group_concat(name) FROM (SELECT name FROM pragma_table_info('tbl_whitelist') WHERE (name LIKE '%\\_lamport\\_ts' ESCAPE '\\' OR name LIKE '%\\_source\\_node\\_id' ESCAPE '\\') AND name NOT LIKE 'ownership\\_%' ESCAPE '\\' ORDER BY cid)")
             .Should().Be(string.Join(",", Columns));
         foreach (var column in Columns.Where(c => c.EndsWith("_lamport_ts", StringComparison.Ordinal)))
         {
@@ -59,7 +59,7 @@ public class WhitelistConcernVersionsMigrationTests : SquashTestBase
 
         await RunNewRunnerAsync(path);
 
-        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43, 44, 45);
+        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43, 44, 45, 46, 47, 49, 50, 51);
         foreach (var (id, ts, source) in new[] { ("1", 7311L, Author), ("2", 7400L, Author), ("3", 0L, (string?)null) })
         {
             var node = $"bbbbbbbb-0000-4000-8000-00000000000{id}";
@@ -90,7 +90,7 @@ public class WhitelistConcernVersionsMigrationTests : SquashTestBase
 
         await RunNewRunnerAsync(path);
 
-        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43, 44, 45);
+        FullLedger(path).Select(r => r.Version).Should().Equal(40, 41, 42, 43, 44, 45, 46, 47, 49, 50, 51);
         Query<string>(path, "SELECT member_lamport_ts || ',' || name_lamport_ts || ',' || tls_lamport_ts FROM tbl_whitelist WHERE node_id = 'bbbbbbbb-0000-4000-8000-000000000009'")
             .Should().Be("10,90,10", "a row with a version on a concern is not one from before 045");
     }

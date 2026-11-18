@@ -223,8 +223,10 @@ public class LanChannelsTests
 
         var round = await sync.RoundAsync();
 
-        round.Failed.Should().Be(1);
-        round.Problem.Should().StartWith("Mac: ").And.Contain("not reachable");
+        // Refused at once = the computer is away, not a real failure: yellow.
+        round.Failed.Should().Be(0);
+        round.Unreachable.Should().Be(1);
+        round.Problem.Should().BeNull();
         using var scope = vault.Services.CreateScope();
         var channel = (await scope.ServiceProvider.GetRequiredService<PeerChannelStore>().GetAsync(peer.NodeId))
             .Should().ContainSingle("PeerSessions noted how the address went; the old path knew no channels").Subject;

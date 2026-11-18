@@ -1,4 +1,6 @@
 using BeeMemoryBank.Busy;
+using BeeMemoryBank.FullIos.Controls;
+using BeeMemoryBank.FullIos.Localization;
 using BeeMemoryBank.FullIos.Services;
 
 namespace BeeMemoryBank.FullIos.Pages;
@@ -12,6 +14,8 @@ public partial class CreateVaultPage : ContentPage
     public CreateVaultPage(FullVault vault, AppFlow flow)
     {
         InitializeComponent();
+        GateScroll.Attach(GateViewer, GateRoot);
+        // The card carries the title; the gate's header shows only the back button.
         _vault = vault;
         _flow = flow;
         NameEntry.Text = FullVault.NodeName(null, DeviceInfo.Current.Name);
@@ -47,8 +51,8 @@ public partial class CreateVaultPage : ContentPage
         }, new BusyOptions
         {
             Long = true,
-            Title = "Creating your memory bank",
-            Message = "Please wait. The key is derived from your password on purpose slowly; this takes a few seconds.",
+            Title = AppStrings.Get("CreateBusyTitle"),
+            Message = AppStrings.Get("CreateBusyMessage"),
             ResultLabel = ErrorLabel,
         });
         if (ran && recoveryKey is not null) _flow.ShowRecoveryKey(recoveryKey, firstTime: true);

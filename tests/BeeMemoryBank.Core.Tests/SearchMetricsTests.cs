@@ -4,7 +4,7 @@ using BeeMemoryBank.Core.Services;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// Tests for <see cref="SearchMetrics"/> (WP-18): percentile computation over the rolling window,
+/// Tests for <see cref="SearchMetrics"/> : percentile computation over the rolling window,
 /// coarse result-count bucketing, per-search-type isolation, window eviction, and -- the load-bearing
 /// privacy guarantee -- that no query text, title, or article content can ever reach the component's
 /// observable state.
@@ -145,7 +145,7 @@ public class SearchMetricsTests
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // 4. Privacy -- the one hard rule of this WP. No query text, title, or article content can
+    // 4. Privacy -- the one hard rule of this work. No query text, title, or article content can
     //    ever reach the component's observable state.
     // ─────────────────────────────────────────────────────────────────────────────
 

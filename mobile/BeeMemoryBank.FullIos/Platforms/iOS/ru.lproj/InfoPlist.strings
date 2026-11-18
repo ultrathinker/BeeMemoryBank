@@ -1,0 +1,4 @@
+/* The photo-library permission text (image upload), Russian. */
+"NSPhotoLibraryUsageDescription" = "Bee Memory Bank считывает выбранную вами картинку, чтобы зашифровать и сохранить её внутри заметки. Никуда больше она не отправляется.";
+/* The camera permission text (Scan QR code on the join page). */
+"NSCameraUsageDescription" = "Bee Memory Bank использует камеру только чтобы считать QR-код, который показывает компьютер при подключении этого iPhone. Снимки не сохраняются.";

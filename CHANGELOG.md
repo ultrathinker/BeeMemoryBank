@@ -7,6 +7,266 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+#### 2.12.0 (2026-11-18)
+
+"People leave": taking a superadmin's rights away becomes a process that closes every way back in, personal things go
+with the person, and shared things stay. A key rotation no longer costs anybody who stays anything. This release also
+carries everything done since 2.10.2: the redesigned iPhone and Android apps, admin pages in plain words, and a plain
+node that encrypts itself. Five additive migrations (046, sealed doors; 047, people and device ownership; 049, the node
+key history; 050, shared doors and the accounts node; 051, the removal process) bring the database schema to 51, and the
+boot store of an encrypted node takes B003 and B004. **Update every node of a network
+together — servers, desktops, phones and blind copies — and read the [upgrade notes](docs/deployment.md#upgrading-to-2120)
+first.** Once a node holds a door in the new format there is no downgrade; a snapshot taken before the update is the
+only way back. A one-person bank notices nothing of the removal machinery: it is never asked to review anything.
+
+### Security
+
+- **The API decides who a signed-in person is, on every call.** It reads the role and the active flag from its own user
+  table instead of trusting the role the web layer forwards. A demoted or deleted superadmin's open browser loses admin
+  access at the very next request, and superadmin pages check the session on every request and ask for a new sign-in
+  when the check cannot be answered (an unreachable API signs the administrator out rather than guessing).
+- **Demoting a superadmin or deleting any user is one transaction.** The person's door, remote API tokens and AI agents
+  go together with the role change or the deletion — there is no moment at which a former superadmin is an ordinary
+  user who still sees every folder, and no token or agent outlives the rights. A demotion must say what the person may
+  see afterwards (a role that hides folders, specific folders, or an explicit "open role"); nothing is preselected.
+  Since 2.12 the person's **recovery keys** are revoked in the same step: a recovery key is personal and goes with the
+  person.
+- **Every way into a vault is now a sealed door** (door format v2, [ADR 0012](docs/adr/0012-sealed-doors.md)): the
+  master key is sealed to a key pair only that door's secret can derive — passwords, recovery keys, OS and server
+  auto-unlock, quick unlock and auto-unlock agents. A box can be written from the public key alone, which is what lets
+  a rotation re-seal every door without anybody's password. Doors made by earlier versions keep working and are
+  converted the first time they are used. An encrypted node keeps only the database-key wrappers its doors still need;
+  a door that still holds an older master key always opens the closed file.
+- **A key rotation no longer deletes the doors of the people who stay.** On every node, the rotation seals every v2
+  door and every v2 auto-unlock agent to the new key inside its transaction; "Start unlocked after a restart" stays on
+  (the enable record follows the door, and a crash mid-rotation leaves the server armed). Only doors in the format of
+  an older release that were never used since the update are handled differently: password and recovery doors keep
+  working through a *bridge from the old key* (below); old auto-unlock doors and agent keys are removed as before and
+  must be re-issued. On a node whose doors are all in the new format, somebody with the old master key and a *later*
+  copy of that node's database gains nothing from it — the chain that used to make that possible is gone.
+- **Recovery keys are personal.** Each new key belongs to the superadmin who issued it and resets only that person's
+  password; naming another superadmin is refused exactly like a wrong key, after the same work, so the answer is no
+  oracle for who owns which key. A key issued before 2.12 has no owner on record and keeps the older rule (any active
+  superadmin); such keys are listed as "owner unknown". **Re-issue personal keys and revoke the old ones** (Admin →
+  Recovery keys). Demoting or deleting a superadmin revokes their recovery keys with their other doors.
+- **The unknown-owner set can be revoked in one step:** recovery keys with no owner, the un-migrated legacy password
+  slot, and agents whose owner is missing. Deleting any access slot — a recovery key, a password door, an auto-unlock
+  door — is refused if it would leave the node with no door a person can open; concurrent revokes cannot race that
+  guard, and the recovery-key revoke route refuses any slot that is not a recovery key.
+- **Revoking a trusted device now also drops its sync tokens, channel rows, contact state and queued relay envelopes**
+  on every node that applies the revoke, so a revoked peer has no delivery window left.
+- A rotation that ends a removal (`reason = offboarding:<process id>`) is applied by every node by itself, whatever the
+  auto-accept toggle says, with a warning and an audit entry. A key rotation and an offline re-key can no longer overlap
+  on a node.
+- **More on the audit log:** a recovery key issued or revoked, a snapshot downloaded, and a node joined (or re-joined)
+  are recorded with who and what — never a secret. Recovery-key entries name the key's owner as well as the actor;
+  revoking the legacy password slot is recorded too (`legacy_slot_revoked`). Demoting or deleting a person records a
+  `recovery_key_revoked` entry for each of their recovery keys, atomically with the change.
+- **A node can change its identity key in place** (Admin → Node identity key, `bmb node rekey`): it keeps its id, its
+  data and its devices, and the old key stops working everywhere once the other devices have synced — a stolen backup
+  of the node's old identity seed can no longer sign as the node on an updated peer. Every signature of a node is
+  checked by one rule: events a retired key signed after its rotation are refused unless they are the node's own
+  listed events from before the rotation, and a node that received unlisted ones raises an attention flag
+  (`retired_key_unacknowledged_events`, acknowledged on the identity page). Two competing new keys for one node are an
+  **identity conflict**: the node's events are refused until another superadmin device confirms the right key. A
+  re-key never runs during a key rotation or an offline re-key, and is refused while any active peer has not updated.
+- **A restore can no longer bring a retired identity key back.** The API-only `keep-identity` restore mode is removed
+  (refused with a fixed sentence); a network restore keeps the node's CURRENT identity and merges the key history, so a
+  key retired after the snapshot stays retired.
+- **On shared nodes, a removed person is locked out everywhere at once.** When the accounts node publishes the
+  superadmins' doors without the person, every shared node deletes that person's mirror account, door, sessions, agents
+  and tokens in one transaction — the old password no longer signs in or joins there. Personal and blind copies never
+  receive the doors list and cannot open it; a blind copy can never be the accounts node.
+- **Removing a superadmin is now a process that closes every way back in** ("People being removed",
+  [ADR 0014](docs/adr/0014-people-and-shared-nodes.md)). The person is locked out at once — every session, their password
+  door, recovery keys, agents, remote tokens and invitations; their personal devices are revoked, and their mirror on a
+  shared node cannot sign in either. Then the accounts node and every shared server change their identity keys, the
+  person is taken off the shared servers' list of superadmins, everything they created is reviewed, and the master key is
+  changed on every full node — only then is the account deleted or demoted. A removed person's tombstone is kept for ever
+  and applied on every node, also after a restore and after a join: a copy they still hold loses them at its first sync
+  and its next start. It starts from the Users page, the API or `bmb user remove-superadmin`, with your own password;
+  `bmb offboarding status` and `bmb offboarding continue` follow it.
+- **Each step of a removal waits for the ones before it and names what it waits for.** A node that cannot do its part is
+  named with what to do — update it, pair it again, or revoke it. The close refuses while any node reports an
+  unacknowledged key warning or accounts-node change, and lists its reminders (old snapshots, hosting credentials, a
+  stolen device of somebody who stays).
+- **A forged list of superadmin doors cannot outlast a removal.** A forged huge version can no longer overtake the
+  accounts node's list versions, and a list signed by the author's current key replaces one signed by a retired key
+  whatever the versions; the shared-door step confirms only the accounts node's own list at or above the version it
+  published, with no door or mirror of the person left. An event signed as this node that it did not write is flagged
+  (`signed_as_this_node`, acknowledged on the identity page); a back-dated forgery an older build stored is quarantined
+  at the first start of 2.12, not applied.
+- **A rogue peer cannot close or hijack another node's removal.** Only the process's driver advances it (a take-over is
+  honoured once the old driver is revoked), and a new process comes only from the accounts node. The doors applier never
+  re-plants a mirror of a removed person; an agent key or a remote-token request of a person being removed is refused.
+- **The review follows the network and never decides a superadmin by itself.** It is rebuilt when the whitelist, users,
+  slots, agents or invitations change; devices that joined after the removal began, or through an invitation the person
+  made, are pre-selected for removal; a device the review removed that comes back active is listed again and revoked at
+  the close. "Accept defaults" keeps every superadmin unless the deciding administrator names them; keeping anything
+  else needs a reason.
+- **A demotion or deletion keeps a superadmin's door until another superadmin has a sealed door**, so the device box
+  never stays a copy of the leaver's. The phones' slot cards follow the same rule: a one-person bank cannot delete its
+  only superadmin's password door there (changing the password still works).
+- **The offline re-key refuses while a removal is open**, and keeps the version of the accounts node's list of
+  superadmins.
+
+### Added
+
+- **Admin → Recovery keys** lists every recovery key with its owner (or "owner unknown"), issue date and label; issue a
+  key for yourself with a label, revoke one key, or revoke all keys with no owner. Issuing and revoking are audited
+  with the owner and the actor — never the key.
+- **The Master key page (Admin → DEK Rotation) shows a remaining bridge from the old key** — whose old-format doors
+  still hold it, since which rotation — and can remove it at once (those people then set their passwords again, as after
+  a rotation before 2.12). The bridge ends by itself when the last old-format door is used or deleted.
+- **Device ownership.** Every trusted device is `shared` (the organisation's), `personal` (one person's) or `unknown`.
+  The Devices page shows the ownership and asks for a review when the bank has more than one superadmin; a
+  single-superadmin bank is never nagged. Joins can say whose device it is (`bmb join --login <name>`, and `--shared` for an
+  organisation server), and a blind invitation's maker says whose copy it is (default shared). A device may not change its own
+  ownership. On the update, blind copies become `shared` and existing full peers start as `unknown` for review — nothing
+  is guessed.
+- **Nodes report their state** (`node_state`): app version, platform, runtime kind, key fingerprints and attention
+  flags, replicated to every node and kept current through compaction — what the readiness card reads to name the
+  devices that hold a feature back. Each full node also reports whether it still keeps a bridge from an old master key;
+  the removal's rotation step and its close list the nodes that do (or cannot tell).
+- **`quick_unlock`, a new door kind for phones** — a 32-byte secret in the phone's key store, no password path. The
+  iPhone's Face ID / Touch ID unlock now uses it: the Keychain keeps only the secret, a key rotation no longer turns
+  Face ID off, and the closed encrypted phone opens through the door's copy in the boot store. An older Face ID setup
+  is converted at its next unlock; if a rotation came first, the password is asked once and Face ID is offered again.
+- **Shared server nodes follow a designated accounts node.** One `shared` full node is named the network's accounts
+  node (`accounts_home`); it publishes the current superadmins' doors as a versioned list sealed to each shared node.
+  Every listed superadmin can sign in, unlock and accept new devices on every shared node with their own current
+  password; password changes, promotions and removals on the accounts node propagate by themselves (a locked shared
+  node applies the list at its next unlock). Password changes and account edits on a shared node are refused and name
+  the accounts node; creating a local superadmin there is refused. A single-person bank is never offered any of this.
+  Publishing waits until every shared node has updated (`shared-doors-v1`); Admin → Devices names the ones holding it
+  back. Turning a shared node back into a personal one removes the replicated accounts and doors.
+- **Admin → Node identity key** (`/Admin/IdentityKey`, `bmb node rekey --reason "..."`): re-key this node, see its key
+  and any identity conflict, confirm the right key of a conflicted node, and acknowledge a retired-key attention flag.
+  Devices that were away follow up to 16 re-keys through the signed transition chain; a device away across more is
+  paired or joined again. Android phone pairing records are signed again with the new key, and a blind copy moves its
+  hub pin from the rotation it applies.
+- **Admin → People being removed** shows every open removal: its steps and what each waits for, the review (everything
+  the person created or that has no owner, pre-selected remove; keeping needs a reason), and the close with its
+  reminders. If the accounts node is lost, a superadmin can take the removal over on another node. The Users page starts
+  one ("Remove superadmin rights..." asks demote or delete, and your password); on the command line:
+  `bmb user remove-superadmin <name> --demote-to <role>|--delete --as <admin>` and `bmb offboarding status|continue`.
+- **The accounts node's move is guarded and visible**: it can only move to a node where a superadmin has an account of
+  their own; "the accounts node changed" is acknowledged on the Devices page; a doors list a shared node could not apply
+  for long raises an attention flag.
+
+### Changed
+
+- **The iPhone app is rebuilt in the product's design** (four tabs with the sync badge, the new tree, note, editor,
+  search and trash screens, settings, sync and recovery pages) and reaches parity with the web on the phone: folder
+  rename/move/delete, the folder picker, tags and comments, related articles, images, the note menu, editor toolbar,
+  preview and protect, source view, master-password change, wipe, and the sync controls (invisible mode, events,
+  remove a device). Joining is simpler (scan the QR code in the app), Face ID / Touch ID unlock is there, a new phone
+  is encrypted from the start, and the password hint shows on the unlock page. Checked on a real iPhone.
+- **The Android app is rebuilt in the same design**: the four-tab shell with the sync badge, the content screens,
+  settings with its recovery/encryption/trash sub-screens, the sync screen, welcome and connect screens, an in-app
+  QR scanner on the join page, and the same idle/leave auto-lock policy as the iPhone. Setup checks the same password
+  policy as every other host. Large system fonts, landscape unlock, the soft keyboard and modal dialogs behave; the
+  master-password fields never offer to save to Google; dates read humanly in the phone's language.
+- **Admin pages speak in plain one-line texts**, with the long explanations folded under "More details".
+- **A plain node encrypts itself.** A node set up by an earlier version whose database is still unencrypted runs the
+  same encryption migration by itself, in the background, right after the next unlock (once the network has metadata
+  encryption on) — no button to press. The Database encryption page shows the progress or one calm line saying what is
+  in the way; `bmb vault seal` remains for the command line. A failure is logged and said calmly; the node keeps
+  serving. **Phones encrypt themselves too**: the Android and iPhone apps run the same migration right after a create
+  or a join, with no button (the old "Encrypt this phone's database" card and page are gone); a plain copy left by an
+  older build is set up again, not converted.
+- **A successful join turns on "Show this node to devices in my network" by itself** (from off only), so the computer
+  a phone just joined is reachable on the local network without a second switch.
+- The Users page never crosses the superadmin line with a role dropdown: "Make superadmin..." says in plain words what
+  the person gets (and that taking it back is a whole process); "Remove superadmin rights..." asks what they may see
+  afterwards before it can be confirmed. Nobody removes their own rights from the page, and the last superadmin's
+  button is off.
+- A network restore keeps every retired-key link and the node-key history (the monotonic tables are merged, never
+  replaced), and merges the accounts-node designation by its newest version — a restore never rolls it back.
+- **A device an administrator disconnected from the bank says so calmly.** Instead of a sync error every minute, the
+  phones and the desktop show one sentence — "An administrator disconnected this device from the bank. What is already
+  on it stays readable here; it no longer receives changes." — and the sync loop stops asking every minute (it asks
+  again about once an hour; any successful sync clears the state). A node tells a revoked device so only after the
+  device proves who it is, in a refusal signed with the node's own key.
+- **The phones say whose device this is** when more than one person holds a personal superadmin device, and show the
+  owner of each key slot; a recovery key issued on a phone is issued for its owner. The Android Debug "dev password"
+  works again (it adds a proper test slot, and the card offers no other password slot).
+
+### Fixed
+
+- OS auto-unlock could keep an internal lock after a start that found the vault already unlocked.
+- After a password sign-in that re-wrapped an old key slot, the boot store could name the wrong master key for that
+  door.
+- A demotion deletes the door the person holds *now*, not only the one it loaded them with (a password change racing
+  the demotion can no longer leave a door behind).
+- A restore and a node reset drop the cached caller state, so a restored user table is authoritative at once.
+- Closing the QR scanner on Android no longer closes the app.
+- iPhone: converting an older Face ID setup can no longer turn Face ID off silently — the old Keychain items are
+  removed only after the new door's secret is stored, and if Face ID cannot be kept the app says so and asks to turn
+  it on again. Switching Face ID on and off quickly can no longer leave it half on.
+- **An encrypted node updated from 2.10 could not be unlocked**: every sign-in answered 500 ("no such column:
+  door_version") because a start step read the new door columns before the migrations had added them. The step now runs
+  after the migrations; the failed starts wrote nothing.
+- **Events an older build stored without knowing their type are applied after the update.** A 2.10/2.11 node stored the
+  accounts-node designation, the superadmins' doors lists and a removal's tombstone without applying them; the first
+  start of 2.12 replays them in order, so the node learns the accounts node and applies the removal without anybody
+  re-designating or re-starting anything.
+- **A node that names itself the accounts node is accepted as shared by definition** — no administrator on another node
+  has to mark it `shared` first (a row explicitly marked personal is still refused).
+- **An iPhone with an encrypted vault closed itself at every start**, before the password could be typed; an encrypted
+  Android phone syncs in the background again after a restart, and a text shared to a locked phone waits for the unlock
+  instead of opening the editor over it.
+- **The phones no longer close themselves when a lock lands while a page is reading.** On an encrypted phone the idle
+  timer, the background lock or Lock now can close the database under a page still reading it; the sync, settings and
+  trash pages and the note editor's tag read now stop quietly when that happens instead of ending the app. An Android
+  sync service that fails to start hands over to the WorkManager backstop, so background sync is not silently dead.
+- **Wiping an encrypted phone starts it again.** Android's "Delete all data", the first sync's "cancel and delete" and
+  the setup reset deleted only the database and left the boot store behind — the next start was a dead end with nothing
+  to tap, until the app's data was cleared in the system settings; they now delete the whole sealed file set. The
+  iPhone's wipe said "Wipe failed" after a wipe that had worked and sat on an unlock page with no door; it now ends on
+  the welcome screen.
+- A stored event signed with a retired key is never left without its warning, even if the node stops while it is
+  set aside.
+- After a node gets a new identity key, its phone pairing records, audit entry and announcement are completed at the
+  next unlock if the node stopped right after the change.
+- "Start unlocked after a restart" stays on after a key rotation even when its record could not be written during
+  the rotation.
+- A key rotation proposed right after unlocking is no longer refused with "Another rotation is in progress."
+- On a shared server the recovery copy of the doors follows a new list of superadmins at the next unlock if the
+  server stopped in between.
+
+### Notes for upgrading
+
+- **Update every node** — servers, desktops, phones, blind copies — and let each one sync once. The readiness card
+  names the devices that hold a feature back by their capabilities (`door-box-v1`, `ownership-v1`, `node-state-v1`,
+  `identity-rekey-v1`, `shared-doors-v1`).
+- **Every superadmin signs in once after the update**, on every node they use: that converts their door to the new
+  format. Until then a "bridge from the old key" stays on that node (Admin → DEK Rotation shows it and can remove it).
+- **Review device ownership** on the Devices page when the bank has more than one superadmin.
+- **Recovery keys issued before 2.12 have no owner.** Issue personal ones and revoke the old ones (Admin → Recovery
+  keys, "revoke all keys with unknown owner").
+- **No downgrade after the update**: an older program cannot open a door in the new format. Take a snapshot before
+  updating; it is the only way back.
+- **An identity re-key needs every node updated** (`identity-rekey-v1`); the Node identity key page names the ones
+  that are not. Re-key only after every device has synced the update, and let them sync again afterwards so the old
+  key stops working everywhere.
+- **Shared nodes:** designate one `shared` full node as the accounts node; the other shared nodes then receive the
+  superadmins' doors list (at their next unlock if locked). The list is published only once every shared node shows
+  `shared-doors-v1` — Admin → Devices names the ones holding it back. Change superadmin passwords on the accounts
+  node; a shared node refuses the change and names it.
+- **iPhone Face ID converts at the next unlock** after the update; if a key rotation came first, the password is asked
+  once and Face ID is offered again. Nothing else is asked of the phone.
+- **Removing a superadmin**: start it from the Users page, the API or `bmb user remove-superadmin`, with your own
+  password. The steps run in order and each waits for the ones before it; a 2.10/2.11 node holds the identity-key step
+  back until it is updated or revoked — the page names it. The master-key change applies by itself on every node; the
+  close waits for every key warning and accounts-node change to be acknowledged.
+- **A node not yet updated may show a quarantined `node_state` of a blind node** under Admin → Sync ("blind nodes never
+  author events"). It is harmless, waits on nothing, and stops once that node is updated.
+- **A node that was old across an earlier removal may show one retired-key warning at its first start** after the
+  update: an event an older build stored, signed by a key since retired. Check it and acknowledge it on the identity
+  page (Admin → Node identity key); a later removal's close waits for it.
+- The full guide is in [docs/deployment.md](docs/deployment.md#upgrading-to-2120).
+
 #### 2.10.2 (2026-11-14)
 
 A fix for encrypted servers that use "Start unlocked after a restart". No migration; a 2.10.1 node and a 2.10.2 node work
@@ -1034,7 +1294,7 @@ already drifted out of sync with each other and with the actual endpoint set. An
 list now answers `404`, not `403` — "this exists but you may not use it" is itself information
 worth withholding from an anonymous prober. See [docs/deployment.md](docs/deployment.md#reverse-proxy--what-is-exposed).
 
-#### Bounded, explicit system-scope elevation via `RunAsSystemAsync` (Fable #6, completed 2026-09-05)
+#### Bounded, explicit system-scope elevation via `RunAsSystemAsync` (completed 2026-09-05)
 
 The `CallerScopeHolder.ElevateToSystem()` disposable introduced earlier in this file's own
 "Changed" section above closed the *forgotten-restore* failure mode; it didn't remove the
@@ -1098,9 +1358,9 @@ migration (035, a unique index for the OS auto-unlock slot, created by a repair 
   proposal wipes the key-encryption key on every failure path; the macOS command runners kill the whole process tree on a timeout and wait for it; the
   blind timer scheduler no longer disposes its cancellation source under a running loop; `scripts/pack-android-blind.ps1` always checks the signing identity.
 
-#### 1.0.12: fixes from the review rounds (2026-09-29)
+#### 1.0.12: review fixes (2026-09-29)
 
-The blind-node, recovery and re-key work went through several review rounds; each fix has a test that
+The blind-node, recovery and re-key work was reviewed in depth; each fix has a test that
 fails without it.
 
 - **A blind node paired again after a re-key never synced.** The full node asked it for events from

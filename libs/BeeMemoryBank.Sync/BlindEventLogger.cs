@@ -27,7 +27,7 @@ public sealed class BlindEventLogger(ISyncTrigger syncTrigger) : IEventLogger
     public void SignalSync() => syncTrigger.Signal();
     public Task<RowVersion> LogWhitelistAddAsync(WhitelistEntry entry, Guid? eventId = null) => Refused<RowVersion>(EventTypes.WhitelistAdd);
     public Task<RowVersion> LogWhitelistRevokeAsync(Guid nodeId) => Refused<RowVersion>(EventTypes.WhitelistRevoke);
-    public Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null) => Refused<RowVersion>(EventTypes.WhitelistUpdate);
+    public Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null, string? ownership = null, Guid? ownerPersonId = null, string? ownerLabel = null) => Refused<RowVersion>(EventTypes.WhitelistUpdate);
     public Task LogMasterPasswordChangedAsync(DateTime changedAt) => Refused(EventTypes.MasterPasswordChanged);
     public Task LogCommentCreateAsync(Comment comment) => Refused(EventTypes.CommentCreate);
     public Task LogCommentDeleteAsync(Guid commentId) => Refused(EventTypes.CommentDelete);
@@ -42,4 +42,8 @@ public sealed class BlindEventLogger(ISyncTrigger syncTrigger) : IEventLogger
     public Task LogMediaLinkAsync(Guid mediaId, Guid articleId, long lamportTs) => Refused(EventTypes.MediaLink);
     public Task LogHardDeleteAsync(string entityType, string entityIdentifier) => Refused(EventTypes.HardDelete);
     public Task LogSnapshotCheckpointAsync(long cpSeq, int eventsRemoved, string snapshotFileName, string snapshotSha256, string? prevCheckpointSha256, DateTime producedAt) => Refused(EventTypes.SnapshotCheckpoint);
+    public Task<bool> LogPersonRemovedAsync(Guid personId, string outcome, DateTime removedAt, Guid eventId) => Refused<bool>(EventTypes.PersonRemoved);
+    public Task<long> LogOffboardingStateAsync(Guid processId, Guid personId, Guid accountsNodeId, Guid driverNodeId, string target, int step,
+        DateTime startedAt, DateTime? closedAt, string? outcome) => Refused<long>(EventTypes.OffboardingState);
+    public Task LogNodeRekeyRequestAsync(Guid processId, IReadOnlyList<Guid> nodes) => Refused(EventTypes.NodeRekeyRequest);
 }

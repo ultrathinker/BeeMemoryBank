@@ -50,7 +50,8 @@ public static class VaultEndpoints
         [property: JsonPropertyName("inbox")] InboxStatus? Inbox,
         [property: JsonPropertyName("auto_unlock")] AutoUnlockStatus AutoUnlock,
         [property: JsonPropertyName("last_refusal")] string? LastRefusal,
-        [property: JsonPropertyName("migration")] MigrationStatus? Migration);
+        [property: JsonPropertyName("migration")] MigrationStatus? Migration,
+        [property: JsonPropertyName("auto_seal_note")] string? AutoSealNote = null);
 
     public sealed record SealRequest([property: JsonPropertyName("password")] string? Password);
 
@@ -190,7 +191,8 @@ public static class VaultEndpoints
         var migration = MigrationStatusOf(services, start);
 
         if (!gate.IsSealed)
-            return new VaultStatus("plain", gate.State.ToString(), null, null, null, autoUnlock, null, migration);
+            return new VaultStatus("plain", gate.State.ToString(), null, null, null, autoUnlock, null, migration,
+                services.GetService<Services.AutoSealService>()?.FailureNote);
 
         var boot = services.GetRequiredService<BootStore>();
         string? sealedAt = null;

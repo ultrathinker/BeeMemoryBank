@@ -1,4 +1,5 @@
 using BeeMemoryBank.Busy;
+using BeeMemoryBank.FullIos.Localization;
 
 namespace BeeMemoryBank.FullIos.Pages;
 
@@ -12,6 +13,7 @@ public partial class RecoveryKeyPage : ContentPage
     public RecoveryKeyPage(AppFlow flow)
     {
         InitializeComponent();
+        Title = AppStrings.Get("SettingsRecovery");
         _flow = flow;
     }
 
@@ -27,7 +29,7 @@ public partial class RecoveryKeyPage : ContentPage
     {
         if (_key is null) return;
         Platforms.iOS.IosClipboard.CopySecret(_key);
-        CopyButton.Text = "Copied for two minutes";
+        CopyButton.Text = AppStrings.Get("RecoveryCopied");
     }
 
     private void OnConfirmToggled(object? sender, ToggledEventArgs e) => ContinueButton.IsEnabled = e.Value;
@@ -40,7 +42,7 @@ public partial class RecoveryKeyPage : ContentPage
         await BusyAction.RunAsync(sender as Button, async () =>
         {
             if (_firstTime) await _flow.OfferQuickUnlockAsync(this);
-            _flow.ShowMain();
+            await _flow.EncryptThenShowMainAsync();
         });
     }
 }

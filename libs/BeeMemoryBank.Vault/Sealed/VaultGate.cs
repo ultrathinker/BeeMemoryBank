@@ -93,7 +93,7 @@ public sealed class VaultGate : IVaultGate, IVaultKeySource, ISealedVaultKeys, I
     /// <summary>
     /// Asks, before every open that would start one, for the plain files of an unfinished "Encrypt this node" that are still readable on the disk
     /// (it tries to erase them first and returns what is left). An open is refused with <see cref="VaultOpenRefusals.RepairRequired"/> while the list
-    /// is not empty (review round 1, H1). Not set on a node that has no migration.
+    /// is not empty. Not set on a node that has no migration.
     /// </summary>
     public Func<IReadOnlyList<string>>? PlainLeftovers { get; set; }
 
@@ -211,7 +211,7 @@ public sealed class VaultGate : IVaultGate, IVaultKeySource, ISealedVaultKeys, I
 
             if (state == VaultState.Closing)
             {
-                // A close that threw before it could publish Closed (a generation that could not be ended, review round 1 H4): it is finished first,
+                // A close that threw before it could publish Closed (a generation that could not be ended): it is finished first,
                 // so that no open ever starts over a generation that is still alive. A second failure reaches the caller and the state stays Closing.
                 await CloseCoreAsync("retry", rewrite: false, relayClosing: false, ct).ConfigureAwait(false);
             }
@@ -230,7 +230,7 @@ public sealed class VaultGate : IVaultGate, IVaultKeySource, ISealedVaultKeys, I
                 return VaultOpenResult.Done;
             }
 
-            // A replaced plain file of an "Encrypt this node" that is still readable: nothing is unwrapped, nothing opens (review round 1, H1).
+            // A replaced plain file of an "Encrypt this node" that is still readable: nothing is unwrapped, nothing opens.
             if (PlainLeftovers?.Invoke() is { Count: > 0 } leftovers)
             {
                 _logger?.LogWarning("The database is not opened: a replaced unencrypted file is still readable on the disk ({Files}).", string.Join(", ", leftovers));
@@ -455,7 +455,7 @@ public sealed class VaultGate : IVaultGate, IVaultKeySource, ISealedVaultKeys, I
             }
         }
 
-        // Closed is published here and nowhere else, and only with the proof that every file's key-bearing generation was ended (review round 1, H4):
+        // Closed is published here and nowhere else, and only with the proof that every file's key-bearing generation was ended:
         // a close that threw before this line leaves the state at Closing with the keys cleared, and the next close or open finishes it.
         PublishClosed(files, ended);
         _logger?.LogInformation("The database is closed ({Reason}).", reason);

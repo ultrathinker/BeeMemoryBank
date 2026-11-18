@@ -173,7 +173,8 @@ public class ServerAutoUnlockTests : SealedWriterFixture
         File.ReadAllText(svc.NodeKeyFilePath).Trim().Should().MatchRegex("^[0-9a-f]{64}$");
         var record = System.Text.Json.JsonDocument.Parse(File.ReadAllText(svc.RecordPath)).RootElement;
         record.GetProperty("v").GetInt32().Should().Be(1);
-        record.GetProperty("slot_sha256").GetString().Should().Be(BootDoorHash.OfSlot(slot.SlotId, slot.SlotType, slot.EncryptedMasterDek, slot.IV, slot.Salt, null, null, null));
+        record.GetProperty("slot_sha256").GetString().Should().Be(BootDoorHash.OfSlot(slot.SlotId, slot.SlotType, slot.EncryptedMasterDek, slot.IV, slot.Salt, null, null, null,
+            slot.DoorVersion, slot.DoorPublicKey));
         record.GetProperty("dek_fp").GetString().Should().Be(DekFingerprint.Of(Session.GetMasterDek()));
         File.ReadAllText(svc.RecordPath).Should().NotContain(File.ReadAllText(svc.NodeKeyFilePath).Trim(), "the record holds no secret");
         (await AuditActionsAsync()).Should().Equal("server_auto_unlock_enabled");
@@ -466,6 +467,10 @@ public class ServerAutoUnlockTests : SealedWriterFixture
         public Task<int> CreateAsync(MasterKeyStore slot, System.Data.IDbTransaction? transaction = null) => throw new InvalidOperationException("disk full");
         public Task DeleteAsync(int slotId, System.Data.IDbTransaction? transaction = null) => inner.DeleteAsync(slotId, transaction);
         public Task UpdateSlotKeyAsync(int slotId, byte[] encryptedDek, byte[] iv) => inner.UpdateSlotKeyAsync(slotId, encryptedDek, iv);
+        public Task<bool> ReplaceDoorAsync(MasterKeyStore door, byte[]? expectedEncryptedMasterDek, System.Data.IDbTransaction? transaction = null) =>
+            inner.ReplaceDoorAsync(door, expectedEncryptedMasterDek, transaction);
+        public Task SetDekFingerprintIfUnknownAsync(int slotId, byte[] encryptedMasterDek, string dekFingerprint) =>
+            inner.SetDekFingerprintIfUnknownAsync(slotId, encryptedMasterDek, dekFingerprint);
     }
 
     [Fact]
@@ -729,45 +734,225 @@ public class ServerAutoUnlockTests : SealedWriterFixture
 
     // --- rotation and reset ---------------------------------------------------------------------------------------------------------
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task ARotationSwitchesTheCheckboxOff_SlotRecordAndNodeCreatedKeyFileGone_OnTheInitiatorAndOnAnAutoAcceptingPeer(bool initiator)
+    /// <summary>A rotation through the real rewrap, as the initiator (the admin's door sealed for its password) or as a peer.</summary>
+    private async Task RotateAsync(byte[] newDek, bool initiator, IServerAutoUnlockLocalState hook, IUnlockMaterialMirror? mirror = null)
     {
-        var operatorFile = OperatorKeyFile();
-        var svc = Make(sealedNode: true, configuredKeyFile: operatorFile);
-        await svc.EnableAsync();
         var oldDek = Session.GetMasterDek();
-        var newDek = RandomNumberGenerator.GetBytes(32);
-        (int Slot, byte[] W, byte[] Iv)? slot = null;
+        BeeMemoryBank.Crypto.Doors.Sealed? door = null;
+        int? slotId = null;
         if (initiator)
         {
             var user = (await KeySlots.GetAllAsync()).Where(s => s.SlotType == "user").OrderBy(s => s.SlotId).First();
             var kek = KeyDerivation.DeriveKek(AdminPassword, user.Salt!, user.ArgonMemory!.Value, user.ArgonIterations!.Value, user.ArgonParallelism!.Value);
-            var (w, iv) = MasterKeyManager.WrapMasterDek(newDek, kek);
-            slot = (user.SlotId, w, iv);
+            door = BeeMemoryBank.Crypto.Doors.Seal(user.SlotType, kek, user.Salt, newDek);
+            Array.Clear(kek);
+            slotId = user.SlotId;
         }
+        await BeeMemoryBank.Sync.DekRotation.DekRewrapper.RewrapAllAsync(Factory, Session, oldDek, (byte[])newDek.Clone(), 2, Guid.NewGuid().ToString(), initiator,
+            slotId, door?.Box, door?.Iv, sealedHooks: new SealedRotationHooks(mirror ?? Mirror, hook), newSlotDoorPublicKey: door?.PublicKey);
+    }
 
-        await BeeMemoryBank.Sync.DekRotation.DekRewrapper.RewrapAllAsync(Factory, Session, oldDek, newDek, 2, Guid.NewGuid().ToString(), initiator,
-            slot?.Slot, slot?.W, slot?.Iv, sealedHooks: new SealedRotationHooks(Mirror, svc));
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ARotationKeepsTheCheckboxOn_TheRecordFollowsTheResealedDoor_AndTheNextStartOpensWithTheNewKey(bool initiator)
+    {
+        var operatorFile = OperatorKeyFile();
+        var svc = Make(sealedNode: true, configuredKeyFile: operatorFile);
+        await svc.EnableAsync();
+        var newDek = RandomNumberGenerator.GetBytes(32);
 
-        (await ServerSlotsAsync()).Should().BeEmpty("the commit deleted the slot");
-        File.Exists(svc.RecordPath).Should().BeFalse("the rotation hook removed the enable record");
-        (await Doors.ListAsync()).Should().NotContain(d => d.SlotType == ServerAutoUnlockService.SlotType);
+        await RotateAsync(newDek, initiator, svc);
+
+        var slot = (await ServerSlotsAsync()).Should().ContainSingle("the server door is sealed to the new DEK, not deleted").Subject;
+        slot.DoorVersion.Should().Be(2);
+        slot.DekFingerprint.Should().Be(DekFingerprint.Of(newDek));
+        var evaluation = await svc.EvaluateAsync();
+        evaluation.State.Should().Be(ServerAutoUnlockState.Armed, "the enable record names the re-sealed door and the new DEK");
+        evaluation.Record!.DekFingerprint.Should().Be(DekFingerprint.Of(newDek));
+        evaluation.Record.NextSlotSha256.Should().BeNull("the record is settled after the commit");
         File.Exists(operatorFile).Should().BeTrue("an operator's file is never touched");
-        (await svc.EvaluateAsync()).State.Should().Be(ServerAutoUnlockState.Off);
+
+        var host = new SealedWritersTests.FakeSealedHost(Doors) { Usable = false };
+        var restarted = Make(session: new SessionService(KeySlots), host: host, sealedNode: true, configuredKeyFile: operatorFile);
+        (await restarted.RunAtStartAsync(new NodeIdentityRepository(Factory))).Should().Be(ServerAutoUnlockStartOutcome.Unlocked,
+            "a cold start after the rotation opens without a password");
+        host.Unlocked.Should().ContainSingle().Which.Dek.Should().Equal(newDek);
     }
 
     [Fact]
-    public async Task ARotationRemovesTheNodeCreatedKeyFileToo()
+    public async Task ARotationOnAPlainServer_TheNextStartOpensWithTheNewKey()
+    {
+        var svc = Make();
+        await svc.EnableAsync();
+        var newDek = RandomNumberGenerator.GetBytes(32);
+
+        await RotateAsync(newDek, initiator: false, svc);
+
+        var restarted = new SessionService(KeySlots);
+        (await Make(session: restarted).RunAtStartAsync(new NodeIdentityRepository(Factory))).Should().Be(ServerAutoUnlockStartOutcome.Unlocked);
+        restarted.GetMasterDek().Should().Equal(newDek);
+    }
+
+    /// <summary>Forwards the preparation but never settles: the state a crash right after the commit leaves.</summary>
+    private sealed class CrashAfterCommit(IServerAutoUnlockLocalState inner) : IServerAutoUnlockLocalState
+    {
+        public Task DisableLocalAsync(CancellationToken ct = default) => inner.DisableLocalAsync(ct);
+        public Task PrepareRotationAsync(ServerRotationDoor change, CancellationToken ct = default) => inner.PrepareRotationAsync(change, ct);
+        public Task OnDekRotatedAsync(bool committed, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task ACrashBetweenTheCommitAndTheSettle_LeavesTheServerArmed_AndTheNextUnlockSettlesTheRecord()
     {
         var svc = Make(sealedNode: true);
         await svc.EnableAsync();
+        var newDek = RandomNumberGenerator.GetBytes(32);
+
+        await RotateAsync(newDek, initiator: false, new CrashAfterCommit(svc));
+
+        var before = await svc.EvaluateAsync();
+        before.State.Should().Be(ServerAutoUnlockState.Armed, "the record names the old and the re-sealed door, the old and the new DEK");
+        before.Record!.NextSlotSha256.Should().NotBeNull();
+        var host = new SealedWritersTests.FakeSealedHost(Doors) { Usable = false };
+        var restartedSession = new SessionService(KeySlots);
+        (await Make(session: restartedSession, host: host, sealedNode: true).RunAtStartAsync(new NodeIdentityRepository(Factory)))
+            .Should().Be(ServerAutoUnlockStartOutcome.Unlocked);
+        host.Unlocked.Should().ContainSingle().Which.Dek.Should().Equal(newDek);
+
+        await svc.UpgradeAsync();
+
+        var after = await svc.EvaluateAsync();
+        after.State.Should().Be(ServerAutoUnlockState.Armed);
+        after.Record!.NextSlotSha256.Should().BeNull("the post-unlock step settles a record that still names two doors");
+        after.Record.DekFingerprint.Should().Be(DekFingerprint.Of(newDek));
+    }
+
+    /// <summary>
+    /// The enable record cannot be written inside the rotation (P4 open question 5: a failing file write): only the first write fails, or every
+    /// write fails. <c>settle</c> false: nothing after the commit runs (a crash right after it). Everything else is forwarded.
+    /// </summary>
+    private sealed class PrepareFails(IServerAutoUnlockLocalState inner, bool settle, bool everyTime) : IServerAutoUnlockLocalState
+    {
+        private int _calls;
+        public Task DisableLocalAsync(CancellationToken ct = default) => inner.DisableLocalAsync(ct);
+        public Task PrepareRotationAsync(ServerRotationDoor change, CancellationToken ct = default)
+        {
+            if (Interlocked.Increment(ref _calls) == 1 || everyTime) throw new IOException("the enable record could not be written");
+            return settle ? inner.PrepareRotationAsync(change, ct) : Task.CompletedTask;   // a later call comes after the commit: not in a crash
+        }
+        public Task OnDekRotatedAsync(bool committed, CancellationToken ct = default) => settle ? inner.OnDekRotatedAsync(committed, ct) : Task.CompletedTask;
+    }
+
+    [Theory]
+    [InlineData(true, false, true)]    // the record write failed once, inside the rotation: written after the commit, the checkbox stays on
+    [InlineData(false, false, false)]  // a crash right after the commit: nothing more is written, the checkbox is off at the next start
+    [InlineData(true, true, false)]    // the record cannot be written at all: the checkbox is off at the next start
+    public async Task ARotationWhoseRecordCouldNotBePrepared_IsSettledAfterTheCommit_AndTheServerNeverOpensWithAStaleRecord(bool settle, bool everyTime,
+        bool staysOn)
+    {
+        // P4: PrepareRotationAsync runs inside the rotation transaction and writes a file; a failure is logged and the rotation goes on. P11 O4: the
+        // settle after the commit could not settle a record that never named the re-sealed door, so the checkbox went off at the next start even
+        // without a crash. The record is now written for the re-sealed door after the commit (the same step, once more) and then settled. Whatever
+        // happens, the start never opens the vault with anything but the committed key, and the password still opens it.
+        var svc = Make(sealedNode: true);
+        await svc.EnableAsync();
+        var newDek = RandomNumberGenerator.GetBytes(32);
+
+        await RotateAsync(newDek, initiator: false, new PrepareFails(svc, settle, everyTime));
+
+        Session.GetMasterDek().Should().Equal(newDek, "the rotation committed although the record could not be prepared");
+        var host = new SealedWritersTests.FakeSealedHost(Doors) { Usable = false };
+        var restarted = new SessionService(KeySlots);
+        var outcome = await Make(session: restarted, host: host, sealedNode: true).RunAtStartAsync(new NodeIdentityRepository(Factory));
+        if (staysOn)
+        {
+            outcome.Should().Be(ServerAutoUnlockStartOutcome.Unlocked, "the record names the re-sealed door and the new key");
+            host.Unlocked.Should().ContainSingle().Which.Dek.Should().Equal(newDek, "only the committed key opens");
+        }
+        else
+        {
+            outcome.Should().Be(ServerAutoUnlockStartOutcome.Repaired, "the record names a door that is gone: the checkbox is off, the node closed");
+            host.Unlocked.Should().BeEmpty();
+        }
+
+        var byPassword = new SessionService(KeySlots);
+        (await byPassword.UnlockAsync(AdminPassword)).Should().BeTrue("the password opens the rotated vault");
+        byPassword.GetMasterDek().Should().Equal(newDek);
+    }
+
+    /// <summary>Writes the pending doors and the wrappers before the commit and never rewrites: the boot store a crash right after the commit leaves.</summary>
+    private sealed class NoRewriteMirror(IUnlockMaterialMirror inner) : IUnlockMaterialMirror
+    {
+        public Task RewriteAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task AddPendingDoorAsync(PendingDoor door, CancellationToken ct = default) => inner.AddPendingDoorAsync(door, ct);
+        public Task RetireDoorAsync(string kind, long sourceId, CancellationToken ct = default) => inner.RetireDoorAsync(kind, sourceId, ct);
+        public Task AddDbKeyWrapperAsync(byte[] masterDek, CancellationToken ct = default) => inner.AddDbKeyWrapperAsync(masterDek, ct);
+        public Task WriteNewBootStoreAsync(string bootPath, IDbConnectionFactory vault, byte[] databaseKey, int dbkGeneration, IReadOnlyList<byte[]> masterDeks,
+            CancellationToken ct = default) => inner.WriteNewBootStoreAsync(bootPath, vault, databaseKey, dbkGeneration, masterDeks, ct);
+    }
+
+    /// <summary>A session as a restarted process has it: locked, judging a door and the sentinel through the database.</summary>
+    private SessionService RestartedSealedSession() => new(KeySlots, new ServiceCollection()
+        .AddSingleton<INodeIdentityRepository>(_ => new NodeIdentityRepository(Factory))
+        .AddScoped<IUserRepository>(_ => new UserRepository(Factory))
+        .AddScoped<IAgentRepository>(_ => new AgentRepository(Factory))
+        .BuildServiceProvider().GetRequiredService<IServiceScopeFactory>());
+
+    [Fact]
+    public async Task ACrashBetweenTheCommitAndTheBootRewrite_StillOpensASealedServer_ThroughTheDoorThatHoldsTheCommittedKey()
+    {
+        // the boot store keeps the old door (old key) and the pending re-sealed one (new key) and the record names both; the start
+        // must try each until the sealed unlock (sentinel and door check) accepts one, not give up after the first.
+        var svc = Make(sealedNode: true);
+        await svc.EnableAsync();
+        var newDek = RandomNumberGenerator.GetBytes(32);
+
+        await RotateAsync(newDek, initiator: false, new CrashAfterCommit(svc), new NoRewriteMirror(Mirror));
+
+        var doors = (await Doors.ListAsync()).Where(d => d.SlotType == ServerAutoUnlockService.SlotType).ToList();
+        doors.Should().HaveCount(2, "the crash left the old door and the pending re-sealed door");
+        doors.Should().ContainSingle(d => d.Pending);
+        (await svc.GetStatusAsync()).Enabled.Should().BeTrue("the open database holds the re-sealed door, and the record names its key as the next one");
+
+        var restarted = RestartedSealedSession();
+        var host = new SealedAutoUnlockHost(new FakeGate(VaultState.Closed), Doors, (dek, door, ct) => restarted.TryUnlockWithDekAsync(dek, door, ct));
+        (await Make(session: restarted, host: host, sealedNode: true).RunAtStartAsync(new NodeIdentityRepository(Factory)))
+            .Should().Be(ServerAutoUnlockStartOutcome.Unlocked);
+        restarted.GetMasterDek().Should().Equal(newDek);
+    }
+
+    [Fact]
+    public async Task ARotationThatRollsBack_LeavesTheRecordOnTheOldDoor()
+    {
+        var svc = Make();
+        await svc.EnableAsync();
+        var oldDek = Session.GetMasterDek();
+        var before = (await svc.EvaluateAsync()).Record!;
+
+        await svc.PrepareRotationAsync(new ServerRotationDoor(before.SlotSha256, new string('a', 64), new string('b', 64)));
+        await svc.OnDekRotatedAsync(committed: false);
+
+        var after = (await svc.EvaluateAsync()).Record!;
+        after.SlotSha256.Should().Be(before.SlotSha256);
+        after.DekFingerprint.Should().Be(DekFingerprint.Of(oldDek));
+        after.NextSlotSha256.Should().BeNull();
+        after.NextDekFingerprint.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task AV1ServerDoor_IsStillRemovedByARotation_WithItsRecordAndTheNodeCreatedKeyFile()
+    {
+        var svc = Make(sealedNode: true);
+        await svc.EnableAsync();
+        await DowngradeToV1Async(svc);
+        await Mirror.RewriteAsync();
         File.Exists(svc.NodeKeyFilePath).Should().BeTrue();
 
         await BeeMemoryBank.Sync.DekRotation.DekRewrapper.RewrapAllAsync(Factory, Session, Session.GetMasterDek(), RandomNumberGenerator.GetBytes(32), 2,
             Guid.NewGuid().ToString(), isInitiator: false, sealedHooks: new SealedRotationHooks(Mirror, svc));
 
+        (await ServerSlotsAsync()).Should().BeEmpty("a v1 door holds the old DEK and the rotation cannot re-seal it");
         File.Exists(svc.NodeKeyFilePath).Should().BeFalse();
         File.Exists(svc.RecordPath).Should().BeFalse();
     }
@@ -785,13 +970,15 @@ public class ServerAutoUnlockTests : SealedWriterFixture
     }
 
     [Fact]
-    public async Task TheOpenStepKeepsASlotTheRecordNames_AndHasOrderFifty()
+    public async Task TheOpenStepKeepsASlotTheRecordNames_AndRunsAfterTheMigrations()
     {
         var svc = Make(sealedNode: true);
         await svc.EnableAsync();
         var step = new StaleServerSlotOpenStep(svc);
 
-        step.Order.Should().Be(50);
+        // Order 150: after the migrations step (100), because the step reads tbl_key_slot with the current columns (spec 11.2; the
+        // first open of a database of an older release has the old ones until the migrations ran).
+        step.Order.Should().Be(150);
         await step.RunAsync(true, CancellationToken.None);
 
         (await ServerSlotsAsync()).Should().ContainSingle("the slot is the one the enable record names");
@@ -814,6 +1001,120 @@ public class ServerAutoUnlockTests : SealedWriterFixture
 
         (await fresh.TryAutoUnlockAsync(new NodeIdentityRepository(Factory))).Should().BeTrue();
         restarted.GetMasterDek().Should().Equal(dek);
+    }
+
+    // ---- sealed doors (ADR 0012) --------------------------------------------------------------------------------------------------
+
+    /// <summary>Turns the server's v2 slot back into the v1 wrap an earlier release wrote, and its record into the record of that release.</summary>
+    private async Task<MasterKeyStore> DowngradeToV1Async(ServerAutoUnlockService svc)
+    {
+        var secret = Convert.FromHexString(File.ReadAllText(svc.NodeKeyFilePath).Trim());
+        var dek = Session.GetMasterDek();
+        var slot = (await ServerSlotsAsync()).Single();
+        var (wrapped, iv) = MasterKeyManager.WrapMasterDek(dek, secret);
+        using (var c = Factory.CreateConnection())
+            await c.ExecuteAsync("UPDATE tbl_key_slot SET encrypted_master_dek = @wrapped, iv = @iv, door_version = 1, door_public_key = NULL, dek_fp = NULL WHERE slot_id = @id",
+                new { wrapped, iv, id = slot.SlotId });
+        var v1 = (await ServerSlotsAsync()).Single();
+        File.WriteAllText(svc.RecordPath, System.Text.Json.JsonSerializer.Serialize(new ServerEnableRecord(1,
+            BootDoorHash.OfSlot(v1.SlotId, v1.SlotType, v1.EncryptedMasterDek, v1.IV, null, null, null, null), DekFingerprint.Of(dek), DateTime.UtcNow.ToString("o"))));
+        return v1;
+    }
+
+    [Fact]
+    public async Task EnableWritesASealedDoor_AndTheRecordNamesItsV2Hash()
+    {
+        var svc = Make();
+        await svc.EnableAsync();
+        var slot = (await ServerSlotsAsync()).Single();
+        slot.DoorVersion.Should().Be(2);
+        slot.DoorPublicKey.Should().HaveCount(DoorBox.PublicKeySize);
+        slot.EncryptedMasterDek.Should().HaveCount(DoorBox.BoxSize);
+        slot.DekFingerprint.Should().Be(DekFingerprint.Of(Session.GetMasterDek()));
+        (await svc.EvaluateAsync()).State.Should().Be(ServerAutoUnlockState.Armed);
+        File.ReadAllText(svc.RecordPath).Should().NotContain("next_slot_sha256", "only an upgrade in progress names a second door");
+    }
+
+    [Fact]
+    public async Task AnArmedV1Slot_IsSealedAgainAfterAnUnlock_TheRecordFollows_AndTheNextStartStillUnlocks()
+    {
+        var dek = Session.GetMasterDek();
+        var svc = Make();
+        await svc.EnableAsync();
+        var v1 = await DowngradeToV1Async(svc);
+        (await svc.EvaluateAsync()).State.Should().Be(ServerAutoUnlockState.Armed, "the record of an earlier release names the v1 slot");
+
+        await svc.UpgradeAsync();
+
+        var v2 = (await ServerSlotsAsync()).Single();
+        v2.SlotId.Should().Be(v1.SlotId, "the door is replaced in place");
+        v2.DoorVersion.Should().Be(2);
+        v2.DekFingerprint.Should().Be(DekFingerprint.Of(dek));
+        var record = System.Text.Json.JsonDocument.Parse(File.ReadAllText(svc.RecordPath)).RootElement;
+        record.GetProperty("slot_sha256").GetString().Should().Be(
+            BootDoorHash.OfSlot(v2.SlotId, v2.SlotType, v2.EncryptedMasterDek, v2.IV, null, null, null, null, v2.DoorVersion, v2.DoorPublicKey));
+        record.TryGetProperty("next_slot_sha256", out _).Should().BeFalse("the upgrade finished");
+        record.GetProperty("dek_fp").GetString().Should().Be(DekFingerprint.Of(dek));
+        (await svc.EvaluateAsync()).State.Should().Be(ServerAutoUnlockState.Armed, "the slot is never stale after its upgrade");
+
+        await svc.UpgradeAsync();
+        (await ServerSlotsAsync()).Single().EncryptedMasterDek.Should().Equal(v2.EncryptedMasterDek, "a v2 door is left alone");
+
+        var restarted = new SessionService(KeySlots);
+        (await Make(session: restarted).RunAtStartAsync(new NodeIdentityRepository(Factory))).Should().Be(ServerAutoUnlockStartOutcome.Unlocked);
+        restarted.GetMasterDek().Should().Equal(dek);
+    }
+
+    [Fact]
+    public async Task ACrashInTheMiddleOfTheUpgrade_LeavesARecordThatNamesBothDoors_AndTheServerStaysArmedWithEither()
+    {
+        var dek = Session.GetMasterDek();
+        var svc = Make();
+        await svc.EnableAsync();
+        var v1 = await DowngradeToV1Async(svc);
+        var secret = Convert.FromHexString(File.ReadAllText(svc.NodeKeyFilePath).Trim());
+        var replacement = BeeMemoryBank.Crypto.Doors.WithDoor(v1, BeeMemoryBank.Crypto.Doors.Seal(ServerAutoUnlockService.SlotType, secret, null, dek));
+        var oldHash = BootDoorHash.OfSlot(v1.SlotId, v1.SlotType, v1.EncryptedMasterDek, v1.IV, null, null, null, null);
+        var newHash = BootDoorHash.OfSlot(replacement.SlotId, replacement.SlotType, replacement.EncryptedMasterDek, replacement.IV, null, null, null, null,
+            replacement.DoorVersion, replacement.DoorPublicKey);
+        File.WriteAllText(svc.RecordPath, System.Text.Json.JsonSerializer.Serialize(
+            new ServerEnableRecord(1, oldHash, DekFingerprint.Of(dek), DateTime.UtcNow.ToString("o"), newHash)));
+
+        // A crash after the record named both doors and before the slot changed: armed with the old door.
+        (await svc.EvaluateAsync()).State.Should().Be(ServerAutoUnlockState.Armed);
+        await svc.RetireStaleSlotsInOpenDatabaseAsync();
+        (await ServerSlotsAsync()).Should().ContainSingle("the open step keeps a slot the record names");
+
+        // A crash after the slot changed and before the record named only the new door: armed with the new one, and a start unlocks.
+        (await KeySlots.ReplaceDoorAsync(replacement, v1.EncryptedMasterDek)).Should().BeTrue();
+        (await svc.EvaluateAsync()).State.Should().Be(ServerAutoUnlockState.Armed);
+        await svc.RetireStaleSlotsInOpenDatabaseAsync();
+        (await ServerSlotsAsync()).Should().ContainSingle();
+        var restarted = new SessionService(KeySlots);
+        var restartedService = Make(session: restarted);
+        (await restartedService.RunAtStartAsync(new NodeIdentityRepository(Factory))).Should().Be(ServerAutoUnlockStartOutcome.Unlocked);
+        restarted.GetMasterDek().Should().Equal(dek);
+
+        // the step after the unlock (IUnlockedDoorUpgrade) finds the door v2 already and settles the record on it.
+        await restartedService.UpgradeAsync();
+        var settled = (await restartedService.EvaluateAsync()).Record!;
+        settled.SlotSha256.Should().Be(newHash, "the record names the door there is");
+        settled.NextSlotSha256.Should().BeNull();
+        settled.DekFingerprint.Should().Be(DekFingerprint.Of(dek));
+        File.ReadAllText(svc.RecordPath).Should().NotContain("next_slot_sha256");
+    }
+
+    [Fact]
+    public async Task OnAnOpenDatabase_ASlotThatNamesAnotherDekThanTheRecord_IsNotArmed_AsOnAClosedOne()
+    {
+        // the open-database path passed no fingerprint, so any DEK the slot named matched the record.
+        var svc = Make();
+        await svc.EnableAsync();
+        (await svc.EvaluateAsync()).State.Should().Be(ServerAutoUnlockState.Armed);
+        using (var c = Factory.CreateConnection())
+            await c.ExecuteAsync("UPDATE tbl_key_slot SET dek_fp = @fp WHERE slot_type = 'server_auto_unlock'", new { fp = new string('a', 64) });
+
+        (await svc.EvaluateAsync()).State.Should().Be(ServerAutoUnlockState.StaleSlot, "the slot names a DEK the record does not");
     }
 
     [Fact]

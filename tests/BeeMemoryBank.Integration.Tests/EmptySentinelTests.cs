@@ -14,7 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-312/308 fix round, findings 1 and 3: an EMPTY sentinel (<c>X''</c>) is a missing sentinel, exactly like NULL, at every door that reads it
+/// BMB-312/308: an EMPTY sentinel (<c>X''</c>) is a missing sentinel, exactly like NULL, at every door that reads it
 /// (the one predicate is <see cref="MasterKeyManager.IsSentinelMissing"/>), and the seal preflight stores the sentinel it makes with the same conditional
 /// statement as every other healer, so it can never overwrite one somebody stored after it looked.
 /// </summary>

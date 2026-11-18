@@ -306,7 +306,7 @@ public sealed class Format2PackageTests : IAsyncLifetime
     public static IEnumerable<object[]> NotAContainer() => Format2TestKit.NotAContainerCases.Select(c => new object[] { c });
 
     /// <summary>
-    /// Spec 7.1 (review round): a baseline container has the BMBCH1 framing. Another plaintext format that merely does not start
+    /// Spec 7.1: a baseline container has the BMBCH1 framing. Another plaintext format that merely does not start
     /// like SQLite, or a frame broken in any one way, is refused by the writer and by a reader that is handed a signed package
     /// carrying it (the receiver does not rely on the sender having checked).
     /// </summary>
@@ -406,7 +406,7 @@ public sealed class Format2PackageTests : IAsyncLifetime
     ];
 
     /// <summary>
-    /// Spec 8.5 and 8.6 step 5 (review round): the reader refuses a delta stream that breaks the invariants of the format
+    /// Spec 8.5 and 8.6 step 5: the reader refuses a delta stream that breaks the invariants of the format
     /// instead of trusting the sender - every row after the cut and not after the head, strictly in order, each event once,
     /// no clear content - before anything reaches the applier or the disk of a receiver.
     /// </summary>
@@ -505,7 +505,7 @@ public sealed class Format2PackageTests : IAsyncLifetime
     ];
 
     /// <summary>
-    /// Spec 8.6 step 2 (review round 2): the receiver validates every field of a signed blind manifest that it will use after
+    /// Spec 8.6 step 2: the receiver validates every field of a signed blind manifest that it will use after
     /// the baseline is adopted, before anything is adopted - a manifest is signed, not safe. Each of these used to pass the
     /// reader and to throw (or to fail halfway) in the seed, after the baseline had been taken.
     /// </summary>
@@ -611,7 +611,7 @@ public sealed class Format2PackageTests : IAsyncLifetime
     ];
 
     /// <summary>
-    /// Spec 8.4 and 8.6 step 4 (review round 3): the receiver holds every row of <c>control.db</c> against the rules the live
+    /// Spec 8.4 and 8.6 step 4: the receiver holds every row of <c>control.db</c> against the rules the live
     /// appliers apply, before anything is adopted. Each of these passed the reader (the table names were right) and was imported
     /// after the baseline was adopted and the legacy content purged - a Lamport time at the limit then failed the first seed's grant.
     /// </summary>

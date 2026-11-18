@@ -1,47 +1,121 @@
 <?xml version="1.0" encoding="utf-8" ?>
+<!-- Sync in the design's shape (the Android StatusPage's cards): the state card with the pill,
+     the last sync and Sync now inside it, this device's card, the devices card with their state,
+     and the banners for no network / a failed round / the local network iOS refused. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:services="clr-namespace:BeeMemoryBank.FullIos.Services"
+             xmlns:controls="clr-namespace:BeeMemoryBank.FullIos.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
              x:Class="BeeMemoryBank.FullIos.Pages.SyncPage"
              Title="Sync">
-    <Grid RowDefinitions="*,Auto" Padding="20,8,20,20">
-        <ScrollView>
-            <VerticalStackLayout Spacing="8">
-                <Label x:Name="NodeLabel" FontSize="20" FontAttributes="Bold" />
-                <Label x:Name="NodeIdLabel" Style="{StaticResource Muted}" FontSize="12" />
-                <Label x:Name="CountLabel" AutomationId="NoteCount" />
-                <Label Text="Last round" Style="{StaticResource Section}" />
-                <Label x:Name="RoundLabel" AutomationId="LastRound" />
-                <Label x:Name="ProblemLabel" Style="{StaticResource Error}" IsVisible="False" />
-                <Label x:Name="LocalNetworkLabel" Style="{StaticResource Error}" IsVisible="False" AutomationId="LocalNetworkOff" />
-                <Label Text="Syncs with" Style="{StaticResource Section}" />
-                <VerticalStackLayout x:Name="PeersList" Spacing="8">
-                    <BindableLayout.ItemTemplate>
-                        <DataTemplate x:DataType="services:PeerStatus">
-                            <Border Style="{StaticResource Card}" Padding="12">
-                                <Border.GestureRecognizers>
-                                    <TapGestureRecognizer Tapped="OnPeerTapped" />
-                                </Border.GestureRecognizers>
-                                <VerticalStackLayout Spacing="2">
-                                    <Label Text="{Binding Name}" FontAttributes="Bold" />
-                                    <Label Text="{Binding Address}" Style="{StaticResource Muted}" FontSize="12" />
-                                    <Label Text="{Binding ReachabilityText}" FontSize="14" IsVisible="{Binding HasReachabilityText}" />
-                                    <Label Text="{Binding Summary}" FontSize="14" />
-                                    <Label Text="Ways to reach it ›" Style="{StaticResource Muted}" FontSize="12" />
-                                </VerticalStackLayout>
-                            </Border>
-                        </DataTemplate>
-                    </BindableLayout.ItemTemplate>
+    <ScrollView>
+        <VerticalStackLayout Padding="16,16,16,100" Spacing="12">
+
+            <Border x:Name="OfflineBanner" Style="{StaticResource CardBorder}" IsVisible="False">
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="{loc:Translate SyncOfflineTitle}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate SyncOfflineDesc}" Style="{StaticResource ItemMeta}" />
                 </VerticalStackLayout>
-                <Label x:Name="NoPeersLabel" Style="{StaticResource Muted}" IsVisible="False"
-                       Text="No other device yet. Join this iPhone to a computer, or connect a computer to this memory bank." />
-                <Label Style="{StaticResource Muted}" Margin="0,16,0,0"
-                       Text="This iPhone calls your other devices while the app is open, after every change and once a minute, and once more when you leave the app. While the app is open it also looks for your computers on this Wi-Fi, so it can sync with them directly. It never waits for calls: iOS stops apps in the background." />
-            </VerticalStackLayout>
-        </ScrollView>
-        <VerticalStackLayout Grid.Row="1" Spacing="8">
-            <ActivityIndicator x:Name="Busy" IsVisible="False" IsRunning="False" />
-            <Button x:Name="SyncButton" Text="Sync now" Clicked="OnSyncNow" AutomationId="SyncNowButton" />
+            </Border>
+
+            <Border x:Name="ErrorBanner" Style="{StaticResource CardBorder}" IsVisible="False"
+                    Stroke="{AppThemeBinding Light={StaticResource BmbErrorBorderLight}, Dark={StaticResource BmbErrorBorder}}">
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="{loc:Translate SyncErrorTitle}" Style="{StaticResource CardTitle}"
+                           TextColor="{AppThemeBinding Light={StaticResource BmbErrorLight}, Dark={StaticResource BmbError}}" />
+                    <Label x:Name="ProblemText" Style="{StaticResource ItemMeta}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- An administrator disconnected this phone (2.12): one calm sentence in the plain card colours, not an error. -->
+            <Border x:Name="DisconnectedBanner" Style="{StaticResource CardBorder}" IsVisible="False" AutomationId="SyncDisconnected">
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="{loc:Translate SyncDisconnectedTitle}" Style="{StaticResource CardTitle}" />
+                    <Label Text="{loc:Translate SyncProblemDisconnected}" Style="{StaticResource ItemMeta}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- A computer that is simply away: yellow, never red. -->
+            <Border x:Name="UnreachableBanner" Style="{StaticResource CardBorder}" IsVisible="False" AutomationId="SyncUnreachable"
+                    Stroke="{AppThemeBinding Light={StaticResource BmbWarningBorderLight}, Dark={StaticResource BmbWarningBorder}}">
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="{loc:Translate SyncUnreachableTitle}" Style="{StaticResource CardTitle}"
+                           TextColor="{AppThemeBinding Light={StaticResource BmbWarningLight}, Dark={StaticResource BmbWarning}}" />
+                    <Label x:Name="UnreachableText" Style="{StaticResource ItemMeta}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Border x:Name="LanBanner" Style="{StaticResource CardBorder}" IsVisible="False" AutomationId="LocalNetworkOff"
+                    Stroke="{AppThemeBinding Light={StaticResource BmbWarningBorderLight}, Dark={StaticResource BmbWarningBorder}}">
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="{loc:Translate SyncLanOffTitle}" Style="{StaticResource CardTitle}"
+                           TextColor="{AppThemeBinding Light={StaticResource BmbWarningLight}, Dark={StaticResource BmbWarning}}" />
+                    <Label x:Name="LanText" Style="{StaticResource ItemMeta}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- State -->
+            <Border Style="{StaticResource CardBorder}" AutomationId="SyncStateCard">
+                <VerticalStackLayout Spacing="12">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <Label Grid.Column="0" Text="{loc:Translate SyncStateCard}" Style="{StaticResource CardTitle}" VerticalOptions="Center" />
+                        <Border Grid.Column="1" x:Name="StatePill" StrokeThickness="1" StrokeShape="RoundRectangle 11" Padding="10,4" VerticalOptions="Center">
+                            <Label x:Name="StatePillLabel" FontSize="12" FontFamily="{StaticResource FontBodySemibold}" />
+                        </Border>
+                    </Grid>
+                    <controls:InfoRow Label="{loc:Translate SyncLastSync}">
+                        <Label x:Name="LastSyncValue" Style="{StaticResource ItemTitle}" />
+                    </controls:InfoRow>
+                    <Label x:Name="RoundDetail" Style="{StaticResource ItemMeta}" AutomationId="LastRound" IsVisible="False" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                        <VerticalStackLayout Grid.Column="0" Spacing="2" VerticalOptions="Center">
+                            <Label Text="{loc:Translate SyncInvisibleTitle}" Style="{StaticResource ItemTitle}" />
+                            <Label Text="{loc:Translate SyncInvisibleDesc}" Style="{StaticResource ItemMeta}" />
+                        </VerticalStackLayout>
+                        <Switch Grid.Column="1" x:Name="InvisibleSwitch" VerticalOptions="Center" Toggled="OnInvisibleToggled" AutomationId="InvisibleSwitch" />
+                    </Grid>
+                    <Button x:Name="SyncButton" Text="{loc:Translate SyncNow}" Style="{StaticResource PrimaryButton}"
+                            Clicked="OnSyncNow" AutomationId="SyncNowButton" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- This device -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="{loc:Translate SyncThisDevice}" Style="{StaticResource CardTitle}" />
+                    <controls:InfoRow Label="{loc:Translate SettingsDeviceName}">
+                        <Label x:Name="NodeLabel" Style="{StaticResource ItemTitle}" />
+                    </controls:InfoRow>
+                    <controls:InfoRow Label="{loc:Translate SyncDeviceIdLabel}">
+                        <Label x:Name="NodeIdLabel" FontFamily="Menlo" FontSize="12" LineBreakMode="CharacterWrap"
+                               TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+                    </controls:InfoRow>
+                    <controls:InfoRow Label="{loc:Translate SyncNotesLabel}">
+                        <Label x:Name="CountLabel" Style="{StaticResource ItemTitle}" AutomationId="NoteCount" />
+                    </controls:InfoRow>
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Devices -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SyncDevicesCard}" Style="{StaticResource CardTitle}" />
+                    <Label x:Name="NoPeersLabel" Text="{loc:Translate SyncNoDevices}" Style="{StaticResource ItemMeta}" IsVisible="False" />
+                    <VerticalStackLayout x:Name="PeersList" Spacing="8" AutomationId="PeersList" />
+                </VerticalStackLayout>
+            </Border>
+
+            <!-- Recent events -->
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="{loc:Translate SyncEventsCard}" Style="{StaticResource CardTitle}" />
+                    <Label x:Name="NoEventsLabel" Text="{loc:Translate SyncNoEvents}" Style="{StaticResource ItemMeta}" IsVisible="False" />
+                    <VerticalStackLayout x:Name="EventsList" Spacing="6" AutomationId="ActivityList" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Label Text="{loc:Translate SyncIosNote}" Style="{StaticResource ItemMeta}" />
         </VerticalStackLayout>
-    </Grid>
+    </ScrollView>
 </ContentPage>

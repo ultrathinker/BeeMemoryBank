@@ -4,7 +4,7 @@ namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
 /// Tests for <see cref="Services.TreeService.GetTreePathsAsync"/> — the depth-bounded, optionally
-/// paginated tree view backing the <c>bee_get_tree</c> MCP tool (WP-19).
+/// paginated tree view backing the <c>bee_get_tree</c> MCP tool.
 /// </summary>
 public class TreePaginationTests : TestFixture
 {
@@ -30,7 +30,7 @@ public class TreePaginationTests : TestFixture
     [Fact]
     public async Task NoLimits_ReturnsAllDescendants_UnboundedLegacyBehavior()
     {
-        // Omitting depth/limit must reproduce the pre-WP-19 unbounded behavior: every descendant of
+        // Omitting depth/limit must reproduce the earlier unbounded behavior: every descendant of
         // the scoped path comes back, no pagination, truncated == false.
         var result = await TreeService.GetTreePathsAsync(path: "/DepthTest");
 
@@ -126,7 +126,7 @@ public class TreePaginationTests : TestFixture
     [Fact]
     public async Task DepthZero_OnThousandsOfFolders_ReturnsBoundedResponse()
     {
-        // Synthetic 1000-folder subtree. This is the core WP-19 guarantee: even at scale, a
+        // Synthetic 1000-folder subtree. This is the core guarantee: even at scale, a
         // depth/limit cap returns a bounded slice instead of the whole subtree.
         const int n = 1000;
         for (var i = 0; i < n; i++)

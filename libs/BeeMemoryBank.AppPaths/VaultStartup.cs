@@ -14,8 +14,8 @@ public sealed class VaultLease : IDisposable
 public sealed class VaultInUseException(string message) : InvalidOperationException(message);
 
 /// <summary>
-/// The one gate every process that opens a data directory passes before it creates or opens anything in it (review
-/// release-b R1-1..R1-3): the Node in both its modes, the Api (standalone, Docker, or the Node's child) and every CLI
+/// The one gate every process that opens a data directory passes before it creates or opens anything in it
+/// The Node in both its modes, the Api (standalone, Docker, or the Node's child) and every CLI
 /// command. Only the <c>bmb rekey</c> verb stays out: it takes the lease exclusively instead.
 /// <list type="number">
 /// <item>A re-key that is running (its <c>&lt;D&gt;.rekey.lock</c> held) refuses the start before anything is resolved:
@@ -42,7 +42,7 @@ public static class VaultStartup
     /// <summary>
     /// Passes the gate. Throws <see cref="VaultInUseException"/> while a re-key runs. The caller keeps the lease for its
     /// whole life (a field or a DI singleton: a local the JIT sees as dead may be finalized, which releases it).
-    /// <para>Nothing is resolved without the lease (review release-b-fix #1). The swap resolver renames directories, so
+    /// <para>Nothing is resolved without the lease. The swap resolver renames directories, so
     /// it runs only with the lease held <b>exclusively</b>. Then no re-key (which needs it exclusively too) and no
     /// other start can be in the middle of the same journal, and the re-key lock is checked again under it. Afterwards
     /// the lease is taken shared for the life of the process. A start that finds others holding it shared joins them:
@@ -63,7 +63,7 @@ public static class VaultStartup
                 if (exclusive != null)
                 {
                     if (Refusal(d) is { } late) throw new VaultInUseException(late);
-                    // The link gate FIRST (BMB-306 fix round 5): a data folder that is a link, or a reserved name in it that is one (live or dangling), refuses the start by
+                    // The link gate FIRST (BMB-306): a data folder that is a link, or a reserved name in it that is one (live or dangling), refuses the start by
                     // name before any resolver below asks whether anything exists, reads, moves or wipes through it.
                     resolved = LinkGate.RefusedStart(d) ?? RekeySwapResolver.Resolve(d);
                     if (resolved.Seal is null)
@@ -118,7 +118,7 @@ public static class VaultStartup
 
         // The others passed the gate, so the swap is resolved - but a setup, join or restore may be running in one of them, or have been cut off while another
         // still runs. This start does not resolve a seal intent (that needs the lease exclusively, and it may be a live operation's), and it must not serve
-        // what the operation writes in the open either: it is refused by name, and nothing is wiped (BMB-306 fix round 2).
+        // what the operation writes in the open either: it is refused by name, and nothing is wiped (BMB-306).
         if (SealIntent.BusyRefusal(d) is { } busy)
             joined = joined with
             {

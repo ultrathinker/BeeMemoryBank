@@ -186,7 +186,7 @@ public class OwnerOnlyFileTests : IDisposable
         Directory.GetFiles(_dir).Should().BeEmpty();
     }
 
-    // ─── Windows ACLs (review release-a #7) ─────────────────────────────────
+    // ─── Windows ACLs ─────────────────────────────────
 
     [WindowsAclFact]
     public void CreateNew_InAFolderEveryAccountCanRead_IsOwnerOnly()
@@ -282,7 +282,7 @@ public class OwnerOnlyFileTests : IDisposable
         problem.Should().BeNull();
     }
 
-    // BMB-304 fix3 (G4): a sealed join import could not put its finished staging copy over the extracted file on Windows. One helper replaces a staged file.
+    // BMB-304: a sealed join import could not put its finished staging copy over the extracted file on Windows. One helper replaces a staged file.
 
     private (string From, string To) Staged(byte[] oldBytes, byte[] newBytes)
     {

@@ -7,7 +7,7 @@ using Xunit;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// BMB-307 fix2 (M2): the remote sentinel check reads "the server has no sentinel" with the one predicate. An empty text used to be decoded into an empty sentinel, which
+/// BMB-307: the remote sentinel check reads "the server has no sentinel" with the one predicate. An empty text used to be decoded into an empty sentinel, which
 /// no key matches: every sync with an older server that answered an empty sentinel logged a "DEK sentinel mismatch" warning that meant nothing.
 /// </summary>
 public sealed class RemoteSentinelVerifierTests : SyncTestFixture

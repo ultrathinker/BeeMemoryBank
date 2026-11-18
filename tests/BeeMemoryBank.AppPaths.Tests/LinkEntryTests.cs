@@ -3,7 +3,7 @@ using BeeMemoryBank.TestSupport;
 namespace BeeMemoryBank.AppPaths.Tests;
 
 /// <summary>
-/// BMB-306 fix round 4 (H1): <see cref="LinkEntry"/> judges a link by the directory entry itself, never by whether what it points to is there. File.Exists, Directory.Exists and
+/// BMB-306: <see cref="LinkEntry"/> judges a link by the directory entry itself, never by whether what it points to is there. File.Exists, Directory.Exists and
 /// FileSystemInfo.Exists look through a link where the platform resolves it, and what they answer for a link to nothing differs between platforms and runtime versions; the
 /// answers here must not.
 /// </summary>

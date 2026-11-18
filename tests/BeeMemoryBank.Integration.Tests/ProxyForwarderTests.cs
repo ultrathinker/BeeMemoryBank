@@ -120,14 +120,30 @@ public sealed class ProxyForwarderFixture : IAsyncLifetime
 /// </summary>
 public sealed class CountingHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
 {
+    private const string StampPath = "/api/users/me/stamp";
+
     private int _count;
+    private int _stampLookups;
 
     public int Count => Volatile.Read(ref _count);
+
+    /// <summary>
+    /// The requests that are not the Web layer's own security-stamp lookup. A signed-in superadmin's request for a superadmin route makes that lookup before the page or the proxy
+    /// route runs (<c>PrincipalStampValidator</c>, on every such request), so "the request was not forwarded" is about what is left once it is taken out.
+    /// </summary>
+    public int ForwardedCount => Volatile.Read(ref _count) - Volatile.Read(ref _stampLookups);
+
+    private readonly System.Collections.Concurrent.ConcurrentQueue<string> _paths = new();
+
+    /// <summary>How many requests asked for <paramref name="path"/>.</summary>
+    public int CountOf(string path) => _paths.Count(p => p == path);
 
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _count);
+        if (request.RequestUri?.AbsolutePath == StampPath) Interlocked.Increment(ref _stampLookups);
+        _paths.Enqueue(request.RequestUri?.AbsolutePath ?? "");
         return base.SendAsync(request, cancellationToken);
     }
 }
@@ -375,10 +391,14 @@ public class ProxyForwarderTests
         // BMB-338: the overview names other people and their rights. A regular user is refused by the Web gate itself,
         // before anything is forwarded; the superadmin gets the real answer.
         var before = _fx.ApiCalls.Count;
+        var beforeStamps = _fx.ApiCalls.CountOf("/api/users/me/stamp");
         var bob = await _fx.Bob.GetAsync("/api-proxy/access/folder-marks");
         bob.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await bob.Content.ReadAsStringAsync()).Should().Contain("superadmin only");
-        _fx.ApiCalls.Count.Should().Be(before, "the refusal is local: the API is not even asked");
+        // Since 2.12 the Web asks the API who the cookie belongs to on every superadmin route; that question is the only call.
+        _fx.ApiCalls.CountOf("/api/access/folder-marks").Should().Be(0, "the refusal is local: the request is never forwarded");
+        (_fx.ApiCalls.Count - before).Should().Be(_fx.ApiCalls.CountOf("/api/users/me/stamp") - beforeStamps,
+            "the API is asked nothing but the stamp of the session");
 
         var admin = await _fx.Admin.GetAsync("/api-proxy/access/folder-marks");
         admin.StatusCode.Should().Be(HttpStatusCode.OK);

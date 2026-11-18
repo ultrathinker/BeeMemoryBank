@@ -1,8 +1,10 @@
 using System.Buffers.Text;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Models;
+using BeeMemoryBank.Sync;
 
 namespace BeeMemoryBank.Core.Services.BlindPhone;
 
@@ -38,15 +40,47 @@ public sealed class BlindPhoneState(IBlindPhoneStore store)
     /// <summary>
     /// The accepted "where to call" code; null until paired. A refusal remembered (<see cref="SourceRefusedAt"/>) was given by the computer this code named: a new code is a new pairing, and its
     /// first refusal is a first one, so setting a code forgets the remembered time.
+    /// <para>
+    /// The hub's key in the code is the one of the pairing; a hub that re-keyed since moved it (release 2.12, plan WS-D D4: <see cref="FollowHubKey"/>), and
+    /// the code read here carries the key it moved to, so every call, signature check and channel plan of the copy uses the hub's current key. The code as
+    /// it was paired (whose MAC the pairing secret checks) is <see cref="PairedCallCode"/>. Setting a code is a new pairing: the moved key is forgotten.
+    /// </para>
     /// </summary>
     public BlindCallCode? CallCode
     {
-        get => BlindCallCode.TryParse(store.Get(P + "call_code"), out var c) ? c : null;
+        get => PairedCallCode is { } code && FollowedHubKey(code.NodeId) is { } moved ? code with { PublicKey = moved } : PairedCallCode;
         set
         {
             store.Set(P + "call_code", value?.ToString());
             store.Set(P + "source_refused_at", null);
+            store.Set(P + "hub_key", null);
         }
+    }
+
+    /// <summary>The call code exactly as the pairing gave it (its MAC is over the pairing's key); <see cref="CallCode"/> for everything else.</summary>
+    public BlindCallCode? PairedCallCode => BlindCallCode.TryParse(store.Get(P + "call_code"), out var c) ? c : null;
+
+    /// <summary>
+    /// Moves the copy's pin of the hub's key when the hub answers with a key its signed key transition chain leads to from the pinned one (release 2.12,
+    /// plan WS-D D4; <see cref="PeerKey.Follow"/>). True when the pin moved. An answer of another node, a key the chain does not reach (a hub that re-keyed
+    /// more than 16 times while this copy was away: the copy is paired again), or no chain at all leaves the pin as it is.
+    /// </summary>
+    public bool FollowHubKey(RemoteIdentity identity)
+    {
+        if (CallCode is not { } code || identity.NodeId != code.NodeId) return false;
+        if (PeerKey.Follow(code.NodeId, code.PublicKey, identity.Ed25519PublicKeyB64, identity.KeyChain) is not { } reached) return false;
+        if (CryptographicOperations.FixedTimeEquals(reached, code.PublicKey)) return false;
+        store.Set(P + "hub_key", $"{code.NodeId:D}:{Base64Url.EncodeToString(reached)}");
+        return true;
+    }
+
+    private byte[]? FollowedHubKey(Guid hub)
+    {
+        var text = store.Get(P + "hub_key");
+        if (text is null || text.IndexOf(':') is var colon && colon <= 0) return null;
+        if (!Guid.TryParseExact(text[..colon], "D", out var node) || node != hub) return null;
+        try { return Base64Url.DecodeFromChars(text[(colon + 1)..]) is { Length: NodeKeyTransition.KeySize } key ? key : null; }
+        catch (FormatException) { return null; }
     }
 
     public bool InitialLoadDone
@@ -99,7 +133,7 @@ public sealed class BlindPhoneState(IBlindPhoneStore store)
     /// <summary>Forgets everything (Disconnect and wipe).</summary>
     public void Clear()
     {
-        foreach (var key in new[] { "node_id", "public_key", "name", "call_code", "initial_load_done",
+        foreach (var key in new[] { "node_id", "public_key", "name", "call_code", "hub_key", "initial_load_done",
                      "last_sync", "last_backup", "schedule", "pending_backup", "pause_reported_at", "pause_reported_reason", "source_refused_at" })
             store.Set(P + key, null);
     }

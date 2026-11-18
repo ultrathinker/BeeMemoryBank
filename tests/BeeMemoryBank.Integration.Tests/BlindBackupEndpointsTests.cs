@@ -276,7 +276,7 @@ public class BlindBackupEndpointsTests : IAsyncLifetime
             "the repository the backup used is encrypted under it");
     }
 
-    // ── the restic password and the repository it created (review round 2) ──────────────────────
+    // ── the restic password and the repository it created ──────────────────────
 
     private BlindBackupSettingsStore Store => _factory.Services.GetRequiredService<BlindBackupSettingsStore>();
 

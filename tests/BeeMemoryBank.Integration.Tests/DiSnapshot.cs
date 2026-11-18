@@ -31,7 +31,8 @@ internal static class DiSnapshot
     /// </summary>
     public static string Container(IEnumerable<ServiceDescriptor> descriptors)
     {
-        var rows = descriptors.Select((d, i) => (d, i)).Where(x =>
+        var all = descriptors.ToList();
+        var rows = all.Select((d, i) => (d, i)).Where(x =>
         {
             var impl = x.d.IsKeyedService ? x.d.KeyedImplementationType : x.d.ImplementationType;
             var inst = x.d.IsKeyedService ? x.d.KeyedImplementationInstance : x.d.ImplementationInstance;
@@ -46,7 +47,11 @@ internal static class DiSnapshot
             var what = impl is not null ? Fmt(impl) : inst is not null ? "instance " + Fmt(inst.GetType()) : factory ? "factory" : "?";
             var key = d.IsKeyedService ? " [key " + d.ServiceKey + "]" : "";
             return (Service: Fmt(d.ServiceType), x.i, Line: $"{d.Lifetime} {Fmt(d.ServiceType)}{key} => {what}");
-        }).OrderBy(r => r.Service, StringComparer.Ordinal).ThenBy(r => r.i).Select(r => r.Line);
+        }).OrderBy(r => r.Service, StringComparer.Ordinal).ThenBy(r => r.i).Select(r => r.Line).ToList();
+        // The OS auto-unlock (registered only where the platform has a secret store) also registers itself as one more door
+        // upgrade (ADR 0012) through a factory, under a service type of Core; that one line is left out with the rest of it.
+        if (all.Any(d => IsOperatingSystemSpecific(d.ServiceType)))
+            rows.Remove(OsAutoUnlockDoorUpgradeLine);
         return string.Join("\n", rows) + "\n";
     }
 
@@ -54,6 +59,8 @@ internal static class DiSnapshot
     /// Registrations that exist only on some operating systems (the OS auto-unlock and its secret-store implementation are Windows-only): left out,
     /// so the golden file is the same on the Windows machine it was written on and on the Linux test boxes. Everything else is compared exactly.
     /// </summary>
+    private const string OsAutoUnlockDoorUpgradeLine = "Singleton BeeMemoryBank.Core.Interfaces.IUnlockedDoorUpgrade => factory";
+
     private static bool IsOperatingSystemSpecific(Type service) =>
         service.Namespace == "BeeMemoryBank.Infrastructure.OsAutoUnlock"
         || service.Namespace == "BeeMemoryBank.Infrastructure.Secrets";

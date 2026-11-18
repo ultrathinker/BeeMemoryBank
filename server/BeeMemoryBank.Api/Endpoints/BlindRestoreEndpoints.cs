@@ -174,7 +174,7 @@ public static class BlindRestoreEndpoints
             if (publicKey.Length != 32 || req.NodeId == Guid.Empty || BlindNodeId.IsBlind(req.NodeId))
                 return Results.BadRequest(new ErrorResponse("Bad node id or public key."));
 
-            // Idempotent for the device that spent the code (review release-a #9): the code is spent before the whitelist
+            // Idempotent for the device that spent the code: the code is spent before the whitelist
             // and audit writes, which are not in its transaction, so a failure between them used to leave the code burnt and
             // the device untrusted. The device's retry (the restore client retries a 5xx) now repeats the claim. A second
             // device is refused (another node id). A repeat may only finish what the first claim did not write - no row

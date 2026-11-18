@@ -1,5 +1,7 @@
 using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Mobile.Controls;
+using BeeMemoryBank.Mobile.Localization;
 using BeeMemoryBank.Mobile.Services;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Channels;
@@ -38,7 +40,7 @@ public partial class InitialSyncPage : ContentPage
         Spinner.IsRunning = true;
         RetryButton.IsVisible = false;
         ErrorLabel.IsVisible = false;
-        CounterLabel.Text = "Connecting…";
+        CounterLabel.Text = AppStrings.Get("InitialSyncConnecting");
         _eventsApplied = 0;
 
         try
@@ -74,11 +76,11 @@ public partial class InitialSyncPage : ContentPage
                 foreach (var peer in peers)
                 {
                     if (token.IsCancellationRequested) break;
-                    CounterLabel.Text = $"Downloading from {peer.DisplayName}… ({_eventsApplied} events)";
+                    CounterLabel.Text = AppStrings.Format("InitialSyncDownloadingFormat", peer.DisplayName, _eventsApplied);
                     var applied = await PeerSessions.SyncWithPeerAsync(sp, http, peer, token);
                     _eventsApplied += applied;
                     roundTotal += applied;
-                    CounterLabel.Text = $"Downloaded {_eventsApplied} events";
+                    CounterLabel.Text = AppStrings.Format("InitialSyncDownloadedFormat", _eventsApplied);
                 }
 
                 if (roundTotal == 0) break;
@@ -97,10 +99,10 @@ public partial class InitialSyncPage : ContentPage
         {
             Spinner.IsRunning = false;
             Spinner.IsVisible = false;
-            ErrorLabel.Text = $"Sync failed: {BeeMemoryBank.Sync.PeerContactLog.Describe(ex)}";
+            ErrorLabel.Text = AppStrings.Format("InitialSyncFailedFormat", PeerContactLog.Describe(ex));
             ErrorLabel.IsVisible = true;
             RetryButton.IsVisible = true;
-            CounterLabel.Text = $"{_eventsApplied} events downloaded before error";
+            CounterLabel.Text = AppStrings.Format("InitialSyncBeforeErrorFormat", _eventsApplied);
         }
         finally
         {
@@ -127,10 +129,8 @@ public partial class InitialSyncPage : ContentPage
 
     private async void OnCancelClicked(object? sender, EventArgs e)
     {
-        bool confirmed = await DisplayAlert(
-            "Cancel and delete",
-            "This will DELETE this node and all data downloaded so far. You'll have to set up again. Continue?",
-            "Delete", "Keep trying");
+        bool confirmed = await AppDialog.ConfirmAsync(this, AppStrings.Get("CancelDeleteTitle"),
+            AppStrings.Get("CancelDeleteDesc"), AppStrings.Get("Delete"), AppStrings.Get("CancelDeleteKeep"), danger: true);
         if (!confirmed) return;
 
         _cts?.Cancel();
@@ -138,8 +138,8 @@ public partial class InitialSyncPage : ContentPage
         await BusyAction.RunAsync(sender as Button, WipeAndResetAsync, new BusyOptions
         {
             Long = true,
-            Title = "Deleting this node",
-            Message = "Please wait. The data downloaded so far is being removed and the app restarts by itself.",
+            Title = AppStrings.Get("DeletingDeviceTitle"),
+            Message = AppStrings.Get("DeletingDeviceMessage"),
         });
     }
 
@@ -147,15 +147,10 @@ public partial class InitialSyncPage : ContentPage
     {
         App.StopSyncService();
         _services.GetService<IBiometricService>()?.Clear();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
 
-        var dbPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "beememorybank.db");
-        if (File.Exists(dbPath))
-        {
-            try { File.Delete(dbPath); } catch { }
-        }
+        // The whole vault file set: on an encrypted phone the first sync runs after the encryption, and deleting the database alone left the boot
+        // store behind - the next start was a dead end. A file that cannot go is said by the busy helper, not ignored.
+        await PhoneWipe.ReturnToPlainAsync(_services);
 
 #if ANDROID
         var intent = Android.App.Application.Context.PackageManager!

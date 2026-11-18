@@ -8,7 +8,8 @@ namespace BeeMemoryBank.Web.Models;
 public record BlindInviteDto(
     string InviteId, string State, string Label, string SourceName, string Address, string Trust, string CreatedBy, DateTime CreatedAt, DateTime ExpiresAt,
     string? DeviceName, string? Platform, string? AppVersion, string? SeenFrom, DateTime? RedeemedAt, string? MatchCode, DateTime? ConfirmDeadline,
-    DateTime? DecidedAt, string? DecidedBy, string? DeviceId, string Kind = "device");
+    DateTime? DecidedAt, string? DecidedBy, string? DeviceId, string Kind = "device",
+    string Ownership = "shared", string? OwnerLabel = null);
 
 /// <summary>What the Api made (POST /api/blind-nodes/invites): the one-time string, shown once. Its <c>ToString()</c> leaves the string out: a generated one would print it.</summary>
 public record BlindInviteIssuedDto(string InviteId, string Text, DateTime ExpiresAt, string Address, string Trust, string? Pin, string? Notice)

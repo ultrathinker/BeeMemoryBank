@@ -10,7 +10,7 @@ using BeeMemoryBank.Sync;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Covers the Этап "Bee-Export/Import" additions to <see cref="ZipExportService"/>: empty
+/// Covers the "Bee-Export/Import" additions to <see cref="ZipExportService"/>: empty
 /// folders now survive export (via .bmb-keep markers) and every export carries a
 /// ".bmb-manifest.json" sidecar with exact titles/tags/protected-flags so
 /// <see cref="BeeImportService"/> can restore them exactly. The round-trip test at the bottom

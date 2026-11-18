@@ -6,7 +6,7 @@ using Xunit;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-311 fix round (F2, F3, F5, F6, F13, F14): what the shared busy helper of the Web UI (<c>wwwroot/js/bmb-busy.js</c>) DOES, run in a small fake page by
+/// BMB-311: what the shared busy helper of the Web UI (<c>wwwroot/js/bmb-busy.js</c>) DOES, run in a small fake page by
 /// <c>JsHarness/bmb-busy-harness.js</c> (node, no packages, timers that only move when the test says so). A source scan cannot tell that a lock is let go
 /// after thirty minutes; running the file with the clock moved can. The tests need node; where there is none they are skipped, and
 /// <c>BMB_REQUIRE_NODE=1</c> makes that a failure (CI has node).
@@ -74,7 +74,7 @@ public class BusyHelperBehaviorTests
     [InlineData("a_declined_confirmation_ends_the_reservation")]
     // F5: what the node said reaches the person
     [InlineData("errors_carry_what_the_node_said")]
-    // BMB-311 fix2: R6 (the whole text of a long error), R7 (the first submit event is seen busy)
+    // BMB-311: R6 (the whole text of a long error), R7 (the first submit event is seen busy)
     [InlineData("a_long_error_keeps_its_whole_text_in_an_area_that_opens")]
     [InlineData("the_first_submit_event_is_seen_busy_at_once_and_a_declined_one_is_undone")]
     // BMB-313 Q3: the header badge of the sync status and the check of a node
@@ -108,7 +108,7 @@ public class BusyHelperBehaviorTests
     [InlineData("seal_form_shows_starting_only_when_it_is_sent")]
     public void TheEncryptionPage_DoesNotSayItIsStartingWhenTheQuestionWasDeclined(string scenario)
     {
-        // BMB-305 fix round, B2: the form asks first (site.js, capture phase) and the page's own handler ran anyway and put up "Starting...".
+        // BMB-305: the form asks first (site.js, capture phase) and the page's own handler ran anyway and put up "Starting...".
         var (ok, detail) = RunScenario(Path.Combine(RepoRoot, "server", "BeeMemoryBank.Web", "wwwroot", "js", "pages", "vault-encryption.js"), scenario);
 
         Assert.True(ok, detail);

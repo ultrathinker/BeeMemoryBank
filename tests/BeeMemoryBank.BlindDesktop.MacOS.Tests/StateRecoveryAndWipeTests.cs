@@ -3,7 +3,7 @@ using BeeMemoryBank.BlindDesktop.MacOS;
 namespace BeeMemoryBank.BlindDesktop.MacOS.Tests;
 
 /// <summary>
-/// Fix round 1, finding 1: setting a damaged state file aside is a courtesy, never a condition. If the copy cannot be made, whatever the
+/// Setting a damaged state file aside is a courtesy, never a condition. If the copy cannot be made, whatever the
 /// reason, the store must still start empty so that the start-up (and with it the recovery of the identity) goes on.
 /// </summary>
 public class StateStoreRecoveryTests
@@ -110,7 +110,7 @@ public class StateStoreRecoveryTests
     }
 }
 
-/// <summary>Fix round 1, finding 2: the host removes its own state file and its damaged copies after "Disconnect and wipe".</summary>
+/// <summary>The host removes its own state file and its damaged copies after "Disconnect and wipe".</summary>
 public class StateStoreWipeTests
 {
     private static string Write(string folder, string name, string content = "x")

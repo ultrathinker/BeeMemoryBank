@@ -63,7 +63,7 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
     /// node: a silently re-minted identity no longer matches the whitelist rows the whole mesh
     /// keeps for this node, and nothing an operator can do afterwards repairs that.</para>
     ///
-    /// <para>Two starts that both find no file (review A2-d) do not both win: the new seed is
+    /// <para>Two starts that both find no file do not both win: the new seed is
     /// renamed into place without replacing anything, in one atomic step on every platform
     /// (<see cref="OwnerOnlyFile.MoveNoReplace"/>), and the start whose rename finds the other's
     /// seed there takes that one.</para>
@@ -211,7 +211,7 @@ public sealed class FileNodeKey(string path) : IExternalNodeKey
     /// points at a key that is not there. The rename is what makes the file appear only complete.</para>
     ///
     /// <para>The temp name is random and created with <see cref="FileMode.CreateNew"/>, and the
-    /// final path is refused when it is a link (review release-a2 sec#9). A fixed
+    /// final path is refused when it is a link. A fixed
     /// <c>name.tmp</c> beside the key is a path anything else on the box can pre-create — as a
     /// symlink to somewhere else, in which case <see cref="FileMode.Create"/> would follow it and
     /// write the seed through the link, outside the data volume and with whatever permissions the

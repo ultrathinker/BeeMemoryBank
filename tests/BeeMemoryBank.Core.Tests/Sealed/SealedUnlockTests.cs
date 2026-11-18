@@ -9,6 +9,7 @@ using BeeMemoryBank.Storage.Sqlite;
 using BeeMemoryBank.Vault.Sealed;
 using Dapper;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Core.Tests.Sealed;
 
@@ -159,14 +160,35 @@ public sealed class SealedUnlockTests : IAsyncDisposable
         await lease!.DisposeAsync();
         Gate.State.Should().Be(VaultState.Closed);
 
-        var dek = await Session.TryOpenWithRecoveryKeyAsync(_recoveryKey);
-        dek.Should().Equal(_node.MasterDek);
+        var opened = await Session.TryOpenWithRecoveryKeyAsync(_recoveryKey);
+        opened!.Dek.Should().Equal(_node.MasterDek);
         Gate.State.Should().Be(VaultState.Closed, "the check borrowed the database and gave it back");
         Session.IsUnlocked.Should().BeFalse();
 
         (await Session.UnlockAsync(_recoveryKey)).Should().BeTrue("the recovery slot is a door like the others");
         await FinishUnlockAsync();
         Gate.State.Should().Be(VaultState.Open);
+    }
+
+    [Fact]
+    public async Task A_recovery_open_on_a_closed_node_names_the_slots_owner_from_the_database()
+    {
+        await NodeAsync();
+        // The recovery key was issued for admin (the only superadmin). Read admin's id while a lease holds the database open.
+        int adminId;
+        var lease = await Session.OpenForRecoveryAsync(_recoveryKey);
+        using (var scope = _node.Services.CreateScope())
+            adminId = (await scope.ServiceProvider.GetRequiredService<IUserRepository>().GetByUsernameAsync("admin"))!.Id;
+        await lease!.DisposeAsync();
+        Gate.State.Should().Be(VaultState.Closed);
+
+        // The door comes from the boot store, which carries no owner; the owner must still be read from the database row.
+        var opened = await Session.TryOpenWithRecoveryKeyAsync(_recoveryKey);
+
+        opened.Should().NotBeNull();
+        opened!.OwnerUserId.Should().Be(adminId, "a recovery key is personal: the reset it powers may only reset this owner");
+        Gate.State.Should().Be(VaultState.Closed, "the check borrowed the database and gave it back");
+        Array.Clear(opened.Dek);
     }
 
     [Fact]
@@ -182,6 +204,25 @@ public sealed class SealedUnlockTests : IAsyncDisposable
     }
 
     // ---- a master DEK from a door: agents, auto-unlock, hand-off, quick unlock -------------------------------------------------------------
+
+    [Fact]
+    public async Task Pending_copies_a_crash_left_in_the_boot_store_are_dropped_by_the_rewrite_of_the_first_unlock()
+    {
+        // a crash before a rotation's commit leaves pending copies of a key that was never committed. The 10-second watcher must
+        // not drop pending rows (a writer that has not committed yet owns them); the open is the moment no writer can be in flight, and the
+        // rewrite that completes every sealed unlock (VaultGate.CompleteOpenAsync) is the one that drops them.
+        await NodeAsync();
+        var door = await DoorAsync("user");
+        await _node.Mirror.AddPendingDoorAsync(new PendingDoor(door.Kind, door.SourceId, door.SlotType, RandomNumberGenerator.GetBytes(door.EncryptedMasterDek.Length),
+            door.Iv, door.Salt, door.ArgonMemory, door.ArgonIterations, door.ArgonParallelism, null, null, new string('a', 64), door.DoorVersion,
+            door.DoorPublicKey));
+        (await _node.Doors.ListAsync()).Should().Contain(d => d.Pending);
+
+        (await Session.TryUnlockWithDekAsync(_node.MasterDek, door)).Should().BeTrue();
+        await FinishUnlockAsync();
+
+        (await _node.Doors.ListAsync()).Should().NotContain(d => d.Pending, "the first unlock rewrote the boot store from the database");
+    }
 
     [Fact]
     public async Task A_master_dek_with_its_door_opens_the_database_a_wrong_one_does_not_and_both_look_the_same()

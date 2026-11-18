@@ -118,6 +118,9 @@ public static class ApiStartupTasks
         // Crash-recovery sweeps (restore, standalone restore staging, DEK rotation, media staging) and the snapshot working copies.
         await ApiStartWork.RunCrashSweepsAsync(services, dataPath, sweepSnapshotStaging: true);
 
+        // The tombstones of removed people (release 2.12.0): after a restore or a join, before anybody signs in.
+        await ApiStartWork.EnforceTombstonesAsync(services);
+
         // ── OS auto-unlock (opt-in; where the OS has a secret store: Windows DPAPI, macOS Keychain) ──
         // Attempt to auto-unlock the session using the OS-protected secret, if the feature was
         // previously enabled by the admin. This runs in-process (Api's SessionService is the
@@ -208,6 +211,8 @@ public static class ApiStartupTasks
             services.GetRequiredService<ILogger<Program>>()
                 .LogWarning(ex, "OS auto-unlock attempt failed at startup (non-fatal); manual unlock required.");
         }
+        // An old plain database encrypts itself after the unlock; a no-op while locked or sealed.
+        services.GetService<BeeMemoryBank.Api.Services.AutoSealService>()?.Trigger();
     }
 
     private static async Task TryServerAutoUnlockAsync(IServiceProvider services)
@@ -219,7 +224,11 @@ public static class ApiStartupTasks
             using var scope = services.CreateScope();
             var outcome = await server.RunAtStartAsync(scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>());
             if (outcome == BeeMemoryBank.Infrastructure.AutoUnlock.ServerAutoUnlockStartOutcome.Unlocked)
+            {
                 services.GetRequiredService<ILogger<Program>>().LogInformation("Session unlocked by 'start unlocked after a restart'.");
+                // An old plain database encrypts itself after the unlock.
+                services.GetService<BeeMemoryBank.Api.Services.AutoSealService>()?.Trigger();
+            }
         }
         catch (Exception ex)
         {

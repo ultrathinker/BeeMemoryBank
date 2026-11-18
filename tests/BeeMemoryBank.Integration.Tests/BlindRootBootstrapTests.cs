@@ -15,7 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review r1-merge #3, the owner's main scenario: one PC and one blind node. No peer can confirm the PC's
+/// The owner's main scenario: one PC and one blind node. No peer can confirm the PC's
 /// standing and no event ever granted it, so its authority on the blind node comes from the operator:
 /// the pair code issued at the blind node's console says the device that uses it will manage the node,
 /// and the PC's first seed with it makes the PC the blind node's superadmin. Later changes of that
@@ -72,7 +72,7 @@ public class BlindRootBootstrapTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review l-root2 #3: the same add through the Web page. The operator is told that the blind node
+    /// The same add through the Web page. The operator is told that the blind node
     /// trusts the PC only because it holds the pair code.
     /// </summary>
     [Fact]

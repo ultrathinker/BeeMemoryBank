@@ -5,7 +5,7 @@ using BeeMemoryBank.Sync;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-313 fix round, F2/F3/F4/F9: the one projection every status of the mesh reads (the header, Trusted Nodes, the Blind nodes page, the host status).
+/// BMB-313: the one projection every status of the mesh reads (the header, Trusted Nodes, the Blind nodes page, the host status).
 /// It is pure, so the rules are pinned here without a node: how long "online" lasts for the interval the loop really runs at, what a clock that is ahead
 /// is worth, what "we do not know yet" is after a restart, and that a blind node's own my-standing call is never mistaken for it calling in.
 /// </summary>

@@ -96,7 +96,7 @@ public class SyncScheduler(
     /// applies into. Maintenance mode and the event-write gate do not stop this loop: a cycle that
     /// fetches a page and writes its sync position (SyncClient's own commit, outside the gate) either
     /// fails the wipe's own verification or lands after the wipe committed and resurrects mesh state
-    /// on a node the operator just disconnected (review release-a2 agy#4, sec#6, spec#3). Taking
+    /// on a node the operator just disconnected. Taking
     /// <see cref="_syncLock"/> is the drain — a cycle that is already applying finishes, and this
     /// method returns only when it has.</para>
     /// </summary>
@@ -286,7 +286,8 @@ public class SyncScheduler(
                 if (_lastFailure.TryGetValue(node.NodeId, out var asked)) failures.Add(asked);
                 continue;
             }
-            if (blind && _closed.ShouldSkip(node.NodeId, DateTime.UtcNow, PeerContactLog.EndpointKey(node.ApiAddress)))
+            // A blind node's closed doors, and on any node a peer that said an administrator disconnected this node (its only entries on a full node).
+            if (_closed.ShouldSkip(node.NodeId, DateTime.UtcNow, PeerContactLog.EndpointKey(node.ApiAddress)))
             {
                 if (_lastFailure.TryGetValue(node.NodeId, out var asked)) failures.Add(asked);
                 continue;
@@ -307,8 +308,8 @@ public class SyncScheduler(
                 snapshotRequiredState?.Clear(node.NodeId);
                 contacts?.NoteOutboundOk(node.NodeId, DateTime.UtcNow, node.ApiAddress);
                 _lastFailure.TryRemove(node.NodeId, out _);
-                if (blind && _closed.NoteOpen(node.NodeId))
-                    logger.LogInformation("{NodeId} ({Address}) answers this blind node again", node.NodeId, node.ApiAddress);
+                if (_closed.NoteOpen(node.NodeId))
+                    logger.LogInformation("{NodeId} ({Address}) answers this node again", node.NodeId, node.ApiAddress);
                 EndPausedEpisode(node, "a session went through");
                 if (_unreachable.NoteSuccess(node.NodeId) is var failedBefore and > 0)
                     logger.LogInformation("{NodeId} ({Address}) is reachable again after {Failures} failed attempts",
@@ -369,6 +370,20 @@ public class SyncScheduler(
                 _unreachable.NoteSuccess(node.NodeId);
                 if (blind) EndClosedEpisode(node, ex.Reason == PeerPauseReport.Busy ? "it answered, busy with other transfers" : "it answered, paused by its owner");
                 NotePaused(node, ex, contacts);
+                continue;
+            }
+            catch (ThisDeviceRevokedException ex)
+            {
+                // The peer proved that an administrator disconnected this node (its whitelist row there is revoked): not an error to repeat every
+                // minute. One line per episode, the calm sentence in the contact log, and the peer is asked again only every ClosedRetry (release 2.12).
+                failure = ex;
+                NoteFailed(failures, node, ex);
+                contacts?.NoteOutboundFailure(node.NodeId, DateTime.UtcNow, PeerContactLog.Describe(ex), node.ApiAddress);
+                if (_closed.NoteClosed(node.NodeId, DateTime.UtcNow, ClosedRetry, PeerContactLog.EndpointKey(node.ApiAddress)))
+                    logger.LogWarning("{NodeId} ({Address}) says an administrator disconnected this node from the bank; what is here stays readable, " +
+                        "nothing new arrives from it. Asking again every {Retry}", node.NodeId, node.ApiAddress, ClosedRetry);
+                else
+                    logger.LogDebug("{NodeId} ({Address}) still says this node was disconnected", node.NodeId, node.ApiAddress);
                 continue;
             }
             catch (Exception ex) when (blind && IsClosedToMe(ex))
@@ -585,6 +600,20 @@ public class SyncScheduler(
         ForgetPeerState(nodeId, scope.ServiceProvider.GetService<PeerContactLog>());
         _endpoints.TryRemove(nodeId, out _);   // the next cycle records the address it finds
         syncTrigger.Signal();
+    }
+
+    public async Task PeerRevokedAsync(Guid nodeId, CancellationToken ct = default)
+    {
+        PeerChanged(nodeId);
+        using var scope = scopeFactory.CreateScope();
+        scope.ServiceProvider.GetService<PeerContactLog>()?.Forget(nodeId);
+        scope.ServiceProvider.GetService<Channels.PeerReachability>()?.Forget(nodeId);
+        if (scope.ServiceProvider.GetService<Channels.PeerChannelStore>() is { } channels)
+            await channels.DeleteForPeerAsync(nodeId, ct);
+        if (scope.ServiceProvider.GetService<BeeMemoryBank.Storage.Boot.IRelayInbox>() is { } inbox)
+            await inbox.DeleteForPeerAsync(nodeId, ct);
+        foreach (var cleanup in scope.ServiceProvider.GetServices<IPeerRevocationCleanup>())
+            await cleanup.OnPeerRevokedAsync(nodeId, ct);
     }
 
     private void ForgetPeerState(Guid nodeId, PeerContactLog? contacts)

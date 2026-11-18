@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// BMB-306/307 fix round 3 (G3): the words of an exception that came from a call to another device - its message carries the address that was dialled, a token in a
+/// BMB-306/307: the words of an exception that came from a call to another device - its message carries the address that was dialled, a token in a
 /// query, the reason phrase and the page a proxy sent - never reach a log line, a status or a screen. The ONE mechanism is <c>FailureText</c> / <c>PeerContactLog.Describe</c>
 /// (the kind of failure from a closed set, chosen by the TYPE of the exception). This test is what keeps it so in the projects that call other devices or show what happened to
 /// the person who pressed a button: it reads the sources of the networking projects and fails on

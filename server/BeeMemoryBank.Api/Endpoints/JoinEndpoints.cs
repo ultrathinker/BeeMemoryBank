@@ -25,11 +25,13 @@ public static class JoinEndpoints
             INodeIdentityRepository nodeRepo,
             IWhitelistRepository whitelistRepo,
             IUserRepository userRepo,
+            IDbConnectionFactory dbFactory,
             IEventLogger eventLogger,
             SessionService session,
             ISyncProtocolPolicy protocolPolicy,
             BeeMemoryBank.Sync.PeerAddressService addresses,
             HttpContext httpCtx,
+            IAuditLogRepository auditRepo,
             ILoggerFactory loggerFactory) =>
         {
             // 1. Verify that this node is initialized
@@ -70,11 +72,32 @@ public static class JoinEndpoints
             // mirrors the same try-every-candidate-slot pattern KeyManagementService.
             // ChangePasswordAsync already uses for the equivalent "which slot is this password for"
             // problem.
-            var (passwordSlot, noPasswordSlot) = await FindPasswordSlotAsync(req.MasterPassword, keySlotRepo, userRepo);
-            if (noPasswordSlot)
+            var slotResult = await FindPasswordSlotAsync(req.MasterPassword, keySlotRepo, userRepo, req.Login);
+            if (slotResult.NoPasswordSlot)
                 return Results.Json(new ErrorResponse("No password-bearing key slot found on this node"), statusCode: 500);
-            if (passwordSlot == null)
+            if (slotResult.Slot is not { } passwordSlot)
                 return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 401);
+            var transportSlot = slotResult.Transport ?? passwordSlot;
+
+            string joinOwnership;
+            Guid? joinOwnerPersonId = null;
+            string? joinOwnerLabel = null;
+            var joinNeedsReview = false;
+            if (OwnershipKinds.NormalizeOrNull(req.Ownership) == OwnershipKinds.Shared)
+            {
+                joinOwnership = OwnershipKinds.Shared;
+            }
+            else if (!slotResult.Ambiguous && slotResult.Opener is { } opener && opener.PersonId != Guid.Empty)
+            {
+                joinOwnership = OwnershipKinds.Personal;
+                joinOwnerPersonId = opener.PersonId;
+                joinOwnerLabel = string.IsNullOrWhiteSpace(opener.DisplayName) ? opener.Username : opener.DisplayName;
+            }
+            else
+            {
+                joinOwnership = OwnershipKinds.Unknown;
+                joinNeedsReview = true;
+            }
 
             // The password is valid, but recording this peer means signing a whitelist_add event,
             // and the signature needs this node's master DEK — which is only in memory while the
@@ -117,6 +140,7 @@ public static class JoinEndpoints
             // 4. Add the new node to the whitelist (or update if already exists)
             // One step with the abort of the same join (JoinAttemptGate): the row is looked at and written under one gate, so two joins of
             // one new id cannot both create it, and a join the joiner has already aborted writes nothing.
+            var rejoined = false;
             await JoinAttemptGate.Gate.WaitAsync();
             try
             {
@@ -156,12 +180,22 @@ public static class JoinEndpoints
                     // The one writer of a peer's row on a running node: the address is policed and canonical, the key on record is the key named (the check above, again),
                     // the event and the row carry the same address and version, a repeat that changes nothing writes nothing, and the loop forgets the old place.
                     var isSuperadmin = JoinAuthority.ForPasswordPeer(req.NodeId);
-                    var rejoined = await addresses.ApplyProofAsync(existing,
-                        new BeeMemoryBank.Sync.PeerProof(apiAddress, ProvenKey: publicKey, DisplayName: req.DisplayName, IsSuperadmin: isSuperadmin, Announce: true), "join", "join");
-                    if (!rejoined.Succeeded)
-                        return rejoined.Outcome == BeeMemoryBank.Sync.PeerAddressOutcome.WrongKey
+                    var applied = await addresses.ApplyProofAsync(existing,
+                        new BeeMemoryBank.Sync.PeerProof(apiAddress, ProvenKey: publicKey, DisplayName: req.DisplayName, IsSuperadmin: isSuperadmin, Announce: true,
+                            Ownership: OwnershipKinds.IsKnown(joinOwnership) ? joinOwnership : null,
+                            OwnerPersonId: joinOwnerPersonId,
+                            OwnerLabel: joinOwnerLabel),
+                        "join", "join");
+                    if (!applied.Succeeded)
+                        return applied.Outcome == BeeMemoryBank.Sync.PeerAddressOutcome.WrongKey
                             ? Results.Json(new ErrorResponse("Node with this NodeId is already registered with a different public key"), statusCode: 403)
-                            : Results.BadRequest(new ErrorResponse(rejoined.Message));
+                            : Results.BadRequest(new ErrorResponse(applied.Message));
+                    if (joinNeedsReview && !OwnershipKinds.IsKnown(applied.Entry?.Ownership) && applied.Entry is { NeedsReview: false } needsReviewRow)
+                    {
+                        needsReviewRow.NeedsReview = true;
+                        await whitelistRepo.UpdateAsync(needsReviewRow);
+                    }
+                    rejoined = true;
                 }
                 else
                 {
@@ -174,12 +208,16 @@ public static class JoinEndpoints
                         Status = "A",
                         CreatedAt = now,
                         UpdatedAt = now,
-                        // Whoever knows the master password is a superadmin (owner's decision, BMB-42).
+                        // Whoever knows the master password is a superadmin (BMB-42).
                         // The password has just handed this node the DEK, which outweighs anything a
                         // superadmin-only event can do. Recording it content-only used to let it hard
                         // delete or change the password locally while this node refused the event —
                         // a divergence nothing ever repaired. See JoinAuthority.
-                        IsSuperadmin = JoinAuthority.ForPasswordPeer(req.NodeId)
+                        IsSuperadmin = JoinAuthority.ForPasswordPeer(req.NodeId),
+                        Ownership = joinOwnership,
+                        OwnerPersonId = joinOwnerPersonId,
+                        OwnerLabel = joinOwnerLabel,
+                        NeedsReview = joinNeedsReview
                     };
                     // The event is logged first, inside the one writer, so the row carries the version of the add the mesh is told about;
                     // otherwise this row starts at version 0 and any later event beats it, including one that predates the join.
@@ -191,6 +229,15 @@ public static class JoinEndpoints
             {
                 JoinAttemptGate.Gate.Release();
             }
+
+            // 4a. On record: a node was given the key to the vault. Which node (id and the name it gave), and whose password opened the door when that is known:
+            // the slot's owner, which is a person; a legacy slot from before the user table has none. Never the password, the slot's bytes or the key.
+            await auditRepo.LogAsync("whitelist", req.NodeId.ToString(), "node_joined", "peer",
+                $"Node '{Printable(req.DisplayName)}' ({req.NodeId}) {(rejoined ? "re-joined" : "joined")}; the password opened " +
+                await DescribeSlotOwnerAsync(userRepo, passwordSlot));
+
+            if (joinOwnership == OwnershipKinds.Shared && httpCtx.RequestServices.GetService<ISuperadminDoorsNotifier>() is { } doorsNotifier)
+                await doorsNotifier.NotifyChangedAsync(immediate: false);
 
             // 4b. What the joiner said about its LAN endpoints and TLS anchors (optional members, absent from older joiners): the row that only "calls us"
             // can be called from the first minute (docs/design/lan-peer-sync.md 8).
@@ -211,6 +258,7 @@ public static class JoinEndpoints
                     // peer and be trusted unpinned, and a marker would be ignored by joiners of 2.0.x to 2.5.0. So it is left out.
                     if (!BeeMemoryBank.Sync.JoinTls.TryInherit(e.TlsTrust, e.TlsSpki, out var tlsTrust, out var tlsSpki))
                         return null;
+                    var (wOwnership, wPersonId, wLabel) = OwnershipKinds.Resolve(e.Ownership, e.OwnerPersonId, e.OwnerLabel);
                     return new JoinWhitelistEntry(
                         e.NodeId,
                         e.DisplayName,
@@ -221,7 +269,10 @@ public static class JoinEndpoints
                         tlsSpki,
                         e.LamportTs,
                         e.SourceNodeId,
-                        BeeMemoryBank.Sync.JoinPeerVersions.From(e));
+                        BeeMemoryBank.Sync.JoinPeerVersions.From(e),
+                        wOwnership,
+                        wPersonId,
+                        wLabel);
                 })
                 .OfType<JoinWhitelistEntry>()
                 .ToList();
@@ -233,15 +284,21 @@ public static class JoinEndpoints
                 .Select(BeeMemoryBank.Sync.JoinRevokedPeer.From)
                 .ToList();
 
+            var selfOwnership = await BeeMemoryBank.Sync.WhitelistHistory.ResolveSelfOwnershipAsync(dbFactory, identity.NodeId);
+
             return Results.Ok(new JoinResponse(
                 RemoteNode: new JoinRemoteIdentity(
                     identity.NodeId,
                     identity.DisplayName,
                     Convert.ToBase64String(identity.Ed25519PublicKey),
-                    protocolPolicy.Declared),
+                    protocolPolicy.Declared,
+                    selfOwnership?.Ownership,
+                    selfOwnership?.OwnerPersonId,
+                    selfOwnership?.OwnerLabel,
+                    selfOwnership?.Version),
                 KeySlot: new JoinKeySlot(
-                    Convert.ToBase64String(passwordSlot.EncryptedMasterDek),
-                    Convert.ToBase64String(passwordSlot.IV),
+                    Convert.ToBase64String(transportSlot!.EncryptedMasterDek),
+                    Convert.ToBase64String(transportSlot.IV),
                     Convert.ToBase64String(passwordSlot.Salt!),
                     passwordSlot.ArgonMemory ?? CryptoConstants.DefaultArgonMemory,
                     passwordSlot.ArgonIterations ?? CryptoConstants.DefaultArgonIterations,
@@ -251,7 +308,8 @@ public static class JoinEndpoints
                 TlsLeafSpki: offer?.TlsLeafSpki,
                 TlsCaKey: offer?.TlsCaKey,
                 LanPort: offer?.LanPort,
-                RevokedPeers: revokedPeers));
+                RevokedPeers: revokedPeers,
+                JoinedAsDisplayName: slotResult.Opener?.DisplayName));
         }).WithTags("Join");
 
         // POST /api/join/abort - a joiner whose join failed AFTER this node answered it (a timeout, a bad step on its own side, a snapshot
@@ -274,7 +332,8 @@ public static class JoinEndpoints
             IEventLogger eventLogger,
             IAuditLogRepository auditRepo,
             ILoggerFactory loggerFactory,
-            SessionService session) =>
+            SessionService session,
+            HttpContext ctx) =>
         {
             var identity = await nodeRepo.GetAsync();
             if (identity == null)
@@ -291,10 +350,10 @@ public static class JoinEndpoints
             if (publicKey.Length != CryptoConstants.Ed25519PublicKeySize)
                 return Results.BadRequest(new ErrorResponse("Ed25519 public key must be 32 bytes"));
 
-            var (passwordSlot, noPasswordSlot) = await FindPasswordSlotAsync(req.MasterPassword ?? "", keySlotRepo, userRepo);
-            if (noPasswordSlot)
+            var slotResult = await FindPasswordSlotAsync(req.MasterPassword ?? "", keySlotRepo, userRepo);
+            if (slotResult.NoPasswordSlot)
                 return Results.Json(new ErrorResponse("No password-bearing key slot found on this node"), statusCode: 500);
-            if (passwordSlot == null)
+            if (slotResult.Slot == null)
                 return Results.Json(new ErrorResponse("Invalid master password"), statusCode: 401);
 
             await JoinAttemptGate.Gate.WaitAsync();
@@ -333,6 +392,7 @@ public static class JoinEndpoints
                 // Log first: the revoke's version is what a later whitelist_add is compared against (see DELETE /api/whitelist/{nodeId}).
                 var version = await eventLogger.LogWhitelistRevokeAsync(req.NodeId);
                 await whitelistRepo.RevokeAsync(req.NodeId, version);
+                await WhitelistEndpoints.CleanupRevokedPeerAsync(ctx.RequestServices, req.NodeId);
                 JoinAttemptGate.Cancel(req.NodeId);
 
                 var shownName = new string(existing.DisplayName.Where(c => !char.IsControl(c)).Take(100).ToArray());
@@ -349,26 +409,46 @@ public static class JoinEndpoints
         }).WithTags("Join");
     }
 
+    /// <summary>A name a peer chose, as one printable line of at most 100 characters: it goes into an audit entry, so no control character and no length of its own.</summary>
+    private static string Printable(string? text) => new((text ?? "").Where(c => !char.IsControl(c)).Take(100).ToArray());
+
+    /// <summary>Whose slot a password opened, in words for the audit log: the owner's user name and id, or that the slot is a legacy one with no owner.</summary>
+    private static async Task<string> DescribeSlotOwnerAsync(IUserRepository userRepo, MasterKeyStore slot)
+    {
+        var owner = (await userRepo.ListActiveAsync()).FirstOrDefault(u => u.KeySlotId == slot.SlotId);
+        return owner is null
+            ? $"slot #{slot.SlotId} ({slot.SlotType}), which has no user"
+            : $"the slot of user '{Printable(owner.Username)}' (#{owner.Id})";
+    }
+
     /// <summary>The outcome of checking a master password against this node's key slots.</summary>
     /// <param name="Slot">The slot the password opens (and that may be used to join), or null.</param>
     /// <param name="NoPasswordSlot">True when the node has no password-bearing slot at all.</param>
-    private readonly record struct PasswordSlotResult(MasterKeyStore? Slot, bool NoPasswordSlot);
+    /// <param name="Transport">The key slot as the join answer carries it: the stored v1 wrap, or for a sealed (v2) door a v1 wrap of the same DEK under the
+    /// same password-derived KEK, salt and parameters (ADR 0012) - the wire format of every earlier release, so a joiner of any version opens it.</param>
+    /// <param name="Opener">The unique superadmin user whose slot opened, or null when ambiguous or legacy.</param>
+    /// <param name="Ambiguous">True when multiple slots opened or an un-migrated legacy <c>password</c> slot opened.</param>
+    private readonly record struct PasswordSlotResult(MasterKeyStore? Slot, bool NoPasswordSlot, MasterKeyStore? Transport = null, User? Opener = null, bool Ambiguous = false);
 
     /// <summary>
-    /// The master-password proof of a join and of its abort, in one place: tries every password-bearing slot (see the comments
-    /// inside), so both endpoints accept exactly the same callers. <see cref="KdfBusyException"/> is not swallowed.
+    /// The master-password proof of a join and of its abort, in one place: with <paramref name="login"/> tries that user's
+    /// slot first and attributes cleanly; without <paramref name="login"/> tries every candidate slot instead of stopping at
+    /// the first, returning whether the opener is unique or ambiguous. <see cref="KdfBusyException"/> is not swallowed.
     /// </summary>
     private static async Task<PasswordSlotResult> FindPasswordSlotAsync(
-        string masterPassword, IKeySlotRepository keySlotRepo, IUserRepository userRepo)
+        string masterPassword, IKeySlotRepository keySlotRepo, IUserRepository userRepo, string? login = null)
     {
         var slots = await keySlotRepo.GetAllAsync();
         var candidateSlots = slots.Where(s => s.SlotType == "user" || s.SlotType == "password").ToList();
         if (candidateSlots.Count == 0)
             return new PasswordSlotResult(null, NoPasswordSlot: true);
 
-        MasterKeyStore? passwordSlot = null;
-        foreach (var candidate in candidateSlots)
+        var activeUsers = await userRepo.ListActiveAsync();
+        var usersBySlot = activeUsers.Where(u => u.KeySlotId.HasValue).ToDictionary(u => u.KeySlotId!.Value);
+
+        (User? Owner, MasterKeyStore? Transport) TryOpenCandidate(MasterKeyStore candidate, out bool validOpener)
         {
+            validOpener = false;
             try
             {
                 var candidateKek = KeyDerivation.DeriveKek(
@@ -377,46 +457,73 @@ public static class JoinEndpoints
                     candidate.ArgonMemory ?? CryptoConstants.DefaultArgonMemory,
                     candidate.ArgonIterations ?? CryptoConstants.DefaultArgonIterations,
                     candidate.ArgonParallelism ?? CryptoConstants.DefaultArgonParallelism);
-                // Attempt to decrypt — if the password is wrong for THIS slot, an exception is
-                // thrown and we move on to the next candidate rather than failing outright.
-                MasterKeyManager.UnwrapMasterDek(candidate.EncryptedMasterDek, candidate.IV, candidateKek);
+                byte[]? opened = null;
+                try
+                {
+                    opened = Doors.OpenSlot(candidate, candidateKek);
 
-                // SECURITY: joining hands the caller mesh membership and, with it, the master
-                // DEK — a strictly larger capability than unlocking this node. So it gets the
-                // same rule /api/session/unlock does (SessionService.UnlockCoreAsync): a
-                // "user" slot counts only if its owner is a superadmin. Checked here, after
-                // the unwrap has cryptographically proven which slot this password belongs to,
-                // rather than from anything the caller says about itself.
-                //
-                // This endpoint matters more than the unlock one: /api/join deliberately skips
-                // the internal-key gate (a joining node has no key yet) and is one of the few
-                // routes a reverse proxy is expected to forward, so it is reachable from
-                // outside in a way /api/session/unlock is not.
-                //
-                // Legacy "password" slots are exempt for the same reason as in
-                // UnlockCoreAsync: they predate the user table entirely and ARE the
-                // superadmin-equivalent credential until the migration converts them.
-                if (candidate.SlotType == "user" && !await IsSuperadminSlotAsync(userRepo, candidate.SlotId))
-                    continue;
+                    // SECURITY: joining hands the caller mesh membership and, with it, the master DEK - a strictly larger capability than
+                    // unlocking this node. So only a superadmin's "user" slot counts (legacy "password" slots are exempt until migrated), and
+                    // never the door of a person being removed (2.12): sign-in and the recovery reset refuse them too.
+                    User? owner = null;
+                    if (candidate.SlotType == "user"
+                        && (!usersBySlot.TryGetValue(candidate.SlotId, out owner) || owner.Role != UserRoles.Superadmin || owner.IsBeingRemoved))
+                        return (null, null);
 
-                passwordSlot = candidate;
-                break;
+                    var transport = candidate;
+                    if (candidate.DoorVersion == Doors.V2)
+                    {
+                        var (wrapped, iv) = MasterKeyManager.WrapMasterDek(opened, candidateKek);
+                        transport = new MasterKeyStore
+                        {
+                            SlotId = candidate.SlotId, SlotType = candidate.SlotType, EncryptedMasterDek = wrapped, IV = iv, Salt = candidate.Salt,
+                            ArgonMemory = candidate.ArgonMemory, ArgonIterations = candidate.ArgonIterations, ArgonParallelism = candidate.ArgonParallelism,
+                        };
+                    }
+                    validOpener = true;
+                    return (owner, transport);
+                }
+                finally
+                {
+                    if (opened is not null) Array.Clear(opened);
+                    Array.Clear(candidateKek);
+                }
             }
             catch (KdfBusyException) { throw; }
-            catch { /* wrong password for this slot — try the next candidate */ }
+            catch { return (null, null); }
         }
 
-        return new PasswordSlotResult(passwordSlot, NoPasswordSlot: false);
-    }
+        int? triedPreferredSlotId = null;
+        if (!string.IsNullOrWhiteSpace(login))
+        {
+            var namedUser = activeUsers.FirstOrDefault(u => string.Equals(u.Username, login.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (namedUser is { Role: UserRoles.Superadmin, IsBeingRemoved: false, KeySlotId: { } preferredSlotId })
+            {
+                var preferred = candidateSlots.FirstOrDefault(s => s.SlotId == preferredSlotId);
+                if (preferred is not null)
+                {
+                    triedPreferredSlotId = preferred.SlotId;
+                    var (opener, transport) = TryOpenCandidate(preferred, out var valid);
+                    if (valid && opener is not null)
+                        return new PasswordSlotResult(preferred, NoPasswordSlot: false, transport, opener, Ambiguous: false);
+                }
+            }
+        }
 
-    /// <summary>
-    /// True if <paramref name="slotId"/> belongs to an ACTIVE superadmin. Deactivated accounts
-    /// resolve to false: fail closed, matching SessionService.UnlockCoreAsync, which looks the
-    /// owner up the same way. An orphaned slot — no user row points at it — is likewise false.
-    /// </summary>
-    private static async Task<bool> IsSuperadminSlotAsync(IUserRepository userRepo, int slotId)
-    {
-        var owner = (await userRepo.ListActiveAsync()).FirstOrDefault(u => u.KeySlotId == slotId);
-        return owner != null && owner.Role == UserRoles.Superadmin;
+        var openedCandidates = new List<(MasterKeyStore Slot, MasterKeyStore? Transport, User? Owner)>();
+        foreach (var candidate in candidateSlots)
+        {
+            if (triedPreferredSlotId == candidate.SlotId) continue;
+            var (owner, transport) = TryOpenCandidate(candidate, out var valid);
+            if (valid) openedCandidates.Add((candidate, transport, owner));
+        }
+
+        if (openedCandidates.Count == 0)
+            return new PasswordSlotResult(null, NoPasswordSlot: false);
+
+        if (openedCandidates.Count > 1 || openedCandidates[0].Slot.SlotType == "password" || openedCandidates[0].Owner is null)
+            return new PasswordSlotResult(openedCandidates[0].Slot, NoPasswordSlot: false, openedCandidates[0].Transport, Opener: null, Ambiguous: true);
+
+        return new PasswordSlotResult(openedCandidates[0].Slot, NoPasswordSlot: false, openedCandidates[0].Transport, openedCandidates[0].Owner, Ambiguous: false);
     }
 }

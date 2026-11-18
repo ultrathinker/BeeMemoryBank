@@ -19,12 +19,17 @@ public static class NoteHtml
         .DisableHtml()
         .Build();
 
-    public static string Render(string markdown) => Page(Markdown.ToHtml(markdown ?? "", Pipeline));
+    /// <summary>
+    /// The note's page. <paramref name="dark"/> forces the appearance the app shows (the design's
+    /// tokens); null follows the system's prefers-color-scheme, as before. The Markdown handling
+    /// and the policy are the same whatever the appearance.
+    /// </summary>
+    public static string Render(string markdown, bool? dark = null) => Page(Markdown.ToHtml(markdown ?? "", Pipeline), dark);
 
     /// <summary>A plain-text page (a message instead of a note), escaped.</summary>
-    public static string Text(string text) => Page($"<p>{WebUtility.HtmlEncode(text ?? "")}</p>");
+    public static string Text(string text, bool? dark = null) => Page($"<p>{WebUtility.HtmlEncode(text ?? "")}</p>", dark);
 
-    private static string Page(string body) =>
+    private static string Page(string body, bool? dark) =>
         $$"""
             <!DOCTYPE html>
             <html>
@@ -32,8 +37,8 @@ public static class NoteHtml
             <meta charset="utf-8">
             <meta http-equiv="Content-Security-Policy" content="{{ContentSecurityPolicy}}">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta name="color-scheme" content="light dark">
-            <style>{{Style}}</style>
+            <meta name="color-scheme" content="{{(dark is null ? "light dark" : dark.Value ? "dark" : "light")}}">
+            <style>{{StyleFor(dark)}}</style>
             </head>
             <body>
             {{body}}
@@ -41,12 +46,30 @@ public static class NoteHtml
             </html>
             """;
 
+    // The design's tokens (Resources/Styles/Colors.xaml), as CSS: the note reads in the same
+    // palette as the app around it. The body keeps the system text style so Dynamic Type carries
+    // into the note; the WebView cannot load the app's faces under the page's own policy.
+    private const string LightTokens = "--text: #14171F; --muted: #61697D; --accent: #8A6000; --code: #ECEEF4; --border: rgba(20,23,31,0.22);";
+    private const string DarkTokens = "--text: #F3F5F8; --muted: #848C9E; --accent: #FFC800; --code: #1E222E; --border: rgba(255,255,255,0.22);";
+
+    private static string StyleFor(bool? dark)
+    {
+        var root = dark switch
+        {
+            true => $":root {{ color-scheme: dark; {DarkTokens} }}",
+            false => $":root {{ color-scheme: light; {LightTokens} }}",
+            _ => $":root {{ color-scheme: light dark; {LightTokens} }}\n@media (prefers-color-scheme: dark) {{ :root {{ {DarkTokens} }} }}",
+        };
+        return root + "\n" + Style;
+    }
+
     private const string Style = """
-        :root { color-scheme: light dark; --text: #1c1017; --muted: #6e5a64; --accent: #c2185b; --code: #f5f0f2; --border: #e3d7dd; }
-        @media (prefers-color-scheme: dark) { :root { --text: #e8d8df; --muted: #a88a97; --accent: #f06292; --code: #2a1520; --border: #4a2838; } }
         html { -webkit-text-size-adjust: 100%; }
-        body { font: -apple-system-body; color: var(--text); background: transparent; margin: 0; padding: 4px 2px 48px; word-wrap: break-word; }
-        h1, h2, h3, h4 { line-height: 1.25; margin: 1.2em 0 0.5em; }
+        /* The note page is one ScrollView: the WebView is sized to this content and never
+           scrolls inside itself, so no tab-bar room is needed here (the page carries it). */
+        html, body { overflow: hidden; }
+        body { font: -apple-system-body; color: var(--text); background: transparent; margin: 0; padding: 4px 0 8px; word-wrap: break-word; }
+        h1, h2, h3, h4 { line-height: 1.25; margin: 1.2em 0 0.5em; font-weight: 700; }
         h1 { font-size: 1.5em; } h2 { font-size: 1.3em; } h3 { font-size: 1.15em; }
         a { color: var(--accent); }
         pre, code { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; background: var(--code); border-radius: 6px; }
@@ -56,7 +79,8 @@ public static class NoteHtml
         blockquote { margin: 0.8em 0; padding: 0 0 0 12px; border-left: 3px solid var(--border); color: var(--muted); }
         table { border-collapse: collapse; display: block; overflow-x: auto; }
         th, td { border: 1px solid var(--border); padding: 4px 8px; }
-        img { max-width: 100%; }
+        /* A picture on its own line: inline after text it made one tall broken line (real iPhone, 15.11). */
+        img { display: block; max-width: 100%; height: auto; margin: 0.6em 0; border-radius: 8px; }
         hr { border: none; border-top: 1px solid var(--border); }
         ul.contains-task-list { padding-left: 1.2em; } li.task-list-item { list-style: none; }
         """;

@@ -53,6 +53,11 @@ public static class RecoveryBoxCrypto
         var kek = DeriveKek(password, salt, p);
         try
         {
+            // A device box of a sealed (v2) door (ADR 0012): the KEK derives the door key that opens the box; the public key in the box
+            // must be the one the KEK derives.
+            if (RecoveryBoxKdf.IsDoorV2(wrapped))
+                return Doors.Open(Doors.V2, RecoveryBoxKdf.DeviceDoorKind, wrapped[(1 + DoorBox.PublicKeySize)..], iv, kek, salt,
+                    wrapped[1..(1 + DoorBox.PublicKeySize)]);
             return MasterKeyManager.UnwrapMasterDek(wrapped, iv, kek);
         }
         finally

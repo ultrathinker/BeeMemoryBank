@@ -81,6 +81,10 @@ public sealed class NodeEndpointsPublisher(
 
     public async Task<SyncEvent> PublishAsync(IReadOnlyList<NodeEndpointEntry> endpoints, string? leafPin, string? caKey, int? port, long seq)
     {
+        // An own event is signed and logged inside the event-write gate, so an identity re-key (which quiesces it) never finds one signed by the old
+        // key between its list of the node's own events and its commit.
+        using var writeGate = await BeeMemoryBank.Sync.EventWriteGate.Instance.EnterAsync();
+        using var ownerFlow = BeeMemoryBank.Sync.EventWriteGate.EnterOwnerFlow();
         var identity = await nodeRepo.GetAsync() ?? throw new InvalidOperationException("Node is not initialized.");
         var payload = new NodeEndpointsPayload(identity.NodeId.ToString("D"), seq, endpoints.ToList(), leafPin, caKey, port);
         var payloadJson = JsonSerializer.Serialize(payload, JsonOpts);

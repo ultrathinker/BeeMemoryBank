@@ -195,6 +195,16 @@ public class EventLogger(
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
 
+        var rawNormalized = OwnershipKinds.NormalizeOrNull(entry.Ownership);
+        if (entry.NodeId == identity.NodeId && OwnershipKinds.IsKnown(rawNormalized))
+            throw new InvalidOperationException("A node cannot change its own ownership.");
+
+        var (normalizedOwnership, ownerPersonId, ownerLabel) =
+            OwnershipKinds.Resolve(rawNormalized, entry.OwnerPersonId, entry.OwnerLabel);
+        // If personal was passed without an owner, downgrade explicitly to "unknown" in the payload;
+        // an already-unknown row omits ownership so it does not clobber another node's explicit answer.
+        var downgradedInvalidPersonal = rawNormalized == OwnershipKinds.Personal && normalizedOwnership == OwnershipKinds.Unknown;
+        var includeOwnership = OwnershipKinds.IsKnown(normalizedOwnership) || downgradedInvalidPersonal;
         var lamportTs = clock.Tick();
         var payload = new WhitelistAddPayload(
             NodeId: entry.NodeId,
@@ -204,7 +214,10 @@ public class EventLogger(
             CanGenerateEmbeddings: entry.CanGenerateEmbeddings,
             IsSuperadmin: entry.IsSuperadmin,
             TlsSpki: entry.TlsSpki,
-            TlsTrust: entry.TlsTrust);
+            TlsTrust: entry.TlsTrust,
+            Ownership: includeOwnership ? normalizedOwnership : null,
+            OwnerPersonId: ownerPersonId,
+            OwnerLabel: ownerLabel);
 
         await AppendEventAsync(identity, EventTypes.WhitelistAdd, null, lamportTs,
             JsonSerializer.Serialize(payload), eventId: eventId);
@@ -226,13 +239,35 @@ public class EventLogger(
         return new RowVersion(lamportTs, identity.NodeId);
     }
 
-    public async Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null)
+    public async Task<RowVersion> LogWhitelistUpdateAsync(Guid nodeId, string? apiAddress, string? displayName, bool? isSuperadmin = null, string? tlsSpki = null, string? tlsTrust = null, string? ownership = null, Guid? ownerPersonId = null, string? ownerLabel = null)
     {
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
 
+        string? normalizedOwnership = null;
+        Guid? resolvedPersonId = null;
+        string? resolvedLabel = null;
+        if (ownership is not null)
+        {
+            var rawNormalized = OwnershipKinds.NormalizeOrNull(ownership)
+                ?? throw new ArgumentException($"Invalid ownership kind '{ownership}'.", nameof(ownership));
+            if (nodeId == identity.NodeId)
+                throw new InvalidOperationException("A node cannot change its own ownership.");
+            (normalizedOwnership, resolvedPersonId, resolvedLabel) =
+                OwnershipKinds.Resolve(rawNormalized, ownerPersonId, ownerLabel);
+        }
+
         var lamportTs = clock.Tick();
-        var payload = new WhitelistUpdatePayload(NodeId: nodeId, ApiAddress: apiAddress, DisplayName: displayName, IsSuperadmin: isSuperadmin, TlsSpki: tlsSpki, TlsTrust: tlsTrust);
+        var payload = new WhitelistUpdatePayload(
+            NodeId: nodeId,
+            ApiAddress: apiAddress,
+            DisplayName: displayName,
+            IsSuperadmin: isSuperadmin,
+            TlsSpki: tlsSpki,
+            TlsTrust: tlsTrust,
+            Ownership: normalizedOwnership,
+            OwnerPersonId: resolvedPersonId,
+            OwnerLabel: resolvedLabel);
 
         await AppendEventAsync(identity, EventTypes.WhitelistUpdate, null, lamportTs,
             JsonSerializer.Serialize(payload));
@@ -437,6 +472,42 @@ public class EventLogger(
 
         await AppendEventAsync(identity, EventTypes.MasterPasswordChanged, null, lamportTs,
             JsonSerializer.Serialize(payload));
+    }
+
+    public async Task<bool> LogPersonRemovedAsync(Guid personId, string outcome, DateTime removedAt, Guid eventId)
+    {
+        if (outcome is not ("deleted" or "demoted"))
+            throw new ArgumentException("The outcome of a removal is deleted or demoted.", nameof(outcome));
+        if (await eventLogRepo.ExistsAsync(eventId)) return false;
+
+        var identity = await nodeRepo.GetAsync()
+            ?? throw new InvalidOperationException("Node is not initialized.");
+        var payload = new PersonRemovedPayload(personId.ToString("D"), outcome, removedAt.ToUniversalTime());
+        await AppendEventAsync(identity, EventTypes.PersonRemoved, null, clock.Tick(), JsonSerializer.Serialize(payload), eventId: eventId);
+        return true;
+    }
+
+    public async Task<long> LogOffboardingStateAsync(Guid processId, Guid personId, Guid accountsNodeId, Guid driverNodeId, string target, int step,
+        DateTime startedAt, DateTime? closedAt, string? outcome)
+    {
+        var identity = await nodeRepo.GetAsync()
+            ?? throw new InvalidOperationException("Node is not initialized.");
+        var lamportTs = clock.Tick();
+        var payload = new OffboardingStatePayload(processId.ToString("D"), personId.ToString("D"), accountsNodeId.ToString("D"),
+            driverNodeId.ToString("D"), target, step, startedAt.ToUniversalTime(), closedAt?.ToUniversalTime(), outcome);
+        await AppendEventAsync(identity, EventTypes.OffboardingState, null, lamportTs,
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull }));
+        return lamportTs;
+    }
+
+    public async Task LogNodeRekeyRequestAsync(Guid processId, IReadOnlyList<Guid> nodes)
+    {
+        if (nodes.Count == 0) throw new ArgumentException("A request names at least one node.", nameof(nodes));
+        var identity = await nodeRepo.GetAsync()
+            ?? throw new InvalidOperationException("Node is not initialized.");
+        var payload = new NodeRekeyRequestPayload(processId.ToString("D"), EventApplier.RemovalRekeyReason(processId),
+            nodes.Distinct().OrderBy(n => n).Select(n => n.ToString("D")).ToList());
+        await AppendEventAsync(identity, EventTypes.NodeRekeyRequest, null, clock.Tick(), JsonSerializer.Serialize(payload));
     }
 
     public async Task LogSnapshotCheckpointAsync(long cpSeq, int eventsRemoved, string snapshotFileName, string snapshotSha256, string? prevCheckpointSha256, DateTime producedAt)

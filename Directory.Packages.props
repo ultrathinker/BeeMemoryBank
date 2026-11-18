@@ -35,29 +35,29 @@
     <PackageVersion Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
     <PackageVersion Include="Makaretu.Dns.Multicast" Version="0.27.0" />
     <PackageVersion Include="Markdig" Version="0.44.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.15" />
     <!-- Microsoft.Data.Sqlite.Core is the managed API only: the native SQLite comes from SQLite3MC.PCLRaw.bundle below. The full
          Microsoft.Data.Sqlite package would add a second SQLitePCLRaw bundle (e_sqlite3) next to it - never reference it. -->
-    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.15" />
     <!-- The Microsoft.Extensions.* family moves in lockstep: these packages reference each other
          with a ">= same patch" floor, so raising one of them alone makes every project that still
          pins the others fail with NU1605 — which is exactly why they are all on 10.0.11 here.
          Microsoft.AspNetCore.* and Microsoft.Data.Sqlite.Core ride the same .NET 10 servicing train and
          are kept level with it. -->
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.15" />
     <!-- These, and Markdig above, were floating ("10.*", "*", "1.19.*", "0.44.*") in the mobile
          project, i.e. the build was not reproducible — a restore months apart could pull different packages. They are pinned to
          the versions that restore last resolved. Keep Xamarin.AndroidX.Core and Core.Core.Ktx on the
          same train when bumping (see the comment in BeeMemoryBank.Mobile.csproj). -->
     <PackageVersion Include="Microsoft.Maui.Controls" Version="10.0.100" />
-    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.31.1" />
     <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
@@ -81,10 +81,10 @@
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageVersion Include="System.IO.FileSystem.AccessControl" Version="5.0.0" />
-    <PackageVersion Include="System.IO.Hashing" Version="10.0.11" />
+    <PackageVersion Include="System.IO.Hashing" Version="10.0.15" />
     <!-- Same version Microsoft.ML.Tokenizers resolves, so Storage and Embeddings agree. -->
     <PackageVersion Include="System.Numerics.Tensors" Version="9.0.0" />
-    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.15" />
     <PackageVersion Include="Velopack" Version="1.2.0" />
     <PackageVersion Include="Xamarin.AndroidX.Biometric" Version="1.1.0.33" />
     <!-- The blind Android app scans an invitation QR code with Google Play services' code scanner (Google's own screen: no CAMERA permission here). Binding of

@@ -18,16 +18,24 @@ public class InternalKeyHandler(IHttpContextAccessor httpContextAccessor) : Dele
         if (!string.IsNullOrEmpty(key))
             request.Headers.TryAddWithoutValidation("X-Internal-Key", key);
 
-        var role = httpContextAccessor.HttpContext?.User.FindFirst(ClaimTypes.Role)?.Value;
-        if (!string.IsNullOrEmpty(role))
-            request.Headers.TryAddWithoutValidation("X-User-Role", role);
+        // A signed-in person is named by X-User-Id, always. What that person is (role, active or not) is the API's to say: it reads its own tbl_user on
+        // every call (CallerIdentityMiddleware) and does not look at the role below, which is only the cookie's statement. A role is never sent without
+        // the id it belongs to: to the API a role header with no id is a machine-local caller acting in that role (the tray, the CLI), and the Web
+        // layer is not one.
+        var claims = httpContextAccessor.HttpContext?.User;
+        var userId = claims?.FindFirst("UserId")?.Value;
+        if (!string.IsNullOrEmpty(userId))
+        {
+            // GetSecurityStampAsync (OnValidatePrincipal path) sets X-User-Id itself because the
+            // principal isn't populated yet. Never add a second one: the API rejects a duplicate
+            // X-User-Id header as malformed.
+            if (!request.Headers.Contains("X-User-Id"))
+                request.Headers.TryAddWithoutValidation("X-User-Id", userId);
 
-        var userId = httpContextAccessor.HttpContext?.User.FindFirst("UserId")?.Value;
-        // GetSecurityStampAsync (OnValidatePrincipal path) sets X-User-Id itself because the
-        // principal isn't populated yet. Never add a second one: the API rejects a duplicate
-        // X-User-Id header as malformed.
-        if (!string.IsNullOrEmpty(userId) && !request.Headers.Contains("X-User-Id"))
-            request.Headers.TryAddWithoutValidation("X-User-Id", userId);
+            var role = claims?.FindFirst(ClaimTypes.Role)?.Value;
+            if (!string.IsNullOrEmpty(role))
+                request.Headers.TryAddWithoutValidation("X-User-Role", role);
+        }
 
         // The user's display name is deliberately NOT forwarded in a header. A display name is
         // user-controlled text and may be non-ASCII, and SocketsHttpHandler refuses non-ASCII

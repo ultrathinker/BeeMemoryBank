@@ -46,6 +46,15 @@ public static class NodeDependencyInjection
         services.TryAddSingleton<Channels.ILocalNetworks, Channels.SystemLocalNetworks>();
         services.TryAddSingleton<Channels.IPeerDiscovery, Channels.NoPeerDiscovery>();
 
+        // Self-authored node_state control events (release 2.12.0): base contributor, publisher and materialised store.
+        services.AddScoped<NodeStateStore>();
+        services.AddScoped<INodeStateContributor, DefaultNodeStateContributor>();
+        // The attention flag of a node that holds events of a re-keyed node its rotation did not acknowledge (plan WS-D D3).
+        services.AddScoped<INodeStateContributor, RetiredKeyAttentionContributor>();
+        services.AddScoped<INodeStateContributor, SignedAsThisNodeContributor>();
+        services.TryAddSingleton<BeeMemoryBank.Storage.Sqlite.NodeKeyHistoryStore>();
+        services.AddScoped<NodeStatePublisher>();
+
         services.AddScoped<EventApplier>();
         // The key of a peer a device holds none for, from a trusted node's standing (BMB-337): the sync client takes it when it is registered.
         services.AddScoped<PeerTlsBackfill>();

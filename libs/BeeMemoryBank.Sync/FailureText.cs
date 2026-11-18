@@ -3,7 +3,7 @@ using BeeMemoryBank.Crypto;
 namespace BeeMemoryBank.Sync;
 
 /// <summary>
-/// What a screen, an API answer or a status says about a failure met while working with another device or reading its data (BMB-306/307 fix round 2, T3: the one
+/// What a screen, an API answer or a status says about a failure met while working with another device or reading its data (BMB-306/307: the one
 /// rule for the whole tree). Two kinds only, decided by the TYPE of the failure and never by looking at its text:
 /// <list type="bullet">
 /// <item>a failure this code threw ITSELF to be read - an <see cref="InvalidOperationException"/>, an <see cref="ArgumentException"/>, an

@@ -122,7 +122,7 @@ public class EmbeddingVectorCacheInvalidationTests : TestFixture
     }
 
     /// <summary>
-    /// The concrete before/after story from the task brief: ~20 people editing constantly means
+    /// The concrete before/after story: ~20 people editing constantly means
     /// searches and edits interleave, so this simulates the realistic case -- an edit immediately
     /// followed by a search, repeated -- rather than "10 edits, then 1 search" (which would cost
     /// exactly one rebuild either way, since a rebuild only ever happens lazily on a READ, and

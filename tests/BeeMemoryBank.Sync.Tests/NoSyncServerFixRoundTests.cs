@@ -16,10 +16,10 @@ using Xunit;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// BMB-307 fix round. What the first round tested with a bare handler is tested again through the REAL pinned handler (<see cref="SpkiPinGuardHandler"/>, which
+/// BMB-307. What the first round tested with a bare handler is tested again through the REAL pinned handler (<see cref="SpkiPinGuardHandler"/>, which
 /// is what every sync client and the address probe are built on), with the answers a real network gives: a redirect to a login page, a 502 and 504 of a proxy,
 /// a captive portal, a host that never answers, a body that is endless or trickles; and a protocol-3 peer without the envelope capability, which must be a failure
-/// at every layer (F1, F2, F5, F9, F11).
+/// at every layer.
 /// </summary>
 public class NoSyncServerFixRoundTests : IAsyncLifetime
 {

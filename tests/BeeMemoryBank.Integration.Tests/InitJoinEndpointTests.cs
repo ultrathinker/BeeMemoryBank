@@ -99,7 +99,7 @@ public class InitJoinEndpointTests : IAsyncLifetime
                 .Should().BeTrue("a joined node has never shown its administrator a recovery key");
         }
 
-        // Review revsrv F10: the archive the join downloaded was made in the joiner's data folder (owner-only), and is gone.
+        // The archive the join downloaded was made in the joiner's data folder (owner-only), and is gone.
         var staging = BeeMemoryBank.Core.IO.SnapshotStaging.DirIn(nodeB.DataPath);
         Directory.Exists(staging).Should().BeTrue("the downloaded archive is staged in the data folder, not in the OS temp folder");
         Directory.GetFileSystemEntries(staging).Should().BeEmpty("the archive and the extracted database are removed once the join is done");

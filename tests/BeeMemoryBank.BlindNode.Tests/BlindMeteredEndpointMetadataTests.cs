@@ -7,7 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The door's table and the endpoints agree (srvfix9, the route-table contract the review named): the endpoints that carry <see cref="BlindMeteredEndpoint"/> in the blind host are
+/// The door's table and the endpoints agree: the endpoints that carry <see cref="BlindMeteredEndpoint"/> in the blind host are
 /// exactly the keys of <see cref="BlindUsageMiddleware.DataRouteKeys"/>. A bulk endpoint added to the endpoint table (and the routes golden) with its marker but not to the door's table, or a
 /// key left in the table after its endpoint went, fails here instead of being served unmetered.
 /// </summary>

@@ -26,7 +26,8 @@ public sealed class BlindInviteException(string message, int status = 400, bool 
 }
 
 /// <param name="Trust"><c>auto</c> (default: a certificate the system's chain vouches for, else a pin), <c>pin</c> or <c>public-ca</c>.</param>
-public sealed record IssueBlindInviteRequest(string? Label, string? SourceName, int? LifetimeMinutes, string? Address, string? Trust);
+public sealed record IssueBlindInviteRequest(string? Label, string? SourceName, int? LifetimeMinutes, string? Address, string? Trust,
+    string? Ownership = null, Guid? OwnerPersonId = null);
 
 /// <summary>
 /// The invitation as the owner copies it (<paramref name="Text"/>); the secret in it is shown once and kept nowhere. A record would print every member in its
@@ -41,7 +42,8 @@ public sealed record IssuedBlindInvite(string InviteId, string Text, DateTime Ex
 public sealed record BlindInviteListItem(
     string InviteId, string State, string Label, string SourceName, string Address, string Trust, string CreatedBy, DateTime CreatedAt, DateTime ExpiresAt,
     string? DeviceName, string? Platform, string? AppVersion, string? SeenFrom, DateTime? RedeemedAt, string? MatchCode, DateTime? ConfirmDeadline,
-    DateTime? DecidedAt, string? DecidedBy, string? DeviceId, string Kind = BlindInviteKinds.Device);
+    DateTime? DecidedAt, string? DecidedBy, string? DeviceId, string Kind = BlindInviteKinds.Device,
+    string Ownership = OwnershipKinds.Shared, string? OwnerLabel = null);
 
 public sealed record ConfirmedBlindInvite(Guid NodeId, string DisplayName);
 
@@ -247,6 +249,22 @@ public sealed class BlindInviteService(
         var self = await sp.GetRequiredService<INodeIdentityRepository>().GetAsync()
             ?? throw new BlindInviteException("This node is not initialized.", 503);
 
+        var ownershipRaw = string.IsNullOrWhiteSpace(request.Ownership) ? OwnershipKinds.Shared : request.Ownership.Trim().ToLowerInvariant();
+        if (ownershipRaw is not (OwnershipKinds.Shared or OwnershipKinds.Personal))
+            throw new BlindInviteException("Choose \"shared\" or \"personal\" ownership.");
+        Guid? ownerPersonId = null;
+        string? ownerLabel = null;
+        if (ownershipRaw == OwnershipKinds.Personal)
+        {
+            if (request.OwnerPersonId is not { } pid || pid == Guid.Empty)
+                throw new BlindInviteException("Choose a person for personal ownership.");
+            var users = await sp.GetRequiredService<IUserRepository>().ListActiveAsync();
+            var owner = users.FirstOrDefault(u => u.PersonId == pid)
+                ?? throw new BlindInviteException("The selected person was not found.");
+            ownerPersonId = owner.PersonId;
+            ownerLabel = string.IsNullOrWhiteSpace(owner.DisplayName) ? owner.Username : owner.DisplayName;
+        }
+
         var sourceName = string.IsNullOrWhiteSpace(request.SourceName) ? self.DisplayName.Trim() : request.SourceName.Trim();
         if (!BlindInviteText.IsPlain(sourceName, BlindInvitation.MaxSourceNameLength))
             throw new BlindInviteException("The name shown to your friend must be 1 to 64 characters without control characters.");
@@ -294,6 +312,9 @@ public sealed class BlindInviteService(
             CreatedAt = now,
             ExpiresAt = invitation.ExpiresAt.UtcDateTime,
             State = BlindInviteRowState.Issued,
+            Ownership = ownershipRaw,
+            OwnerPersonId = ownerPersonId,
+            OwnerLabel = ownerLabel,
         }, now, MaxOpen))
         {
             CryptographicOperations.ZeroMemory(secret);
@@ -413,7 +434,9 @@ public sealed class BlindInviteService(
         return rows.Select(r => new BlindInviteListItem(
             r.InviteId, r.State, r.Label, r.SourceName, r.Address, r.Trust, r.CreatedBy, r.CreatedAt, r.ExpiresAt,
             r.RedeemerName, r.RedeemerPlatform, r.RedeemerVersion, r.RedeemerSeenFrom, r.RedeemedAt, MatchCodeOf(r), r.ConfirmDeadline,
-            r.DecidedAt, r.DecidedBy, r.RedeemerNodeId, r.Kind)).ToList();
+            r.DecidedAt, r.DecidedBy, r.RedeemerNodeId, r.Kind,
+            OwnershipKinds.IsKnown(r.Ownership) ? OwnershipKinds.Normalize(r.Ownership) : OwnershipKinds.Shared,
+            r.OwnerLabel)).ToList();
     }
 
     private static string? MatchCodeOf(BlindInviteRecord r) =>
@@ -810,6 +833,11 @@ public sealed class BlindInviteService(
                 await UndoAsync(sp, row, BlindInviteRowState.Refused, "the device cannot be enrolled");
                 throw new BlindInviteException(error!, 409);
             }
+            var rowOwnership = OwnershipKinds.IsKnown(row.Ownership) ? OwnershipKinds.Normalize(row.Ownership) : OwnershipKinds.Shared;
+            enrollment.Entry.Ownership = rowOwnership;
+            enrollment.Entry.OwnerPersonId = rowOwnership == OwnershipKinds.Personal ? row.OwnerPersonId : null;
+            enrollment.Entry.OwnerLabel = rowOwnership == OwnershipKinds.Personal ? row.OwnerLabel : null;
+            enrollment.Entry.NeedsReview = false;
             try
             {
                 await EnrolAsync(sp, row, enrollment, self);
@@ -857,7 +885,7 @@ public sealed class BlindInviteService(
         {
             try
             {
-                return (await manager.AddAsync(codeText, ct)).DisplayName;
+                return (await manager.AddAsync(codeText, ct, row.Ownership, row.OwnerPersonId, row.OwnerLabel)).DisplayName;
             }
             catch (BlindNodeUnreachableException) when (existing is { Status: "A" })
             {
@@ -977,9 +1005,9 @@ public sealed class BlindInviteService(
             }
             await HitAsync("logged");
 
-            // An add writes every field of the row, and its membership. Written again from an add logged before (a retry), a field of the old
+            // An add writes every field of the row it carries (Ownership only when known), and its membership. Written again from an add logged before (a retry), a field of the old
             // row that an update made newer than that add keeps its value, as every other node judges the add.
-            device.StampLocal(version, WhitelistEventConcerns.OfAdd);
+            device.StampLocal(version, WhitelistEventConcerns.OfAddFor(device));
             if (own is not null && existing is not null) WhitelistEventConcerns.KeepNewerFields(existing, device, version);
             if (existing is null) await whitelist.CreateAsync(device);
             else await whitelist.UpdateAsync(device);

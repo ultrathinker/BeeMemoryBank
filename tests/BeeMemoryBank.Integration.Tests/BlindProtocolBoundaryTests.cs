@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-stage0 round 2 #3: the blind node's own sync surface — seed upload, seed progress,
+/// The blind node's own sync surface — seed upload, seed progress,
 /// replica — is closed to a token bound to protocol 2 like the rest (SyncProtocolBoundaryTests).
 /// The first seed arrives before any token exists: it is authorized by the pairing secret alone,
 /// out of band of protocol negotiation, and tested on its own below.

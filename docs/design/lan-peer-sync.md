@@ -287,7 +287,7 @@ which category Windows gives the current network, and how to change it.
   - A real inbound test needs a second machine. A paired peer can test via `probe-relay` (exists) and report "your firewall
     blocks direct sync" to the status.
 - **Windows service**: the MSI feature, changed to `Scope="localsubnet"` and the private and domain profiles.
-- **Legacy `EnsureInboundTcpRule`** (`BMB_HTTPS_ENABLED=1`): keeps its old wide scope (owner's decision, 2026-11-08; section 19).
+- **Legacy `EnsureInboundTcpRule`** (`BMB_HTTPS_ENABLED=1`): keeps its old wide scope (decided 2026-11-08; section 19).
 - **macOS**: the signed app gets the system "Accept incoming connections?" prompt on the first listen when the application
   firewall is on. Nothing to do. The card shows a hint if no peer has ever reached this node on the LAN.
 

@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-stage0 round 2 #2 and #4: on a blind node a restore_network and a rotation commit are
+/// On a blind node a restore_network and a rotation commit are
 /// closed while the event is being applied, not by a background task. Proven with a failure point:
 /// when closing fails, the event must stay out of the log (so it is delivered again) — a background
 /// task would have let it in already, with nothing left to close the state afterwards.

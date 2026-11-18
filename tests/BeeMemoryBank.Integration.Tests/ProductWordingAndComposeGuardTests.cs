@@ -98,7 +98,7 @@ public class ProductWordingAndComposeGuardTests
 
         text.Should().NotBeEmpty();
         // It browses for other nodes, announces itself only when the setting is switched on, and can be joined through the
-        // Connect a device door (a phone or another computer): all three are true on the Mac since task P7.
+        // Connect a device door (a phone or another computer): all three are true on the Mac.
         text.Should().Contain("other nodes").And.Contain("local network")
             .And.Contain("Devices on my network").And.Contain("join this Mac");
     }
@@ -123,7 +123,7 @@ public class ProductWordingAndComposeGuardTests
 
         text.Should().Contain("**off by default**").And.Contain("BMB_HTTPS_ENABLED=1");
         text.Should().Contain("Devices on my network").And.Contain("Connect a device").And.Contain("bmb join --code");
-        text.Should().NotContain("TODO(P7)", "task P7 built what the marker announced");
+        text.Should().NotContain("TODO(P7)", "what the marker announced is built; the marker must be gone");
         text.Replace("\r\n", "\n").Should().NotContain("already\ncovers the home network, phones and blind-node pairing");
     }
 

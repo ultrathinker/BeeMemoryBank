@@ -101,7 +101,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Fix round 2 (addendum B): the page used to say "Titles, paths, tags and file names are visible to it", which is untrue once metadata encryption is on (every node set up with 2.6.2 or later).
+    /// (addendum B): the page used to say "Titles, paths, tags and file names are visible to it", which is untrue once metadata encryption is on (every node set up with 2.6.2 or later).
     /// It says what a blind node sees in each case, and the Admin page describes both ways of adding a copy, the invitation first.
     /// </summary>
     /// <summary>The page as plain text on one line: entities decoded, runs of white space (the source's line breaks) made one space.</summary>
@@ -134,7 +134,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Fix round 3 (review of the documentation): the invitation pages said that before the owner confirms, the device "receives nothing". Asking to join already sends this node the device's id, public
+    /// The invitation pages said that before the owner confirms, the device "receives nothing". Asking to join already sends this node the device's id, public
     /// key, name, platform, version and its own backup key; what is true is that no vault content and no usable key of the memory bank is sent TO the device. The old copy must fail these tests.
     /// </summary>
     private static readonly string[] NothingCopy = ["they receive nothing", "receives nothing", "nothing reaches"];
@@ -370,7 +370,7 @@ public sealed class BlindNodesPageTests : IAsyncLifetime
         var (status, html) = await AddAsync();
 
         status.Should().Be(HttpStatusCode.OK);
-        // The technical line is the kind of failure, not the exception's own text (which carries the address that was dialled): BMB-306/307 fix round 3, G3.
+        // The technical line is the kind of failure, not the exception's own text (which carries the address that was dialled): BMB-306/307 3, G3.
         ShowsInOrder(html, "server on this computer did not answer", "restart Bee Memory Bank", "Technical detail", "no answer: connection refused");
         html.Should().NotContain("localhost:5300");
         html.Should().Contain($">{PairCode}</textarea>");

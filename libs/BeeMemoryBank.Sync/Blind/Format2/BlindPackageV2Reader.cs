@@ -60,8 +60,9 @@ public sealed class BlindPackageV2Reader : IBlindPackageV2Reader
         // 1. Outer: the detached signature over manifest || archive, then every entry against the signed manifest.
         var outerBytes = await Format2Package.ReadEntryAsync(archivePath, Format2Package.ManifestFileName, MaximumManifestBytes, ct)
             ?? throw new InvalidDataException("The package has no manifest.json.");
+        // The serving node signs the package when it serves it: only its current key (the helper's current-key check, plan WS-D D3).
         if (detachedSignature.Length > 0
-            && !Ed25519Signer.Verify(servingKey, await Format2Package.DetachedSignaturePayloadAsync(outerBytes, archivePath, ct), detachedSignature))
+            && !NodeEventVerifier.SignatureVerifies(servingKey, await Format2Package.DetachedSignaturePayloadAsync(outerBytes, archivePath, ct), detachedSignature))
             throw new InvalidDataException("The package's detached signature does not verify under the serving node's key.");
 
         Directory.CreateDirectory(dir);
@@ -72,7 +73,7 @@ public sealed class BlindPackageV2Reader : IBlindPackageV2Reader
         if (!CryptographicOperations.FixedTimeEquals(extractedOuter, outerBytes))
             throw new InvalidDataException("The package holds two different manifests.");
         var embedded = await File.ReadAllBytesAsync(Path.Combine(dir, Format2Package.ManifestSignatureFileName), ct);
-        if (!Ed25519Signer.Verify(servingKey, Format2Package.EmbeddedSignaturePayload(outerBytes), embedded))
+        if (!NodeEventVerifier.SignatureVerifies(servingKey, Format2Package.EmbeddedSignaturePayload(outerBytes), embedded))
             throw new InvalidDataException("The package's manifest signature does not verify under the serving node's key.");
 
         Guid servingNodeId;
@@ -134,7 +135,12 @@ public sealed class BlindPackageV2Reader : IBlindPackageV2Reader
         var baselineBytes = await File.ReadAllBytesAsync(Path.Combine(baselineDir, BaselineManifest.FileName), ct);
         var baselineSignature = await File.ReadAllBytesAsync(Path.Combine(baselineDir, BaselineManifest.SignatureFileName), ct);
         var baseline = BaselineManifest.Parse(baselineBytes);
-        VerifyBaselineSignature(baseline, baselineBytes, baselineSignature, trustedProducer);
+        // A baseline made before its producer re-keyed is signed by the key it retired (plan WS-D D4): the package's own key history, the rows
+        // that lead to the key this receiver trusts for the producer, says which.
+        var carriedHistory = entries.Contains(BlindManifestV2.ControlDbFileName)
+            ? ReadKeyHistory(Path.Combine(dir, BlindManifestV2.ControlDbFileName))
+            : [];
+        VerifyBaselineSignature(baseline, baselineBytes, baselineSignature, trustedProducer, carriedHistory);
         if (baseline.BaselineId != manifest.BaselineId)
             throw new InvalidDataException("The blind manifest names another baseline than the one the package carries.");
         var blobList = await VerifyBaselineFilesAsync(baselineDir, baseline, ct);
@@ -184,14 +190,17 @@ public sealed class BlindPackageV2Reader : IBlindPackageV2Reader
     /// </summary>
     public static void VerifyBaselineSignature(
         BaselineManifest baseline, byte[] manifestBytes, byte[] signature,
-        Func<Guid, (byte[] PublicKey, bool IsSuperadmin)?> trustedProducer)
+        Func<Guid, (byte[] PublicKey, bool IsSuperadmin)?> trustedProducer,
+        IReadOnlyList<BeeMemoryBank.Core.Models.NodeKeyHistoryEntry>? carriedHistory = null)
     {
         if (trustedProducer(baseline.ProducerNodeId) is not { } producer)
             throw new InvalidDataException("The baseline's producer is not a node this receiver trusts.");
         if (!producer.IsSuperadmin)
             throw new InvalidDataException("The baseline's producer is not a superadmin here.");
+        var history = NodeEventVerifier.ChainedTo(baseline.ProducerNodeId, producer.PublicKey, carriedHistory ?? []);
         if (signature.Length != 64
-            || !Ed25519Signer.Verify(producer.PublicKey, BaselineManifest.SignaturePayload(manifestBytes), signature))
+            || !NodeEventVerifier.VerifyPackageSignature(baseline.ProducerNodeId, producer.PublicKey, history,
+                BaselineManifest.SignaturePayload(manifestBytes), signature, signedAtLamport: null))
             throw new InvalidDataException("The baseline's signature does not verify under its producer's key.");
         if (baseline.KeyGeneration < 1 || !Metadata.SealedEnvelope.IsKeyId(baseline.KeyId))
             throw new InvalidDataException("The baseline names no valid metadata key.");
@@ -225,6 +234,22 @@ public sealed class BlindPackageV2Reader : IBlindPackageV2Reader
     /// every row is one the live appliers could have written (<see cref="ControlDbValidator"/>): the import after the adoption
     /// takes the rows as they are, so a row it must not take is refused here, before anything is adopted.
     /// </summary>
+    /// <summary>The key history rows of a package's control part (none for a package made before 2.12); a malformed table reads as none.</summary>
+    /// <summary>The key history a package's control.db carries; empty when it holds none or cannot be read (nothing then chains).</summary>
+    public static IReadOnlyList<BeeMemoryBank.Core.Models.NodeKeyHistoryEntry> ReadKeyHistory(string path)
+    {
+        try
+        {
+            using var conn = new SqliteConnection($"Data Source={path};Mode=ReadOnly;Pooling=False");
+            conn.Open();
+            return NodeKeyHistoryStore.ListAllAsync(conn).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is SqliteException or FormatException or InvalidCastException or InvalidOperationException)
+        {
+            return [];
+        }
+    }
+
     private static void VerifyControlDb(string path)
     {
         using (var conn = new SqliteConnection($"Data Source={path};Mode=ReadOnly;Pooling=False"))
@@ -244,7 +269,7 @@ public sealed class BlindPackageV2Reader : IBlindPackageV2Reader
             }
 
             foreach (var table in SnapshotTables.Control)
-                if (!tables.Contains(table))
+                if (!tables.Contains(table) && !SnapshotTables.ControlOptional.Contains(table, StringComparer.Ordinal))
                     throw new InvalidDataException($"The control database table {table} is missing.");
         }
         ControlDbValidator.Validate(path);

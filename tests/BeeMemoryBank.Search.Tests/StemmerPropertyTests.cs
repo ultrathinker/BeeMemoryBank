@@ -4,7 +4,7 @@ using BeeMemoryBank.Search;
 namespace BeeMemoryBank.Search.Tests;
 
 /// <summary>
-/// The load-bearing test for WP-05: a large-scale fuzz run asserting the prefix invariant and
+/// The load-bearing test: a large-scale fuzz run asserting the prefix invariant and
 /// idempotency hold for every generated case, not just the curated golden-file examples.
 /// </summary>
 /// <remarks>
@@ -15,7 +15,7 @@ namespace BeeMemoryBank.Search.Tests;
 /// text it may have come from. This test normalizes each generated string with
 /// <see cref="TextNormalization.Normalize"/> first (exactly what a real <see cref="ITokenizer"/>
 /// pass would produce) and then checks the prefix relationship against that normalized string,
-/// which is the meaningful guarantee for the downstream FTS5 prefix-query design this WP exists
+/// which is the meaningful guarantee for the downstream FTS5 prefix-query design this work exists
 /// to support: the index stores normalized-but-unstemmed word forms, and the stem must prefix
 /// those, not the original raw bytes (which may have had diacritics or different casing).
 /// </para>

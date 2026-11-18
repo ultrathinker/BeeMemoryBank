@@ -34,6 +34,8 @@ public class DeviceModel(ApiClient api) : AdminPageModel(api)
     /// <summary>What the Api says about a blind node: protocol, contact and the alarms it judged.</summary>
     public BlindNodeDto? Blind { get; private set; }
 
+    public List<UserDto> Users { get; private set; } = [];
+
     public bool IsBlind => BlindNodeId.IsBlind(NodeId);
 
     public bool NetworkUnavailable => Peer is null;
@@ -58,6 +60,9 @@ public class DeviceModel(ApiClient api) : AdminPageModel(api)
             try { Channels = await Api.GetPeerChannelsAsync(NodeId); }
             catch (HttpRequestException) { /* an older Api: the page shows the address on record only */ }
         }
+        try { Users = (await Api.GetUsersAsync()) ?? []; }
+        catch (HttpRequestException) { Users = []; }
+        catch (TaskCanceledException) { Users = []; }
         return Page();
     }
 
@@ -101,6 +106,17 @@ public class DeviceModel(ApiClient api) : AdminPageModel(api)
                 ? "Peer promoted to superadmin."
                 : "Peer demoted. It can no longer revoke peers, hard-delete content or restore the network.")
             : Back(err: error ?? "Failed to change peer authority");
+    }
+
+    public async Task<IActionResult> OnPostSetPeerOwnershipAsync(string? choice)
+    {
+        var (okChoice, ownership, pid) = DevicesModel.ParseOwnershipChoice(choice);
+        if (!okChoice)
+            return Back(err: "Select shared infrastructure or a person for this device.");
+        var (ok, error) = await Api.SetPeerOwnershipAsync(NodeId, ownership, pid);
+        return ok
+            ? Back(msg: "Device ownership updated.")
+            : Back(err: error ?? "Failed to update device ownership");
     }
 
     public async Task<IActionResult> OnPostSetAutoAcceptRestoreAsync(bool autoAccept)

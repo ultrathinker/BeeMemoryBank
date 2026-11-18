@@ -8,7 +8,7 @@ namespace BeeMemoryBank.Api.Services;
 /// In-memory store for temporary challenge tokens and Bearer tokens for sync auth.
 /// Singleton — data lives in the process memory.
 /// </summary>
-public class SyncTokenStore(BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy? policy = null)
+public class SyncTokenStore(BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy? policy = null) : IPeerRevocationCleanup
 {
     private sealed record ChallengeEntry(Guid ServerNodeId, DateTime ExpiresAt);
     private sealed record TokenEntry(Guid NodeId, int ProtocolVersion, IReadOnlyList<string>? Capabilities, DateTime ExpiresAt);
@@ -102,6 +102,25 @@ public class SyncTokenStore(BeeMemoryBank.Sync.Metadata.ISyncProtocolPolicy? pol
     {
         _challenges.Clear();
         _tokens.Clear();
+    }
+
+    /// <summary>
+    /// Drops all cached bearer tokens for a revoked peer so existing tokens stop working immediately
+    /// on both open and sealed/relay endpoints.
+    /// </summary>
+    public void RevokeNode(Guid nodeId)
+    {
+        foreach (var entry in _tokens)
+        {
+            if (entry.Value.NodeId == nodeId)
+                _tokens.TryRemove(entry.Key, out _);
+        }
+    }
+
+    public Task OnPeerRevokedAsync(Guid nodeId, CancellationToken ct = default)
+    {
+        RevokeNode(nodeId);
+        return Task.CompletedTask;
     }
 
     public void CleanupExpired()

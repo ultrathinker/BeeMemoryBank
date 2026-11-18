@@ -52,8 +52,8 @@ public partial class DekRotationService
                 if (commit.NodeId.ToString().Equals(localNodeId, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var autoAccept = await whitelistRepo.GetAutoAcceptDekRotationAsync(commit.NodeId.ToString());
-                if (!autoAccept) continue;
+                // A removal rotation of a superadmin node is applied whatever the setting says (2.12, DekRotationReasons).
+                if (!(await DekRotationReasons.DecideAutoApplyAsync(commit, whitelistRepo)).Apply) continue;
 
                 _logger.LogInformation(
                     "Retrying auto-accept for previously-deferred DEK rotation commit {EventId} from {NodeId}",
@@ -86,10 +86,20 @@ public partial class DekRotationService
             var originator = await whitelistRepo.GetByNodeIdAsync(commitEvent.NodeId)
                 ?? throw new InvalidOperationException($"Originator node {commitEvent.NodeId} not in whitelist.");
 
-            var sigPayload = EventSignature.BuildPayload(commitEvent);
-            if (!Ed25519Signer.Verify(originator.Ed25519PublicKey, sigPayload, commitEvent.Signature))
+            // The initiator's current key, or the key it retired for a commit it signed before its re-key (plan WS-D D3): the live rule at first
+            // delivery, the package rule for the commit this node already holds (it passed the receipt check).
+            var mode = await BeeMemoryBank.Sync.NodeEventVerifier.ReceiptModeAsync(
+                verifyScope.ServiceProvider.GetRequiredService<IEventLogRepository>(), commitEvent);
+            if (!await BeeMemoryBank.Sync.NodeEventVerifier.VerifyAsync(_connFactory, commitEvent, originator.Ed25519PublicKey, mode))
                 throw new InvalidOperationException("Commit event signature verification failed (originator key).");
 
+            // The node-local key-operation lock (2.12): busy is "not yet" (the commit stays pending and is retried), not a failure.
+            using var keyOperation = TryEnterKeyOperation(out var refusal);
+            if (keyOperation is null)
+            {
+                deferred = true;
+                throw new DekRotationPreconditionException(refusal!);
+            }
             await HeavyOperationLock.Instance.WaitAsync();
             bool runPostCompaction = false;
             try
@@ -200,7 +210,8 @@ public partial class DekRotationService
             // Confidential rotation: open this node's own envelope; legacy events fall back to
             // unwrap-under-old-DEK. (ADR 0006.)
             newDek = DekRotationMaterial.ResolveNewDek(
-                payload, commitEvent.EventId, identity, oldDek, out chainEncB64, out chainIvB64);
+                payload, commitEvent.EventId, identity, oldDek, out chainEncB64, out chainIvB64,
+                await BeeMemoryBank.Sync.DekRotation.DekEnvelopeRefresh.FetchedAsync(_connFactory, commitEvent.EventId));
 
             // chainEncB64/chainIvB64 are what LazySlotRewrapService needs to walk this rotation after
             // compaction removes the event they arrived in — stored node-local, never synced.
@@ -212,12 +223,19 @@ public partial class DekRotationService
             rewrapped = true;
 
             _logger.LogInformation(
-                "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. RecoverySlots={Recovery}.",
+                "DEK rotation auto-accept completed. Epoch {OldEpoch}\u2192{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. OldFormatAutoUnlockDoorsRemoved={Doors}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, agentsDeleted, recoveryDeleted);
+            if (DekRotationReasons.IsRemoval(payload.Reason))
+                await RemovalRotationRecord.WriteAsync(scope.ServiceProvider, commitEvent, payload, _logger);
+            // The rotation's own retired link and the device box of the doors (2.12).
+            PostRotationRecovery.Start(_scopeFactory, _sessionService, _logger);
             return true;
         }
         catch (DekRotationPreconditionException ex)
         {
+            // The envelope was made for this node's previous identity key: ask the node that rotated for a fresh one (plan WS-D D4).
+            if (ex is BeeMemoryBank.Sync.DekRotation.DekEnvelopeStaleException)
+                await BeeMemoryBank.Sync.DekRotation.DekEnvelopeRefresh.RequestAsync(_connFactory, commitEvent.EventId, commitEvent.NodeId);
             // Nothing was changed (the rewrap never started), so this is "not yet", not "failed":
             // the row stays Committing and is retried (bounded automatic retry, next unlock, or an
             // admin applying it from the pending-rotation banner). Failed is terminal — nothing retries it — which would

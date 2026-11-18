@@ -47,7 +47,7 @@ public static class SealedVaultServices
                 () => sp.GetService<IUnlockMaterialMirror>(),
                 sp.GetService<ILogger<VaultGate>>(),
                 start.Mode == VaultStoreMode.Sealed ? VaultStoreMode.Sealed : VaultStoreMode.Plain);
-            // No unlock opens a node while a replaced plain file is readable; each unlock tries to erase it first (review round 1, H1).
+            // No unlock opens a node while a replaced plain file is readable; each unlock tries to erase it first.
             gate.PlainLeftovers = () => SealSwapResolver.Leftovers(dataPath).Count == 0 ? [] : sp.GetRequiredService<SealMigrationService>().ClearLeftovers();
             return gate;
         });
@@ -84,6 +84,11 @@ public static class SealedVaultServices
 
         // What every setup ends with (BMB-306): the new node's metadata encryption on and its database encrypted, under the master password just given.
         services.AddScoped<FreshNodeSealing>();
+        // an OLD plain database encrypts itself after the unlock, with no button (the unlock endpoints and the start-unlocked paths trigger it).
+        services.AddSingleton<BeeMemoryBank.Api.Services.AutoSealService>();
+        // a completed join turns "Show this node to devices in my network" on (a desktop node's front does it; elsewhere nothing is sent).
+        services.AddSingleton<BeeMemoryBank.Api.Endpoints.JoinCompletedNotice>(sp => () => BeeMemoryBank.Api.Services.Lan.LanJoinExchange.NotifyJoinedAsync(
+            sp, sp.GetRequiredService<ILoggerFactory>().CreateLogger("BeeMemoryBank.Api.Lan.JoinCompleted")));
         // The marker a setup, join or restore writes before its first write in the open and FreshNodeSealing removes when the node is encrypted: a start
         // that finds it still there wipes what was written (VaultStartup.Enter -> SealIntent.Resolve).
         services.AddSingleton<ISealIntents>(sp => new SealIntents(dataPath, () => SealIntents.HoldsNoNode(sp.GetRequiredService<DbConnectionFactory>())));
@@ -94,7 +99,9 @@ public static class SealedVaultServices
         services.AddSingleton<IVaultOpenStep>(sp => new ChatSchemaOpenStep(sp));
         services.AddSingleton<IVaultOpenStep>(sp => new LamportClockOpenStep(sp));
         services.AddSingleton<IVaultOpenStep>(sp => new CrashSweepsOpenStep(sp, dataPath));
+        services.AddSingleton<IVaultOpenStep>(sp => new TombstonesOpenStep(sp));
         services.AddSingleton<IVaultOpenStep>(sp => new MediaBackfillOpenStep(sp));
+        services.AddSingleton<IVaultOpenStep>(sp => new NodeStateOpenStep(sp.GetRequiredService<BeeMemoryBank.Sync.NodeStateAnnouncer>()));
         services.AddSingleton<IVaultOpenStep>(sp => new ConceptTagBackfillOpenStep(sp));
     }
 

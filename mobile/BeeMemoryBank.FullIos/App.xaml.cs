@@ -1,5 +1,6 @@
 using BeeMemoryBank.FullIos.Pages;
 using BeeMemoryBank.FullIos.Services;
+using Microsoft.Extensions.Logging;
 
 namespace BeeMemoryBank.FullIos;
 
@@ -15,6 +16,11 @@ public partial class App : Application
         InitializeComponent();
         _services = services;
         _flow = services.GetRequiredService<AppFlow>();
+        // The saved appearance (dark / light / system) before the first page is shown.
+        ThemeManager.ApplySaved();
+        // A failure of the one busy helper is said in the app's own dialog, not the grey system
+        // alert (the same headline and text, only the skin changes; BusyAction.cs itself is shared).
+        BeeMemoryBank.Busy.BusyAction.FailureDialog = (page, title, text) => Controls.AppDialog.AlertAsync(page, title, text);
     }
 
     protected override Window CreateWindow(IActivationState? activationState)
@@ -27,14 +33,26 @@ public partial class App : Application
         return window;
     }
 
+    /// <summary>
+    /// The cold start. An async void that throws ends the app before anything is on the screen, so a failure is logged and the
+    /// start page says the app's own calm sentence; AppFlow.StartAsync already catches what it knows.
+    /// </summary>
     protected override async void OnStart()
     {
         base.OnStart();
+        try
+        {
 #if DEBUG || BMB_E2E
-        if (await FullE2E.RunAsync(_services, _flow)) return;
+            if (await FullE2E.RunAsync(_services, _flow)) return;
 #endif
-        await _flow.StartAsync();
-        if (Interlocked.Exchange(ref _pendingJoinCode, null) is { } code) ShowJoinCode(code);
+            await _flow.StartAsync();
+            if (Interlocked.Exchange(ref _pendingJoinCode, null) is { } code) ShowJoinCode(code);
+        }
+        catch (Exception ex)
+        {
+            _services.GetService<ILogger<App>>()?.LogError(ex, "The start failed");
+            (Windows.FirstOrDefault()?.Page as StartPage)?.ShowProblem(Localization.AppStrings.Get("OpenPrepareError"));
+        }
     }
 
     /// <summary>
@@ -52,12 +70,20 @@ public partial class App : Application
         return true;
     }
 
+    /// <summary>A join link. On a phone that holds a vault (locked or not) it changes nothing; a failure is logged, never an end of the app.</summary>
     private async void ShowJoinCode(string code)
     {
-        if (await _services.GetRequiredService<FullVault>().GetStateAsync() != VaultState.NoVault) return;
-        _flow.ShowWelcome();
-        var join = _services.GetRequiredService<JoinPage>();
-        join.UseCode(code);
-        if (Windows.FirstOrDefault()?.Page is NavigationPage nav) await nav.PushAsync(join);
+        try
+        {
+            if (await _services.GetRequiredService<FullVault>().GetStateAsync() != VaultState.NoVault) return;
+            _flow.ShowWelcome();
+            var join = _services.GetRequiredService<JoinPage>();
+            join.UseCode(code);
+            if (Windows.FirstOrDefault()?.Page is NavigationPage nav) await nav.PushAsync(join);
+        }
+        catch (Exception ex)
+        {
+            _services.GetService<ILogger<App>>()?.LogError(ex, "Opening a join link failed");
+        }
     }
 }

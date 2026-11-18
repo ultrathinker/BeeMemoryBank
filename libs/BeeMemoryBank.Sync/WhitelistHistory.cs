@@ -66,4 +66,55 @@ public static class WhitelistHistory
     public static WhitelistFact? Newest(IEnumerable<WhitelistFact> facts, string eventType) =>
         facts.Where(f => f.EventType == eventType).Aggregate((WhitelistFact?)null,
             (best, f) => best is null || ConflictResolver.IncomingWins(best.Version, f.Version) ? f : best);
+
+    /// <summary>This node's own ownership as recorded in non-self whitelist events in its log.</summary>
+    public sealed record SelfOwnershipInfo(string Ownership, Guid? OwnerPersonId, string? OwnerLabel, JoinVersion? Version);
+
+    /// <summary>
+    /// Resolves this node's own ownership from the latest non-self <c>whitelist_add</c> or <c>whitelist_update</c>
+    /// event about <paramref name="selfNodeId"/> in <c>tbl_event</c>, or null when none carries ownership.
+    /// </summary>
+    public static async Task<SelfOwnershipInfo?> ResolveSelfOwnershipAsync(IDbConnectionFactory db, Guid selfNodeId)
+    {
+        if (selfNodeId == Guid.Empty) return null;
+        string? ownership = null;
+        Guid? ownerPersonId = null;
+        string? ownerLabel = null;
+        RowVersion version = default;
+
+        foreach (var fact in await ForPeerAsync(db, selfNodeId))
+        {
+            if (fact.Version.SourceNodeId == selfNodeId) continue;
+            try
+            {
+                string? rawOwnership = null;
+                Guid? rawPid = null;
+                string? rawLabel = null;
+                if (fact.EventType == EventTypes.WhitelistAdd)
+                {
+                    var add = System.Text.Json.JsonSerializer.Deserialize<WhitelistAddPayload>(fact.Payload);
+                    if (add is not null) (rawOwnership, rawPid, rawLabel) = (add.Ownership, add.OwnerPersonId, add.OwnerLabel);
+                }
+                else if (fact.EventType == EventTypes.WhitelistUpdate)
+                {
+                    var upd = System.Text.Json.JsonSerializer.Deserialize<WhitelistUpdatePayload>(fact.Payload);
+                    if (upd is not null) (rawOwnership, rawPid, rawLabel) = (upd.Ownership, upd.OwnerPersonId, upd.OwnerLabel);
+                }
+
+                if (OwnershipKinds.NormalizeOrNull(rawOwnership) is not null
+                    && ConflictResolver.IncomingWins(version, fact.Version))
+                {
+                    (ownership, ownerPersonId, ownerLabel) = OwnershipKinds.Resolve(rawOwnership, rawPid, rawLabel);
+                    version = fact.Version;
+                }
+            }
+            catch (System.Text.Json.JsonException) { }
+        }
+
+        if (ownership is null) return null;
+        var joinVer = version.LamportTs > 0
+            ? new JoinVersion(version.LamportTs, version.SourceNodeId == Guid.Empty ? null : version.SourceNodeId)
+            : null;
+        return new SelfOwnershipInfo(ownership, ownerPersonId, ownerLabel, joinVer);
+    }
 }

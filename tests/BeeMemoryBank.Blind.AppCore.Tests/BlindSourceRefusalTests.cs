@@ -267,7 +267,7 @@ public sealed class BlindSourceRefusalTests
         host.EntryOf(id).Phase.Should().Be(BlindAccountPhases.Active);
     }
 
-    // ---- a state that cannot be written never removes an account (review T3) ---------------------------------------------------------------
+    // ---- a state that cannot be written never removes an account ---------------------------------------------------------------
 
     /// <summary>The account's state, but a write of the remembered refusal fails while the test says so (a full disk, a store that is locked).</summary>
     private sealed class FlakyRefusalState(IBlindStateStore inner) : IBlindStateStore
@@ -319,7 +319,7 @@ public sealed class BlindSourceRefusalTests
         host.EntryOf(id).Phase.Should().Be(BlindAccountPhases.RemovedByOwner);
     }
 
-    // ---- the baseline check is a contact too (review D3) -------------------------------------------------------------------------------------
+    // ---- the baseline check is a contact too -------------------------------------------------------------------------------------
 
     [Theory]
     [InlineData(BlindBaselineCheck.Current)]
@@ -398,7 +398,7 @@ public sealed class BlindSourceRefusalTests
         }
     }
 
-    // ---- the card shows the newest news (review D4) ------------------------------------------------------------------------------------------
+    // ---- the card shows the newest news ------------------------------------------------------------------------------------------
 
     [Fact]
     public async Task AFirstLoadThatFailedAfterTheRefusal_IsShownOnTheCard_NotTheRefusalThatIsOlder()
@@ -504,7 +504,7 @@ public sealed class BlindSourceRefusalTests
         host.EntryOf(id).Phase.Should().Be(BlindAccountPhases.RemovedByOwner);
     }
 
-    // ---- a refusal is never remembered for an account the source has already removed (review D1) --------------------------------------------
+    // ---- a refusal is never remembered for an account the source has already removed --------------------------------------------
 
     /// <summary>An account that has loaded, refused once by a round and removed by the second one: the state of a pass that ran its sync round and then its long job.</summary>
     private static async Task<string> RemovedBySyncAsync(InviteRig rig, BlindAccountHost host, FakeInviteHub hub)

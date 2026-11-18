@@ -21,7 +21,7 @@ public sealed class BlindPairing(
 {
     /// <summary>
     /// What issuing a code grants, shown with the code by the console and the CLI: the device whose
-    /// first seed uses it becomes this node's superadmin (review r1-merge #3).
+    /// first seed uses it becomes this node's superadmin.
     /// </summary>
     public const string AuthorityNotice =
         "The device that uses this code will manage this blind node (reseed, anchors, recovery).";
@@ -113,7 +113,7 @@ public sealed class BlindPairing(
 
     /// <summary>
     /// Whether the code a proof was checked against is still the current, unexpired, unspent one. The
-    /// seed service asks again under its upload gate (review l-root2 #1): a proof checked before
+    /// seed service asks again under its upload gate: a proof checked before
     /// another upload with the same code spent it must not be accepted after that upload is done.
     /// </summary>
     public async Task<bool> IsCurrentCodeAsync(string codeId) =>

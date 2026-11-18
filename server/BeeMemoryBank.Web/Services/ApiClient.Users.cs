@@ -51,6 +51,47 @@ public partial class ApiClient
         return resp.IsSuccessStatusCode ? (true, null) : (false, await ReadErrorAsync(resp));
     }
 
+    public async Task<(bool Ok, string? Error)> SetPeerOwnershipAsync(Guid nodeId, string ownership, Guid? ownerPersonId = null)
+    {
+        var resp = await http.PutAsJsonAsync($"/api/whitelist/{nodeId}/ownership",
+            new { ownership, ownerPersonId });
+        return resp.IsSuccessStatusCode ? (true, null) : (false, await ReadErrorAsync(resp));
+    }
+
+    public async Task<(bool Ok, int Updated, IReadOnlyList<(Guid NodeId, string Reason)> Skipped, string? Error)> ReviewOwnershipAsync(
+        bool confirmAll = true,
+        IReadOnlyList<(Guid NodeId, string Ownership, Guid? OwnerPersonId)>? items = null)
+    {
+        var body = new
+        {
+            confirmAll,
+            items = items?.Select(i => new { nodeId = i.NodeId, ownership = i.Ownership, ownerPersonId = i.OwnerPersonId }).ToList()
+        };
+        var resp = await http.PostAsJsonAsync("/api/whitelist/review-ownership", body);
+        if (!resp.IsSuccessStatusCode)
+            return (false, 0, [], await ReadErrorAsync(resp));
+        try
+        {
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var count = doc.RootElement.TryGetProperty("updated", out var u) && u.TryGetInt32(out var c) ? c : 0;
+            var skipped = new List<(Guid, string)>();
+            if (doc.RootElement.TryGetProperty("skipped", out var s) && s.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in s.EnumerateArray())
+                {
+                    var nodeId = item.TryGetProperty("nodeId", out var nid) && nid.TryGetGuid(out var g) ? g : Guid.Empty;
+                    var reason = item.TryGetProperty("reason", out var r) ? r.GetString() ?? "" : "";
+                    skipped.Add((nodeId, reason));
+                }
+            }
+            return (true, count, skipped, null);
+        }
+        catch (JsonException)
+        {
+            return (true, 0, [], null);
+        }
+    }
+
     /// <summary>Has the master password been changed on another node while this one kept its slot?</summary>
     public async Task<MasterPasswordNoticeDto?> GetMasterPasswordNoticeAsync() =>
         await http.GetFromJsonAsync<MasterPasswordNoticeDto>("/api/keys/password-notice", JsonOpts);
@@ -240,5 +281,26 @@ public partial class ApiClient
             return (false, err?.Error ?? "Failed to change password", (int)resp.StatusCode);
         }
         catch { return (false, "Failed to change password", (int)resp.StatusCode); }
+    }
+
+    // ─── Shared doors & accounts home ────────────────────────────────────────
+
+    public async Task<SharedDoorsStatusDto?> GetSharedDoorsStatusAsync()
+    {
+        var resp = await http.GetAsync("/api/shared-doors/status");
+        if (!resp.IsSuccessStatusCode) return null;
+        return await resp.Content.ReadFromJsonAsync<SharedDoorsStatusDto>(JsonOpts);
+    }
+
+    public async Task<(bool Ok, string? Error)> AcknowledgeAccountsHomeChangeAsync()
+    {
+        var resp = await http.PostAsync("/api/shared-doors/accounts-home-changed/acknowledge", null);
+        return resp.IsSuccessStatusCode ? (true, null) : (false, await ReadErrorAsync(resp));
+    }
+
+    public async Task<(bool Ok, string? Error)> SetAccountsHomeAsync(Guid nodeId)
+    {
+        var resp = await http.PutAsJsonAsync("/api/accounts-home", new { nodeId });
+        return resp.IsSuccessStatusCode ? (true, null) : (false, await ReadErrorAsync(resp));
     }
 }

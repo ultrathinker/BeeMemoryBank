@@ -1,55 +1,56 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- The articles of one tag, in the look of the Search list: a row with the article icon box, the
+     title and the path; the empty state like the empty folder. Tapping a row opens the article. -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
-             x:Class="BeeMemoryBank.Mobile.Pages.TagArticlesPage"
-             BackgroundColor="{StaticResource BackgroundColor}">
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
+             x:Class="BeeMemoryBank.Mobile.Pages.TagArticlesPage">
 
     <Grid RowDefinitions="*">
 
-        <ActivityIndicator x:Name="LoadingIndicator"
-                           Grid.Row="0"
-                           IsRunning="False"
-                           IsVisible="False"
-                           Color="{StaticResource PrimaryColor}"
-                           VerticalOptions="Center"
-                           HorizontalOptions="Center"
+        <ActivityIndicator x:Name="LoadingIndicator" Grid.Row="0"
+                           IsRunning="False" IsVisible="False"
+                           VerticalOptions="Center" HorizontalOptions="Center"
                            ZIndex="10" />
 
-        <CollectionView x:Name="ArticlesList"
-                        AutomationId="TagArticlesList"
-                        SelectionMode="None"
-                        Margin="8,8,8,0">
+        <CollectionView x:Name="ArticlesList" AutomationId="TagArticlesList"
+                        SelectionMode="None" Margin="16,8,16,16">
             <CollectionView.EmptyView>
-                <StackLayout Padding="16" VerticalOptions="Center" HorizontalOptions="Center">
-                    <Label Text="No articles found"
-                           TextColor="{StaticResource SecondaryTextColor}"
-                           FontSize="16"
-                           HorizontalOptions="Center" />
-                </StackLayout>
+                <VerticalStackLayout Padding="20,36" Spacing="12" HorizontalOptions="Center">
+                    <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                            StrokeShape="RoundRectangle 16" WidthRequest="52" HeightRequest="52" HorizontalOptions="Center">
+                        <Image Source="{AppThemeBinding Light=icon_row_file_light.svg, Dark=icon_row_file_dark.svg}"
+                               WidthRequest="26" HeightRequest="26" HorizontalOptions="Center" VerticalOptions="Center" />
+                    </Border>
+                    <Label Text="{loc:Translate TagArticlesEmptyTitle}" Style="{StaticResource EmptyTitle}" />
+                    <Label Text="{loc:Translate TagArticlesEmptyDesc}" Style="{StaticResource EmptyDesc}" />
+                </VerticalStackLayout>
             </CollectionView.EmptyView>
             <CollectionView.ItemTemplate>
                 <DataTemplate>
-                    <Frame Style="{StaticResource CardFrame}" Margin="0,4">
-                        <Frame.GestureRecognizers>
-                            <TapGestureRecognizer Tapped="OnArticleTapped" />
-                        </Frame.GestureRecognizers>
-                        <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="2">
-                            <Label Grid.Row="0" Grid.Column="0"
-                                   Text="{Binding Title}"
-                                   FontAttributes="Bold"
-                                   FontSize="15"
-                                   LineBreakMode="TailTruncation" />
-                            <Label Grid.Row="0" Grid.Column="1"
-                                   Text="{Binding TreePath}"
-                                   FontSize="12"
-                                   TextColor="{StaticResource SecondaryTextColor}"
-                                   LineBreakMode="TailTruncation" />
+                    <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                            Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                            StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                            Padding="6,6,6,12" Margin="0,4">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" Padding="0,4" MinimumHeightRequest="48">
+                            <Grid.GestureRecognizers>
+                                <TapGestureRecognizer Tapped="OnArticleTapped" />
+                            </Grid.GestureRecognizers>
+                            <Border Grid.Column="0" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                    StrokeShape="RoundRectangle 12"
+                                    BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}">
+                                <Image WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center"
+                                       Source="{AppThemeBinding Light=icon_row_file_light.svg, Dark=icon_row_file_dark.svg}" />
+                            </Border>
+                            <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                                <Label Text="{Binding Title}" Style="{StaticResource ItemTitle}" LineBreakMode="TailTruncation" />
+                                <Label Text="{Binding TreePath}" Style="{StaticResource ItemMeta}" LineBreakMode="TailTruncation" />
+                            </VerticalStackLayout>
                         </Grid>
-                    </Frame>
+                    </Border>
                 </DataTemplate>
             </CollectionView.ItemTemplate>
         </CollectionView>
 
     </Grid>
-
 </ContentPage>

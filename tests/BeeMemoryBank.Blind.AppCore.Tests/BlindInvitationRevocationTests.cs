@@ -469,7 +469,7 @@ public sealed class BlindInvitationRevocationTests
         host.GetSnapshot().Accounts.Should().HaveCount(2);
     }
 
-    // ---- the owner revoked the device BEFORE its first load (review MAJOR-8) --------------------------------------------------------------------
+    // ---- the owner revoked the device BEFORE its first load --------------------------------------------------------------------
 
     /// <summary>A confirmed account whose first load has not happened: what an invitation leaves between "Active" and the first download.</summary>
     internal static async Task<string> ConfirmedBeforeTheFirstLoadAsync(BlindAccountHost host, FakeInviteHub hub)

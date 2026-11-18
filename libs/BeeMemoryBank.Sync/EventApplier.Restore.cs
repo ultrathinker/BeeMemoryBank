@@ -170,7 +170,12 @@ public partial class EventApplier
             return;
         }
 
-        var autoAccept = await whitelistRepo.GetAutoAcceptDekRotationAsync(evt.NodeId.ToString());
+        // A removal rotation (reason offboarding:<id>) from a superadmin node is applied whatever auto_accept_dek_rotation says (2.12).
+        var (autoAccept, removal) = await DekRotationReasons.DecideAutoApplyAsync(evt, whitelistRepo);
+        if (removal)
+            logger.LogWarning(
+                "DEK_ROTATION_COMMIT {EventId} from {NodeId} ends the removal of a person ({Reason}); it is applied here regardless of the auto-accept setting",
+                evt.EventId, evt.NodeId, payload.Reason);
 
         if (autoAccept)
         {

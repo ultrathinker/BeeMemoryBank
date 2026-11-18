@@ -7,7 +7,7 @@ using BeeMemoryBank.Sync.Blind;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// The one failure-text rule of the shared blind core (fix round 2), pinned where it is decided: <see cref="BlindFailureText"/> says the KIND of a failure or a bounded sentence of this code - never the
+/// The one failure-text rule of the shared blind core, pinned where it is decided: <see cref="BlindFailureText"/> says the KIND of a failure or a bounded sentence of this code - never the
 /// message of an exception - and cleans a text that was stored by an earlier version when it is read back.
 /// </summary>
 public sealed class BlindFailureTextRuleTests : IDisposable

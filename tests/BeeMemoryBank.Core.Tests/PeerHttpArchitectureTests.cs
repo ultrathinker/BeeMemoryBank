@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// BMB-307 fix round 3 (G5): an HTTP client that dials a peer, or the other computer of a join, opens its sockets through <c>PeerSocketConnector</c> (the name is resolved
+/// BMB-307: an HTTP client that dials a peer, or the other computer of a join, opens its sockets through <c>PeerSocketConnector</c> (the name is resolved
 /// there, every answer must be an address a node may call, and only those are connected to) and uses no proxy. The connector guarded only the scheduler and the hub probe,
 /// while the join clients (the one for a typed address, the one pinned by a code, the named no-redirect client) were built with ordinary handlers. This test reads the
 /// sources and fails for any handler that is built without the connector unless the place is listed here WITH the reason it never dials a peer: a new client gets the

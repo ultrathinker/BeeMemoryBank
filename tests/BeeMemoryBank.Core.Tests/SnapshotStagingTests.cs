@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// The working copies of a join and a restore (review revsrv F10, revios F5): made in the data folder, readable by the owner only from the
+/// The working copies of a join and a restore: made in the data folder, readable by the owner only from the
 /// first byte, and swept at the next start if a kill left them.
 /// </summary>
 public class SnapshotStagingTests : IDisposable

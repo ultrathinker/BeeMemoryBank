@@ -6,19 +6,19 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
-/// WP-07 tests: wiring of <see cref="ArticleRepository.SearchAsync"/> /
+/// Tests: wiring of <see cref="ArticleRepository.SearchAsync"/> /
 /// <see cref="FolderRepository.SearchAsync"/> to the FTS5 metadata index (migration 005) via
 /// <see cref="FtsQueryBuilder"/>. Covers:
 ///   - the MATCH-expression builder directly (escaping, AND semantics, empty input, morphology);
 ///   - the differential guarantee: FTS results are a superset of the old
 ///     <c>unicode_contains</c> substring-scan results, with the token-boundary behavior change
 ///     (mid-word substrings like "art" in "article") documented and asserted explicitly;
-///   - the <c>"сервера"</c>/<c>"сервер"</c> morphology example from WP-05, end-to-end through the
+///   - the <c>"сервера"</c>/<c>"сервер"</c> morphology example, end-to-end through the
 ///     wiring (not just inside the stemmer library);
 ///   - soft-delete filtering (stale FTS rows must not surface);
 ///   - FTS5-special-character queries never crash;
 ///   - the preserved <see cref="ArticleRepository.SearchByExactSubstringAsync"/> still returns
-///     what the pre-WP-07 path used to return.
+///     what the earlier path used to return.
 /// </summary>
 public class FtsQueryWiringTests : IAsyncLifetime
 {
@@ -125,7 +125,7 @@ public class FtsQueryWiringTests : IAsyncLifetime
     public async Task SearchAsync_Ru_Morphology_Сервера_Finds_Сервер_And_ViceVersa()
     {
         // Article titled with the dictionary form "сервер"; also one tagged with "серверов".
-        // The concrete WP-05 example: a query for "сервера" must find content stored as "сервер".
+        // The concrete example: a query for "сервера" must find content stored as "сервер".
         var titled = await InsertArticleAsync("Сервер — главный узел");
         var tagged = await InsertArticleAsync("Нечто совершенно другое");
         var tagId = await InsertTagAsync("серверов");
@@ -154,7 +154,7 @@ public class FtsQueryWiringTests : IAsyncLifetime
         // Realistic mixed ru/en corpus with whole-word titles and tags.
         // (Russian words here deliberately avoid 'ё': FTS5's default unicode61 tokenizer removes
         // Latin diacritics but not Cyrillic ones, while the query-side stemmer strips 'ё' too —
-        // so ё-words are a known indexing/query mismatch surfaced in the WP-07 report, not a bug
+        // so ё-words are a known indexing/query mismatch, not a bug
         // in this wiring. We keep the corpus ё-free so the differential assertion is exact.)
         var corpus = new (string title, string[] tags)[]
         {
@@ -221,10 +221,10 @@ public class FtsQueryWiringTests : IAsyncLifetime
         // FTS search: a query that the old scan matched ONLY because it was a *mid-word substring
         // that is not a token prefix* no longer matches.
         //
-        // Note on the "art"/"article" example cited in the brief: under this WP's prefix-query
+        // Note on the "art"/"article" example: under the prefix-query
         // design ("art" -> "art" stem -> "art"*), "art" IS a prefix of the token "article", so
         // FTS matches it the same as the old scan did — no behavior change there. The behavior
-        // change is narrower than the brief's illustration: it only bites for substrings that are
+        // change is narrower than that illustration: it only bites for substrings that are
         // not a prefix of any token. "xyg" inside "Oxygen" is such a case.
         var id = await InsertArticleAsync("Oxygen tank");
 
@@ -321,7 +321,7 @@ public class FtsQueryWiringTests : IAsyncLifetime
         // FTS5 unicode61 remove_diacritics=1 does NOT touch CYRILLIC marks, so the source token
         // "сёрфинг" stays "сёрфинг" in the index. The query-side stemmer (TextNormalization)
         // strips ё→е, so a query for "сёрфинг" becomes "серфинг"* and does NOT match the indexed
-        // "сёрфинг". This is a tokenizer-configuration asymmetry in migration 005 (out of WP-07's
+        // "сёрфинг". This is a tokenizer-configuration asymmetry in migration 005 (out of
         // scope — we must not touch the migration); it is documented here as a known limitation,
         // not a bug in this wiring. Most modern Russian text uses е in place of ё anyway, and the
         // common case (е-spelled query against е-spelled source, or ё-query against ё-source

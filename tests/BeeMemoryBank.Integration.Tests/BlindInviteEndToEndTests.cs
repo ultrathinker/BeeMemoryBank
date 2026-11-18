@@ -426,7 +426,7 @@ public sealed class BlindInviteEndToEndTests(BlindInviteE2EWorld world)
     [Fact]
     public async Task TheOwnerRevokesTheDeviceBeforeItsFirstLoad_TheCardSaysRemovedByOwner_AndTheFirstLoadIsNotRetried()
     {
-        // Review MAJOR-8: confirmed, then revoked before the first download. The challenge answers 401 to the first load; that is the source removing the device, not a first load to retry for ever.
+        // Confirmed, then revoked before the first download. The challenge answers 401 to the first load; that is the source removing the device, not a first load to retry for ever.
         await world.ResetAsync();
         var clock = new OffsetTimeProvider();
         await using var device = new DeviceRig(world.Anchors, clock);

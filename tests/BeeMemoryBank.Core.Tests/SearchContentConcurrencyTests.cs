@@ -11,7 +11,7 @@ using System.Runtime.ExceptionServices;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// Regression tests for the lost-article bug in body-content search (WP-02).
+/// Regression tests for the lost-article bug in body-content search.
 ///
 /// The old <see cref="SearchService.SearchWithContentAsync"/> paginated the active-body set with
 /// repeated <c>LIMIT/OFFSET</c> queries, each on a FRESH SQLite connection. Under concurrent
@@ -36,7 +36,7 @@ public class SearchContentConcurrencyTests : TestFixture
     private const int TotalArticles = 250;
 
     // Repeat the whole search-while-churning scenario this many times: race bugs are flaky by
-    // construction, so a single run is not a meaningful guard (the brief calls for repetition).
+    // construction, so a single run is not a meaningful guard (hence the repetition).
     private const int Iterations = 20;
     private const int WriterCount = 3;
     private const int OldPageSize = 50;

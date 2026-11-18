@@ -1,30 +1,28 @@
 appId: com.beememorybank.mobile
 ---
+# Lock now lives in Settings (the old flyout's Lock button moved there with the four-tab shell).
 - runFlow: _go_home.yaml
-- tapOn:
-    text: "Open navigation drawer"
 - extendedWaitUntil:
     visible:
-      text: "Status"
+      text: "Sync"
     timeout: 3000
 - tapOn:
-    text: "Status"
-- runFlow: _close_drawer.yaml
+    point: "62%,95%"
 - extendedWaitUntil:
     visible:
-      text: "Node Info"
+      text: "State"
     timeout: 10000
 - tapOn:
-    text: "Open navigation drawer"
+    point: "87%,95%"
 - extendedWaitUntil:
     visible:
-      text: "🔒  Lock"
+      id: "com.beememorybank.mobile:id/LockNowButton"
     timeout: 10000
 - tapOn:
-    text: "🔒  Lock"
+    id: "com.beememorybank.mobile:id/LockNowButton"
 - extendedWaitUntil:
     visible:
-      text: "Enter password to unlock"
+      id: "com.beememorybank.mobile:id/UnlockButton"
     timeout: 10000
 - tapOn:
     id: "com.beememorybank.mobile:id/PasswordEntry"
@@ -34,6 +32,6 @@ appId: com.beememorybank.mobile
     id: "com.beememorybank.mobile:id/UnlockButton"
 - extendedWaitUntil:
     visible:
-      text: "Node Info"
+      text: "State"
     timeout: 30000
 - takeScreenshot: lock_reunlock

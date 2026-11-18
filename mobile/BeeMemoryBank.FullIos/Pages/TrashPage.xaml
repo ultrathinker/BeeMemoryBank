@@ -2,26 +2,46 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:services="clr-namespace:BeeMemoryBank.FullIos.Services"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
              x:Class="BeeMemoryBank.FullIos.Pages.TrashPage"
              Title="Trash">
-    <CollectionView x:Name="List" SelectionMode="None">
+    <!-- Bottom room for the tab bar: the list's last row must end above it, not under it. -->
+    <RefreshView x:Name="Refresher" Refreshing="OnRefreshing">
+    <CollectionView x:Name="List" SelectionMode="None" Margin="16,4,16,100">
         <CollectionView.Header>
-            <Label Style="{StaticResource Muted}" Padding="20,8,20,8"
-                   Text="Notes deleted on any of your devices. Restoring one makes a copy named [RESTORED] at the top level; emptying the trash is done on a computer." />
+            <Label Style="{StaticResource SubtitleLabel}" Padding="0,8,0,8" Text="{loc:Translate TrashDesc}" />
         </CollectionView.Header>
         <CollectionView.EmptyView>
-            <Label Text="The trash is empty." Style="{StaticResource Muted}" HorizontalTextAlignment="Center" Margin="24,48" />
+            <VerticalStackLayout Padding="20,36" Spacing="12" HorizontalOptions="Center">
+                <Label Text="{loc:Translate TrashEmptyTitle}" Style="{StaticResource EmptyTitle}" />
+                <Label Text="{loc:Translate TrashEmptyDesc}" Style="{StaticResource EmptyDesc}" />
+            </VerticalStackLayout>
         </CollectionView.EmptyView>
         <CollectionView.ItemTemplate>
             <DataTemplate x:DataType="services:TrashItem">
-                <Grid ColumnDefinitions="*,Auto" Padding="20,10" MinimumHeightRequest="56">
-                    <VerticalStackLayout VerticalOptions="Center" Spacing="2">
-                        <Label Text="{Binding Title}" FontSize="17" LineBreakMode="TailTruncation" />
-                        <Label Text="{Binding Path}" Style="{StaticResource Muted}" FontSize="12" />
-                    </VerticalStackLayout>
-                    <Button Grid.Column="1" Text="Restore" Style="{StaticResource Secondary}" MinimumHeightRequest="40" FontSize="15" Clicked="OnRestore" />
-                </Grid>
+                <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                        Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                        StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                        Padding="6" Margin="0,4">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Padding="0,4">
+                        <Border Grid.Column="0" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                StrokeShape="RoundRectangle 12" VerticalOptions="Center"
+                                BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}">
+                            <Image Source="{AppThemeBinding Light=icon_row_file_light.png, Dark=icon_row_file_dark.png}"
+                                   WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center" />
+                        </Border>
+                        <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                            <!-- The name never loses words: when the restore button squeezes the
+                                 column (large type), the name wraps instead of truncating. -->
+                            <Label Text="{Binding Title}" Style="{StaticResource ItemTitle}" LineBreakMode="WordWrap" />
+                            <Label Text="{Binding Path, Converter={StaticResource DisplayPath}}" Style="{StaticResource ItemMeta}" LineBreakMode="TailTruncation" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="2" Text="{loc:Translate TrashRestore}" Style="{StaticResource SecondaryButton}"
+                                MinimumHeightRequest="40" FontSize="15" VerticalOptions="Center" Clicked="OnRestore" />
+                    </Grid>
+                </Border>
             </DataTemplate>
         </CollectionView.ItemTemplate>
     </CollectionView>
+    </RefreshView>
 </ContentPage>

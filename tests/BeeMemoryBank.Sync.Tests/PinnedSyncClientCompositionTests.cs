@@ -5,7 +5,7 @@ using Microsoft.Extensions.Http;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// Review L-stage1 #6: every client a node syncs through carries the pinned handler — the
+/// Every client a node syncs through carries the pinned handler — the
 /// scheduler's on any host that calls AddSync (the phone's foreground service included), and a
 /// default client composed the way the phone's MauiProgram does it, next to its own handlers.
 /// </summary>

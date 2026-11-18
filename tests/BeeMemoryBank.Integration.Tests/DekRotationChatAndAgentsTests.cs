@@ -591,7 +591,7 @@ public class DekRotationChatAndAgentsTests : IAsyncLifetime
         return await _client.SendAsync(req);
     }
 
-    // ───── Fix round 1 ───────────────────────────────────────────────────────────────────────
+    // ───── ───────────────────────────────────────────────────────────────────────
 
     [Fact]
     public async Task ChatRotationHook_RefusesWhenLegacyRowsRemain_AndPassesOnceTheyAreMoved()

@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 
 namespace BeeMemoryBank.Api.Dream;
 
-// The contracts between the engine (P0b), the detectors (D1, D2) and the model tasks (M1, M2): plan 3.5.
+// The contracts between the engine, the detectors (D1, D2) and the model tasks (M1, M2): plan 3.5.
 
 /// <summary>
 /// What one run may look at, built once per run by DreamCorpusBuilder. Articles are the active ones that are not

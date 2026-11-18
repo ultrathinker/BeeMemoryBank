@@ -2,19 +2,23 @@
 @model BeeMemoryBank.Web.Pages.Admin.HardDeleteModel
 
 @section About {
-    <p>
-        When you delete an article or a folder from the tree, it goes to the trash: the item is hidden from the tree and from search, but its encrypted content and files are still on disk, and
-        you can bring it back. <strong>Hard delete</strong> is the other thing: the selected article or folder (with everything under it) is <strong>physically removed</strong> from the database and
-        from the disk, and a signed event tells every synced node to remove it too.
-    </p>
-    <p class="admin-warning">
-        <strong>It is permanent and cannot be undone</strong>, here or on any other node. The only way back is a snapshot or a backup that was made before. Only a superadmin can do it, and the
-        page asks you to confirm each deletion after showing what it will remove.
-    </p>
-    <p>
-        Use it for cleaning up junk imports, or for data that must not persist anywhere. For ordinary tidying, delete from the tree instead. Below, the list shows the items with a filter, and
-        the audit log shows what was removed.
-    </p>
+    <p>Deletes notes forever, on every device. Normal deleting moves them to the trash instead.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            When you delete an article or a folder from the tree, it goes to the trash: the item is hidden from the tree and from search, but its encrypted content and files are still on disk, and
+            you can bring it back. <strong>Hard delete</strong> is the other thing: the selected article or folder (with everything under it) is <strong>physically removed</strong> from the database and
+            from the disk, and a signed event tells every synced node to remove it too.
+        </p>
+        <p class="admin-warning">
+            <strong>It is permanent and cannot be undone</strong>, here or on any other node. The only way back is a snapshot or a backup that was made before. Only a superadmin can do it, and the
+            page asks you to confirm each deletion after showing what it will remove.
+        </p>
+        <p>
+            Use it for cleaning up junk imports, or for data that must not persist anywhere. For ordinary tidying, delete from the tree instead. Below, the list shows the items with a filter, and
+            the audit log shows what was removed.
+        </p>
+    </details>
 }
 
 <div style="display:flex; justify-content:flex-end; margin:16px 0 12px;">
@@ -100,7 +104,7 @@
 <sl-dialog id="dlg-confirm-restore" label="Restore">
     <sl-alert variant="primary" open style="margin-bottom:16px;">
         <sl-icon slot="icon" name="info-circle"></sl-icon>
-        This will create a <strong>new copy</strong> <code id="restore-target-name"></code> at the root. The original stays in the trash — you can hard-delete it separately.
+        This makes a <strong>new copy</strong> <code id="restore-target-name"></code> at the top level. The original stays in the trash.
         <br/><br/>
         <span id="restore-article-note" style="display:none;">Content, tags, and ciphertext are preserved. Comments and version history are not copied.</span>
         <span id="restore-folder-note" style="display:none;">The subfolder structure (deleted together with this folder) will be recreated as empty folders. Articles from the deleted folder are already orphaned and live in the root.</span>

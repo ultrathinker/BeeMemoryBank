@@ -50,6 +50,18 @@ public static class DekRewrapper
     private static async Task RunPreRewrapHooksCoreAsync(
         IServiceProvider services, Microsoft.Extensions.Logging.ILogger? logger, CancellationToken ct)
     {
+        // 2.12: a v1 door whose secret this node can read (the OS and the server auto-unlock) is sealed as a v2 door first, while the session
+        // still holds the outgoing DEK, so that the rotation re-seals it instead of deleting it. Best effort, like every door upgrade.
+        foreach (var upgrade in (IEnumerable<IUnlockedDoorUpgrade>?)services.GetService(typeof(IEnumerable<IUnlockedDoorUpgrade>)) ?? [])
+        {
+            try { await upgrade.UpgradeAsync(ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger?.LogWarning("A door upgrade before the rotation failed ({Type}); a v1 door it could not seal is handled by the rotation.",
+                    ex.GetType().Name);
+            }
+        }
+
         var hooks = (IEnumerable<IDekRotationHook>?)services.GetService(typeof(IEnumerable<IDekRotationHook>)) ?? [];
         foreach (var hook in hooks)
         {
@@ -101,7 +113,8 @@ public static class DekRewrapper
         Microsoft.Extensions.Logging.ILogger? logger = null,
         bool createNextMetadataKey = false,
         DekRotationCompletionRecord? completionRecord = null,
-        SealedRotationHooks? sealedHooks = null)
+        SealedRotationHooks? sealedHooks = null,
+        byte[]? newSlotDoorPublicKey = null)
     {
         // Step B: the mirror of a sealed node (null elsewhere; both members do nothing on a plain node). Explicit argument first, else what
         // RunPreRewrapHooksAsync captured for this flow.
@@ -110,6 +123,9 @@ public static class DekRewrapper
         int agentsDeleted = 0;
         int slotsDeleted = 0;
         var tally = new RewrapTally();
+        var doors = ResealedDoors.None;
+        var serverPrepared = false;
+        var serverUnprepared = new List<ServerRotationDoor>();
 
         Report(progress, DekRotationFlowStep.ReWrappingPerItem, 20,
             isInitiator ? "Re-wrapping article bodies..." : "Auto-accept: re-wrapping article bodies...");
@@ -163,57 +179,46 @@ public static class DekRewrapper
             ReEncryptRemoteAccountTokens(conn, tx, oldDek, newDek, tally, logger);
 
             Report(progress, DekRotationFlowStep.InvalidatingAgents, 75,
-                isInitiator ? "Removing agent keys that carry the old master key..." : "Auto-accept: removing agent keys that carry the old master key...");
+                isInitiator ? "Sealing the doors of those who stay to the new master key..." : "Auto-accept: sealing the doors of those who stay to the new master key...");
 
-            // --- tbl_agent: only agents that carry a wrapped copy of the master DEK are removed.
-            // Such an agent (owner was a superadmin when it was created) holds the OLD DEK sealed
-            // under a key derived from its own plaintext API key, which the server never stores, so
-            // it cannot be re-wrapped — and a rotation is typically a response to suspected key
-            // exposure, so a credential that could open the old DEK is treated as part of what is
-            // being retired and must be re-issued. Every other agent holds no key material at all
-            // (encrypted_dek/dek_iv/salt are NULL — Agent.CanAutoUnlock is false, migration 014),
-            // so the rotation has nothing to take from it: it keeps authenticating as its owner,
-            // exactly as before; deleting those too would disconnect every teammate's MCP client
-            // on every rotation. Not filtered by status: a soft-deleted row that somehow still
-            // holds a wrapped DEK is exactly the kind of leftover that must not survive.
-            agentsDeleted = await conn.ExecuteAsync(
-                "DELETE FROM tbl_agent WHERE encrypted_dek IS NOT NULL", transaction: tx);
+            // The quiet rotation (2.12, ADR 0012): every v2 door of somebody who stays is sealed to the new DEK from its public key, here, in
+            // the rotation transaction - the superadmins' doors, recovery keys, the OS and server auto-unlock, quick unlock and the v2
+            // auto-unlock agents. A v1 door cannot be re-sealed (only its secret can write it): a password or recovery door is kept and the
+            // chain below lets it reach the new DEK at its next use; a v1 secret-keyed door and a v1 agent hold the old DEK under a secret this
+            // node may not have, and are deleted as before (agents without key material are never touched).
+            doors = ResealDoors(conn, tx, newDek, isInitiator ? initiatorSlotId : null);
+            agentsDeleted = doors.AgentsDeleted;
+            slotsDeleted = doors.SlotsDeleted;
 
             if (isInitiator)
             {
-                Report(progress, DekRotationFlowStep.InvalidatingSlots, 80,
-                    "Re-wrapping initiator key slot, removing others...");
+                Report(progress, DekRotationFlowStep.InvalidatingSlots, 80, "Re-sealing the initiator's door...");
 
+                // With a door public key the new content is a sealed (v2) box (ADR 0012), else a v1 wrap; either way the door names its DEK.
                 await conn.ExecuteAsync(
-                    "UPDATE tbl_key_slot SET encrypted_master_dek = @encDek, iv = @iv WHERE slot_id = @slotId",
-                    new { encDek = newWrappedSlotDek, iv = newWrappedSlotIv, slotId = initiatorSlotId!.Value }, tx);
+                    @"UPDATE tbl_key_slot SET encrypted_master_dek = @encDek, iv = @iv, door_version = @version, door_public_key = @pk, dek_fp = @fp
+                      WHERE slot_id = @slotId",
+                    new
+                    {
+                        encDek = newWrappedSlotDek, iv = newWrappedSlotIv, slotId = initiatorSlotId!.Value,
+                        version = newSlotDoorPublicKey is null ? 1 : 2, pk = newSlotDoorPublicKey, fp = DekFingerprint.Of(newDek),
+                    }, tx);
 
-                slotsDeleted = await conn.ExecuteAsync(
-                    "DELETE FROM tbl_key_slot WHERE slot_id <> @slotId",
-                    new { slotId = initiatorSlotId!.Value }, tx);
-
-                await conn.ExecuteAsync(
-                    "UPDATE tbl_user SET key_slot_id = NULL WHERE key_slot_id IS NOT NULL AND key_slot_id <> @slotId",
-                    new { slotId = initiatorSlotId!.Value }, tx);
+                // Nobody else's door is deleted any more and nobody's tbl_user.key_slot_id is cleared (2.12): the doors were re-sealed above.
             }
-            else
+
+            // The bridge (DekBridge): the chain (NEW under OLD) is kept only while a v1 door is left that may need it; without one every
+            // chain row goes, this rotation's included, so that the OLD DEK and a later copy of this database do not yield the NEW one (H10).
+            if (!DekBridge.HasV1Doors(conn, tx))
             {
-                Report(progress, DekRotationFlowStep.InvalidatingAgents, 80,
-                    "Auto-accept: removing recovery key slots...");
-
-                // os_auto_unlock must be invalidated here too, not just recovery: this node's
-                // DPAPI secret file is unchanged, but its slot still wraps the OLD (now invalid)
-                // DEK, and the server has no access to the plaintext secret to re-wrap it here.
-                // Leaving it would make IsEnabledAsync() report "enabled" while auto-unlock
-                // silently fails sentinel verification and returns false forever afterward. An
-                // enabled-looking but non-functional feature is worse than requiring the admin to
-                // notice and re-enable it.
-                //
-                // server_auto_unlock is the server checkbox's slot (docs/design/step-b-spec.md 11.2 item 6): the same argument, and a rotation
-                // always switches the checkbox off - the owner turns it on again if they want it.
-                slotsDeleted = await conn.ExecuteAsync(
-                    "DELETE FROM tbl_key_slot WHERE slot_type IN ('recovery', 'os_auto_unlock', 'server_auto_unlock')", transaction: tx);
+                chainEncryptedNewDekB64 = null;
+                chainIvB64 = null;
+                conn.Execute(DekBridge.ClearAllSql, transaction: tx);
             }
+
+            // This rotation's own retired link (OLD under NEW), published after the commit (RotationLinks).
+            if (conn.ExecuteScalar<string?>("SELECT node_id FROM tbl_node_identity LIMIT 1", transaction: tx) is { } linkAuthor)
+                RotationLinks.Write(conn, tx, commitEventId, linkAuthor, oldDek, newDek);
 
             Report(progress, DekRotationFlowStep.Finalizing, 85,
                 isInitiator ? "Updating sentinel and epoch..." : "Auto-accept: updating sentinel and epoch...");
@@ -290,9 +295,31 @@ public static class DekRewrapper
                         new { slotId = initiatorSlotId!.Value }, tx);
                     await mirror.AddPendingDoorAsync(new PendingDoor(BootDoorKinds.Slot, initiatorSlotId.Value, slot.SlotType, newWrappedSlotDek!,
                         newWrappedSlotIv!, slot.Salt, (int?)slot.Memory, (int?)slot.Iterations, (int?)slot.Parallelism, null, null,
-                        DekFingerprint.Of(newDek)));
+                        DekFingerprint.Of(newDek), newSlotDoorPublicKey is null ? 1 : 2, newSlotDoorPublicKey));
                 }
+                // Every re-sealed door, as pending with the new fingerprint, before the commit.
+                foreach (var pending in doors.Pending)
+                    await mirror.AddPendingDoorAsync(pending);
             }
+
+            // The server checkbox: the enable record names the re-sealed door too before the commit, so the server stays armed whatever
+            // happens next. Best effort: a record that could not be written here is written once more right after the commit (below); only a
+            // crash before that switches the checkbox off at the next start.
+            if (sealedHooks.ServerAutoUnlock is { } preparing)
+                foreach (var change in doors.Server)
+                {
+                    try
+                    {
+                        await preparing.PrepareRotationAsync(change);
+                        serverPrepared = true;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        serverUnprepared.Add(change);
+                        logger?.LogWarning("The enable record of the server checkbox could not name the re-sealed door ({Type}); it is written again after the commit.",
+                            ex.GetType().Name);
+                    }
+                }
 
             tx.Commit();
         }
@@ -301,6 +328,11 @@ public static class DekRewrapper
             tx.Rollback();
             // Rule 3 on failure: the rewrite drops the pending rows of a rotation that did not happen.
             await SlotDoors.RewriteAsync(mirror, logger);
+            if (serverPrepared && sealedHooks.ServerAutoUnlock is { } undo)
+            {
+                try { await undo.OnDekRotatedAsync(committed: false); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { logger?.LogWarning("The enable record could not be settled after a failed rotation ({Type}).", ex.GetType().Name); }
+            }
             throw;
         }
 
@@ -309,18 +341,38 @@ public static class DekRewrapper
         Array.Clear(oldDek, 0, oldDek.Length);
 
         // Rule 3 after the commit: doors, wrappers (the old one goes when nothing needs it any more, spec 3.4) and the mirrors. The session
-        // holds the new DEK now, so it is the current one. Then the server checkbox: the commit deleted its slot, so its enable record and a
-        // node-created key file go too; a failure is logged and the stale rule of 11.2 removes what is left at the next start.
+        // holds the new DEK now, so it is the current one. Then the server checkbox: a re-sealed door settles the enable record on the new
+        // door and DEK; a v1 door the commit deleted takes its enable record and a node-created key file with it. A failure is logged: the
+        // record names both doors meanwhile, and the stale rule of 11.2 removes what is left of a deleted one at the next start.
         await SlotDoors.RewriteAsync(mirror, logger);
         if (sealedHooks.ServerAutoUnlock is { } serverAutoUnlock)
         {
-            try { await serverAutoUnlock.DisableLocalAsync(); }
-            catch (Exception ex) { logger?.LogWarning(ex, "The local state of the server checkbox could not be removed after the rotation; the next start removes it."); }
+            if (doors.Server.Count > 0)
+            {
+                // A record the rotation could not write before its commit (P11 O4) is written now, by the same step and the same rule (the
+                // record still names the old door): then the settle below moves it to the re-sealed door and the new key.
+                foreach (var late in serverUnprepared)
+                {
+                    try { await serverAutoUnlock.PrepareRotationAsync(late); }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        logger?.LogWarning("The enable record of the server checkbox could not name the re-sealed door after the rotation either ({Type}); " +
+                            "\"Start unlocked after a restart\" is off at the next start until it is switched on again.", ex.GetType().Name);
+                    }
+                }
+                try { await serverAutoUnlock.OnDekRotatedAsync(committed: true); }
+                catch (Exception ex) { logger?.LogWarning(ex, "The enable record of the server checkbox could not be settled after the rotation; the next unlock settles it."); }
+            }
+            if (doors.ServerSlotDeleted)
+            {
+                try { await serverAutoUnlock.DisableLocalAsync(); }
+                catch (Exception ex) { logger?.LogWarning(ex, "The local state of the server checkbox could not be removed after the rotation; the next start removes it."); }
+            }
         }
 
         var completedMsg = isInitiator
             ? $"DEK rotation completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Auto-unlock agent keys removed: {agentsDeleted}."
-            : $"DEK rotation auto-accept completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Auto-unlock agent keys removed: {agentsDeleted}. Recovery slots removed: {slotsDeleted}.";
+            : $"DEK rotation auto-accept completed. Epoch {newEpoch - 1}\u2192{newEpoch}. Auto-unlock agent keys removed: {agentsDeleted}. Old-format auto-unlock doors removed: {slotsDeleted}.";
         // Rows that survived the rotation without being rotated are said out loud, in the same
         // message the operator already reads, rather than left in a log they have no reason to
         // open. "AlreadyOnNewKey" is routine and healthy — it is the peer race, correctly handled.
@@ -343,6 +395,87 @@ public static class DekRewrapper
 
         return (agentsDeleted, slotsDeleted, tally);
     }
+
+    /// <summary>What <see cref="ResealDoors"/> did: the counts for the messages, the boot doors to add as pending, the server doors re-sealed.</summary>
+    internal sealed record ResealedDoors(int AgentsDeleted, int SlotsDeleted, List<PendingDoor> Pending, List<ServerRotationDoor> Server, bool ServerSlotDeleted)
+    {
+        public static ResealedDoors None => new(0, 0, [], [], false);
+    }
+
+    private static bool IsSecretKeyed(string slotType) =>
+        slotType is KeySlotTypes.OsAutoUnlock or KeySlotTypes.ServerAutoUnlock or KeySlotTypes.QuickUnlock;
+
+    /// <summary>
+    /// The door pass of the quiet rotation, inside the rotation transaction. Key slots (the initiator's own, <paramref name="skipSlotId"/>, is
+    /// written by the caller with its password): a v2 door is sealed to <paramref name="newDek"/> from its public key and names it; a v1
+    /// secret-keyed door is deleted; a v1 password or recovery door is kept. Agents with a wrapped DEK: a v2 door (kdf 2) is sealed again, a
+    /// v0/v1 one is deleted, whatever its status (a soft-deleted row that still holds an old DEK is a leftover that must not survive). Agents
+    /// without key material are not touched: they authenticate as their owner and hold nothing a rotation could take.
+    /// </summary>
+    internal static ResealedDoors ResealDoors(System.Data.IDbConnection conn, System.Data.IDbTransaction tx, byte[] newDek, int? skipSlotId)
+    {
+        var pending = new List<PendingDoor>();
+        var server = new List<ServerRotationDoor>();
+        var serverDeleted = false;
+        var slotsDeleted = 0;
+        var agentsDeleted = 0;
+        var newFp = DekFingerprint.Of(newDek);
+
+        // Only the columns a door is made of (not created_at: a row with an odd timestamp must not stop a rotation).
+        var slots = conn.Query<MasterKeyStore>(
+            @"SELECT slot_id AS SlotId, slot_type AS SlotType, encrypted_master_dek AS EncryptedMasterDek, iv AS IV, salt AS Salt,
+                     argon_memory AS ArgonMemory, argon_iterations AS ArgonIterations, argon_parallelism AS ArgonParallelism,
+                     door_version AS DoorVersion, door_public_key AS DoorPublicKey, dek_fp AS DekFingerprint
+                FROM tbl_key_slot ORDER BY slot_id", transaction: tx).ToList();
+        foreach (var slot in slots)
+        {
+            if (slot.SlotId == skipSlotId) continue;
+            if (slot.DoorVersion == Doors.V2 && slot.DoorPublicKey is { Length: DoorBox.PublicKeySize } publicKey)
+            {
+                var resealed = Doors.WithDoor(slot, Doors.SealTo(slot.SlotType, publicKey, newDek));
+                conn.Execute("UPDATE tbl_key_slot SET encrypted_master_dek = @box, iv = @iv, dek_fp = @fp WHERE slot_id = @id",
+                    new { box = resealed.EncryptedMasterDek, iv = resealed.IV, fp = newFp, id = slot.SlotId }, tx);
+                pending.Add(SlotDoors.PendingFor(resealed, null));
+                if (slot.SlotType == KeySlotTypes.ServerAutoUnlock)
+                    server.Add(new ServerRotationDoor(SlotHash(slot), SlotHash(resealed), newFp));
+            }
+            else if (IsSecretKeyed(slot.SlotType))
+            {
+                conn.Execute("DELETE FROM tbl_key_slot WHERE slot_id = @id", new { id = slot.SlotId }, tx);
+                slotsDeleted++;
+                serverDeleted |= slot.SlotType == KeySlotTypes.ServerAutoUnlock;
+            }
+        }
+
+        var agents = conn.Query<Agent>(
+            @"SELECT id AS Id, key_hash AS KeyHash, encrypted_dek AS EncryptedDek, dek_iv AS DekIV, salt AS Salt, COALESCE(kdf_version, 0) AS KdfVersion,
+                     door_public_key AS DoorPublicKey, dek_fp AS DekFingerprint, status AS Status
+                FROM tbl_agent WHERE encrypted_dek IS NOT NULL", transaction: tx).ToList();
+        foreach (var agent in agents)
+        {
+            if (agent.KdfVersion == Agent.SealedDoorKdfVersion && agent.DoorPublicKey is { Length: DoorBox.PublicKeySize } publicKey)
+            {
+                var door = Doors.SealTo(Doors.AgentKind, publicKey, newDek);
+                conn.Execute("UPDATE tbl_agent SET encrypted_dek = @box, dek_iv = @iv, dek_fp = @fp WHERE id = @id",
+                    new { box = door.Box, iv = door.Iv, fp = newFp, id = agent.Id }, tx);
+                agent.EncryptedDek = door.Box;
+                agent.DekIV = door.Iv;
+                agent.DekFingerprint = newFp;
+                if (agent.Status == "A") pending.Add(AgentDoors.PendingFor(agent));
+            }
+            else
+            {
+                conn.Execute("DELETE FROM tbl_agent WHERE id = @id", new { id = agent.Id }, tx);
+                agentsDeleted++;
+            }
+        }
+
+        return new ResealedDoors(agentsDeleted, slotsDeleted, pending, server, serverDeleted);
+    }
+
+    private static string SlotHash(MasterKeyStore s) =>
+        BootDoorHash.OfSlot(s.SlotId, s.SlotType, s.EncryptedMasterDek, s.IV, s.Salt, s.ArgonMemory, s.ArgonIterations, s.ArgonParallelism, s.DoorVersion,
+            s.DoorPublicKey);
 
     /// <summary>
     /// Re-wraps the semantic-search projection matrix, which is sealed directly under the master
@@ -567,7 +700,7 @@ public static class DekRewrapper
         // the seed. There is nothing here to re-wrap, and reading it as a v1 row is not a harmless
         // miss: ed25519_private_key_iv is NULL, so the row fell into MarkUnreadable and every
         // rotation reported "UNREADABLE ROWS: 1 (tbl_node_identity:…) — manual recovery required"
-        // for a node whose identity was never in any danger (review release-a #4).
+        // for a node whose identity was never in any danger.
         if (version == NodeIdentityCrypto.ExternalKeyVersion) return;
 
         var nodeIdStr = (string)row.NodeId;

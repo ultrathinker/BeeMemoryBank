@@ -68,7 +68,7 @@ public sealed class AndroidBackupRestoreSource(
             // and there is no database to check the pairing against, so the pairing is checked against the package's signed whitelist
             // and the anchors the phone holds; the restore then verifies the package and opens the baseline with the recovered keys.
             if (await RecoveryRestoreService.IsFormat2PackageAsync(parts.PackagePath, ct))
-                await CheckPairingV2Async(seal, opened.NodeId, parts.PackagePath, events, keys!, ct);
+                await CheckPairingV2Async(seal, opened.NodeId, parts.PackagePath, events, keys!, Path.Combine(work, "check"), ct);
             else
                 await CheckPairingAsync(seal, opened.NodeId, parts.PackagePath, events, keys!, Path.Combine(work, "check"), ct);
 
@@ -114,8 +114,17 @@ public sealed class AndroidBackupRestoreSource(
         var manifest = RestoreEvidenceFromManifest.Of(BlindManifest.Parse(await File.ReadAllBytesAsync(manifestPath, ct)));
 
         var pairedBy = manifest.Whitelist.Where(p => p.NodeId == seal.PairedBy).ToList();
+        // The pairing node's key in the package, or one it retired since the pairing (plan WS-D D4; a re-key also signs the record again).
+        IReadOnlyList<BeeMemoryBank.Core.Models.NodeKeyHistoryEntry> carried;
+        using (var historyConn = new SqliteConnection($"Data Source={package.DatabasePath};Mode=ReadOnly;Pooling=False"))
+        {
+            historyConn.Open();
+            carried = await BeeMemoryBank.Storage.Sqlite.NodeKeyHistoryStore.ListAllAsync(historyConn);
+        }
         if (pairedBy is not [{ IsSuperadmin: true } signer]
-            || !Ed25519Signer.Verify(signer.PublicKey, seal.PairingStatement(phoneId), seal.PairingSignature))
+            || !BeeMemoryBank.Sync.NodeEventVerifier.VerifyPackageSignature(seal.PairedBy, signer.PublicKey,
+                BeeMemoryBank.Sync.NodeEventVerifier.ChainedTo(seal.PairedBy, signer.PublicKey, carried),
+                seal.PairingStatement(phoneId), seal.PairingSignature, signedAtLamport: null))
             throw new InvalidDataException("The phone's pairing record is not signed by a superadmin of this network; pair the phone again.");
 
         AnchorVerification anchor;
@@ -153,7 +162,7 @@ public sealed class AndroidBackupRestoreSource(
     /// is verified by the restore against the producer key the pairing record holds, before anything of it is read.
     /// </summary>
     private async Task CheckPairingV2Async(BlindPhoneBackupSeal seal, Guid phoneId, string packagePath,
-        IReadOnlyList<SyncEvent> events, RecoveredKeys keys, CancellationToken ct)
+        IReadOnlyList<SyncEvent> events, RecoveredKeys keys, string dir, CancellationToken ct)
     {
         BlindManifestV2 manifest;
         try
@@ -172,10 +181,20 @@ public sealed class AndroidBackupRestoreSource(
             catch (FormatException) { /* a row without a usable key vouches for nothing */ }
         }
         var pairedBy = manifest.Whitelist.Where(p => p.NodeId == seal.PairedBy).ToList();
+        // Format 2: the manifest carries no key history before the package is opened; the record is signed again at every re-key (plan WS-D D4),
+        // so the current key of the pairing node is the one to check (the helper's current-key check).
         if (pairedBy is not [{ IsSuperadmin: true } signer] || !publicKeys.TryGetValue(signer.NodeId, out var signerKey)
-            || !Ed25519Signer.Verify(signerKey, seal.PairingStatement(phoneId), seal.PairingSignature))
+            || !BeeMemoryBank.Sync.NodeEventVerifier.SignatureVerifies(signerKey, seal.PairingStatement(phoneId), seal.PairingSignature))
             throw new InvalidDataException("The phone's pairing record is not signed by a superadmin of this network; pair the phone again.");
-        if (!keys.HeadProven || !AnchorVouchesFor(events, publicKeys, keys.Current, seal.PairedBy))
+        // The authors' retired keys, carried in the package's control.db, as the format-1 path reads them from the package's
+        // database: an anchor signed before its author re-keyed still vouches. The package's signature is not verified yet (the restore does that
+        // first thing); a forged history only adds links whose two proofs verify, so it cannot make a key that never signed an anchor vouch.
+        IReadOnlyList<BeeMemoryBank.Core.Models.NodeKeyHistoryEntry> carried = [];
+        Directory.CreateDirectory(dir);
+        var control = Path.Combine(dir, BlindManifestV2.ControlDbFileName);
+        if (await Format2Package.ExtractEntryAsync(packagePath, BlindManifestV2.ControlDbFileName, control, _limits.MaxBodyBytes, ct))
+            carried = BlindPackageV2Reader.ReadKeyHistory(control);
+        if (!keys.HeadProven || !AnchorVouchesFor(events, publicKeys, keys.Current, seal.PairedBy, carried))
             throw new InvalidDataException(
                 "No anchor under the master key vouches for the superadmin that paired this phone; its backup cannot say who produced it.");
     }
@@ -184,10 +203,15 @@ public sealed class AndroidBackupRestoreSource(
     /// Is there a state anchor among <paramref name="events"/> that a known node signed, that verifies under <paramref name="dek"/>, whose
     /// signer was a superadmin at its cut and whose trust section lists <paramref name="nodeId"/> as a superadmin with the key held?
     /// </summary>
-    internal static bool AnchorVouchesFor(IReadOnlyList<SyncEvent> events, IReadOnlyDictionary<Guid, byte[]> publicKeys, byte[] dek, Guid nodeId)
+    internal static bool AnchorVouchesFor(IReadOnlyList<SyncEvent> events, IReadOnlyDictionary<Guid, byte[]> publicKeys, byte[] dek, Guid nodeId,
+        IReadOnlyList<BeeMemoryBank.Core.Models.NodeKeyHistoryEntry>? history = null)
     {
         if (!publicKeys.TryGetValue(nodeId, out var nodeKey)) return false;
+        history ??= [];
         var fingerprint = DekFingerprint.Of(dek);
+        // A node's keys: the one the package names and those it retired, as the carried history leads from them to it (plan WS-D D4).
+        IEnumerable<byte[]> KeysOf(Guid node, byte[] current) =>
+            BeeMemoryBank.Sync.NodeEventVerifier.ChainedTo(node, current, history).Select(r => r.PublicKey).Prepend(current);
         foreach (var evt in events)
         {
             if (evt.EventType != EventTypes.StateAnchor || !publicKeys.TryGetValue(evt.NodeId, out var key)) continue;
@@ -195,11 +219,13 @@ public sealed class AndroidBackupRestoreSource(
             try { a = JsonSerializer.Deserialize<StateAnchorPayload>(evt.Payload); }
             catch (JsonException) { continue; }
             if (a is not { PositionVector: not null } || a.DekFingerprint != fingerprint
-                || !Ed25519Signer.Verify(key, EventSignature.BuildPayload(evt), evt.Signature)
+                || !BeeMemoryBank.Sync.NodeEventVerifier.Verify(evt, key, history, BeeMemoryBank.Sync.NodeKeyMode.Package)
                 || !StateAnchorCrypto.Verify(dek, a.AnchorId, a.DekFingerprint, a.PositionVector, a.Digest, a.CreatedAt, a.Hmac)
                 || StateDigest.FormatOf(a.Digest) != StateDigest.FormatVersion)
                 continue;
-            if (StateDigest.TrustProves(a.Digest, evt.NodeId, key, superadmin: true) && StateDigest.TrustProves(a.Digest, nodeId, nodeKey, superadmin: true))
+            // The trust section names each node with the key it held at the anchor's cut: the current one, or one retired since.
+            if (KeysOf(evt.NodeId, key).Any(k => StateDigest.TrustProves(a.Digest, evt.NodeId, k, superadmin: true))
+                && KeysOf(nodeId, nodeKey).Any(k => StateDigest.TrustProves(a.Digest, nodeId, k, superadmin: true)))
                 return true;
         }
         return false;

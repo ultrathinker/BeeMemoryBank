@@ -108,8 +108,8 @@ public sealed class BlindWipeService(
                 $"a backup job did not stop within {DrainTimeout.TotalSeconds:0} s — nothing was wiped; try again");
         tokens.Clear();
 
-        // One barrier for every OTHER writer, taken in one documented order (review release-a2
-        // agy#4, sec#6, spec#3). Maintenance below stops HTTP callers only:
+        // One barrier for every OTHER writer, taken in one documented order
+        // Maintenance below stops HTTP callers only:
         //
         //   1. the event-write gate — holds new event writes off (EventApplier, the log trimmer)
         //      and waits for the ones already running; this flow is the owner, so its own writes

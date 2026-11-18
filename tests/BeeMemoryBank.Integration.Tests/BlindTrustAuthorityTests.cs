@@ -6,7 +6,7 @@ using BeeMemoryBank.Sync.Blind;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The trust mode of a callable node is the authority over its pin (ADR 0007, review INT-03): wherever a row is written from a
+/// The trust mode of a callable node is the authority over its pin (ADR 0007): wherever a row is written from a
 /// manifest, a package or a record, or read back for a screen, a pin that the mode does not call for is a leftover and never
 /// outlives the mode — a stale key must not override the chosen policy or reject a legitimate certificate after a rotation.
 /// </summary>

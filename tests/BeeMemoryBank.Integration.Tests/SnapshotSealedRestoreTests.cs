@@ -165,10 +165,10 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         Directory.CreateDirectory(staging);
         using var watch = new PlainFileWatch([staging], template.Canaries);
 
-        var outcome = await node.Snapshots.RestoreAsync(info.FileName);
+        var outcome = await node.Snapshots.RestoreAsync(info.FileName, masterPassword: SealedNodeTemplate.Password);
         watch.Stop();
 
-        outcome.Standalone.Should().BeFalse();
+        outcome.Standalone.Should().BeTrue("every restore of this route makes a new node (release 2.12, plan R2)");
         DisplayName(node.Factory).Should().Be(original, "the snapshot's database is the node's now");
         hooks.Calls.Should().Equal("before", "after");
         nameWhenBeforeRan.Should().Be(Changed, "the boot store is told before the file is replaced");
@@ -193,7 +193,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         string oldNodeId;
         using (var c = node.Factory.CreateConnection()) oldNodeId = c.ExecuteScalar<string>("SELECT node_id FROM tbl_node_identity")!;
 
-        var outcome = await node.Snapshots.RestoreAsync(info.FileName, standaloneMode: true, masterPassword: SealedNodeTemplate.Password);
+        var outcome = await node.Snapshots.RestoreAsync(info.FileName, masterPassword: SealedNodeTemplate.Password);
 
         outcome.Standalone.Should().BeTrue();
         outcome.NewNodeId.Should().NotBeNull();
@@ -216,7 +216,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         var info = await node.Snapshots.CreateAsync(filterSecrets: false, sign: false);
         SetDisplayName(node.Factory, Changed);
 
-        var act = async () => await node.Snapshots.RestoreAsync(info.FileName);
+        var act = async () => await node.Snapshots.RestoreAsync(info.FileName, masterPassword: SealedNodeTemplate.Password);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*unlock material*");
         DisplayName(node.Factory).Should().Be(Changed);
@@ -237,7 +237,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         node.Snapshots.FreeMemoryOverride = dbSize / 2;
         (dbSize / 2).Should().BeLessThan(dbSize);
 
-        var act = async () => await node.Snapshots.RestoreAsync(info.FileName);
+        var act = async () => await node.Snapshots.RestoreAsync(info.FileName, masterPassword: SealedNodeTemplate.Password);
 
         var ex = (await act.Should().ThrowAsync<NotEnoughMemoryException>()).Which;
         ex.Message.Should().Contain("Opening the database of a snapshot needs about").And.Contain("MB free")
@@ -248,7 +248,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
 
         // The ceiling lifted, the same snapshot restores.
         node.Snapshots.FreeMemoryOverride = null;
-        await node.Snapshots.RestoreAsync(info.FileName);
+        await node.Snapshots.RestoreAsync(info.FileName, masterPassword: SealedNodeTemplate.Password);
         DisplayName(node.Factory).Should().NotBe(Changed);
     }
 
@@ -267,7 +267,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
             Directory.CreateDirectory(staging);
             using var watch = new PlainFileWatch([staging], template.Canaries);
 
-            var act = async () => await node.Snapshots.RestoreAsync(plainInfo.FileName);
+            var act = async () => await node.Snapshots.RestoreAsync(plainInfo.FileName, masterPassword: SealedNodeTemplate.Password);
 
             await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*not encrypted*");
             watch.Stop();
@@ -301,7 +301,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
             Directory.CreateDirectory(staging);
             using var watch = new PlainFileWatch([staging], template.Canaries);
 
-            var act = async () => await node.Snapshots.RestoreAsync(tamperedName);
+            var act = async () => await node.Snapshots.RestoreAsync(tamperedName, masterPassword: SealedNodeTemplate.Password);
 
             await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*not encrypted*");
             watch.Stop();
@@ -356,7 +356,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
     }
 
     /// <summary>
-    /// BMB-304 fix3 (G4): a join import of a sealed node's snapshot could not put its finished staging copy over the extracted container on Windows (the
+    /// BMB-304: a join import of a sealed node's snapshot could not put its finished staging copy over the extracted container on Windows (the
     /// move answered "access denied"): a destination with the read-only attribute, or one that a scanner has open for a moment, is replaced all the same.
     /// </summary>
     [Theory]
@@ -511,7 +511,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         var info = await node.Snapshots.CreateAsync(filterSecrets: false, sign: false);
         Count(node.Factory, $"SELECT COUNT(*) FROM tbl_key_slot WHERE slot_type = '{ServerSlot}'").Should().Be(1, "the snapshot was made while the checkbox was on");
 
-        await node.Snapshots.RestoreAsync(info.FileName, standaloneMode: true, masterPassword: SealedNodeTemplate.Password);
+        await node.Snapshots.RestoreAsync(info.FileName, masterPassword: SealedNodeTemplate.Password);
 
         Count(node.Factory, $"SELECT COUNT(*) FROM tbl_key_slot WHERE slot_type = '{ServerSlot}'").Should().Be(0, "restore of this node only");
         Count(node.Factory, "SELECT COUNT(*) FROM tbl_key_slot").Should().Be(others, "every other slot arrived");
@@ -520,8 +520,8 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
 
         InsertServerSlot(node.Factory);
         var second = await node.Snapshots.CreateAsync(filterSecrets: false, sign: false);
-        await node.Snapshots.RestoreAsync(second.FileName);
-        Count(node.Factory, $"SELECT COUNT(*) FROM tbl_key_slot WHERE slot_type = '{ServerSlot}'").Should().Be(0, "keep-identity restore");
+        await node.Snapshots.RestoreAsync(second.FileName, masterPassword: SealedNodeTemplate.Password);
+        Count(node.Factory, $"SELECT COUNT(*) FROM tbl_key_slot WHERE slot_type = '{ServerSlot}'").Should().Be(0, "a second restore");
         Count(node.Factory, "SELECT COUNT(*) FROM tbl_key_slot").Should().Be(others);
     }
 
@@ -542,9 +542,145 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         Count(node.Factory, $"SELECT COUNT(*) FROM tbl_key_slot WHERE slot_type = '{ServerSlot}'").Should().Be(1, "key slots are not replicated: nothing arrived, nothing left");
     }
 
+    [Fact]
+    public async Task A_network_restore_merges_the_retired_links_and_never_drops_one_written_since_the_snapshot()
+    {
+        // 2.12 (plan R1): tbl_dek_retired_link only grows; a restore from an older snapshot keeps the links written after it.
+        using var node = await SealedNode.CreateAsync(template);
+        var service = new SnapshotService(node.Dir, node.Factory, node.NodeRepo, new NullLamportClock(),
+            replayShieldRepo: new RestoreReplayShieldRepository(node.Factory), keys: new SessionSnapshotKeyOperations(node.Session));
+        static void Link(DbConnectionFactory f, string commit) =>
+            f.CreateConnection().Execute(
+                @"INSERT INTO tbl_dek_retired_link (commit_id, author_node_id, old_fingerprint, new_fingerprint, wrapped, iv, created_at)
+                  VALUES (@commit, 'author', 'old', 'new', zeroblob(49), zeroblob(12), 'now')", new { commit });
+        Link(node.Factory, "in-the-snapshot");
+        var info = await service.CreateAsync(filterSecrets: false, sign: false);
+        Link(node.Factory, "written-since");
+        var self = (await node.NodeRepo.GetAsync())!;
+
+        await service.ApplyNetworkRestoreAsync(service.GetSnapshotPath(info.FileName),
+            new RestoreNetworkEventPayload("hash", "ts", 1, "exp", "https://example.invalid/x", false),
+            new SyncEvent { EventId = Guid.NewGuid(), NodeId = self.NodeId, LamportTs = 100, EventType = "restore_network", ProtocolVersion = 1, CreatedAt = DateTime.UtcNow });
+
+        Count(node.Factory, "SELECT COUNT(*) FROM tbl_dek_retired_link").Should().Be(2, "merged, not replaced");
+        Count(node.Factory, "SELECT COUNT(*) FROM tbl_dek_retired_link WHERE commit_id = 'written-since'").Should().Be(1);
+        SnapshotTables.Monotonic.Should().BeSubsetOf(SnapshotTables.Replicated);
+    }
+
+    /// <summary>
+    /// Release 2.12 (plan WS-D, R2): a network restore keeps this node's identity as it is NOW (the key it re-keyed to after the snapshot,
+    /// not the one in the snapshot) and merges the key history: a retired key recorded since the snapshot stays retired.
+    /// </summary>
+    [Fact]
+    public async Task A_network_restore_keeps_the_current_identity_key_and_merges_the_key_history()
+    {
+        using var node = await SealedNode.CreateAsync(template);
+        var service = new SnapshotService(node.Dir, node.Factory, node.NodeRepo, new NullLamportClock(),
+            replayShieldRepo: new RestoreReplayShieldRepository(node.Factory), keys: new SessionSnapshotKeyOperations(node.Session));
+        var self = (await node.NodeRepo.GetAsync())!;
+        static void History(DbConnectionFactory f, string nodeId, long counter, byte[] oldKey, byte[] newKey) =>
+            f.CreateConnection().Execute(
+                @"INSERT INTO tbl_node_key_history (node_id, counter, public_key, new_public_key, valid_until_lamport, rotation_event_id,
+                      old_key_proof, new_key_proof, created_at)
+                  VALUES (@nodeId, @counter, @oldKey, @newKey, @counter, @rid, zeroblob(64), zeroblob(64), 'now')",
+                new { nodeId, counter, oldKey, newKey, rid = Guid.NewGuid().ToString() });
+        var keyInSnapshot = self.Ed25519PublicKey;
+        var between = RandomNumberGenerator.GetBytes(32);
+        var current = RandomNumberGenerator.GetBytes(32);
+        History(node.Factory, self.NodeId.ToString(), 1, RandomNumberGenerator.GetBytes(32), keyInSnapshot);
+        var info = await service.CreateAsync(filterSecrets: false, sign: false);
+        // Two re-keys after the snapshot: the history grows, and the identity row carries the newest key.
+        History(node.Factory, self.NodeId.ToString(), 2, keyInSnapshot, between);
+        History(node.Factory, self.NodeId.ToString(), 3, between, current);
+        using (var c = node.Factory.CreateConnection())
+            c.Execute("UPDATE tbl_node_identity SET ed25519_public_key = @current", new { current });
+
+        await service.ApplyNetworkRestoreAsync(service.GetSnapshotPath(info.FileName),
+            new RestoreNetworkEventPayload("hash", "ts", 1, "exp", "https://example.invalid/x", false),
+            new SyncEvent { EventId = Guid.NewGuid(), NodeId = self.NodeId, LamportTs = 100, EventType = "restore_network", ProtocolVersion = 1, CreatedAt = DateTime.UtcNow });
+
+        using (var c = node.Factory.CreateConnection())
+        {
+            Guid.Parse(c.ExecuteScalar<string>("SELECT node_id FROM tbl_node_identity")!).Should().Be(self.NodeId, "the node keeps its id");
+            c.ExecuteScalar<byte[]>("SELECT ed25519_public_key FROM tbl_node_identity").Should().Equal(current,
+                "the node keeps the key it signs with now, never the one in the snapshot");
+        }
+        Count(node.Factory, "SELECT COUNT(*) FROM tbl_node_key_history").Should().Be(3, "merged, not replaced: the re-keys since the snapshot stay");
+        SnapshotTables.Monotonic.Should().Contain("tbl_node_key_history");
+    }
+
+    [Fact]
+    public async Task A_network_restore_merges_tbl_accounts_home_by_newest_version_and_never_rolls_back()
+    {
+        using var node = await SealedNode.CreateAsync(template);
+        var service = new SnapshotService(node.Dir, node.Factory, node.NodeRepo, new NullLamportClock(),
+            replayShieldRepo: new RestoreReplayShieldRepository(node.Factory), keys: new SessionSnapshotKeyOperations(node.Session));
+        var self = (await node.NodeRepo.GetAsync())!;
+        var home1 = Guid.NewGuid();
+        var home2 = Guid.NewGuid();
+        var home3 = Guid.NewGuid();
+
+        void WriteHome(Guid homeId, long ts, Guid src)
+        {
+            using var conn = node.Factory.CreateConnection();
+            conn.Execute(
+                @"INSERT INTO tbl_accounts_home (id, node_id, lamport_ts, source_node_id, event_id, updated_at)
+                  VALUES (1, @NodeId, @Ts, @Src, @Evt, @At)
+                  ON CONFLICT(id) DO UPDATE SET node_id = excluded.node_id, lamport_ts = excluded.lamport_ts,
+                      source_node_id = excluded.source_node_id, event_id = excluded.event_id, updated_at = excluded.updated_at",
+                new { NodeId = homeId.ToString("D"), Ts = ts, Src = src.ToString("D"), Evt = Guid.NewGuid().ToString("D"), At = DateTime.UtcNow.ToString("O") });
+        }
+
+        // Snapshot 3 has no tbl_accounts_home row at all.
+        var emptySnap = await service.CreateAsync(filterSecrets: false, sign: false);
+
+        // Snapshot 1 has (home1, ts=5); Snapshot 2 has (home3, ts=20).
+        WriteHome(home1, 5, home1);
+        var olderSnap = await service.CreateAsync(filterSecrets: false, sign: false);
+        WriteHome(home3, 20, home3);
+        var newerSnap = await service.CreateAsync(filterSecrets: false, sign: false);
+
+        // Local advances to (home2, ts=10), then restores olderSnap (ts=5): must stay home2, ts=10.
+        WriteHome(home2, 10, home2);
+        await service.ApplyNetworkRestoreAsync(service.GetSnapshotPath(olderSnap.FileName),
+            new RestoreNetworkEventPayload("hash1", "ts1", 1, "exp", "https://example.invalid/1", false),
+            new SyncEvent { EventId = Guid.NewGuid(), NodeId = self.NodeId, LamportTs = 100, EventType = "restore_network", ProtocolVersion = 1, CreatedAt = DateTime.UtcNow });
+
+        using (var conn = node.Factory.CreateConnection())
+        {
+            var row = conn.QuerySingle<(string NodeId, long Ts)>("SELECT node_id, lamport_ts FROM tbl_accounts_home WHERE id = 1");
+            row.NodeId.Should().Be(home2.ToString("D"));
+            row.Ts.Should().Be(10);
+        }
+
+        // Restoring emptySnap (missing row) also must not erase (home2, ts=10).
+        await service.ApplyNetworkRestoreAsync(service.GetSnapshotPath(emptySnap.FileName),
+            new RestoreNetworkEventPayload("hash2", "ts2", 1, "exp", "https://example.invalid/2", false),
+            new SyncEvent { EventId = Guid.NewGuid(), NodeId = self.NodeId, LamportTs = 101, EventType = "restore_network", ProtocolVersion = 1, CreatedAt = DateTime.UtcNow });
+
+        using (var conn = node.Factory.CreateConnection())
+        {
+            var row = conn.QuerySingle<(string NodeId, long Ts)>("SELECT node_id, lamport_ts FROM tbl_accounts_home WHERE id = 1");
+            row.NodeId.Should().Be(home2.ToString("D"));
+            row.Ts.Should().Be(10);
+        }
+
+        // Restoring newerSnap (home3, ts=20) merges the newer version cleanly.
+        await service.ApplyNetworkRestoreAsync(service.GetSnapshotPath(newerSnap.FileName),
+            new RestoreNetworkEventPayload("hash3", "ts3", 1, "exp", "https://example.invalid/3", false),
+            new SyncEvent { EventId = Guid.NewGuid(), NodeId = self.NodeId, LamportTs = 102, EventType = "restore_network", ProtocolVersion = 1, CreatedAt = DateTime.UtcNow });
+
+        using (var conn = node.Factory.CreateConnection())
+        {
+            var row = conn.QuerySingle<(string NodeId, long Ts)>("SELECT node_id, lamport_ts FROM tbl_accounts_home WHERE id = 1");
+            row.NodeId.Should().Be(home3.ToString("D"));
+            row.Ts.Should().Be(20);
+        }
+    }
+
     // ------------------------------------------------------------ the key envelope (10.7)
 
-    // ------------------------------------------------------------ review round 1, H3: the live file is replaced behind the barrier
+    // ------------------------------------------------------------ the live file is replaced behind the barrier
 
     private sealed record HeldRun(bool Quiesced, bool CompletedWhileHeld, bool LiveChangedWhileHeld, Exception? Failure);
 
@@ -577,10 +713,8 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         return new HeldRun(quiesced, completed, changed, failure);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_restore_replaces_the_live_database_only_behind_the_quiesce_barrier_and_waits_for_a_connection_in_use(bool standalone)
+    [Fact]
+    public async Task A_restore_replaces_the_live_database_only_behind_the_quiesce_barrier_and_waits_for_a_connection_in_use()
     {
         var password = SealedNodeTemplate.Password;
         using var sealedOne = await SealedNode.CreateAsync(template);
@@ -594,7 +728,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
             SetDisplayName(factory, Changed);
 
             var run = await RunWithAConnectionHeldAsync(factory, Path.Combine(dir, "beememorybank.db"),
-                () => snapshots.RestoreAsync(info.FileName, standaloneMode: standalone, masterPassword: password));
+                () => snapshots.RestoreAsync(info.FileName, masterPassword: password));
 
             run.Quiesced.Should().BeTrue("the file is switched behind the factory's quiesce, never under a connection that is still in use");
             run.CompletedWhileHeld.Should().BeFalse("the restore waits for the connection in use");
@@ -605,10 +739,8 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
         }
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_restore_that_cannot_drain_the_live_connections_changes_nothing_says_so_and_a_later_restore_goes_through(bool standalone)
+    [Fact]
+    public async Task A_restore_that_cannot_drain_the_live_connections_changes_nothing_says_so_and_a_later_restore_goes_through()
     {
         var password = SealedNodeTemplate.Password;
         using var sealedOne = await SealedNode.CreateAsync(template);
@@ -621,7 +753,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
             snapshots.LiveSwapDrainTimeout = TimeSpan.FromMilliseconds(500);
 
             var run = await RunWithAConnectionHeldAsync(factory, Path.Combine(dir, "beememorybank.db"),
-                () => snapshots.RestoreAsync(info.FileName, standaloneMode: standalone, masterPassword: password), returnTheConnection: false);
+                () => snapshots.RestoreAsync(info.FileName, masterPassword: password), returnTheConnection: false);
 
             run.Failure.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Contain("Nothing was changed");
             run.LiveChangedWhileHeld.Should().BeFalse();
@@ -630,7 +762,7 @@ public sealed class SnapshotSealedRestoreTests(SealedNodeTemplate template) : IC
             StagingIsEmpty(dir).Should().BeTrue();
 
             snapshots.LiveSwapDrainTimeout = TimeSpan.FromSeconds(30);
-            await snapshots.RestoreAsync(info.FileName, standaloneMode: standalone, masterPassword: password);
+            await snapshots.RestoreAsync(info.FileName, masterPassword: password);
             DisplayName(factory).Should().Be(original);
         }
     }

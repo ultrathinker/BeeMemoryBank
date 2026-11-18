@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace BeeMemoryBank.Sync.Tests.Search;
 
 /// <summary>
-/// WP-11's Definition of Done integration tests: restart-recovery (unlock warm-start reloads a
+/// Integration tests: restart-recovery (unlock warm-start reloads a
 /// persisted segment and its content is immediately findable), tombstone-survives-restart (Gap 2),
 /// corrupted-segment-triggers-rebuild (the conservative full-rebuild-on-any-failure path), and
 /// locked-session no-op.
@@ -58,7 +58,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
-    // ── DoD test 1: restart recovery ────────────────────────────────────────────────
+    // ── Restart recovery ────────────────────────────────────────────────
 
     [Fact]
     public async Task Restart_WarmStartReloadsPersistedSegment_ContentImmediatelyFindableWithoutReindexing()
@@ -82,7 +82,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         node2.Builder.SealCount.Should().Be(0, "content came from warm-start adoption, not a fresh reindex/seal");
     }
 
-    // ── DoD test 2: tombstone survives restart ──────────────────────────────────────
+    // ── Tombstone survives restart ──────────────────────────────────────
 
     [Fact]
     public async Task Tombstone_UpdateBeforeRestart_StaleContentDoesNotReappearAfterWarmStart()
@@ -112,8 +112,8 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
     {
         // Exercises Gap 2's persistence primitive directly against a delete-shaped tombstone
         // (IndexBuilder.RemoveDocument), independent of whatever future product hook eventually
-        // calls it for a real article soft-delete (out of this WP's declared scope -- see
-        // wp-11-report.md) -- this proves the durability plumbing itself is correct for both the
+        // calls it for a real article soft-delete (out of scope) -- this proves the durability
+        // plumbing itself is correct for both the
         // "update" and "delete" shapes of a tombstone.
         var node1 = await CreateNode(initialize: true);
         var article = await node1.ArticleService.CreateAsync("Doc 3", "/", [], "deleteme uniqueterm content");
@@ -130,7 +130,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         node2.Builder.Lookup(Stem("uniqueterm")).Should().BeEmpty("the durable delete-tombstone must survive the restart");
     }
 
-    // ── DoD test 3: corrupted segment triggers full rebuild ─────────────────────────
+    // ── Corrupted segment triggers full rebuild ─────────────────────────
 
     [Fact]
     public async Task CorruptedSegmentFile_TriggersFullRebuild_ResetsIndexPendingInsteadOfCrashingOrPartialIndex()
@@ -153,7 +153,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         var node2 = await CreateNode(initialize: false);
 
         // Call the warm-start step directly first (rather than the whole ProcessPendingAsync
-        // cycle) so the rebuild's effects can be observed before this WP's own low test threshold
+        // cycle) so the rebuild's effects can be observed before this work's own low test threshold
         // (hotBufferSealThreshold: 1, see CreateNode) immediately reindexes+reseals the
         // newly-re-flagged articles within the same cycle -- that immediate self-healing is real
         // and desirable, just not what this assertion block is checking.
@@ -191,7 +191,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
     /// The failure has to be discovered while <b>adopting</b>, not while loading: the warm-start
     /// loads every segment first and adopts them in a second pass, so a segment that will not load
     /// aborts before anything is adopted at all (see
-    /// <c>CorruptedSegmentFile_TriggersFullRebuild_...</c> above). The trigger here is the WP-13
+    /// <c>CorruptedSegmentFile_TriggersFullRebuild_...</c> above). The trigger here is the
     /// case — a segment whose container decrypts fine but whose payload claims an inner format
     /// version from the future — which only fails in the adoption pass. The two articles sit in
     /// separate persisted segments so that <i>whichever</i> one this pass adopts first is a
@@ -290,15 +290,15 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         return segmentId;
     }
 
-    // ── WP-19: merge output survives a restart ──────────────────────────────────────
+    // ── Merge output survives a restart ──────────────────────────────────────
 
     /// <summary>
-    /// WP-19's own Definition of Done: this is the "restart simulation" scenario the WP was scoped
+    /// This is the "restart simulation" scenario the work was scoped
     /// around, not just "a file exists on disk" -- it forces a REAL merge (not just a seal),
     /// persists it, simulates a full process restart the same literal way every other test in this
     /// class does (see this class's own doc comment), and then asserts on the two things that
     /// actually matter: (1) warm-start does NOT fall back to <see cref="SearchIndexLifecycleService.TriggerFullRebuildAsync"/>
-    /// (the bug this WP fixes turns every restart-after-a-merge into exactly that, re-flagging and
+    /// (the bug this change fixes turns every restart-after-a-merge into exactly that, re-flagging and
     /// re-decrypting every article in the vault), and (2) every article indexed before the restart
     /// is still findable afterward, with zero fresh seals -- i.e. its content came from warm-start
     /// adoption of the already-merged, already-durable segment, not from a reindex the process had
@@ -350,16 +350,16 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
 
         node1.Builder.MergeCount.Should().Be(2, "the post-merge edit plus one more seal must have forced a second, distinct merge");
 
-        // The core of WP-19's fix, checked directly (not just indirectly via the restart below):
+        // The core of the fix, checked directly (not just indirectly via the restart below):
         // persisting a merge must RETIRE the manifest rows it consumed, not just add the merged
-        // output alongside them. Before this WP, every seal's manifest row would still be sitting
+        // output alongside them. Before this change, every seal's manifest row would still be sitting
         // here untouched (merge output was never persisted at all) -- the manifest would only ever
         // grow, never shrink. Asserting it is now far smaller than the seal count is a direct proof
         // the retire-on-merge transaction actually ran, independent of whatever warm-start does.
         var manifestsAfterMerges = await node1.ManifestRepo.GetAllManifestsAsync();
         manifestsAfterMerges.Count.Should().BeLessThan(
             node1.Builder.SealCount,
-            "merge persistence must retire the manifest rows for every input segment it consumed -- a manifest that still lists every seal ever made (this WP's original bug) would never shrink");
+            "merge persistence must retire the manifest rows for every input segment it consumed -- a manifest that still lists every seal ever made (the original bug) would never shrink");
 
         // Simulate a full process restart: brand-new object graph, same DB file + segments dir --
         // see this class's own doc comment for why this is a faithful restart simulation, not a
@@ -400,7 +400,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         node2.Builder.SealCount.Should().Be(0, "every article's content came from warm-start adopting the already-merged persisted segment(s), not from a fresh reindex/seal");
     }
 
-    // ── DoD test 4: locked session is a no-op ───────────────────────────────────────
+    // ── Locked session is a no-op ───────────────────────────────────────
 
     [Fact]
     public async Task LockedSession_ProcessPendingAsync_DoesNothing_NoException()
@@ -448,7 +448,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
     /// DB. Hot-buffer threshold is always 1 so a single article's worth of content always forces a
     /// real seal+persist, keeping these tests fast without needing hundreds of articles.
     /// <paramref name="mergeSegmentCountThreshold"/> defaults to 1000 (never trips) to preserve the
-    /// original DoD tests' seal/tombstone-only focus -- WP-19's own merge-persistence restart test
+    /// original tests' seal/tombstone-only focus -- the merge-persistence restart test
     /// passes a low value instead, specifically to force real merges within a handful of articles.
     /// The two "process" object graphs for the same simulated restart MUST be built with the same
     /// threshold value, since it is not itself persisted anywhere (it is an in-memory IndexBuilder
@@ -496,7 +496,7 @@ public class SearchIndexLifecycleIntegrationTests : IAsyncLifetime
         // real seal+persist cycle with a single article instead of hundreds. Tombstone-fraction
         // threshold is fixed at 1.0 (never trips on its own) across every test in this class --
         // only the segment-COUNT threshold varies per-test (see this method's own doc comment),
-        // since that is the trigger WP-19's merge-persistence test needs to force deliberately.
+        // since that is the trigger the merge-persistence test needs to force deliberately.
         var builder = new IndexBuilder(hotBufferSealThreshold: 1, mergeSegmentCountThreshold: mergeSegmentCountThreshold, mergeTombstoneFractionThreshold: 1.0);
         var runtimeState = new SearchIndexRuntimeState();
         var lifecycle = new SearchIndexLifecycleService(

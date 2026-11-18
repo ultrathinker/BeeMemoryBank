@@ -5,7 +5,7 @@ namespace BeeMemoryBank.Search.Tests;
 /// <summary>
 /// Golden-file tests for <see cref="EnglishStemmer"/>: exact expected stems, pinned so future
 /// rule changes show up as reviewable diffs rather than silent behavior drift. Covers every
-/// inflection family called out in the WP-05 brief: plurals, -ed, -ing, -ly, -ness, -ment, the
+/// inflection family called out by name: plurals, -ed, -ing, -ly, -ness, -ment, the
 /// -tion/-sion family (handled here via the generic "-ion" rule, see <see cref="EnglishStemmer"/>
 /// remarks), and comparative/superlative -er/-est.
 /// </summary>

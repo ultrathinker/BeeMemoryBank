@@ -260,8 +260,20 @@ public class CompactionService(
             try
             {
                 deleted = await conn.ExecuteAsync(
-                    "DELETE FROM tbl_event WHERE sequence_num <= @cp AND event_type != @excludeType",
-                    new { cp, excludeType = EventTypes.SnapshotCheckpoint }, tx);
+                    @"DELETE FROM tbl_event
+                      WHERE sequence_num <= @cp
+                        AND event_type != @excludeType
+                        AND NOT (
+                            event_type = @nodeStateType
+                            AND NOT EXISTS (
+                                SELECT 1 FROM tbl_event newer
+                                WHERE newer.event_type = @nodeStateType
+                                  AND lower(newer.node_id) = lower(tbl_event.node_id)
+                                  AND (newer.lamport_ts > tbl_event.lamport_ts
+                                       OR (newer.lamport_ts = tbl_event.lamport_ts AND newer.event_id > tbl_event.event_id))
+                            )
+                        )",
+                    new { cp, excludeType = EventTypes.SnapshotCheckpoint, nodeStateType = EventTypes.NodeState }, tx);
 
                 await conn.ExecuteAsync(
                     @"INSERT INTO tbl_compaction_log
@@ -281,6 +293,10 @@ public class CompactionService(
                     @"DELETE FROM tbl_compaction_log WHERE id NOT IN (
                         SELECT id FROM tbl_compaction_log ORDER BY id DESC LIMIT 20
                     )", tx);
+
+                // The key history keeps the newest 16 rows of each node (release 2.12, plan WS-D D1); the rotation events below the checkpoint are gone
+                // now, and the rows are what verifies the events and packages their retired keys signed.
+                await BeeMemoryBank.Storage.Sqlite.NodeKeyHistoryStore.PruneToCapAsync(conn, tx);
 
                 tx.Commit();
             }

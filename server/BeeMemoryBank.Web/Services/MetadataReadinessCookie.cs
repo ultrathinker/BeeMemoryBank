@@ -10,7 +10,7 @@ namespace BeeMemoryBank.Web.Services;
 /// The answer of "Ask every device now" on the Metadata encryption page, kept in a cookie of its own for a few minutes so that a switch the node refuses (a typo
 /// in the password, a condition that is not met) leaves the page as it was, with its form (BMB-305, BMB-303).
 /// <para>
-/// BMB-305 fix round: it used to ride in the TempData cookie, which has no expiry of its own (a report with the topology of the network stayed in the browser until
+/// BMB-305: it used to ride in the TempData cookie, which has no expiry of its own (a report with the topology of the network stayed in the browser until
 /// a later visit looked at its age) and no size limit (a long list of devices does not fit in a cookie: the browser drops it and the card loses its form). Here:
 /// </para>
 /// <list type="bullet">

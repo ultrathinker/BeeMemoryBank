@@ -30,6 +30,15 @@ public interface IUserRepository
     Task<bool> TryAssignKeySlotAsync(int userId, int slotId);
 
     /// <summary>
+    /// The write that ends a password replacement: the new login hash, the key slot the user holds from now on, and the hint when the caller gave one - and
+    /// nothing else (never the role, the active flag or the display name). It only happens if the row is STILL what the replacement loaded: the same role, the
+    /// same key slot (<paramref name="expectedKeySlotId"/>, null for none) and still active. Returns false when anything changed underneath - a demotion, a
+    /// deletion, another replacement - in which case nothing is written and the caller drops the slot it made. A whole-row <see cref="UpdateAsync"/> from the
+    /// object loaded at the start would write the old role back over a demotion that committed in between.
+    /// </summary>
+    Task<bool> TryReplacePasswordAsync(int userId, string expectedRole, int? expectedKeySlotId, int? newKeySlotId, string passwordHash, bool setHint, string? passwordHint);
+
+    /// <summary>
     /// Clears tbl_user.key_slot_id for any user pointing at slotId. Must be called whenever a
     /// slot row is deleted without a replacement — a dangling key_slot_id makes the user look
     /// like they still have a slot, which silently suppresses re-provisioning at next login.

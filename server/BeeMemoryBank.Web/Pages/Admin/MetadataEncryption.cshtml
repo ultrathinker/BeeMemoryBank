@@ -44,37 +44,41 @@
 }
 
 @section About {
-    @if (activated)
-    {
-        <p>
-            Metadata encryption is <strong>on</strong> for this network. The titles of articles, the names of folders and tags, file names and the shape of the tree are encrypted when they
-            travel between devices and in blind copies, so a blind copy or a relay no longer sees them (it still learns sizes, counts, timing and the names of the devices). A full node still
-            keeps titles readable in its own database, because it shows and searches them. The switch was one way: there is no off switch.
-        </p>
-        <p>
-            Copies made before the switch (old snapshots, earlier blind copies, a backup you took first) still hold titles in clear. Retire them yourself, or keep them as carefully as the
-            backup.
-        </p>
-    }
-    else
-    {
-        <p>
-            Until it is switched on, the <strong>titles of your articles, the names of folders and tags, file names and the shape of the tree</strong> travel between your devices in clear,
-            and blind copies (the blind node, phones, desktop blind copies) store them readable. Switching metadata encryption on encrypts all of that for the whole network, so a blind copy
-            or a relay no longer sees it (it still learns sizes, counts, timing and the names of the devices). A full node still keeps titles readable in its own database, because it shows and searches them. It needs every device on version
-            2.6.0 or newer; a device on an older version stops syncing until it is updated.
-        </p>
-        <p class="admin-warning">
-            <strong>The switch is one way.</strong> There is no off switch, and going back is not possible from the node.
-            Before you switch it on, take a fresh backup of this node and keep it offline.
-            The backup holds your titles in clear, so it is yours to keep, and the node will not restore it.
-        </p>
-        <p>
-            The page first asks every device whether it is ready. Only when every device is ready, and nothing else stands in the way (this node locked, a key rotation under way, changes held
-            that were not applied), does it offer the switch, which asks for your master password. Every other device then switches as it syncs. A device you no longer use should be revoked
-            (<a href="/Admin/Devices">Devices</a>); it then no longer counts.
-        </p>
-    }
+    <p>Encrypts titles, folder names and tags when they travel between your devices.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        @if (activated)
+        {
+            <p>
+                Metadata encryption is <strong>on</strong> for this network. The titles of articles, the names of folders and tags, file names and the shape of the tree are encrypted when they
+                travel between devices and in blind copies, so a blind copy or a relay no longer sees them (it still learns sizes, counts, timing and the names of the devices). A full node still
+                keeps titles readable in its own database, because it shows and searches them. The switch was one way: there is no off switch.
+            </p>
+            <p>
+                Copies made before the switch (old snapshots, earlier blind copies, a backup you took first) still hold titles in clear. Retire them yourself, or keep them as carefully as the
+                backup.
+            </p>
+        }
+        else
+        {
+            <p>
+                Until it is switched on, the <strong>titles of your articles, the names of folders and tags, file names and the shape of the tree</strong> travel between your devices in clear,
+                and blind copies (the blind node, phones, desktop blind copies) store them readable. Switching metadata encryption on encrypts all of that for the whole network, so a blind copy
+                or a relay no longer sees it (it still learns sizes, counts, timing and the names of the devices). A full node still keeps titles readable in its own database, because it shows and searches them. It needs every device on version
+                2.6.0 or newer; a device on an older version stops syncing until it is updated.
+            </p>
+            <p class="admin-warning">
+                <strong>The switch is one way.</strong> There is no off switch, and going back is not possible from the node.
+                Before you switch it on, take a fresh backup of this node and keep it offline.
+                The backup holds your titles in clear, so it is yours to keep, and the node will not restore it.
+            </p>
+            <p>
+                The page first asks every device whether it is ready. Only when every device is ready, and nothing else stands in the way (this node locked, a key rotation under way, changes held
+                that were not applied), does it offer the switch, which asks for your master password. Every other device then switches as it syncs. A device you no longer use should be revoked
+                (<a href="/Admin/Devices">Devices</a>); it then no longer counts.
+            </p>
+        }
+    </details>
 }
 
 @if (Model.HeldEvents is { } held && held.TryGetProperty("count", out var heldCount) && heldCount.GetInt32() > 0)

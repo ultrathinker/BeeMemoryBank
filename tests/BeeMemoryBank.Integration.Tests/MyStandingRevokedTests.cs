@@ -12,7 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review L-merge #5: a peer revoked between its token check and my-standing's read of the active
+/// A peer revoked between its token check and my-standing's read of the active
 /// whitelist gets an authorization answer, not a 500. The race is made deterministic by a whitelist
 /// that already leaves the caller out of the active list while its own lookup still finds it.
 /// </summary>

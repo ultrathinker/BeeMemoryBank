@@ -3,36 +3,41 @@
 
 @* Dream settings (plan 3.9) - superadmin-only (the whole area is). The form is read and saved by dream-admin.js through /api-proxy/dream (plan 3.8). *@
 @section About {
-    <p>
-        <strong>Dream</strong> (in the header, after Search) looks through the notes of this node and leaves advice on keeping them in order:
-        duplicates, notes in the wrong folder, tags spelled several ways, empty folders. It changes nothing by itself; every change is made by a
-        person pressing a button on the Dream page. This page decides what a run may do: when the nightly run is allowed, how much advice it may
-        leave, whether a model may take part, which folders Dream never reads, and what has been dismissed for good.
-    </p>
-    <p class="admin-warning">
-        <strong>With a model switched on, note content leaves this node.</strong> Dream sends the text of every note it looks at - all notes of the
-        node except those under a second password and those in the excluded folders below - to the provider of the model chosen in the Model
-        section (a provider a superadmin approved on the AI / Chat page, or a fallback model's provider when that one fails). With the model off, Dream works from local rules alone and nothing leaves the node.
-    </p>
-    <p>
-        The nightly schedule and these limits belong to <strong>this node alone</strong>: with several full nodes, turn the schedule on on one of
-        them, or each node will spend its own budget and keep its own list of advice. Dream runs only while the vault is unlocked; it never unlocks
-        anything itself.
-    </p>
+    <p>Dream looks through your notes and suggests tidying up. It never changes anything by itself.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            <strong>Dream</strong> (in the header, after Search) looks through the notes of this node and leaves advice on keeping them in order:
+            duplicates, notes in the wrong folder, tags spelled several ways, empty folders. It changes nothing by itself; every change is made by a
+            person pressing a button on the Dream page. This page decides what a run may do: when the nightly run is allowed, how much advice it may
+            leave, whether a model may take part, which folders Dream never reads, and what has been dismissed for good.
+        </p>
+        <p class="admin-warning">
+            <strong>With a model switched on, note content leaves this node.</strong> Dream sends the text of every note it looks at - all notes of the
+            node except those under a second password and those in the excluded folders below - to the provider of the model chosen in the Model
+            section (a provider a superadmin approved on the AI / Chat page, or a fallback model's provider when that one fails). With the model off, Dream works from local rules alone and nothing leaves the node.
+        </p>
+        <p>
+            The nightly schedule and these limits belong to <strong>this node alone</strong>: with several full nodes, turn the schedule on on one of
+            them, or each node will spend its own budget and keep its own list of advice. Dream runs only while the vault is unlocked; it never unlocks
+            anything itself.
+        </p>
+    </details>
 }
 
 <div id="dream-settings">
     @* The script fills this when the node does not serve the Dream settings yet (it answers "not implemented"): the form then
-       shows the planned defaults and Save stays off until the node's Dream service arrives (package P0b of the plan). *@
+       shows the planned defaults and Save stays off until the node's Dream service arrives. *@
     <div id="dream-endpoint-note" hidden aria-live="polite"></div>
 
     <h3 style="margin-bottom:12px;"><sl-icon name="moon-stars"></sl-icon> Schedule</h3>
     <div class="card" style="padding:16px;max-width:720px;margin-bottom:24px;">
         <sl-switch id="dream-schedule-enabled" size="small">Run nightly</sl-switch>
-        <p class="text-muted text-sm" style="margin:8px 0 16px 0;">
-            When it is on, Dream starts once a night inside the window below, if the vault is unlocked, nothing heavy is going on and the list of
-            open advice is not full.
-        </p>
+        <p class="text-muted text-sm" style="margin:8px 0 16px 0;">Dream runs once a night, inside the time window below.</p>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>When it is on, Dream starts once a night inside the window below, if the vault is unlocked, nothing heavy is going on and the list of open advice is not full.</p>
+        </details>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;">
             <sl-input id="dream-schedule-start" size="small" label="Window opens at (node-local HH:mm)" placeholder="03:00"></sl-input>
             <sl-input id="dream-schedule-window" type="number" min="15" max="720" size="small" label="Window length (minutes)"></sl-input>
@@ -65,12 +70,14 @@
     <h3 style="margin-bottom:12px;"><sl-icon name="cpu"></sl-icon> Model</h3>
     <div class="card" style="padding:16px;max-width:720px;margin-bottom:24px;">
         <sl-switch id="dream-use-model" size="small">Use a model</sl-switch>
-        <p class="text-muted text-sm" style="margin:8px 0 16px 0;">
-            With it off, Dream runs on local rules alone and <strong>nothing leaves this node</strong>. With it on, every run also asks the model:
+        <p class="text-muted text-sm" style="margin:8px 0 16px 0;">Off: nothing leaves this computer. On: the text of your notes goes to the provider of the chosen model.</p>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>With it off, Dream runs on local rules alone and <strong>nothing leaves this node</strong>. With it on, every run also asks the model:
             the text of every note it looks at - except the protected ones and the excluded folders below - goes to the provider of the model
             chosen here (or of a fallback model), and what the model advises is kept on this node like every other advice. Providers, their keys
-            and models, and the fallback chain are managed on the <a href="/Admin/AiChat">AI / Chat</a> page.
-        </p>
+            and models, and the fallback chain are managed on the <a href="/Admin/AiChat">AI / Chat</a> page.</p>
+        </details>
         <label style="font-size:0.85rem;color:var(--text-secondary);display:block;margin-bottom:4px;">Model for Dream</label>
         <sl-select id="dream-analysis-model" size="small" style="max-width:360px;" hoist></sl-select>
         <p id="dream-models-hint" class="text-muted text-sm" style="margin:8px 0 0 0;"></p>
@@ -78,10 +85,11 @@
 
     <h3 style="margin-bottom:12px;"><sl-icon name="folder-x"></sl-icon> Excluded folders</h3>
     <div class="card" style="padding:16px;max-width:720px;margin-bottom:24px;">
-        <p class="text-muted text-sm" style="margin:0 0 12px 0;">
-            Dream never reads these folders, sends their notes nowhere and never mentions them. One path per line, e.g. <code>/Imported</code>. The
-            node turns the paths into folders when you save; a path it does not know refuses the save.
-        </p>
+        <p class="text-muted text-sm" style="margin:0 0 12px 0;">Dream does not look into these folders. One path per line, e.g. <code>/Imported</code>.</p>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>Dream never reads these folders, sends their notes nowhere and never mentions them. The node turns the paths into folders when you save; a path it does not know refuses the save.</p>
+        </details>
         <sl-textarea id="dream-excluded-folders" rows="4" placeholder="/Imported" style="max-width:480px;"></sl-textarea>
     </div>
 

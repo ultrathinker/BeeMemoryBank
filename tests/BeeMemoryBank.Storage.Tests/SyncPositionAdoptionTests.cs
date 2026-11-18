@@ -4,7 +4,7 @@ using BeeMemoryBank.Storage.Sqlite;
 namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
-/// The Codex note on fix 4: adopting a blind peer's checkpoint read the cursor and then upserted it, so two overlapping
+/// A review note: adopting a blind peer's checkpoint read the cursor and then upserted it, so two overlapping
 /// syncs could both adopt and the second move the cursor the first had set. TryAdoptAsync only ever creates it.
 /// </summary>
 public class SyncPositionAdoptionTests : IAsyncLifetime

@@ -211,6 +211,38 @@ public sealed class PeerChannelStore(IDbConnectionFactory db)
             new { Peer = peer.ToString("D"), Source = ChannelSources.Manual, Address = address }) > 0;
     }
 
+    /// <summary>
+    /// Forgets the failures noted against a peer's channels and keeps the rows (release 2.12, plan WS-D): a peer that re-keyed is the same node at the
+    /// same addresses, and a probe that met its new key before the rotation arrived noted a "wrong peer" that no longer holds. The addresses a person
+    /// typed for it are settings and stay.
+    /// </summary>
+    public async Task ResetFailuresForPeerAsync(Guid peer, CancellationToken ct = default)
+    {
+        using var conn = db.CreateConnection();
+        var exists = await conn.ExecuteScalarAsync<long?>(
+            new CommandDefinition("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tbl_peer_channel'", cancellationToken: ct));
+        if (exists != 1) return;
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE tbl_peer_channel SET last_fail_at = NULL, last_fail_kind = NULL, fail_streak = 0 WHERE peer_node_id = @Peer COLLATE NOCASE",
+            new { Peer = peer.ToString("D") }, cancellationToken: ct));
+    }
+
+    /// <summary>Deletes all channel rows (primary, announced, mDNS, and manual) for a revoked peer.</summary>
+    public async Task DeleteForPeerAsync(Guid peer, CancellationToken ct = default)
+    {
+        using var conn = db.CreateConnection();
+        var exists = await conn.ExecuteScalarAsync<long?>(
+            new CommandDefinition(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tbl_peer_channel'",
+                cancellationToken: ct));
+        if (exists != 1) return;
+        await conn.ExecuteAsync(
+            new CommandDefinition(
+                "DELETE FROM tbl_peer_channel WHERE peer_node_id = @Peer COLLATE NOCASE",
+                new { Peer = peer.ToString("D") },
+                cancellationToken: ct));
+    }
+
     /// <summary>One attempt at <paramref name="address"/> went through: it is the one tried first next time. Every row of that address is updated; a missing one is made for <paramref name="source"/>.</summary>
     public Task NoteOkAsync(Guid peer, string address, string source, string scope, DateTime nowUtc) =>
         NoteAsync(peer, address, source, scope, nowUtc,

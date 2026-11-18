@@ -7,7 +7,7 @@ using BeeMemoryBank.Boundary;
 namespace BeeMemoryBank.BlindIos.Tests;
 
 /// <summary>
-/// Fix round 2 for the iPhone head (review revfixios): the real loop after a rapid sleep and resume, app-wide errors in the device log, the bookkeeping of the notification callbacks, and the
+/// For the iPhone head: the real loop after a rapid sleep and resume, app-wide errors in the device log, the bookkeeping of the notification callbacks, and the
 /// source guard that keeps an exception's message and the raw failure fields of the status away from every page.
 /// </summary>
 public sealed class IosFixRound2Tests : IDisposable

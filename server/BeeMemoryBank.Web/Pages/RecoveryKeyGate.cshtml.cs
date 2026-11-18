@@ -20,7 +20,7 @@ namespace BeeMemoryBank.Web.Pages;
 /// entry. Every access sweeps expired entries first, so an abandoned step does not keep the key in the process.
 /// The string itself is not wiped (strings are immutable in .NET); it becomes unreachable once its entry is
 /// removed. A restart of the Web process (or another browser) mints a new key, which is an unused extra slot by
-/// design - the brief accepts that rather than storing the key anywhere.</para>
+/// design - that is accepted rather than storing the key anywhere.</para>
 /// </summary>
 [Authorize(Roles = "superadmin")]
 public class RecoveryKeyGateModel(ApiClient api) : PageModel

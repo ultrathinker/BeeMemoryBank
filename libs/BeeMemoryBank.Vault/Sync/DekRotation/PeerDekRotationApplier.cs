@@ -66,32 +66,57 @@ public sealed class PeerDekRotationApplier(
 
             // Signature check before anything destructive: this event destroys every wrapped key in
             // the vault, so it must provably come from the pinned key of a whitelisted peer.
-            var sigPayload = EventSignature.BuildPayload(commitEvent);
-            if (!Ed25519Signer.Verify(originator.Ed25519PublicKey, sigPayload, commitEvent.Signature))
+            // The initiator's current key, or the key it retired for a commit it signed before its re-key (plan WS-D D3): the live rule at first
+            // delivery, the package rule for the commit this node already holds (it passed the receipt check).
+            var mode = await NodeEventVerifier.ReceiptModeAsync(verifyScope.ServiceProvider.GetRequiredService<IEventLogRepository>(), commitEvent);
+            if (!await NodeEventVerifier.VerifyAsync(connFactory, commitEvent, originator.Ed25519PublicKey, mode))
                 throw new InvalidOperationException("Commit event signature verification failed (originator key).");
 
-            await HeavyOperationLock.Instance.WaitAsync();
-            try
+            // The node-local key-operation lock (2.12): while another key operation runs, the commit stays pending and is retried.
+            using (var keyOperation = KeyOperationLock.TryEnter(connFactory.DatabaseId, "a key rotation"))
             {
-                maintenance.Enter("DEK rotation auto-accept in progress…");
-                try
-                {
-                    if (await ApplyCoreAsync(commitEvent, payload))
-                        _deferredRetry.Reset();
-                }
-                catch (DekRotationPreconditionException)
+                if (keyOperation is null)
                 {
                     deferred = true;
-                    throw;
+                    throw new DekRotationPreconditionException(KeyOperationLock.Busy(connFactory.DatabaseId, "A key rotation"));
+                }
+                await HeavyOperationLock.Instance.WaitAsync();
+                try
+                {
+                    maintenance.Enter("DEK rotation auto-accept in progress…");
+                    try
+                    {
+                        if (await ApplyCoreAsync(commitEvent, payload))
+                            _deferredRetry.Reset();
+                    }
+                    catch (DekRotationPreconditionException)
+                    {
+                        deferred = true;
+                        throw;
+                    }
+                    finally
+                    {
+                        maintenance.Exit();
+                    }
                 }
                 finally
                 {
-                    maintenance.Exit();
+                    HeavyOperationLock.Instance.Release();
                 }
             }
-            finally
+
+            if (!deferred && sessionService.IsUnlocked)
             {
-                HeavyOperationLock.Instance.Release();
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var scope = scopeFactory.CreateScope();
+                        if (scope.ServiceProvider.GetService<ISharedDoorsApplier>() is { } doorsApplier)
+                            await doorsApplier.ApplyPendingAsync();
+                    }
+                    catch (Exception ex) { logger.LogWarning(ex, "Post-rotation shared-doors apply failed"); }
+                });
             }
         }
         finally
@@ -157,7 +182,8 @@ public sealed class PeerDekRotationApplier(
             // Confidential rotation: open this node's own envelope; legacy events fall back to
             // unwrap-under-old-DEK. (ADR 0006.)
             newDek = DekRotationMaterial.ResolveNewDek(
-                payload, commitEvent.EventId, identity, oldDek, out var chainEncB64, out var chainIvB64);
+                payload, commitEvent.EventId, identity, oldDek, out var chainEncB64, out var chainIvB64,
+                await DekEnvelopeRefresh.FetchedAsync(connFactory, commitEvent.EventId));
 
             // chainEncB64/chainIvB64 are what LazySlotRewrapService needs to walk this rotation later.
             // Stored locally (never synced), they keep a user's key slot re-wrappable after compaction
@@ -171,13 +197,22 @@ public sealed class PeerDekRotationApplier(
                 chainIvB64: chainIvB64);
 
             completed = true;
+            await DekEnvelopeRefresh.ForgetAsync(connFactory, commitEvent.EventId);
             logger.LogInformation(
-                "DEK rotation auto-accept completed. Epoch {OldEpoch}→{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. RecoverySlots={Recovery}.",
+                "DEK rotation auto-accept completed. Epoch {OldEpoch}→{NewEpoch}. AutoUnlockAgentsRemoved={Agents}. OldFormatAutoUnlockDoorsRemoved={Doors}.",
                 payload.NewDekEpoch - 1, payload.NewDekEpoch, agentsDeleted, recoveryDeleted);
+            if (DekRotationReasons.IsRemoval(payload.Reason))
+                await RemovalRotationRecord.WriteAsync(scope.ServiceProvider, commitEvent, payload, logger);
+
+            // The rotation wrote its retired link in its transaction (RotationLinks): publish it now, and the device box of the doors.
+            PostRotationRecovery.Start(scopeFactory, sessionService, logger);
             return true;
         }
         catch (DekRotationPreconditionException ex)
         {
+            // The envelope was made for this node's previous identity key: ask the node that rotated for a fresh one (plan WS-D D4).
+            if (ex is DekEnvelopeStaleException)
+                await DekEnvelopeRefresh.RequestAsync(connFactory, commitEvent.EventId, commitEvent.NodeId);
             // Nothing was changed (the rewrap never started), so this is "not yet", not "failed":
             // the row stays Committing and is retried (bounded automatic retry, next unlock).
             // Failed is terminal — nothing retries it — which would strand this node on the
@@ -236,8 +271,8 @@ public sealed class PeerDekRotationApplier(
 
                 // Auto-accept is opt-in per peer. Without this check a node would silently apply a
                 // vault-wide key rotation from any whitelisted peer the operator had not agreed to
-                // follow.
-                if (!await whitelistRepo.GetAutoAcceptDekRotationAsync(commit.NodeId.ToString()))
+                // follow. A removal rotation of a superadmin node is the exception (2.12, DekRotationReasons).
+                if (!(await DekRotationReasons.DecideAutoApplyAsync(commit, whitelistRepo)).Apply)
                     continue;
 
                 logger.LogInformation(

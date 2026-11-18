@@ -145,6 +145,14 @@ public static class RekeyD1Check
             }
         foreach (var r in await db.QueryAsync<(long Id, byte[] W, byte[] Iv)>("SELECT slot_id, encrypted_master_dek, iv FROM tbl_key_slot"))
             if (old.Masters.Any(k => Opens(() => DekManager.UnwrapVersioned(r.W, r.Iv, k)))) Opened("tbl_key_slot", r.Id.ToString(), "master key");
+        // A sealed (v2) door cannot be opened with a master key (it is sealed to the door's own key pair, ADR 0012), but it names its DEK: a
+        // door that names an old master still holds it.
+        if (await db.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM pragma_table_info('tbl_key_slot') WHERE name = 'dek_fp'") > 0)
+        {
+            var oldFps = old.Masters.Select(DekFingerprint.Of).ToHashSet(StringComparer.Ordinal);
+            foreach (var r in await db.QueryAsync<(long Id, string Fp)>("SELECT slot_id, dek_fp FROM tbl_key_slot WHERE dek_fp IS NOT NULL"))
+                if (oldFps.Contains(r.Fp)) problems.Add(new("tbl_key_slot", r.Id.ToString(), "the door names an old master key (D1)"));
+        }
         foreach (var r in await db.QueryAsync<(long Id, byte[] W, byte[] Iv)>("SELECT id, encrypted_dek, dek_iv FROM tbl_agent WHERE encrypted_dek IS NOT NULL"))
             problems.Add(new("tbl_agent", r.Id.ToString(), "an agent still carries a wrapped master key"));
         var identity = await db.QuerySingleOrDefaultAsync<(string NodeId, byte[] Pk, byte[]? Iv, long V)>(

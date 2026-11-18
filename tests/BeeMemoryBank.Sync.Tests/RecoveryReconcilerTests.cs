@@ -85,6 +85,31 @@ public class RecoveryReconcilerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ALinkTheRotationWroteItself_IsPublishedOnce_WithoutAnyChain_AndItsMarkerGoes()
+    {
+        // 2.12: the rotation writes its link (OLD under NEW) and a marker in its own transaction, and keeps no chain on a node without v1
+        // doors. The reconciler publishes that link as it is and removes the marker; the event's own apply is a no-op on the same row.
+        await PlantRotationAsync(withChainMaterial: false);
+        var node = (await _f.NodeRepo.GetAsync())!.NodeId.ToString();
+        using (var conn = _f.Factory.CreateConnection())
+        {
+            conn.Open();
+            using var tx = conn.BeginTransaction();
+            BeeMemoryBank.Sync.DekRotation.RotationLinks.Write(conn, tx, _commitId, node, _retired, _current);
+            tx.Commit();
+        }
+
+        await Reconciler().ReconcileAsync();
+        await Reconciler().ReconcileAsync();
+
+        var link = (await Links()).Should().ContainSingle("the event's apply meets the row the rotation wrote").Subject;
+        MasterKeyManager.UnwrapMasterDek(link.Wrapped, link.Iv, _current).Should().Equal(_retired);
+        (await LoggedEvents(EventTypes.RetiredLinkSet)).Should().Be(1, "published once, then the marker is gone");
+        using (var conn = _f.Factory.CreateConnection())
+            (await conn.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_migration_marker WHERE key LIKE 'retired-link-unpublished:%'")).Should().Be(0);
+    }
+
+    [Fact]
     public async Task SecondRun_PublishesNothing()
     {
         await PlantRotationAsync();

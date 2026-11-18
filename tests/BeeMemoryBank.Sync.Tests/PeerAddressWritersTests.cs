@@ -8,7 +8,7 @@ using Xunit;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// BMB-306/307 fix rounds 2 and 3 (T1/G2, Q2): the address of a peer has ONE rule at every boundary that writes it - <see cref="PeerAddressPolicy.ForStorage"/> - and a
+/// BMB-306/307: the address of a peer has ONE rule at every boundary that writes it - <see cref="PeerAddressPolicy.ForStorage"/> - and a
 /// running node writes a peer's row through ONE service with three named entry points (<see cref="PeerAddressService.ChangeAsync"/>, <see cref="PeerAddressService.ApplyProofAsync"/>,
 /// <see cref="PeerAddressService.AdmitAsync"/>) that share the policy, the key on record, the versioned event, idempotency, the loop's reset and the audit line. A replicated
 /// event, a reactivation and an update are the boundaries from other nodes; the endpoints (join, hub, blind re-pair, restore, import) are covered in the Integration tests.

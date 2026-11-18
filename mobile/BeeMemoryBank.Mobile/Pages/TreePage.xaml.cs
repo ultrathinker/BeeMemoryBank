@@ -1,24 +1,29 @@
 using BeeMemoryBank.Busy;
-using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Controls;
+using BeeMemoryBank.Mobile.Localization;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile.Pages;
 
+/// <summary>One row of the tree: a folder or an article, with the meta line the mock-up shows.</summary>
 public record TreeListItem(
     string Name,
     bool IsFolder,
     string? FolderPath,
     Guid? ArticleId,
     DateTime? UpdatedAt,
-    bool Protected = false)
+    bool Protected,
+    string Meta)
 {
-    public string DisplayName => Name;
-    public string IconSource => IsFolder ? "icon_folder.svg" : "icon_article.svg";
-    public string RightText => IsFolder ? "›" : (UpdatedAt.HasValue ? UpdatedAt.Value.ToString("MM-dd") : "");
     // Lock badge shown only for protected articles (folders are never protected).
     public bool ShowLock => Protected && !IsFolder;
+}
+
+/// <summary>A named section of the tree list ("Folders (2)", "Articles (5)").</summary>
+public class TreeGroup(string name, List<TreeListItem> items) : List<TreeListItem>(items)
+{
+    public string Name { get; } = name;
 }
 
 public partial class TreePage : ContentPage
@@ -36,14 +41,18 @@ public partial class TreePage : ContentPage
     {
         InitializeComponent();
         _services = services;
-        BreadcrumbLabel.Text = "/"; // root level
         UpdateExpandIcon();
+        BreadcrumbsLayout.Children.Add(TreeCrumb.Build(AppStrings.Get("TreeRoot"), isCurrent: true, onTap: null, isRoot: true));
     }
 
     // Swap the toolbar icon so it reflects the current state (arrows-out = tap to expand,
-    // arrows-in = tap to collapse).
-    private void UpdateExpandIcon() =>
-        ExpandToggle.IconImageSource = _expanded ? "icon_compact.svg" : "icon_expand.svg";
+    // arrows-in = tap to collapse). The accessible name follows the state too. Set the name
+    // first: a menu item re-reads its name when its icon changes, so the icon swap applies it.
+    private void UpdateExpandIcon()
+    {
+        AutomationProperties.SetName(ExpandToggle, AppStrings.Get(_expanded ? "CollapseAll" : "ExpandAll"));
+        ExpandToggle.IconImageSource = Services.ThemeManager.Icon(_expanded ? "icon_compact" : "icon_expand");
+    }
 
     private void OnToggleExpandClicked(object? sender, EventArgs e)
     {
@@ -63,7 +72,7 @@ public partial class TreePage : ContentPage
         _services.GetRequiredService<Services.SyncNotificationService>().ClearPendingUpdates();
     }
 
-    // Tabs are cached, so a toggle on the Articles tab must be reflected here on re-appear.
+    // Tabs are cached, so a toggle on the Search tab must be reflected here on re-appear.
     private void SyncExpandedFromPrefs()
     {
         var pref = Preferences.Get(ListExpandedKey, false);
@@ -97,7 +106,7 @@ public partial class TreePage : ContentPage
 
                 await LoadItemsAsync();
                 syncNotify.ClearPendingUpdates();
-            }, new BusyOptions { FailureTitle = "Sync" });
+            }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
         }
         finally
         {
@@ -112,14 +121,8 @@ public partial class TreePage : ContentPage
 
         try
         {
-            var items = await Task.Run(async () =>
-            {
-                using var scope = _services.CreateScope();
-                var folderRepo = scope.ServiceProvider.GetRequiredService<IFolderRepository>();
-                var articleRepo = scope.ServiceProvider.GetRequiredService<IArticleRepository>();
-                return await BuildTreeItems(folderRepo, articleRepo, "/");
-            });
-            TreeList.ItemsSource = items;
+            var groups = await Task.Run(() => TreeContent.BuildGroupsAsync(_services, "/"));
+            TreeList.ItemsSource = groups;
         }
         catch (Exception ex)
         {
@@ -130,30 +133,6 @@ public partial class TreePage : ContentPage
             LoadingIndicator.IsRunning = false;
             LoadingIndicator.IsVisible = false;
         }
-    }
-
-    private static async Task<List<TreeListItem>> BuildTreeItems(
-        IFolderRepository folderRepo, IArticleRepository articleRepo, string currentPath)
-    {
-        var folders = await folderRepo.GetChildrenAsync(currentPath == "/" ? null : currentPath);
-        var articles = await articleRepo.ListAsync(currentPath);
-        var directArticles = articles
-            .Where(a => NormalizePath(a.TreePath) == currentPath)
-            .OrderBy(a => a.Title, BeeMemoryBank.Core.UnderscoreFirstComparer.Instance)
-            .ToList();
-
-        var result = new List<TreeListItem>();
-        result.AddRange(folders.OrderBy(f => f.Name, BeeMemoryBank.Core.UnderscoreFirstComparer.Instance)
-            .Select(f => new TreeListItem(f.Name, true, f.Path, null, null)));
-        result.AddRange(directArticles
-            .Select(a => new TreeListItem(a.Title, false, null, a.Id, a.UpdatedAt, a.Protected)));
-        return result;
-    }
-
-    private static string NormalizePath(string? path)
-    {
-        if (string.IsNullOrEmpty(path) || path == "/") return "/";
-        return "/" + path.Trim('/');
     }
 
     // busy-exempt: opens the folder or article tapped (the screen has its own overlay while the page opens), nothing is sent
@@ -178,67 +157,33 @@ public partial class TreePage : ContentPage
         finally { NavBusyOverlay.IsVisible = false; }
     }
 
+    // The mock-up's long press; MAUI has no long-press gesture, the double tap stands in for it.
+    // busy-exempt: opens the row action sheet; the rename/move/delete work runs behind BusyAction in TreeItemActions
     private async void OnItemLongPressed(object? sender, TappedEventArgs e)
     {
         if (sender is not BindableObject bo) return;
         if (bo.BindingContext is not TreeListItem item) return;
-        if (!item.IsFolder || item.FolderPath is null) return;
-
-        var action = await DisplayActionSheet($"Folder: {item.Name}", "Cancel", null, "Rename", "Delete");
-        if (action == "Rename")
-            await RenameFolderAsync(item);
-        else if (action == "Delete")
-            await DeleteFolderAsync(item);
+        await TreeItemActions.RunAsync(this, _services, item, LoadItemsAsync);
     }
 
-    private async Task RenameFolderAsync(TreeListItem item)
+    // busy-exempt: opens the row action sheet; the rename/move/delete work runs behind BusyAction in TreeItemActions
+    private async void OnItemMenuClicked(object? sender, EventArgs e)
     {
-        var newName = await this.ShowInputPopupAsync("Rename Folder", "New folder name:",
-            accept: "Rename", cancel: "Cancel", initialValue: item.Name, maxLength: 100);
-        if (string.IsNullOrWhiteSpace(newName) || newName.Trim() == item.Name) return;
-
-        // The one busy helper (BMB-311): a second long press cannot start a second rename; a failure is said in full in a dialog.
-        await BusyAction.RunAsync(null, async () =>
-        {
-            using var scope = _services.CreateScope();
-            var folderRepo = scope.ServiceProvider.GetRequiredService<IFolderRepository>();
-            var folderSvc = scope.ServiceProvider.GetRequiredService<FolderService>();
-            var folder = await folderRepo.GetByPathAsync(item.FolderPath!);
-            if (folder == null) return;
-            await folderSvc.RenameAsync(folder.Id, newName.Trim());
-            await LoadItemsAsync();
-        }, new BusyOptions { FailureTitle = "Error" });
-    }
-
-    private async Task DeleteFolderAsync(TreeListItem item)
-    {
-        bool confirmed = await DisplayAlert("Delete Folder",
-            $"Delete folder \"{item.Name}\" and all its contents?",
-            "Delete", "Cancel");
-        if (!confirmed) return;
-
-        await BusyAction.RunAsync(null, async () =>
-        {
-            using var scope = _services.CreateScope();
-            var folderRepo = scope.ServiceProvider.GetRequiredService<IFolderRepository>();
-            var folderSvc = scope.ServiceProvider.GetRequiredService<FolderService>();
-            var folder = await folderRepo.GetByPathAsync(item.FolderPath!);
-            if (folder == null) return;
-            await folderSvc.DeleteAsync(folder.Id);
-            await LoadItemsAsync();
-        }, new BusyOptions { FailureTitle = "Error" });
+        if ((sender as Button)?.CommandParameter is not TreeListItem item) return;
+        await TreeItemActions.RunAsync(this, _services, item, LoadItemsAsync);
     }
 
     // busy-exempt: opens the editor, nothing is sent and nothing waits
     private async void OnNewArticleClicked(object? sender, EventArgs e)
     {
-        await Shell.Current.GoToAsync("articleEdit");
+        await Shell.Current.GoToAsync("articleEdit?path=%2F");
     }
 
     private async void OnNewFolderClicked(object? sender, EventArgs e)
     {
-        var name = await this.ShowInputPopupAsync("New Folder", "Folder name:",
-            accept: "Create", cancel: "Cancel", maxLength: 100);
+        var name = await this.ShowInputPopupAsync(AppStrings.Get("NewFolder"), AppStrings.Get("NewFolderParentRoot"),
+            accept: AppStrings.Get("Create"), cancel: AppStrings.Get("Cancel"),
+            placeholder: AppStrings.Get("FolderNamePlaceholder"), maxLength: 100);
         if (string.IsNullOrWhiteSpace(name)) return;
 
         await BusyAction.RunAsync(sender as BindableObject, async () =>
@@ -247,6 +192,6 @@ public partial class TreePage : ContentPage
             var folderSvc = scope.ServiceProvider.GetRequiredService<FolderService>();
             await folderSvc.CreateAsync("/" + name.Trim().Trim('/'));
             await LoadItemsAsync();
-        }, new BusyOptions { FailureTitle = "Error" });
+        }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
     }
 }

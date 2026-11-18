@@ -13,6 +13,10 @@ public partial class MaintenanceMiddleware(RequestDelegate next, MaintenanceMode
         "/api/snapshots/restore/continue-without-backup",
         "/api/snapshots/restore/cancel",
         "/api/session/unlock",
+        // The Web layer asks it on EVERY request to a superadmin page or proxy route (PrincipalStampValidator) and signs the person in again when it cannot be answered. The pages
+        // that matter in maintenance are superadmin pages (the progress, cancel and retry of a DEK rotation, the progress of a restore), so an answer of "in maintenance" would
+        // sign the administrator out of the very page that shows how the maintenance is going. It reads the caller's own stamp from tbl_user and nothing else.
+        "/api/users/me/stamp",
         // "Encrypt this node" (docs/design/step-b-spec.md 10.9) puts the node in maintenance for its whole run, and its page polls these two.
         "/api/vault/status",
         "/api/vault/seal/progress",

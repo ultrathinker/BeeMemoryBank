@@ -77,7 +77,6 @@ public static class AgentCommand
         // agent gets a wrapped master DEK and can therefore auto-unlock a locked vault. An
         // ordinary user's CLI-created agent is otherwise identical — it authenticates and
         // works normally whenever the vault is already unlocked.
-        string? dekFingerprint = null;
         if (owner.Role == UserRoles.Superadmin)
         {
             byte[] masterDek;
@@ -90,12 +89,8 @@ public static class AgentCommand
 
             try
             {
-                var (ciphertext, iv, salt) = AgentKeyHelper.EncryptDekV1(apiKey, masterDek);
-                agent.EncryptedDek = ciphertext;
-                agent.DekIV = iv;
-                agent.Salt = salt;
-                agent.KdfVersion = 1;
-                dekFingerprint = DekFingerprint.Of(masterDek);
+                // A sealed (v2) door, as every new door (ADR 0012).
+                AgentDoors.SealInto(agent, apiKey, masterDek);
             }
             finally
             {
@@ -111,8 +106,7 @@ public static class AgentCommand
         mirror ??= scope.ServiceProvider.GetService<IUnlockMaterialMirror>();
         if (agent.CanAutoUnlock && mirror is not null)
         {
-            await mirror.AddPendingDoorAsync(new PendingDoor(BootDoorKinds.Agent, agent.Id, null, agent.EncryptedDek!, agent.DekIV!, agent.Salt,
-                null, null, null, agent.KeyHash, agent.KdfVersion, dekFingerprint));
+            await mirror.AddPendingDoorAsync(AgentDoors.PendingFor(agent));
             await SlotDoors.RewriteAsync(mirror);
         }
 

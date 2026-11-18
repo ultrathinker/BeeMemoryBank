@@ -74,7 +74,20 @@ public partial class EventApplier(
     // Full nodes only (spec 7.5): asked for an early baseline after a hard delete or a late protocol-3 content event.
     IBaselineScheduler? baselineScheduler = null,
     // The sync loop, told when a replicated whitelist event revokes a peer or moves its address (BMB-313): it forgets what it learned about that peer.
-    IPeerStateResetter? peerState = null)
+    IPeerStateResetter? peerState = null,
+    PeerContactLog? contactLog = null,
+    Channels.PeerReachability? reachability = null,
+    Channels.PeerChannelStore? peerChannels = null,
+    BeeMemoryBank.Storage.Boot.IRelayInbox? relayInbox = null,
+    IEnumerable<IPeerRevocationCleanup>? revocationCleanups = null,
+    IAccountsHomeRepository? accountsHomeRepo = null,
+    ISharedDoorsStateRepository? sharedDoorsStateRepo = null,
+    ISharedDoorsApplier? sharedDoorsApplier = null,
+    ISuperadminDoorsNotifier? superadminDoorsNotifier = null,
+    NodeStateAnnouncer? nodeStateAnnouncer = null,
+    // The removal of a superadmin (release 2.12.0): full nodes enforce a tombstone on their own accounts and lock a person out while a replicated process is open.
+    IRemovedPersonEnforcer? removedPersons = null,
+    IOffboardingReplicaObserver? offboardingObserver = null)
 {
     // whitelistRepoWrite is the same whitelist, just separated for read/write intent clarity
     // In reality it's the same object from DI
@@ -126,9 +139,18 @@ public partial class EventApplier(
         if (await eventLogRepo.ExistsAsync(evt.EventId)) return EventApplyResult.Applied;
 
         // Signature verification
-        var originator = await ResolveOriginatorAsync(evt, context);
-        var sigPayload = EventSignature.BuildPayload(evt);
-        if (!Ed25519Signer.Verify(originator.PublicKey, sigPayload, evt.Signature))
+        Originator originator;
+        try { originator = await ResolveOriginatorAsync(evt, context); }
+        catch (OriginatorNotWhitelistedException) when (context?.Originators is null)
+        {
+            // An event naming THIS node, pushed or relayed here, is refused here as before (a node is not its own peer),
+            // but when it carries a valid signature of this node's key and this node did not write it, "somebody signs as this node" is raised.
+            if (await nodeIdentityRepo.GetAsync() is { } self && self.NodeId == evt.NodeId)
+                await NoteSignedAsThisNodeAsync(evt, self);
+            throw;
+        }
+        // Through the one helper of the node identity re-key (plan WS-D D3): the current key, or a retired one by the rule of the context.
+        if (!await VerifyOriginatorSignatureAsync(evt, originator, context))
             throw new InvalidDataException($"Invalid Ed25519 signature for event {evt.EventId}.");
 
         // The protocol-4 wire rules (spec 3.2, 3.7): a sealed event is protocol 4, has no article id and a well-formed
@@ -472,8 +494,15 @@ public partial class EventApplier(
                 await ApplyArticleDeleteAsync(evt);
                 break;
             case EventTypes.WhitelistAdd:
+            {
+                // A node that joins again (no active row before, an active one after) starts without the retired-key flag of its earlier life.
+                var joining = Deserialize<WhitelistAddPayload>(evt.Payload).NodeId;
+                var activeBefore = (await whitelistRepo.GetByNodeIdAsync(joining))?.Status == "A";
                 await ApplyWhitelistAddAsync(evt);
+                if (!activeBefore && (await whitelistRepo.GetByNodeIdAsync(joining))?.Status == "A")
+                    await RetiredKeyAttention.ClearAsync(connFactory, joining);
                 break;
+            }
             case EventTypes.WhitelistRevoke:
                 await ApplyWhitelistRevokeAsync(evt);
                 break;
@@ -538,8 +567,18 @@ public partial class EventApplier(
             case EventTypes.MetadataKeySet: await ApplyMetadataKeySetAsync(evt); break;
             case EventTypes.MetadataActivation: await ApplyMetadataActivationAsync(evt); break;
             case EventTypes.NodeEndpoints: await ApplyNodeEndpointsAsync(evt); break;
+            case EventTypes.NodeState: await ApplyNodeStateAsync(evt); break;
+            case EventTypes.NodeKeyRotated: await ApplyNodeKeyRotatedAsync(evt); break;
+            case EventTypes.NodeKeyConfirm: await ApplyNodeKeyConfirmAsync(evt); break;
+            case EventTypes.AccountsHomeSet: await ApplyAccountsHomeSetAsync(evt); break;
+            case EventTypes.SuperadminDoorsSet: await ApplySuperadminDoorsSetAsync(evt); break;
+            case EventTypes.PersonRemoved: await ApplyPersonRemovedAsync(evt); break;
+            case EventTypes.OffboardingState: await ApplyOffboardingStateAsync(evt); break;
+            case EventTypes.NodeRekeyRequest: await ApplyNodeRekeyRequestAsync(evt); break;
             default:
-                // Skip unknown event types (forward compatibility)
+                // Skip unknown event types (forward compatibility), and write the skip down: a later build that knows the type applies the stored
+                // event at its start (LateEventReplay).
+                await LateEventReplay.RecordUnknownAsync(connFactory, original.EventId, evt.EventType);
                 break;
         }
 
@@ -547,7 +586,7 @@ public partial class EventApplier(
         // TOCTOU race: if another process already inserted this event (concurrent apply),
         // the duplicate insert is harmlessly ignored since data changes are idempotent.
         // A recovery_box_set is the exception: its apply logs it in the same transaction as the rows, and only
-        // while its box is active here, so an inactive box's material is never in the log (F7).
+        // while its box is active here, so an inactive box's material is never in the log.
         // A sealed row keeps the opened view's type and article id as local columns (spec 3.8): this node's own
         // activity views read them, the wire never does.
         if (heldSequence is { } sequence)

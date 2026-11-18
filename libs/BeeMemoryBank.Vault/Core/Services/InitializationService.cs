@@ -26,14 +26,14 @@ public class InitializationService(
     /// unchanged — and no restore bootstrap is in progress.
     ///
     /// <para><b>Why the old question was wrong, in one number: NULL.</b> The rehearsal on a copy of
-    /// a real 1.0.11 server vault (review release-a2 batch 2) found an identity row whose
+    /// a real 1.0.11 server vault found an identity row whose
     /// <c>sentinel_value</c> is NULL, because the sentinel only became part of the vault later.
     /// 1.0.11 counts any identity row as initialized and unlocks such a vault happily
     /// (<c>SessionService</c> treats a missing sentinel as nothing to check against, then heals it);
     /// a release that asks for the sentinel, an owner or a slot on top of the row therefore reads
     /// that vault as an empty one and sends its operator to the setup wizard — where the wizard
     /// would have written a second identity and a second master DEK over data still sealed under
-    /// the first (R2's MIXED-A U2c). Legacy password slots were the same mistake in a different
+    /// the first. Legacy password slots were the same mistake in a different
     /// shape: an upgraded vault is not usable until its first unlock runs the migration that
     /// promotes the slot, so any test that describes the post-migration shape re-bricks exactly the
     /// vault it is meant to protect.</para>
@@ -66,9 +66,9 @@ public class InitializationService(
     /// initialized" so the restore can be retried. Setup must not read that as an invitation: the
     /// half-written identity is still this node's, its data is still wrapped under a key only the
     /// recovery material holds, and a new master DEK written next to it would be the only one the
-    /// node knows. R2's live mixed-version test caught exactly that outcome on a legacy vault:
+    /// node knows. A live mixed-version test caught exactly that outcome on a legacy vault:
     /// /api/init/standalone succeeded and wrote a SECOND tbl_node_identity row and a setupadmin
-    /// with a fresh DEK (review release-a2, U2c).</para>
+    /// with a fresh DEK.</para>
     /// </summary>
     public async Task<bool> IsClaimedAsync()
         => await nodeRepo.GetAsync() is not null || (await keySlotRepo.GetAllAsync()).Count > 0;
@@ -124,19 +124,10 @@ public class InitializationService(
 
             var salt = KeyDerivation.GenerateSalt();
             kek = KeyDerivation.DeriveKek(password, salt);
-            var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, kek);
-
-            var slot = new MasterKeyStore
-            {
-                SlotType = "user",
-                EncryptedMasterDek = encryptedDek,
-                IV = iv,
-                Salt = salt,
-                ArgonMemory = CryptoConstants.DefaultArgonMemory,
-                ArgonIterations = CryptoConstants.DefaultArgonIterations,
-                ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
-                CreatedAt = now
-            };
+            // The first door of a new node is a sealed (v2) door (ADR 0012); its owner is set when tbl_user points at it (migration 046).
+            var slot = Doors.NewPasswordSlot(KeySlotTypes.User, kek, salt, CryptoConstants.DefaultArgonMemory,
+                CryptoConstants.DefaultArgonIterations, CryptoConstants.DefaultArgonParallelism, masterDek);
+            slot.CreatedAt = now;
             var slotId = await keySlotRepo.CreateAsync(slot);
 
             var user = new User

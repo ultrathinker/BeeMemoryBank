@@ -6,11 +6,11 @@ using BeeMemoryBank.Core.Services;
 namespace BeeMemoryBank.Sync.Tests;
 
 /// <summary>
-/// A0 wire hygiene (brief P1-A0): the shared applier's skip/drop log lines name ids, not content —
+/// Wire hygiene: the shared applier's skip/drop log lines name ids, not content —
 /// no tag names, no folder paths. The lines run wherever the applier runs, a blind node included,
 /// where they would sit in plaintext next to a database it cannot read. A logger provider renders
 /// the attached exception after the formatted message too, so the sink is checked on both — the
-/// repository's InvalidOperationException messages carry the tag names (review round: the first
+/// repository's InvalidOperationException messages carry the tag names (the first
 /// cut of this test dropped the exception and never saw that leak).
 /// </summary>
 public class ApplierLogHygieneTests : IAsyncLifetime

@@ -124,7 +124,7 @@ public class IosKeychainSecretStoreTests
 
         var clear = () => store.Clear();
 
-        // fixed words and the status number: the item's name holds the account's id and is never said (fix round 3)
+        // fixed words and the status number: the item's name holds the account's id and is never said
         var thrown = clear.Should().Throw<AggregateException>().Which;
         thrown.Message.Should().Contain("did not remove a secret of this copy").And.Contain("OSStatus -25291").And.NotContain("identity-seed-v1");
         thrown.InnerExceptions.Should().ContainSingle().Which.Message.Should().NotContain("identity-seed-v1");

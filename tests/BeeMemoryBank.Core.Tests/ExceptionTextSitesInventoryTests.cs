@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// BMB-306/307 fix round 2 (T3, Q1, M3, P4): the sweep that keeps remote-controlled and exception text off every screen, API answer, status and Warning, kept as a
+/// BMB-306/307: the sweep that keeps remote-controlled and exception text off every screen, API answer, status and Warning, kept as a
 /// test so that it stays done. Two things are pinned:
 /// <list type="number">
 /// <item>nothing reads a <c>ReasonPhrase</c> (the reason phrase of an answer is whatever the other host or a proxy in front of it wrote; the message of an

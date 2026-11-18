@@ -33,14 +33,6 @@ public partial class ApiClient
         }
     }
 
-    /// <summary>Starts the migration. The page then follows <c>/api-proxy/vault/seal/progress</c>.</summary>
-    public async Task<(bool Ok, string? Error)> StartSealAsync(string password)
-    {
-        var resp = await http.PostAsJsonAsync("/api/vault/seal", new { password }, JsonOpts);
-        if (resp.IsSuccessStatusCode) return (true, null);
-        return (false, resp.StatusCode == HttpStatusCode.Unauthorized ? "Invalid master password." : await ReadErrorAsync(resp) ?? "The encryption could not be started.");
-    }
-
     /// <summary>Erases the listed unencrypted copies. Null when the password is wrong or the API did not answer.</summary>
     public async Task<(EraseResultDto? Result, string? Error)> ErasePlainCopiesAsync(string password, IReadOnlyList<string> paths)
     {
@@ -100,7 +92,8 @@ public sealed record VaultStatusDto(
     [property: JsonPropertyName("inbox")] VaultInboxDto? Inbox,
     [property: JsonPropertyName("auto_unlock")] VaultAutoUnlockDto? AutoUnlock,
     [property: JsonPropertyName("last_refusal")] string? LastRefusal,
-    [property: JsonPropertyName("migration")] VaultMigrationDto? Migration)
+    [property: JsonPropertyName("migration")] VaultMigrationDto? Migration,
+    [property: JsonPropertyName("auto_seal_note")] string? AutoSealNote = null)
 {
     public bool IsSealed => Mode == "sealed";
 

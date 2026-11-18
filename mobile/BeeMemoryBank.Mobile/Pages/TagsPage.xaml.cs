@@ -3,11 +3,15 @@ using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Mobile.Controls;
+using BeeMemoryBank.Mobile.Localization;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace BeeMemoryBank.Mobile.Pages;
 
-public record TagListItem(string Name, int Count);
+public record TagListItem(string Name, int Count)
+{
+    public string CountText => Services.ContentFormat.ArticleCount(Count);
+}
 
 public partial class TagsPage : ContentPage
 {
@@ -64,8 +68,7 @@ public partial class TagsPage : ContentPage
 
     private async void OnRefreshing(object? sender, EventArgs e)
     {
-        // Pulling the list down asks for a sync round: a request to the computer, not a read (BMB-311). The one busy helper refuses a second round while one runs;
-        // the spinner of the pull is the pull's own, so no pop-up; a failure to even ask is said in full.
+        // Pulling the list down asks for a sync round: a request to the computer, not a read (BMB-311).
         try
         {
             await BusyAction.RunAsync(RefreshView, async () =>
@@ -79,7 +82,7 @@ public partial class TagsPage : ContentPage
 
                 await LoadTagsAsync();
                 syncNotify.ClearPendingUpdates();
-            }, new BusyOptions { FailureTitle = "Sync" });
+            }, new BusyOptions { FailureTitle = AppStrings.Get("SyncingTitle") });
         }
         finally
         {
@@ -96,7 +99,14 @@ public partial class TagsPage : ContentPage
 
     private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)
     {
+        ClearTagSearchButton.IsVisible = (e.NewTextValue ?? "").Length > 0;
         ApplyTags(FilterTags(e.NewTextValue));
+    }
+
+    private void OnClearTagSearchClicked(object? sender, EventArgs e)
+    {
+        TagsSearchBar.Text = "";
+        TagsSearchBar.Focus();
     }
 
     private List<ConceptTagInfo> FilterTags(string? query)
@@ -117,24 +127,66 @@ public partial class TagsPage : ContentPage
         await Shell.Current.GoToAsync($"tagArticles?tagName={Uri.EscapeDataString(item.Name)}");
     }
 
+    // The row's ⋮ opens the actions sheet; the rename / delete work runs behind BusyAction below.
     private async void OnTagOptionsClicked(object? sender, EventArgs e)
     {
         if (sender is not Button btn || btn.CommandParameter is not TagListItem item) return;
 
-        var action = await DisplayActionSheet($"Tag: {item.Name}", "Cancel", null, "Rename", "Delete");
-        if (action == "Rename")
+        var action = await ShowTagActionsAsync(item.Name);
+        if (action == "rename")
             await RenameTagAsync(item.Name);
-        else if (action == "Delete")
+        else if (action == "delete")
             await DeleteTagAsync(item.Name);
+    }
+
+    /// <summary>The mock-up's row actions sheet (like ItemActionsSheet): rename, delete, and a quiet cancel.</summary>
+    private async Task<string> ShowTagActionsAsync(string tagName)
+    {
+        var chosen = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answered = false;
+        var resources = Application.Current?.Resources;
+        var stack = new VerticalStackLayout { Spacing = 8 };
+        BottomSheet.BottomSheetPage? sheet = null;
+
+        void Add(string key, string styleKey, string action)
+        {
+            var button = new Button { Text = AppStrings.Get(key), Style = (Style?)resources?[styleKey] };
+            button.Clicked += async (_, _) =>
+            {
+                // Close the sheet FIRST, then answer: rename/delete push another modal right after.
+                answered = true;
+                if (sheet != null) await sheet.CloseAsync();
+                chosen.TrySetResult(action);
+            };
+            stack.Children.Add(button);
+        }
+
+        Add("Rename", "SecondaryButton", "rename");
+        Add("Delete", "DangerButton", "delete");
+        var cancel = new Button { Text = AppStrings.Get("Cancel"), Style = (Style?)resources?["TextButton"], HorizontalOptions = LayoutOptions.Fill };
+        cancel.Clicked += async (_, _) =>
+        {
+            answered = true;
+            if (sheet != null) await sheet.CloseAsync();
+            chosen.TrySetResult("none");
+        };
+        stack.Children.Add(cancel);
+
+        sheet = new BottomSheet.BottomSheetPage(stack, tagName);
+        sheet.Disappearing += (_, _) => { if (!answered) chosen.TrySetResult("none"); };
+        await Navigation.PushModalAsync(sheet);
+        return await chosen.Task;
     }
 
     private async Task RenameTagAsync(string oldName)
     {
-        var newName = await this.ShowInputPopupAsync("Rename Tag", "New tag name:", initialValue: oldName, maxLength: 100);
+        // The same input popup the folder rename uses.
+        var newName = await this.ShowInputPopupAsync(AppStrings.Get("RenameTitle"), AppStrings.Get("NewNameLabel"),
+            accept: AppStrings.Get("Save"), cancel: AppStrings.Get("Cancel"), initialValue: oldName, maxLength: 100);
         if (string.IsNullOrWhiteSpace(newName) || newName.Trim() == oldName) return;
         newName = newName.Trim();
 
-        // The one busy helper (BMB-311): a second tap cannot start a second rename; a failure is said in full in a dialog.
+        // The one busy helper (BMB-311): a second tap cannot start a second rename; a failure is said in full.
         await BusyAction.RunAsync(null, async () =>
         {
             await Task.Run(async () =>
@@ -144,12 +196,14 @@ public partial class TagsPage : ContentPage
                 await conceptTagSvc.RenameAsync(oldName, newName);
             });
             await LoadTagsAsync();
-        }, new BusyOptions { FailureTitle = "Error" });
+        }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
     }
 
     private async Task DeleteTagAsync(string tagName)
     {
-        bool confirmed = await DisplayAlert("Delete Tag", $"Delete tag \"{tagName}\" from all articles?", "Delete", "Cancel");
+        bool confirmed = await AppDialog.ConfirmAsync(this, AppStrings.Get("DeleteTagTitle"),
+            AppStrings.Format("DeleteTagDescFormat", tagName),
+            AppStrings.Get("Delete"), AppStrings.Get("Cancel"), danger: true);
         if (!confirmed) return;
 
         await BusyAction.RunAsync(null, async () =>
@@ -161,6 +215,6 @@ public partial class TagsPage : ContentPage
                 await conceptTagSvc.DeleteAsync(tagName);
             });
             await LoadTagsAsync();
-        }, new BusyOptions { FailureTitle = "Error" });
+        }, new BusyOptions { FailureTitle = AppStrings.Get("ErrorTitle") });
     }
 }

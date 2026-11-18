@@ -15,7 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.BlindNode.Tests;
 
 /// <summary>
-/// The second round on a seed that arrives under the stored cap (srvfix7, RV5-03, RV5-04, RV5-07, RV5-08): the announced total is judged at the first part, what a seed stages
+/// The second round on a seed that arrives under the stored cap: the announced total is judged at the first part, what a seed stages
 /// and applies does not pause the node's other callers, an upload nobody continues is dropped, and a wipe stops a seed that is being received.
 /// </summary>
 [Collection(HeavyOperationCollection.Name)]
@@ -79,7 +79,7 @@ public sealed class BlindSeedRound2Tests : IDisposable
         ? Directory.GetDirectories(Path.Combine(_node.DataPath, "blind-tmp"), "seed-*")
         : [];
 
-    // ── RV5-03: the announced total is judged at the first part ──
+    // ── The announced total is judged at the first part ──
 
     [Fact]
     public async Task RV5_03_a_seed_whose_announced_total_cannot_fit_is_refused_before_a_byte_is_staged()
@@ -131,7 +131,7 @@ public sealed class BlindSeedRound2Tests : IDisposable
         StagingDirs().Should().BeEmpty();
     }
 
-    // ── RV5-07: the staging of an upload nobody continues does not pause the node's other callers ──
+    // ── The staging of an upload nobody continues does not pause the node's other callers ──
 
     [Fact]
     public async Task RV5_07_the_staging_of_a_seed_does_not_pause_the_phones_that_pull_from_the_node()
@@ -148,7 +148,7 @@ public sealed class BlindSeedRound2Tests : IDisposable
         pull.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "the door answers for what the node holds; the staging of a seed is the seed's own affair (it judges itself part by part)");
     }
 
-    // ── RV5-04: the apply's own peak is not the door's business ──
+    // ── The apply's own peak is not the door's business ──
 
     [Fact]
     public void RV5_04_the_stored_size_leaves_out_what_a_seed_works_in_while_it_works_and_measures_again_after()
@@ -215,7 +215,7 @@ public sealed class BlindSeedRound2Tests : IDisposable
         after.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, "a cutover that is left behind is real disk and counts again once the apply is over");
     }
 
-    // ── RV5-07: an upload nobody continues is dropped on its own ──
+    // ── An upload nobody continues is dropped on its own ──
 
     [Fact]
     public async Task RV5_07_an_upload_nobody_continues_is_dropped_with_its_staging_after_an_hour_without_a_new_seed()
@@ -234,7 +234,7 @@ public sealed class BlindSeedRound2Tests : IDisposable
         StagingDirs().Should().BeEmpty("the sender's computer slept for a week: the owner's disk is not held for it");
     }
 
-    // ── RV5-08: the seed's barrier ──
+    // ── The seed's barrier ──
 
     [Fact]
     public async Task RV5_08_a_seed_that_starts_while_the_wipe_holds_the_service_is_refused_and_one_after_it_runs()
@@ -268,7 +268,7 @@ public sealed class BlindSeedRound2Tests : IDisposable
         progress.Applied.Should().BeFalse();
     }
 
-    // ── RV5-08: a wipe stops a seed that is being received ──
+    // ── A wipe stops a seed that is being received ──
 
     [Fact]
     public async Task RV5_08_a_seed_part_being_received_when_the_node_is_wiped_is_stopped_and_stages_nothing_after_the_wipe()

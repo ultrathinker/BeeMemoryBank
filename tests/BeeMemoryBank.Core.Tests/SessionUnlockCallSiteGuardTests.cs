@@ -116,10 +116,6 @@ public class SessionUnlockCallSiteGuardTests
         ["mobile/BeeMemoryBank.FullIos/Services/FullVault.cs"] =
             "The iPhone app's vault: opens the vault it has just created or joined, and the typed master password.",
 
-        ["mobile/BeeMemoryBank.FullIos/Services/QuickUnlock.cs"] =
-            "iPhone Face ID / Touch ID unlock via UnlockWithDek: the master DEK unwrapped with a Keychain key only the biometry " +
-            "releases, checked against the sentinel before it is installed. Unlocking IS the feature.",
-
         ["mobile/BeeMemoryBank.FullIos/Services/FullSelfCheck.cs"] =
             "The iPhone app's measuring run: unlocks a scratch vault of its own, in a composition of its own, never the app's.",
 

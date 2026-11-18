@@ -46,6 +46,14 @@ public static class FullNodeServices
             .AddSingleton(new MediaStorageOptions(paths.Media))
             .AddLogging();
 
+#if IOS
+        // Pictures: MediaService takes an IImageTranscoder as a required parameter. The phone
+        // uses UIKit (IosImageTranscoder, in this app assembly), not the SkiaSharp Media library the
+        // golden assembly list excludes - so no new package or product assembly. The tests, built on
+        // any OS, register their own fake instead.
+        services.TryAddSingleton<IImageTranscoder, Platforms.iOS.IosImageTranscoder>();
+#endif
+
         // Direct sync on the Wi-Fi (docs/design/lan-peer-sync.md section 16): what Bonjour showed (BonjourPeerDiscovery, registered with the platform's
         // browser by MauiProgram) goes into this cache, and the channel planner reads it as the host's discovery in place of the empty default
         // AddNodeSync registers.

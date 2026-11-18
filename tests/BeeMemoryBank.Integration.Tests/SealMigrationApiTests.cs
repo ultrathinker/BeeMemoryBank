@@ -171,7 +171,7 @@ public sealed class SealMigrationApiTests(ActivatedPlainTemplate template) : ICl
 
     public static IEnumerable<object[]> KillPoints() => Steps.Select(s => new object[] { s });
 
-    // ---- review round 1, H1: no Done and no open while a readable plain file is left ----------------------------------------------------
+    // ---- no Done and no open while a readable plain file is left ----------------------------------------------------
 
     [Fact]
     public async Task A_wipe_that_fails_fails_the_run_closed_and_no_unlock_opens_the_node_while_the_readable_file_is_there()

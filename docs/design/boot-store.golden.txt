@@ -12,6 +12,8 @@ tbl_boot_door.argon_parallelism INTEGER
 tbl_boot_door.content_sha256 TEXT
 tbl_boot_door.dek_fp TEXT
 tbl_boot_door.door_id INTEGER
+tbl_boot_door.door_public_key BLOB
+tbl_boot_door.door_version INTEGER
 tbl_boot_door.encrypted_master_dek BLOB
 tbl_boot_door.iv BLOB
 tbl_boot_door.kdf_version INTEGER
@@ -73,7 +75,13 @@ tbl_whitelist.member_lamport_ts INTEGER
 tbl_whitelist.member_source_node_id TEXT
 tbl_whitelist.name_lamport_ts INTEGER
 tbl_whitelist.name_source_node_id TEXT
+tbl_whitelist.needs_review INTEGER
 tbl_whitelist.node_id TEXT
+tbl_whitelist.owner_label TEXT
+tbl_whitelist.owner_person_id TEXT
+tbl_whitelist.ownership TEXT
+tbl_whitelist.ownership_lamport_ts INTEGER
+tbl_whitelist.ownership_source_node_id TEXT
 tbl_whitelist.source_node_id TEXT
 tbl_whitelist.status TEXT
 tbl_whitelist.superadmin_lamport_ts INTEGER
