@@ -11,7 +11,7 @@ namespace BeeMemoryBank.Sync;
 /// another service). It is not "the peer did not answer" (<see cref="HttpRequestException"/> with no status) and not "the peer's door is shut" (401, 403):
 /// the person has to correct the address, and every screen says so in the same words (<see cref="Headline"/>).
 /// <para>
-/// The text never carries the address (BMB-307 fix round): a stored or typed address may hold a user name or a token, and this message reaches dialogs, API
+/// The text never carries the address (BMB-307): a stored or typed address may hold a user name or a token, and this message reaches dialogs, API
 /// answers and logs. The screen that asked knows which address it asked about.
 /// </para>
 /// </summary>
@@ -29,8 +29,31 @@ public sealed class NoSyncServerException(string reason)
 /// What <c>/api/sync/identity</c> of a peer says about itself (a 2.5 peer sends no capabilities and no version; a build before 2.6.4 sends no platform: what the
 /// network map draws it as is then decided without it).
 /// </summary>
+/// <param name="KeyChain">The node's key transition chain (release 2.12, plan WS-D D4; newest 16 links); absent from older builds and from a node that never re-keyed.</param>
 public sealed record RemoteIdentity(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0,
-    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null, string? Platform = null, bool? InContainer = null);
+    IReadOnlyList<string>? Capabilities = null, string? AppVersion = null, string? Platform = null, bool? InContainer = null,
+    IReadOnlyList<NodeKeyLinkDto>? KeyChain = null);
+
+/// <summary>
+/// One link of a node's key transition chain (release 2.12, plan WS-D D4), base64: the retired key, its successor, the rotation counter, and both
+/// keys' signatures over the transition statement. A caller that pinned an older key walks the links from its pin (<see cref="PeerKey.Follow"/>).
+/// </summary>
+public sealed record NodeKeyLinkDto(string OldPublicKeyB64, string NewPublicKeyB64, long Counter, string SigByOldB64, string SigByNewB64)
+{
+    public static NodeKeyLinkDto Of(NodeKeyLink link) => new(Convert.ToBase64String(link.OldPublicKey),
+        Convert.ToBase64String(link.NewPublicKey), link.Counter, Convert.ToBase64String(link.SigByOld), Convert.ToBase64String(link.SigByNew));
+
+    /// <summary>The link, or null for one that is not base64.</summary>
+    public NodeKeyLink? ToLink()
+    {
+        try
+        {
+            return new NodeKeyLink(Convert.FromBase64String(OldPublicKeyB64 ?? ""), Convert.FromBase64String(NewPublicKeyB64 ?? ""),
+                Counter, Convert.FromBase64String(SigByOldB64 ?? ""), Convert.FromBase64String(SigByNewB64 ?? ""));
+        }
+        catch (FormatException) { return null; }
+    }
+}
 
 public enum AddressVerdict
 {
@@ -46,7 +69,7 @@ public enum AddressVerdict
 
 public sealed record AddressCheck(AddressVerdict Verdict, RemoteIdentity? Identity, string Message);
 
-/// <summary>The public key a peer states about itself, against the one this node has on record (BMB-307 fix round: the node id alone is only a claim).</summary>
+/// <summary>The public key a peer states about itself, against the one this node has on record (BMB-307: the node id alone is only a claim).</summary>
 public static class PeerKey
 {
     /// <summary>True when <paramref name="declaredB64"/> is the stored key. Constant time; a declared key that is not base64 does not match.</summary>
@@ -56,6 +79,35 @@ public static class PeerKey
         try { return CryptographicOperations.FixedTimeEquals(stored, Convert.FromBase64String(declaredB64)); }
         catch (FormatException) { return false; }
     }
+
+    /// <summary>
+    /// The key a peer declares (<paramref name="declaredB64"/>) when it is the <paramref name="stored"/> one, or when the peer's signed key
+    /// transition chain (<paramref name="chain"/>, release 2.12 plan WS-D D4) leads from the stored key to it; null otherwise. Every link must
+    /// carry both keys' signatures over the transition statement of <paramref name="nodeId"/>, and the counters must grow along the walk
+    /// (<see cref="NodeKeyTransition.Advance"/>); at most <see cref="NodeKeyTransition.MaxChain"/> links are read, so a pin older than that is
+    /// not followed (the device must be paired again).
+    /// <para>
+    /// Following a chain proves only that the holder of the stored key named the declared one. A copy that pins a key nobody else holds learns
+    /// nothing a holder of that key could not already do to it; the network's answer to a second, competing chain is the identity conflict.
+    /// </para>
+    /// </summary>
+    public static byte[]? Follow(Guid nodeId, byte[]? stored, string? declaredB64, IReadOnlyList<NodeKeyLinkDto>? chain)
+    {
+        if (stored is not { Length: NodeKeyTransition.KeySize } || string.IsNullOrWhiteSpace(declaredB64)) return null;
+        byte[] declared;
+        try { declared = Convert.FromBase64String(declaredB64); }
+        catch (FormatException) { return null; }
+        if (declared.Length != NodeKeyTransition.KeySize) return null;
+        if (CryptographicOperations.FixedTimeEquals(stored, declared)) return declared;
+        if (chain is not { Count: > 0 }) return null;
+        var links = chain.Take(NodeKeyTransition.MaxChain).Select(l => l?.ToLink()).OfType<NodeKeyLink>();
+        var reached = NodeKeyTransition.Advance(nodeId, stored, links);
+        return CryptographicOperations.FixedTimeEquals(reached, declared) ? declared : null;
+    }
+
+    /// <summary>The declared key is the stored one, or the peer's chain leads to it (<see cref="Follow"/>).</summary>
+    public static bool MatchesOrFollows(Guid nodeId, byte[]? stored, RemoteIdentity identity) =>
+        Follow(nodeId, stored, identity.Ed25519PublicKeyB64, identity.KeyChain) is not null;
 }
 
 /// <summary>One peer a sync could not finish with, and why in a sentence a person can act on (no address, key or token in it).</summary>

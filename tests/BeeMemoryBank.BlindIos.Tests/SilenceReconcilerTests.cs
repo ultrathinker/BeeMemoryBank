@@ -114,7 +114,7 @@ internal sealed class MovableClock(DateTimeOffset start) : TimeProvider
 }
 
 /// <summary>
-/// Fix round 3, item 1 (final review, MINOR): the whole native read / withdraw / add of a notification update is one job of one ordered queue, so that a late withdrawal cannot delete a newer add
+/// The whole native read / withdraw / add of a notification update is one job of one ordered queue, so that a late withdrawal cannot delete a newer add
 /// and the book never believes in a warning the phone does not have. Driven with a fake notification center whose calls complete when the test says, and whose effect is the order of completion.
 /// </summary>
 public sealed class SilenceReconcilerTests
@@ -406,7 +406,7 @@ public sealed class SilenceReconcilerTests
     [Fact]
     public async Task AGrantedPermission_AddsTheReminderThatWasRefusedBefore_WithoutAnyNewSnapshot()
     {
-        // fix round 4 (re-review, MINOR): the system refuses the add because alerts are not allowed yet; the person then says yes. Nothing new happens to the accounts, so no update follows -
+        // the system refuses the add because alerts are not allowed yet; the person then says yes. Nothing new happens to the accounts, so no update follows -
         // the grant itself has to apply the newest snapshot.
         var clock = new MovableClock(DateTimeOffset.UtcNow);
         var center = new FakeNotificationCenter { Refuse = _ => true };

@@ -66,6 +66,14 @@ same network, without touching the rest of the network — for example after a d
 fresh copy of a vault on a spare machine. Both cases require the same vault master key. A snapshot from a
 different vault cannot be opened here, regardless of the password entered.
 
+A snapshot is sealed under the master key **current when it was made**, and a restore opens it only with the current
+session key: a snapshot made **before the last key rotation** is therefore refused ("made by a different vault"), even
+though it is the same vault. Every removal ends with a rotation, so after a finished removal no snapshot from before it
+can be restored on a node of the network. (Restores from a blind copy or a backup folder are different: they walk the
+retired-key links and open older material — see below.) A restore cannot bring a removed person back either: the
+removed-person tombstones survive it, and the rule that refuses a removed person is enforced again after the restore and
+at the next start.
+
 What happens, in order:
 
 1. The master password is checked and the vault is unlocked for the work. If "Create backup before restore" is
@@ -127,7 +135,12 @@ How it works:
 3. Blind copies are not restored: they are flagged for a reseed.
 4. Keep this node running and reachable until the others have fetched the copy; they download it from here.
 
-What stays as it is on every node: its identity, users, key slots and the nodes it trusts.
+What stays as it is on every node: its identity, users, key slots and the nodes it trusts. The **monotonic** tables are
+merged, never replaced (insert-or-ignore, no delete): since 2.12 the retired-key links (`tbl_dek_retired_link`) and the
+node-key history (`tbl_node_key_history`), so a restore cannot lose the links that open older material or resurrect a
+retired identity key. The accounts-node designation (`tbl_accounts_home`) is merged by its newest version, so a restore
+never rolls back to an older (or empty) designation. The removed-person tombstones (`tbl_removed_person`) are merged the
+same way, so a restore cannot bring a removed person back.
 
 From the command line: `bmb snapshot restore-network <file name or id>`; the API is
 `POST /api/snapshots/restore-network` (superadmin, not an agent key; the Admin page also sends the master
@@ -305,10 +318,10 @@ the old format 1 outright. And as everywhere else, this reaches only copies made
   only.
 - **The server's "Start unlocked after a restart" checkbox survives a restore in one case only** — an in-place
   restore over the very server that enabled it, with a byte-identical key slot. Every other restore starts locked
-  and retires the stale slot ([sealed-database.md](sealed-database.md#restore) has the rule and the notice text).
+  and retires the stale slot ([sealed-database.md](sealed-database.md#auto-unlock) has the rule and the notice text).
 
 File-level backups of a sealed node are a different animal — three files that form one set, copied only while the
-node is stopped; see [sealed-database.md](sealed-database.md#backups).
+node is stopped; see [sealed-database.md](sealed-database.md#backing-up-and-restoring-an-encrypted-node).
 
 ## On the record
 
@@ -316,22 +329,31 @@ Every restore is written to the audit log (`tbl_audit_log`):
 
 | Action | When | Details |
 |---|---|---|
-| `snapshot_restore_started` | Before anything is touched | `Mode=standalone`, `keep-identity` or `network`, whether a backup is taken first, who started it |
+| `snapshot_restore_started` | Before anything is touched | `Mode=standalone` or `network`, whether a backup is taken first, who started it |
 | `snapshot_restored` | After a restore of this node, in the restored database | Mode, the new node id (standalone), the backup file, who |
-| `snapshot_restore_refused` | A mode the route does not serve or nobody defined, a wrong master password on the network route, or a snapshot that belongs to another vault | Mode and the reason |
+| `snapshot_restore_refused` | A mode the route does not serve or nobody defined (`keep-identity` included, since 2.12), a wrong master password on the network route, or a snapshot that belongs to another vault | Mode and the reason |
 
 The *started* entry is written before the swap, so it lives on in the safety backup (the restore replaces the
 audit log together with the rest of the database).
+
+Taking a copy of the node away is on the record too: `snapshot_downloaded` (`GET /api/snapshots/{file}/download`) names the
+file and the person who downloaded it, and is written before the first byte is sent. A download that finds no file, or that
+the locked node refuses, writes nothing.
 
 ## For API clients
 
 `POST /api/snapshots/restore` takes `{ fileName, masterPassword, createBackupFirst, mode }` with `mode` one of:
 
-- `standalone` — this node only, new identity (what the dialog sends);
-- `keep-identity` — the snapshot's database is put in place **as it is**, identity and trusted nodes included. Only a
-  snapshot of this very node leaves the network coherent; with another node's snapshot two nodes would share
-  one identity. Not offered in the dialog.
+- `standalone` — this node only, new identity (what the dialog sends). It is the only mode this route serves.
 
-Older clients that send only `standaloneMode` get `standalone` for `true` and `keep-identity` for `false`. `mode: "network"`
+`keep-identity` (the snapshot's database put in place **as it is**, identity key included) is **refused since 2.12**
+(`400`, "no longer offered", on the record as `snapshot_restore_refused`). After a node re-keyed
+([ADR 0013](adr/0013-identity-rekey.md)) such a restore would put back the identity key the node retired, and with it a key
+that anybody holding an old backup can sign with. A restore that keeps the node's identity is the network restore: it keeps
+the node's CURRENT identity row (it is node-local and never imported) and merges the key history
+(`tbl_node_key_history` is in `SnapshotTables.Monotonic`), so a key retired after the snapshot stays retired.
+
+Older clients that send only `standaloneMode` get `standalone` for `true`; `false`, or no mode at all, is the old
+keep-identity request and is refused with the same sentence. `mode: "network"`
 is refused here — use `POST /api/snapshots/restore-network` (`{ mode: "NetworkWide", fileName | snapshotFileId, masterPassword }`).
 A caller that is not a superadmin, or that is an agent key, is refused on both routes.

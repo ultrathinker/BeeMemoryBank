@@ -6,6 +6,7 @@ using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.FullIos.Services;
+using BeeMemoryBank.Storage.PreUnlock;
 using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Sync.Metadata;
 using BeeMemoryBank.Vault.Sealed;
@@ -37,20 +38,21 @@ public class PhoneVaultLifecycleTests
     }
 
     /// <summary>
-    /// The Keychain of the tests: two items in memory. It refuses any value that is a database key or a page key of the vault - it must never be
-    /// handed one (spec 12.4) - and writes down everything it was given.
+    /// The Keychain of the tests: the door's secret (and an older version's wrapped-key item) in memory. It refuses any value that is a database
+    /// key or a page key of the vault - it must never be handed one (spec 12.4) - and writes down everything it was given.
     /// </summary>
     private sealed class GuardedKeychain : IUnlockKeyStore
     {
-        public byte[]? Key;
-        public byte[]? SlotBytes;
+        public byte[]? Secret;
+        public byte[]? LegacyKey;
+        public byte[]? LegacySlot;
         public List<byte[]> Forbidden { get; } = [];
         public List<byte[]> Seen { get; } = [];
         public int Calls;
 
         public bool IsAvailable => true;
         public string BiometryName => "Face ID";
-        public bool IsEnrolled => Key is not null && SlotBytes is not null;
+        public bool IsEnrolled => Secret is not null || (LegacyKey is not null && LegacySlot is not null);
 
         private void Check(byte[] value)
         {
@@ -60,28 +62,37 @@ public class PhoneVaultLifecycleTests
                     throw new InvalidOperationException("A database key or a page key reached the key store.");
         }
 
-        public void Save(byte[] unlockKey, byte[] slot)
+        public void Save(byte[] secret)
         {
             Calls++;
-            Check(unlockKey);
-            Check(slot);
-            Key = unlockKey.ToArray();
-            SlotBytes = slot.ToArray();
+            Check(secret);
+            // The real store's order: the new secret first, then an older version's items.
+            Secret = secret.ToArray();
+            LegacyKey = null;
+            LegacySlot = null;
         }
 
-        public byte[]? ReadSlot() => SlotBytes?.ToArray();
+        public byte[]? ReadLegacySlot() => LegacySlot?.ToArray();
 
-        public Task<byte[]?> ReadUnlockKeyAsync(string reason)
+        public Task<byte[]?> ReadSecretAsync(string reason)
         {
             Calls++;
-            if (Key is not null) Check(Key);
-            return Task.FromResult(Key?.ToArray());
+            if (Secret is not null) Check(Secret);
+            return Task.FromResult(Secret?.ToArray());
+        }
+
+        public Task<byte[]?> ReadLegacyKeyAsync(string reason)
+        {
+            Calls++;
+            if (LegacyKey is not null) Check(LegacyKey);
+            return Task.FromResult(LegacyKey?.ToArray());
         }
 
         public void Forget()
         {
-            Key = null;
-            SlotBytes = null;
+            Secret = null;
+            LegacyKey = null;
+            LegacySlot = null;
         }
     }
 
@@ -209,7 +220,7 @@ public class PhoneVaultLifecycleTests
         keychain.Forbidden.Add(dbk);
         keychain.Forbidden.Add(pageKey);
         var quick = new QuickUnlock(keychain, app.Services);
-        quick.Enable();
+        await quick.EnableAsync();
 
         // Background: the session locks and the database closes.
         await app.Lifecycle.OnBackgroundAsync();
@@ -239,15 +250,167 @@ public class PhoneVaultLifecycleTests
             "the key store holds an unlock key and a wrapped master key, never the database key or a page key");
     }
 
+    /// <summary>
+    /// The iPhone crash at every cold start: an encrypted phone starts with its database closed, and the unlock page read the node's
+    /// identity from it (VaultSealedException out of an async void OnAppearing). What the unlock page asks before anything is unlocked - the state,
+    /// the node's name, the password hint - reads nothing from the closed database: the name comes from the boot store's mirror, the hint is inside
+    /// the database and is simply not shown. Then Face ID opens the vault as before.
+    /// </summary>
     [Fact]
-    public async Task A_quick_unlock_key_that_does_not_open_this_vault_is_turned_off_and_the_phone_stays_closed()
+    public async Task A_sealed_phone_at_a_cold_start_shows_its_unlock_page_without_reading_the_closed_database_and_Face_ID_opens_it()
+    {
+        var (dir, nodeId, keychain) = await SealedPhoneWithFaceIdLeftLockedAsync("phone-cold-start-faceid");
+
+        await using var app = await PhoneApp.StartAsync(dir);
+        await TheUnlockPageAppearsAsync(app, nodeId);
+
+        var quick = new QuickUnlock(keychain, app.Services);
+        quick.IsEnabled.Should().BeTrue("Face ID is still turned on: the unlock page offers it at once");
+        (await quick.UnlockAsync("Open your memory bank")).Should().Be(QuickUnlockResult.Unlocked);
+        await WaitForOpenAsync(app);
+        (await app.Vault.IdentityAsync())!.NodeId.Should().Be(nodeId);
+        (await app.Vault.PasswordHintAsync()).Should().Be("A hint for the canary vault", "once open, the hint is readable again");
+    }
+
+    /// <summary>The same cold start, opened with the master password.</summary>
+    [Fact]
+    public async Task A_sealed_phone_at_a_cold_start_shows_its_unlock_page_without_reading_the_closed_database_and_the_password_opens_it()
+    {
+        var (dir, nodeId, _) = await SealedPhoneWithFaceIdLeftLockedAsync("phone-cold-start-password");
+
+        await using var app = await PhoneApp.StartAsync(dir);
+        await TheUnlockPageAppearsAsync(app, nodeId);
+
+        (await app.Vault.UnlockAsync(Password)).Should().BeTrue();
+        await WaitForOpenAsync(app);
+        (await app.Vault.IdentityAsync())!.DisplayName.Should().Be("Test iPhone");
+    }
+
+    /// <summary>What UnlockPage.OnAppearing asks, on a phone whose database is closed: nothing throws and nothing opens.</summary>
+    private static async Task TheUnlockPageAppearsAsync(PhoneApp app, Guid nodeId)
+    {
+        app.Start.Mode.Should().Be(VaultStoreMode.Sealed);
+        app.Gate.State.Should().Be(GateState.Closed, "a cold start opens nothing before the person unlocks");
+        (await app.Vault.GetStateAsync()).Should().Be(AppVaultState.Locked);
+        var identity = await app.Vault.IdentityAsync();
+        identity.Should().NotBeNull("the node's name is readable while closed: the boot store mirrors it");
+        identity!.NodeId.Should().Be(nodeId);
+        identity.DisplayName.Should().Be("Test iPhone");
+        (await app.Vault.PasswordHintAsync()).Should().BeNull("the hint is inside the closed database");
+        app.Gate.State.Should().Be(GateState.Closed, "reading what the unlock page shows opened nothing");
+        app.Vault.IsUnlocked.Should().BeFalse();
+    }
+
+    /// <summary>An encrypted phone with Face ID turned on, left locked (database closed) as the app leaves the screen; the app process then ends.</summary>
+    private static async Task<(string Dir, Guid NodeId, GuardedKeychain Keychain)> SealedPhoneWithFaceIdLeftLockedAsync(string name)
+    {
+        var keychain = new GuardedKeychain();
+        await using var app = await SealedAppAsync(name);
+        var nodeId = (await app.Vault.IdentityAsync())!.NodeId;
+        await new QuickUnlock(keychain, app.Services).EnableAsync();
+        await app.Lifecycle.OnBackgroundAsync();
+        app.Gate.State.Should().Be(GateState.Closed);
+        return (app.Dir, nodeId, keychain);
+    }
+
+    /// <summary>
+    /// the phone wipes ("delete all data", "cancel and delete" of the first sync, the setup reset) delete the whole sealed file
+    /// set, as the node's reset does. Deleting the database alone left the boot store behind, and the next start was the dead end "db_missing_or_empty"
+    /// with nothing to tap: an encrypted Android phone was unusable until its app data was cleared in the system settings.
+    /// </summary>
+    [Fact]
+    public async Task A_wiped_encrypted_phone_starts_again_as_a_fresh_phone()
+    {
+        string dir;
+        await using (var app = await SealedAppAsync("phone-wipe"))
+        {
+            dir = app.Dir;
+            await app.Lifecycle.OnBackgroundAsync();
+            await app.Vault.UnlockAsync(Password);
+            await WaitForOpenAsync(app);
+            File.Exists(Path.Combine(dir, VaultStoreFiles.Boot)).Should().BeTrue("an encrypted phone keeps its doors in the boot store");
+            File.Exists(Path.Combine(dir, PasswordHintFile.FileName)).Should().BeTrue("and its hint in the pre-unlock mirror");
+
+            // The wipe runs on an unlocked phone, from the settings tab.
+            await app.Lifecycle.ReturnToPlainAsync(dir);
+
+            app.Gate.IsSealed.Should().BeFalse("the gate is a plain gate again");
+            app.Vault.IsUnlocked.Should().BeFalse();
+        }
+        foreach (var name in new[] { VaultStoreFiles.Boot, VaultStoreFiles.Database, VaultStoreFiles.Chat, PasswordHintFile.FileName, VaultStoreFiles.SealJournal })
+            foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+                File.Exists(Path.Combine(dir, name + suffix)).Should().BeFalse($"{name + suffix} is part of the vault and is wiped");
+
+        // The restart after the wipe: the folder is a fresh phone's, the welcome / setup screen comes.
+        await using var next = await PhoneApp.StartAsync(dir);
+        next.Start.CanStart.Should().BeTrue("a wiped phone is not a broken one");
+        next.Start.Mode.Should().Be(VaultStoreMode.Plain);
+        (await next.Vault.GetStateAsync()).Should().Be(AppVaultState.NoVault);
+        AnyFileHoldsCanary(dir).Should().BeFalse("nothing of the wiped vault is left");
+    }
+
+    /// <summary>
+    /// the iPhone's wipe of an encrypted vault (every iPhone's) ends on Welcome. The folder went, but the gate in this process
+    /// was still sealed and closed, so preparing the fresh database threw: the app said "Wipe failed" after a wipe that had worked, and sat on an
+    /// unlock page with no door until it was force-quit. The gate is plain again before the fresh schema is prepared.
+    /// </summary>
+    [Fact]
+    public async Task The_wipe_of_an_encrypted_iPhone_ends_on_a_fresh_phone_in_the_same_process()
+    {
+        await using var app = await SealedAppAsync("phone-wipe-ios");
+        app.Gate.IsSealed.Should().BeTrue();
+
+        (await new SecurityOps(app.Services).WipeDataAsync(new FullNodePaths(app.Dir))).Should().BeTrue("the folder is gone and the fresh schema is ready");
+
+        app.Gate.IsSealed.Should().BeFalse("nothing sealed is left to open: the gate is plain");
+        (await app.Vault.GetStateAsync()).Should().Be(AppVaultState.NoVault, "the Welcome gate comes, not an unlock page with no door");
+        File.Exists(Path.Combine(app.Dir, VaultStoreFiles.Boot)).Should().BeFalse();
+        (await app.Vault.CreateAsync("Test iPhone", Password, "A hint after the wipe")).Should().NotBeNullOrEmpty("a new vault can be made at once");
+    }
+
+    [Fact]
+    public async Task A_new_vault_made_on_this_phone_is_encrypted_by_itself_and_stays_open()
+    {
+        // every database is encrypted, with no button. A vault made here starts its own network, so the new sync format is
+        // switched on first (with its metadata key), as a desktop's setup does, and the encryption asks the person nothing.
+        await using var app = await PhoneApp.StartAsync(TestFolders.New("phone-auto-seal"));
+        await app.Vault.CreateAsync("Test iPhone", Password, "A hint for the auto seal");
+        var sealing = new PhoneSealing(app.Services);
+        sealing.IsNeeded.Should().BeTrue("a new vault is a plain file until it is encrypted");
+
+        await sealing.SealAsync(startsNetwork: true);
+
+        app.Gate.IsSealed.Should().BeTrue();
+        VaultStoreFiles.DetectMode(app.Dir).Should().Be(VaultStoreMode.Sealed);
+        app.Session.IsUnlocked.Should().BeTrue("the person goes on into the notes");
+        sealing.IsNeeded.Should().BeFalse();
+        await app.Notes.SaveAsync(null, Canary, "/", Canary + " in the body");
+        AnyFileHoldsCanary(app.Dir).Should().BeFalse("a raw scan of the phone shows nothing once it is encrypted");
+    }
+
+    [Fact]
+    public async Task A_phone_in_a_network_on_the_old_sync_format_is_left_as_it_is_and_says_why()
+    {
+        // A phone never switches the new format on for a whole network: only a vault that starts its own network does.
+        await using var app = await PhoneApp.StartAsync(TestFolders.New("phone-auto-seal-old"));
+        await app.Vault.CreateAsync("Test iPhone", Password, "A hint for the old network");
+
+        var act = () => new PhoneSealing(app.Services).SealAsync(startsNetwork: false);
+
+        (await act.Should().ThrowAsync<PhoneSealingException>()).Which.Code.Should().Be(PhoneSealingException.OldNetwork);
+        app.Gate.IsSealed.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task An_older_quick_unlock_whose_key_does_not_open_this_vault_is_turned_off_and_the_phone_stays_closed()
     {
         await using var app = await SealedAppAsync("phone-quick-wrong");
         var keychain = new GuardedKeychain();
         var strangerDek = SecureRandom.GetBytes(32);
         var unlockKey = SecureRandom.GetBytes(32);
         var (wrapped, iv) = MasterKeyManager.WrapMasterDek(strangerDek, unlockKey);
-        keychain.Save(unlockKey, QuickUnlock.Slot(iv, wrapped));
+        keychain.LegacyKey = unlockKey;
+        keychain.LegacySlot = QuickUnlock.Slot(iv, wrapped);
         await app.Lifecycle.OnBackgroundAsync();
         app.Gate.State.Should().Be(GateState.Closed);
 
@@ -258,6 +421,115 @@ public class PhoneVaultLifecycleTests
         app.Gate.State.Should().Be(GateState.Closed);
         app.Vault.IsUnlocked.Should().BeFalse();
         (await app.Lifecycle.UnlockWithPasswordAsync(Password)).Should().BeTrue("the password still opens it");
+    }
+
+    [Fact]
+    public async Task An_older_quick_unlock_on_an_encrypted_phone_opens_the_closed_database_and_becomes_a_door()
+    {
+        await using var app = await SealedAppAsync("phone-quick-legacy");
+        var keychain = new GuardedKeychain();
+        var unlockKey = SecureRandom.GetBytes(32);
+        var masterDek = app.Session.GetMasterDek();
+        var (wrapped, iv) = MasterKeyManager.WrapMasterDek(masterDek, unlockKey);
+        Array.Clear(masterDek);
+        keychain.LegacyKey = unlockKey;
+        keychain.LegacySlot = QuickUnlock.Slot(iv, wrapped);
+        await app.Lifecycle.OnBackgroundAsync();
+        var quick = new QuickUnlock(keychain, app.Services);
+
+        (await quick.UnlockAsync("Open your memory bank")).Should().Be(QuickUnlockResult.Unlocked);
+        await WaitForOpenAsync(app);
+
+        keychain.LegacySlot.Should().BeNull("the wrapped master key left the Keychain");
+        keychain.Secret.Should().HaveCount(32).And.NotEqual(unlockKey);
+        await app.Lifecycle.OnBackgroundAsync();
+        (await quick.UnlockAsync("Open your memory bank")).Should().Be(QuickUnlockResult.Unlocked, "the door opens the closed database from now on");
+        await WaitForOpenAsync(app);
+    }
+
+    [Fact]
+    public async Task An_older_quick_unlock_from_before_a_rotation_does_not_open_the_closed_encrypted_phone_and_the_password_does()
+    {
+        // the plain variant is in QuickUnlockTests; here the old master key meets the closed database itself (OpenSealedAsync).
+        await using var app = await SealedAppAsync("phone-quick-legacy-rotated");
+        var keychain = new GuardedKeychain();
+        var unlockKey = SecureRandom.GetBytes(32);
+        var oldDek = app.Session.GetMasterDek();
+        var (wrapped, iv) = MasterKeyManager.WrapMasterDek(oldDek, unlockKey);
+        Array.Clear(oldDek);
+        keychain.LegacyKey = unlockKey;
+        keychain.LegacySlot = QuickUnlock.Slot(iv, wrapped);
+        var newDek = SecureRandom.GetBytes(32);
+        await Rotation.AsPeerAsync(app.Services, newDek);
+        await app.Lifecycle.OnBackgroundAsync();
+        app.Gate.State.Should().Be(GateState.Closed);
+        var quick = new QuickUnlock(keychain, app.Services);
+
+        var result = await quick.UnlockAsync("Open your memory bank");
+
+        result.Should().Be(QuickUnlockResult.TurnedOff, "the old item holds the master key from before the rotation");
+        app.Gate.State.Should().Be(GateState.Closed, "a refused open closes the database again");
+        app.Vault.IsUnlocked.Should().BeFalse();
+        keychain.IsEnrolled.Should().BeFalse();
+        keychain.LegacySlot.Should().BeNull();
+        (await app.Lifecycle.UnlockWithPasswordAsync(Password)).Should().BeTrue("the password, once");
+        await WaitForOpenAsync(app);
+        var current = app.Session.GetMasterDek();
+        current.Should().Equal(newDek);
+        Array.Clear(current);
+        await quick.EnableAsync();
+        await app.Lifecycle.OnBackgroundAsync();
+        (await quick.UnlockAsync("Open your memory bank")).Should().Be(QuickUnlockResult.Unlocked, "Face ID turned on again opens it");
+        await WaitForOpenAsync(app);
+    }
+
+    [Fact]
+    public async Task Face_ID_opens_an_encrypted_phone_at_a_cold_start_through_the_door_in_the_boot_store()
+    {
+        var dir = TestFolders.New("phone-quick-cold");
+        var keychain = new GuardedKeychain();
+        Guid id;
+        await using (var app = await PhoneApp.StartAsync(dir))
+        {
+            id = await app.CreateVaultWithCanaryAsync();
+            (await app.Seal.RunAsync(new SealOptions())).Phase.Should().Be(SealProgress.Done);
+            await new QuickUnlock(keychain, app.Services).EnableAsync();
+            await app.Lifecycle.OnBackgroundAsync();
+        }
+
+        // A new process: nothing of the vault is in memory, the database is closed, only the boot store can be read.
+        await using var next = await PhoneApp.StartAsync(dir);
+        next.Start.Mode.Should().Be(VaultStoreMode.Sealed);
+        next.Gate.IsUsable.Should().BeFalse();
+        var quick = new QuickUnlock(keychain, next.Services);
+
+        (await quick.UnlockAsync("Open your memory bank")).Should().Be(QuickUnlockResult.Unlocked);
+        await WaitForOpenAsync(next);
+
+        (await next.Notes.GetAsync(id))!.Body.Should().Contain(Canary);
+    }
+
+    [Fact]
+    public async Task After_a_key_rotation_Face_ID_still_opens_the_closed_encrypted_phone_and_asks_nothing_new()
+    {
+        await using var app = await SealedAppAsync("phone-quick-rotation");
+        var keychain = new GuardedKeychain();
+        var quick = new QuickUnlock(keychain, app.Services);
+        await quick.EnableAsync();
+        var saves = keychain.Calls;
+        var newDek = SecureRandom.GetBytes(32);
+
+        await Rotation.AsPeerAsync(app.Services, newDek);
+        await app.Lifecycle.OnBackgroundAsync();
+        app.Gate.State.Should().Be(GateState.Closed);
+
+        (await quick.UnlockAsync("Open your memory bank")).Should().Be(QuickUnlockResult.Unlocked);
+        await WaitForOpenAsync(app);
+
+        keychain.Calls.Should().Be(saves + 1, "one read of the secret, nothing stored again");
+        var current = app.Session.GetMasterDek();
+        current.Should().Equal(newDek);
+        Array.Clear(current);
     }
 
     [Theory]

@@ -175,7 +175,9 @@ public sealed partial class BlindPhoneReplicaClient
                 {
                     try
                     {
-                        await applier.ApplyAsync(evt, new ApplyContext(ReceivedFrom: target.NodeId, ReceivedSeq: evt.SequenceNum));
+                        // The deltas are part of a package whose signature was verified: the package rule for a key their author retired
+                        // (plan WS-D D3 - a hub that re-keyed after the baseline serves deltas its old key signed).
+                        await applier.ApplyAsync(evt, new ApplyContext(ReceivedFrom: target.NodeId, ReceivedSeq: evt.SequenceNum, KeyMode: NodeKeyMode.Package));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {

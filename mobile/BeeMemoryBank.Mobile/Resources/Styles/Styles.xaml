@@ -1,0 +1,414 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Control styles of the approved mock-up (design/index.html). Sizes, radii and colours come
+     from its CSS (.btn-primary, .btn-secondary, .btn-danger, .info-card, .chip-btn, .input-shell,
+     .field-label, .section-label, .dialog-title ...), not from guesswork. -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+
+    <!-- ── Pages and text ─────────────────────────────────────────────────── -->
+
+    <Style TargetType="ContentPage" ApplyToDerivedTypes="True">
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbBackgroundLight}, Dark={StaticResource BmbBackground}}" />
+    </Style>
+
+    <Style TargetType="Label">
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}" />
+        <Setter Property="FontSize" Value="15" />
+    </Style>
+
+    <Style TargetType="Label" x:Key="BaseLabel">
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}" />
+        <Setter Property="FontSize" Value="15" />
+    </Style>
+
+    <!-- .app-header-title / .brand-title: the display face. Localized titles use the bold body
+         face because Plus Jakarta Sans has no Cyrillic (the mock-up falls back to Noto Sans too). -->
+    <Style TargetType="Label" x:Key="HeaderTitle" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="20" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBodyBold}" />
+    </Style>
+
+    <Style TargetType="Label" x:Key="BrandTitle" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="26" />
+        <Setter Property="FontFamily" Value="{StaticResource FontDisplayBold}" />
+    </Style>
+
+    <Style TargetType="Label" x:Key="TitleLabel" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="24" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBodyBold}" />
+    </Style>
+
+    <Style TargetType="Label" x:Key="SubtitleLabel" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+    </Style>
+
+    <!-- .info-card-title -->
+    <Style TargetType="Label" x:Key="CardTitle" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBodyBold}" />
+    </Style>
+
+    <!-- .section-label -->
+    <Style TargetType="Label" x:Key="SectionLabel" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}" />
+        <Setter Property="CharacterSpacing" Value="0.5" />
+        <Setter Property="Margin" Value="0,14,0,8" />
+    </Style>
+
+    <!-- .field-label -->
+    <Style TargetType="Label" x:Key="FieldLabel" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+        <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+
+    <!-- .item-title / .item-meta -->
+    <Style TargetType="Label" x:Key="ItemTitle" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+    </Style>
+    <Style TargetType="Label" x:Key="ItemMeta" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+    </Style>
+
+    <!-- .dialog-title / .dialog-body -->
+    <Style TargetType="Label" x:Key="DialogTitle" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="18" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBodyBold}" />
+        <Setter Property="Margin" Value="0,0,0,8" />
+    </Style>
+    <Style TargetType="Label" x:Key="DialogBody" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+        <Setter Property="LineBreakMode" Value="WordWrap" />
+        <Setter Property="Margin" Value="0,0,0,16" />
+    </Style>
+
+    <!-- .field-error -->
+    <Style TargetType="Label" x:Key="FieldError" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbErrorLight}, Dark={StaticResource BmbError}}" />
+        <Setter Property="LineBreakMode" Value="WordWrap" />
+        <Setter Property="Margin" Value="0,6,0,0" />
+    </Style>
+
+    <!-- .empty-title / .empty-desc -->
+    <Style TargetType="Label" x:Key="EmptyTitle" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="17" />
+        <Setter Property="FontFamily" Value="{StaticResource FontBodyBold}" />
+        <Setter Property="HorizontalTextAlignment" Value="Center" />
+    </Style>
+    <Style TargetType="Label" x:Key="EmptyDesc" BasedOn="{StaticResource BaseLabel}">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+        <Setter Property="HorizontalTextAlignment" Value="Center" />
+        <Setter Property="LineBreakMode" Value="WordWrap" />
+        <Setter Property="MaximumWidthRequest" Value="280" />
+    </Style>
+
+    <!-- ── Buttons (.btn-primary, .btn-secondary, .btn-danger, .btn-text, .btn-biometric) ── -->
+
+    <Style TargetType="Button">
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="MinimumHeightRequest" Value="48" />
+        <Setter Property="LineBreakMode" Value="WordWrap" />
+        <Setter Property="Padding" Value="16,12" />
+        <Setter Property="VisualStateManager.VisualStateGroups">
+            <VisualStateGroupList>
+                <VisualStateGroup x:Name="CommonStates">
+                    <VisualState x:Name="Normal" />
+                    <VisualState x:Name="Disabled">
+                        <VisualState.Setters>
+                            <Setter Property="Opacity" Value="0.45" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateGroupList>
+        </Setter>
+    </Style>
+
+    <Style TargetType="Button" x:Key="PrimaryButton">
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="BackgroundColor" Value="{StaticResource BmbAccent}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbAccentForegroundLight}, Dark={StaticResource BmbAccentForeground}}" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="MinimumHeightRequest" Value="48" />
+        <Setter Property="LineBreakMode" Value="WordWrap" />
+        <Setter Property="Padding" Value="16,12" />
+        <Setter Property="VisualStateManager.VisualStateGroups">
+            <VisualStateGroupList>
+                <VisualStateGroup x:Name="CommonStates">
+                    <VisualState x:Name="Normal" />
+                    <VisualState x:Name="Pressed">
+                        <VisualState.Setters>
+                            <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbAccentActiveLight}, Dark={StaticResource BmbAccentActive}}" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="Disabled">
+                        <VisualState.Setters>
+                            <Setter Property="Opacity" Value="0.45" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateGroupList>
+        </Setter>
+    </Style>
+
+    <Style TargetType="Button" x:Key="SecondaryButton">
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="BorderColor" Value="{AppThemeBinding Light={StaticResource BmbBorderStrongLight}, Dark={StaticResource BmbBorderStrong}}" />
+        <Setter Property="BorderWidth" Value="1" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="MinimumHeightRequest" Value="48" />
+        <Setter Property="LineBreakMode" Value="WordWrap" />
+        <Setter Property="Padding" Value="16,12" />
+        <Setter Property="VisualStateManager.VisualStateGroups">
+            <VisualStateGroupList>
+                <VisualStateGroup x:Name="CommonStates">
+                    <VisualState x:Name="Normal" />
+                    <VisualState x:Name="Pressed">
+                        <VisualState.Setters>
+                            <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHoverLight}, Dark={StaticResource BmbSurfaceHover}}" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="Disabled">
+                        <VisualState.Setters>
+                            <Setter Property="Opacity" Value="0.45" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateGroupList>
+        </Setter>
+    </Style>
+
+    <Style TargetType="Button" x:Key="DangerButton">
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbErrorBackgroundLight}, Dark={StaticResource BmbErrorBackground}}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbErrorLight}, Dark={StaticResource BmbError}}" />
+        <Setter Property="BorderColor" Value="{AppThemeBinding Light={StaticResource BmbErrorBorderLight}, Dark={StaticResource BmbErrorBorder}}" />
+        <Setter Property="BorderWidth" Value="1" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="MinimumHeightRequest" Value="48" />
+        <Setter Property="LineBreakMode" Value="WordWrap" />
+        <Setter Property="Padding" Value="16,12" />
+        <Setter Property="VisualStateManager.VisualStateGroups">
+            <VisualStateGroupList>
+                <VisualStateGroup x:Name="CommonStates">
+                    <VisualState x:Name="Normal" />
+                    <VisualState x:Name="Disabled">
+                        <VisualState.Setters>
+                            <Setter Property="Opacity" Value="0.45" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateGroupList>
+        </Setter>
+    </Style>
+
+    <!-- .btn-text: a quiet accent link-button -->
+    <Style TargetType="Button" x:Key="TextButton">
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="BackgroundColor" Value="Transparent" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbAccentTextLight}, Dark={StaticResource BmbAccentText}}" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="MinimumHeightRequest" Value="44" />
+        <Setter Property="LineBreakMode" Value="WordWrap" />
+        <Setter Property="Padding" Value="12,8" />
+    </Style>
+
+    <!-- .btn-biometric: surface card with the strong border; the fingerprint icon is accent -->
+    <Style TargetType="Button" x:Key="BiometricButton" BasedOn="{StaticResource SecondaryButton}">
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}" />
+    </Style>
+
+    <!-- .icon-btn: a 44x44 quiet square for a glyph -->
+    <Style TargetType="Button" x:Key="IconButton">
+        <Setter Property="BackgroundColor" Value="Transparent" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="WidthRequest" Value="44" />
+        <Setter Property="HeightRequest" Value="44" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="FontSize" Value="18" />
+    </Style>
+
+    <!-- .chip-btn: a filter pill; the Selected state is the active tag (.chip-btn.is-active) -->
+    <Style TargetType="Button" x:Key="ChipButton">
+        <Setter Property="FontFamily" Value="{StaticResource FontBodySemibold}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
+        <Setter Property="BorderColor" Value="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" />
+        <Setter Property="BorderWidth" Value="1" />
+        <Setter Property="CornerRadius" Value="18" />
+        <Setter Property="MinimumHeightRequest" Value="36" />
+        <Setter Property="Padding" Value="14,6" />
+        <Setter Property="VisualStateManager.VisualStateGroups">
+            <VisualStateGroupList>
+                <VisualStateGroup x:Name="SelectionStates">
+                    <VisualState x:Name="Unselected" />
+                    <VisualState x:Name="Selected">
+                        <VisualState.Setters>
+                            <Setter Property="BackgroundColor" Value="{StaticResource BmbAccent}" />
+                            <Setter Property="BorderColor" Value="{StaticResource BmbAccent}" />
+                            <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbAccentForegroundLight}, Dark={StaticResource BmbAccentForeground}}" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateGroupList>
+        </Setter>
+    </Style>
+
+    <!-- .toolbar-btn: one cell of the editor's single-row formatting panel -->
+    <Style TargetType="Button" x:Key="EditorToolbarButton">
+        <Setter Property="FontFamily" Value="{StaticResource FontBodyBold}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="BorderColor" Value="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" />
+        <Setter Property="BorderWidth" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="MinimumHeightRequest" Value="38" />
+        <Setter Property="Padding" Value="6" />
+    </Style>
+
+    <!-- ── Cards (.info-card, .unlock-card, .state-panel, .empty-state) ───── -->
+
+    <Style TargetType="Frame">
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}" />
+        <Setter Property="BorderColor" Value="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" />
+        <Setter Property="CornerRadius" Value="24" />
+        <Setter Property="HasShadow" Value="False" />
+        <Setter Property="Padding" Value="16" />
+    </Style>
+
+    <Style TargetType="Frame" x:Key="CardFrame">
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}" />
+        <Setter Property="BorderColor" Value="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" />
+        <Setter Property="CornerRadius" Value="24" />
+        <Setter Property="HasShadow" Value="False" />
+        <Setter Property="Padding" Value="16" />
+        <Setter Property="Margin" Value="0,8" />
+    </Style>
+
+    <!-- The Border-based card for new code (Frame is the legacy shape the existing pages use) -->
+    <Style TargetType="Border" x:Key="CardBorder">
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}" />
+        <Setter Property="Stroke" Value="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" />
+        <Setter Property="StrokeThickness" Value="1" />
+        <Setter Property="StrokeShape" Value="RoundRectangle 24" />
+        <Setter Property="Padding" Value="16" />
+    </Style>
+
+    <!-- .tag-pill -->
+    <Style TargetType="Frame" x:Key="TagPill">
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+        <Setter Property="BorderColor" Value="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" />
+        <Setter Property="CornerRadius" Value="14" />
+        <Setter Property="HasShadow" Value="False" />
+        <Setter Property="Padding" Value="10,4" />
+        <Setter Property="Margin" Value="0,0,8,8" />
+    </Style>
+
+    <!-- ── Inputs (.input-shell, .textarea-input, .search-shell) ──────────── -->
+
+    <Style TargetType="Entry">
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="PlaceholderColor" Value="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+        <Setter Property="MinimumHeightRequest" Value="50" />
+    </Style>
+
+    <Style TargetType="Entry" x:Key="BaseEntry">
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="PlaceholderColor" Value="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+        <Setter Property="MinimumHeightRequest" Value="50" />
+        <Setter Property="Margin" Value="0,8" />
+    </Style>
+
+    <!-- The rounded shell of a field that carries its own show/hide button (Controls/PasswordBox) -->
+    <Style TargetType="Border" x:Key="InputShell">
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+        <Setter Property="Stroke" Value="{AppThemeBinding Light={StaticResource BmbBorderStrongLight}, Dark={StaticResource BmbBorderStrong}}" />
+        <Setter Property="StrokeThickness" Value="1" />
+        <Setter Property="StrokeShape" Value="RoundRectangle 16" />
+        <Setter Property="Padding" Value="14,4,6,4" />
+        <Setter Property="MinimumHeightRequest" Value="50" />
+    </Style>
+
+    <Style TargetType="Editor">
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="PlaceholderColor" Value="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+    </Style>
+
+    <Style TargetType="Editor" x:Key="BaseEditor">
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="PlaceholderColor" Value="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}" />
+    </Style>
+
+    <Style TargetType="SearchBar">
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="PlaceholderColor" Value="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}" />
+        <Setter Property="CancelButtonColor" Value="{AppThemeBinding Light={StaticResource BmbAccentTextLight}, Dark={StaticResource BmbAccentText}}" />
+    </Style>
+
+    <Style TargetType="SearchBar" x:Key="BaseSearchBar">
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="BackgroundColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}" />
+        <Setter Property="TextColor" Value="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}" />
+        <Setter Property="PlaceholderColor" Value="{AppThemeBinding Light={StaticResource BmbTextMutedLight}, Dark={StaticResource BmbTextMuted}}" />
+        <Setter Property="CancelButtonColor" Value="{AppThemeBinding Light={StaticResource BmbAccentTextLight}, Dark={StaticResource BmbAccentText}}" />
+    </Style>
+
+    <!-- ── Switches, checks, progress (.switch-btn, .check-row, .progress-*) ── -->
+
+    <Style TargetType="Switch">
+        <Setter Property="OnColor" Value="{StaticResource BmbAccent}" />
+        <Setter Property="ThumbColor" Value="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbText}}" />
+    </Style>
+
+    <Style TargetType="CheckBox">
+        <Setter Property="Color" Value="{StaticResource BmbAccent}" />
+    </Style>
+
+    <Style TargetType="ActivityIndicator">
+        <Setter Property="Color" Value="{StaticResource BmbAccent}" />
+    </Style>
+
+    <Style TargetType="ProgressBar">
+        <Setter Property="ProgressColor" Value="{StaticResource BmbAccent}" />
+    </Style>
+
+</ResourceDictionary>

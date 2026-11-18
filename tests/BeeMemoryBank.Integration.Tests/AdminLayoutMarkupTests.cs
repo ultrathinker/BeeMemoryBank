@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Fix round 1 of 2.7.2 (what a real browser showed): the pages are server-rendered, so the layout cannot be measured here, but the markup and the rules that keep a
+/// The pages are server-rendered, so the layout cannot be measured here, but the markup and the rules that keep a
 /// merged page from scrolling sideways on a phone can be pinned: no fixed grid of columns, the classes that let a table lose columns, the cell that keeps its icons in one row.
 /// </summary>
 public sealed class AdminLayoutMarkupTests

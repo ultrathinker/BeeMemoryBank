@@ -6,7 +6,7 @@ using static BeeMemoryBank.Integration.Tests.TreeTestContext;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// tree_review on a real node (package M2, fix round): the task the container makes is bound to the node's examined store,
+/// tree_review on a real node: the task the container makes is bound to the node's examined store,
 /// and the seven-day limit holds against the real dream_examined table. The unit tests in TreeReviewTaskTests use a lookup
 /// of their own; this is the production wiring.
 /// </summary>

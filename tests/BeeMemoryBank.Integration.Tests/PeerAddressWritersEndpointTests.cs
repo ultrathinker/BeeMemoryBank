@@ -13,7 +13,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-306/307 fix round 2 (T1, Q2): <c>POST /api/join</c> takes the joiner's address through the ONE policy for a peer's address before anything is written,
+/// BMB-306/307: <c>POST /api/join</c> takes the joiner's address through the ONE policy for a peer's address before anything is written,
 /// stores and announces its canonical form, and a re-join that moves it has the same effects as the "Change node address" screen: the loop forgets the old address
 /// and an audit line says so without the address.
 /// </summary>
@@ -111,7 +111,7 @@ public class JoinAddressEndpointTests : IAsyncLifetime
         // No address in the request means "not supplied": the known one stays.
         (await JoinAsync(nodeId, publicKey, null)).StatusCode.Should().Be(HttpStatusCode.OK);
         _resetter.Changed.Should().BeEmpty();
-        (await AuditAsync(nodeId)).Should().BeEmpty();
+        (await AuditAsync(nodeId)).Should().NotContain(l => l.Action != "node_joined");
 
         (await JoinAsync(nodeId, publicKey, "https://new.local:8443")).StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -185,7 +185,7 @@ public sealed class HubAddressEffectsTests(BlindHubWorld world) : IAsyncLifetime
 }
 
 /// <summary>
-/// BMB-306/307 fix round 2 (Q1): the address check says what kind of thing answered, never what the answer said. A peer that answers 404 with a reason phrase that
+/// BMB-306/307: the address check says what kind of thing answered, never what the answer said. A peer that answers 404 with a reason phrase that
 /// carries a URL and a token is "no sync server", and the sentence the endpoint returns holds none of it.
 /// </summary>
 public class AddressChangeReasonTextTests : IAsyncLifetime
@@ -237,7 +237,7 @@ public class AddressChangeReasonTextTests : IAsyncLifetime
 }
 
 /// <summary>
-/// BMB-306/307 fix round 2 (T3): what the other computer answers to a join - its status line, its reason phrase, an HTML page, an exception raised by the network
+/// BMB-306/307: what the other computer answers to a join - its status line, its reason phrase, an HTML page, an exception raised by the network
 /// stack with an address and a token in it - never reaches the answer of this node's own join endpoint. The status and the kind of failure do.
 /// </summary>
 public class JoinRemoteTextTests : IAsyncLifetime

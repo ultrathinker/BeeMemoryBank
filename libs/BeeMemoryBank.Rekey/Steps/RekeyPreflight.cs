@@ -24,7 +24,7 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// upload, a standalone restore's staging file); less free space on the vault's volume than 2.5 × (database +
 /// chat.db + media) (§7); a row whose ciphertext is gone (a body, version, conflict or medium whose blob is missing, a
 /// medium with neither blob nor <c>.enc</c> file) and a medium whose <c>.enc</c> file is a link: RowResealStep fails
-/// on each (review release-b R2-1, R1-7), and the pre-flight is where a refusal leaves nothing behind; an id that is
+/// on each, and the pre-flight is where a refusal leaves nothing behind; an id that is
 /// not a GUID where the re-seal needs one.</para>
 ///
 /// <para>Listed, never acted on (warnings): a copy of the vault in the OS temp folder, a blind node's folders in a
@@ -106,6 +106,19 @@ public sealed class RekeyPreflight : IRekeyPreflight, IRekeySealedSourceConsumer
                          r => (r.GetString(0), r.GetString(1))))
                 blocking.Add(new RekeyProblem("tbl_dek_rotation_state", id, $"a key rotation is {state.ToLowerInvariant()}; finish or cancel it first"));
 
+        // A rotation committed here whose completion is still pending (its new metadata key, its audit and compaction): the node finishes it at
+        // its next start; a re-key in between would re-seal under a key whose rotation is not done (2.12, plan WS-A6).
+        if (HasTable(main, "tbl_migration_marker"))
+            foreach (var value in Query(main, "SELECT value FROM tbl_migration_marker WHERE key = 'dek_rotation_completion_pending'", r => r.GetString(0)))
+                blocking.Add(new RekeyProblem("tbl_migration_marker", PendingRotationId(value),
+                    "a key rotation is applied but not completed yet; start the node once so that it finishes, then re-key"));
+
+        // An open removal of a superadmin (2.12, plan A6): its rotation is about to replace the key a re-key would seal under, and its steps wait on this
+        // node's identity and doors. Finish it first; a closed one does not refuse.
+        if (HasTable(main, "tbl_offboarding"))
+            foreach (var id in Query(main, "SELECT process_id FROM tbl_offboarding WHERE closed_at IS NULL", r => r.GetString(0)))
+                blocking.Add(new RekeyProblem("tbl_offboarding", id, "the removal of a superadmin is open; finish it first (People being removed)"));
+
         if (HasTable(main, "tbl_restore_event_state"))
             foreach (var (id, state) in Query(main, "SELECT event_id, state FROM tbl_restore_event_state WHERE UPPER(state) IN ('PENDING','DOWNLOADING','APPLYING')",
                          r => (r.GetString(0), r.GetString(1))))
@@ -117,6 +130,18 @@ public sealed class RekeyPreflight : IRekeyPreflight, IRekeySealedSourceConsumer
         var standalone = Path.Combine(sourceDir, "beememorybank.db.standalone-staging");
         if (File.Exists(standalone))
             blocking.Add(new RekeyProblem("(file)", standalone, "a standalone restore did not finish; start the node once to recover it"));
+    }
+
+    private static string PendingRotationId(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var name in new[] { "commitEventId", "CommitEventId" })
+                if (doc.RootElement.TryGetProperty(name, out var id) && id.GetString() is { Length: > 0 } s) return s;
+        }
+        catch (JsonException) { }
+        return "dek_rotation_completion_pending";
     }
 
     // ─── Articles: bodies, versions, conflicts, events, comments ────────────
@@ -208,7 +233,7 @@ public sealed class RekeyPreflight : IRekeyPreflight, IRekeySealedSourceConsumer
     }
 
     /// <summary>A body, version or conflict: its wrapper opens, and its ciphertext is there and opens under the key it
-    /// gives. A row whose ciphertext is gone blocks: the re-seal fails on it (review release-b R2-1).</summary>
+    /// gives. A row whose ciphertext is gone blocks: the re-seal fails on it.</summary>
     private static void CheckArticleRow(SqliteConnection main, Guid article, Wrapper w, RekeyKeys keys, List<byte[]> opened,
         List<RekeyProblem> blocking, List<string> warnings)
     {
@@ -283,7 +308,7 @@ public sealed class RekeyPreflight : IRekeyPreflight, IRekeySealedSourceConsumer
                 byte[]? cipher = blob;
                 if (cipher is null && RowResealStep.MediaFile(sourceDir, raw) is { } file && File.Exists(file))
                 {
-                    // The re-seal never reads through a link (review release-b R1-7); refused here, before the copy.
+                    // The re-seal never reads through a link; refused here, before the copy.
                     if (NoFollow.IsLink(file) || NoFollow.IsLink(Path.GetDirectoryName(file)!))
                     {
                         blocking.Add(new RekeyProblem("tbl_media", id.ToString(), "its .enc file is a link (or inside a linked media directory); the re-key does not follow links"));

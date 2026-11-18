@@ -398,7 +398,7 @@ public partial class BlindHomePage : ContentPage
 
     /// <summary>
     /// A bmb-blind-call: link the app was opened with (the Camera scanned the computer's QR code), or one that waited for this screen, or the code the end-to-end check
-    /// hands over. It goes the SAME way as the Connect button (BMB-311 fix2, R3): behind the busy helper, keyed to the Connect button, so the screen is covered until the
+    /// hands over. It goes the SAME way as the Connect button (BMB-311): behind the busy helper, keyed to the Connect button, so the screen is covered until the
     /// first load has ended and a second link or a tap cannot start another one.
     /// </summary>
     public async Task AcceptLinkAsync(string url)

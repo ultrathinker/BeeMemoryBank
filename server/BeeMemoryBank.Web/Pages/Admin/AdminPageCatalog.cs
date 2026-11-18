@@ -46,6 +46,10 @@ public static class AdminRoutes
     public const string OsAutoUnlock = "/Admin/OsAutoUnlock";
     public const string MetadataEncryption = "/Admin/MetadataEncryption";
     public const string DekRotation = "/Admin/DekRotation";
+    public const string IdentityKey = "/Admin/IdentityKey";
+    /// <summary>The removals of superadmins (release 2.12.0): the list, and one process with <c>?id=</c>.</summary>
+    public const string Offboarding = "/Admin/Offboarding";
+    public static string OffboardingOf(Guid processId) => Offboarding + "?id=" + processId.ToString("D");
 
     public const string Agents = "/Admin/Agents";
     public const string AiChat = "/Admin/AiChat";
@@ -87,56 +91,60 @@ public static class AdminPageCatalog
     public static readonly IReadOnlyList<AdminPageInfo> All =
     [
         new(AdminRoutes.Devices, DevicesSection, "people", "Devices",
-            "Every device of this network and how this node reaches it: connect a new one, add a blind node, open a device for its details."),
+            "Your devices: connect a phone or a computer, see how each one is doing."),
         new(AdminRoutes.NetworkSettings, DevicesSection, "wifi", "Network settings",
-            "Which networks this node syncs with your devices on, whether the web page is shown on your network, VPN sync and Invisible Mode."),
+            "How this computer talks to your other devices."),
         new(AdminRoutes.Device, DevicesSection, "laptop", "Device",
-            "One device: its status, the ways to reach it, what it may do on its own and how its certificate is trusted.", Listed: false),
+            "One device and how it is doing.", Listed: false),
         new(AdminRoutes.BlindNodes, DevicesSection, "shield-lock", "Add a blind node",
-            "Keep an encrypted copy of this network and its backups on another machine that cannot read it.", Listed: false),
+            "Keep an encrypted backup on another machine that cannot read it.", Listed: false),
 
         new(AdminRoutes.Snapshots, BackupsAndHistory, "archive", "Snapshots",
-            "Backups of this node: create one, download or upload a file, restore this node or the whole network from it."),
+            "Make a backup, or restore from one."),
         new(AdminRoutes.Compaction, BackupsAndHistory, "journal-text", "Event Log & Compaction",
-            "Shorten the log of changes this node keeps for syncing, and see how far each device has caught up."),
+            "The history of changes used for syncing, and how far each device has caught up."),
 
         new(AdminRoutes.MasterPassword, Security, "key", "Master Password",
-            "Change the password that opens this node's copy of the vault key."),
-        new(AdminRoutes.RecoveryKey, Security, "life-preserver", "Recovery key",
-            "Issue a key that gets you back in if the administrator password is lost."),
+            "Change your master password."),
+        new(AdminRoutes.RecoveryKey, Security, "life-preserver", "Recovery keys",
+            "Personal keys that get a superadmin back in if they forget their password. Issue, list and revoke them."),
         new(AdminRoutes.LockServer, Security, "lock", "Lock Server",
-            "Erase the vault key from memory and sign everybody out. A superadmin signing in, an enabled agent key or OS auto-unlock after a restart opens it again."),
+            "Lock everything now and sign everybody out."),
         new(AdminRoutes.WebSession, Security, "clock-history", "Web Session",
-            "How long a sign-in in the browser lasts, and whether being active extends it."),
+            "How long you stay signed in."),
         new(AdminRoutes.StorageProtection, Security, "database-lock", "Database encryption",
-            "Encrypt the database files of the node, so that a stolen disk or a copy of the data folder shows nothing."),
+            "Whether the database on this computer is encrypted."),
         new(AdminRoutes.OsAutoUnlock, Security, "unlock", "OS Auto-Unlock",
-            "Let this computer open the vault at startup without a password, through your operating-system account."),
+            "Open the vault when this computer starts, without typing the password."),
         new(AdminRoutes.MetadataEncryption, Security, "incognito", "Metadata encryption",
-            "Encrypt titles, folder and tag names and the shape of the tree for the whole network. One way."),
+            "Encrypt titles, folder names and tags across your devices."),
         new(AdminRoutes.DekRotation, Security, "shield-lock", "DEK Rotation",
-            "Replace the key that encrypts every article, version and file. A heavy operation for the whole network."),
+            "Replace the key that encrypts your notes. Rarely needed."),
+        new(AdminRoutes.IdentityKey, Security, "fingerprint", "Node identity key",
+            "The key this node signs with, and how to give it a new one."),
+        new(AdminRoutes.Offboarding, Security, "person-x", "People being removed",
+            "Superadmins whose rights are being taken away, step by step."),
 
         new(AdminRoutes.Agents, SearchAndAi, "robot", "Agents",
-            "The keys AI agents use to reach this vault: see when each was last used and revoke the ones you no longer trust."),
+            "Keys for AI assistants: see them and switch them off."),
         new(AdminRoutes.AiChat, SearchAndAi, "chat-left-text", "AI / Chat",
-            "The model providers (OpenRouter, Z.ai, Anthropic, Google, local servers ...), their keys and models, and whether users may use the chat at all."),
+            "Which AI models the chat uses."),
         new(AdminRoutes.Dream, SearchAndAi, "moon-stars", "Dream",
-            "When Dream looks through the notes, how much advice it may leave, whether it may use a model, and which folders it never reads."),
+            "When Dream reviews your notes and which folders it skips."),
         new(AdminRoutes.SearchDiagnostics, SearchAndAi, "search", "Search diagnostics",
-            "How fast searches are, how healthy the search index is, and the switch for meaning-based (semantic) search."),
+            "Search speed and health, and search by meaning."),
         new(AdminRoutes.TagGraph, SearchAndAi, "share", "Tag graph",
-            "Check the lookup behind the Graph view and related tags, and rebuild it if it has drifted."),
+            "Check and rebuild the tag graph."),
 
         new(AdminRoutes.SoftwareUpdates, SoftwareAndAppearance, "arrow-up-circle", "Software Updates",
-            "See which version this node runs, and check for, download and apply an update."),
+            "Your version, and updates."),
         new(AdminRoutes.Branding, SoftwareAndAppearance, "type", "Branding",
-            "Change the product name shown in the header and in the browser tab of this node."),
+            "The name shown at the top of the page."),
 
         new(AdminRoutes.HardDelete, DangerZone, "trash", "Hard Delete",
-            "Permanently remove folders, articles and their files from this node and from every synced node. There is no undo."),
+            "Delete notes forever, on every device. There is no undo."),
         new(AdminRoutes.ResetNode, DangerZone, "exclamation-octagon", "Reset This Node",
-            "Wipe everything on this node and return it to the first-run Setup screen."),
+            "Erase everything on this computer and start again."),
     ];
 
     /// <summary>The page with this route (<c>/Admin/Snapshots</c>, any case), or null.</summary>

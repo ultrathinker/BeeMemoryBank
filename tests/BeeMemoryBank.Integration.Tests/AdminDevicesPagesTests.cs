@@ -311,8 +311,10 @@ public sealed class AdminDevicesPagesTests : IAsyncLifetime
         var closed = await GetAsync("/Admin/Devices");
         var flat = Flat(closed);
 
-        flat.Should().Contain("This code works for 15 minutes on this network. Once the other device has joined, the two keep in step by themselves: directly whenever both are on a " +
-                              "trusted network, and through your server or blind node when they are apart. Your web page stays private.");
+        // one plain sentence on top; how long the code works and the rest are folded under "More details".
+        flat.Should().Contain("Scan this code with the Bee Memory Bank app on your phone.");
+        flat.Should().Contain("The code works for 15 minutes, for one device.");
+        closed.Should().Contain("<details class=\"admin-more\">");
         closed.Should().NotMatchRegex("<sl-dialog id=\"dlg-connect-device\"[^>]*\\sopen[\\s>=]", "opening the page opens neither the dialog nor the door");
         _scripted.Sent.Should().NotContain(s => s.Call.StartsWith("POST /node/lan/enable", StringComparison.Ordinal));
 
@@ -596,7 +598,7 @@ public sealed class AdminDevicesPagesTests : IAsyncLifetime
         flat.Should().Contain("Settings > Network & internet > Wi-Fi (or Ethernet) > this network > Network profile type > Private network");
         flat.Should().Contain("Office").And.Contain("a domain network");
         html.Should().NotContain("Yes, sync with my devices here", "Windows decides it; the person does not answer for a Public network");
-        html.Should().Contain("id=\"firewall-step\"").And.Contain("Allow in Windows Firewall");
+        html.Should().Contain("id=\"firewall-step\"").And.Contain("Allow your devices to reach this computer.");
         html.Should().Contain("handler=DevicesFirewall");
     }
 
@@ -609,7 +611,7 @@ public sealed class AdminDevicesPagesTests : IAsyncLifetime
         Flat(html).Should().Contain("Friend's Wi-Fi").And.Contain("not asked yet");
         html.Should().Contain("Yes, sync with my devices here").And.Contain("Not this network").And.Contain("value=\"fp-friend\"");
         html.Should().NotContain("Network profile type");
-        Flat(html).Should().Contain("macOS asks, when the first device connects");
+        Flat(html).Should().Contain("When the first device connects, your Mac asks whether Bee Memory Bank may accept connections.");
 
         _scripted.Answer("POST", "/node/lan/networks", "{}");
         (await PostAsync("/Admin/NetworkSettings", "AnswerNetwork", ("fingerprint", "fp-friend"), ("answer", "yes"))).Should().StartWith("/Admin/NetworkSettings?msg=This network is trusted");

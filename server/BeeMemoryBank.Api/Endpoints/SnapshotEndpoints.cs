@@ -64,7 +64,7 @@ public static class SnapshotEndpoints
         }).RequireSuperadmin().RequireNonAgent()
             .SingleFlight("snapshot-create", "Creating a snapshot");
 
-        group.MapGet("/{fileName}/download", (string fileName, SnapshotService svc, SessionService session, HttpContext ctx) =>
+        group.MapGet("/{fileName}/download", async (string fileName, SnapshotService svc, SessionService session, HttpContext ctx, IAuditLogRepository auditRepo) =>
         {
             // Snapshots contain the encrypted DB (incl. wrapped DEKs and key slots). Even though
             // contents are at rest under master-DEK encryption, exfil enables offline brute-force
@@ -75,6 +75,9 @@ public static class SnapshotEndpoints
             try
             {
                 var filePath = svc.GetSnapshotPath(fileName);
+                // A copy of the whole encrypted vault leaves the node: who took which file is on record before the first byte is sent.
+                var actor = ctx.Request.Headers["X-User-Id"].FirstOrDefault() ?? "system";
+                await auditRepo.LogAsync("snapshot", Path.GetFileName(filePath), "snapshot_downloaded", "web", $"Snapshot downloaded by user {actor}");
                 return Results.File(filePath, "application/gzip", Path.GetFileName(fileName));
             }
             catch (FileNotFoundException)
@@ -164,8 +167,8 @@ public static class SnapshotEndpoints
                 }
 
                 logger.LogInformation("Starting restore from {FileName} (mode {Mode})", req.FileName, mode);
-                var outcome = await svc.RestoreAsync(req.FileName,
-                    standaloneMode: mode == SnapshotRestoreModes.Standalone, masterPassword: req.MasterPassword, ct: ctx.RequestAborted);
+                // Only the standalone restore is served here (release 2.12, plan R2: keep-identity is refused above).
+                var outcome = await svc.RestoreAsync(req.FileName, masterPassword: req.MasterPassword, ct: ctx.RequestAborted);
                 logger.LogInformation("Restore completed successfully");
 
                 // The database on disk is the restored one now, so this entry belongs to the node's
@@ -374,6 +377,10 @@ public static class SnapshotEndpoints
                 CreatedAt = DateTime.UtcNow
             };
 
+            // Signed and logged inside the event-write gate, with the key of that moment (an identity re-key quiesces the gate).
+            using var restoreWriteGate = await EventWriteGate.Instance.EnterAsync();
+            using var restoreOwnerFlow = EventWriteGate.EnterOwnerFlow();
+            identity = await nodeRepo.GetAsync() ?? identity;
             var sigPayload = EventSignature.BuildPayload(evt);
             var masterDek = session.GetMasterDek();
             try
@@ -390,7 +397,7 @@ public static class SnapshotEndpoints
             await eventLogRepo.AppendAsync(evt);
 
             // The lease of this route is the claim on "a restore of this node". The request answers 202 at once and the restore goes on in the background, so the
-            // lease goes with the background work and is given back when that work is over, whichever way it ends (BMB-311 fix round): a second request meanwhile is
+            // lease goes with the background work and is given back when that work is over, whichever way it ends (BMB-311): a second request meanwhile is
             // refused with 409 here, before it can append a second restore event.
             // The work is tracked by the service and linked to the application's stopping token (a node that shuts down cancels it before it replaces anything), and the
             // lease is given back when the work is over: done, failed or cancelled - never earlier, and with no timer.

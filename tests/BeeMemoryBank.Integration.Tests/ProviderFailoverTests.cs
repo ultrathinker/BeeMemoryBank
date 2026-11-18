@@ -178,7 +178,7 @@ public class ProviderFailoverTests : IAsyncLifetime
         _provider.Seen.Select(x => x.Key).Should().Equal("sk-a-first-0001", "sk-a-second-0002");
     }
 
-    // ── A provider that stalls: the HTTP client's timeout, while the browser is still there (review prov-r1, finding 2) ──────────
+    // ── A provider that stalls: the HTTP client's timeout, while the browser is still there ──────────
     // The scripted handler throws what HttpClient throws when its Timeout elapses: a TaskCanceledException with a TimeoutException inside,
     // while the request's own token (the browser's) is NOT cancelled.
 

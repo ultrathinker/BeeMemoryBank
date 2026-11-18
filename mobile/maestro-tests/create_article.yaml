@@ -2,20 +2,18 @@ appId: com.beememorybank.mobile
 ---
 - runFlow: _go_home.yaml
 - evalScript: ${output.title = 'a' + Date.now()}
-- tapOn:
-    text: "Open navigation drawer"
 - extendedWaitUntil:
     visible:
-      text: "Articles"
+      text: "Search"
     timeout: 3000
 - tapOn:
-    text: "Articles"
+    point: "37%,95%"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/ArticlesList"
     timeout: 10000
 - tapOn:
-    text: "NewArticleButton"
+    text: "New article"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/TitleEntry"

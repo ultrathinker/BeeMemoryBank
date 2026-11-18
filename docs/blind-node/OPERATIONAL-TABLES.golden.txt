@@ -17,6 +17,9 @@ tbl_metadata_key
 tbl_migration
 tbl_migration_marker
 tbl_node_identity
+tbl_node_key_conflict
+tbl_node_key_history
+tbl_node_state
 tbl_recovery_box
 tbl_recovery_box_check
 tbl_recovery_box_pending_retire

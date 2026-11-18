@@ -34,7 +34,7 @@ public class PeerPausedExceptionTests
     [Fact]
     public void ABusyNode_IsAShortPause_AskedAgainAboutAMinuteLater_AndTold_InTheFullNodesWords()
     {
-        // srvfix7 (RV5-05): a node whose room is held by other transfers in flight says so; it is not at a limit.
+        // a node whose room is held by other transfers in flight says so; it is not at a limit.
         using var response = Answer(HttpStatusCode.ServiceUnavailable, "busy", r => r.Headers.RetryAfter = new(TimeSpan.FromSeconds(60)));
 
         var thrown = FluentActions.Invoking(() => PeerPausedException.ThrowIfPaused(response)).Should().Throw<PeerPausedException>().Which;
@@ -42,7 +42,7 @@ public class PeerPausedExceptionTests
         thrown.Reason.Should().Be("busy");
         thrown.RetryAfter.Should().Be(TimeSpan.FromSeconds(60));
         thrown.Answer.Should().Be("it is busy with other transfers right now");
-        // srvfix8 (RV6-03): a busy node is not paused by its owner - nobody set anything; the words say so.
+        // a busy node is not paused by its owner - nobody set anything; the words say so.
         PeerPauseReport.Sentence(thrown.Reason, null, null, DateTime.UtcNow, byNode: true).Should().Be("Busy with other transfers right now; asked again in about a minute");
     }
 

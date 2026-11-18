@@ -331,4 +331,37 @@ public class RecoveryKeyResolverTests
 
         act.Should().Throw<InvalidDataException>();
     }
+
+    [Fact]
+    public async Task TheNewestBoxIsTriedFirst_AndItsLinksOpenTheOlderKeys_BeforeAStaleStrongBoxSpendsTheBudget()
+    {
+        // 2.12 (plan WS-A4): after a rotation the device box of a sealed door holds the new key (epoch 2), while the strong box of the old key
+        // (epoch 1) is stale until the next sign-in. Newest epoch first, and the links unwound right after it: the strong box is never tried.
+        var staleStrong = JunkBox("strong", "s512t6", 1) with { DekFingerprint = DekFingerprint.Of(_dek1) };
+        var budget = new RecoveryAttemptBudget(maxHeavy: 1, maxLight: 1);
+        var set = Set([staleStrong, DeviceBox(_dek2, Password, 2)], [Link(_dek1, _dek2)]);
+
+        var keys = await RecoveryKeyResolver.ResolveAsync(set, Password, budget: budget);
+
+        keys.Should().NotBeNull();
+        keys!.Current.Should().Equal(_dek2);
+        keys.Retired.Should().ContainKey(DekFingerprint.Of(_dek1), "the link under the new key opens the old one");
+        budget.HeavyUsed.Should().Be(0, "the strong box of a key already open costs nothing");
+        budget.LightUsed.Should().Be(1);
+        keys.RemainingBoxes.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AnOlderDeviceBoxOfAKeyALinkAlreadyOpened_CostsNoDerivation()
+    {
+        var budget = new RecoveryAttemptBudget(maxHeavy: 0, maxLight: 1);
+        var set = Set([DeviceBox(_dek1, Password, 1), DeviceBox(_dek2, Password, 2)], [Link(_dek1, _dek2)]);
+
+        var keys = await RecoveryKeyResolver.ResolveAsync(set, Password, budget: budget);
+
+        keys!.Retired.Should().ContainKey(DekFingerprint.Of(_dek1));
+        keys.Current.Should().Equal(_dek2);
+        budget.LightUsed.Should().Be(1, "whatever the fingerprints' order, the epoch-2 box goes first and the link opens the rest");
+        keys.RemainingBoxes.Should().Be(0);
+    }
 }

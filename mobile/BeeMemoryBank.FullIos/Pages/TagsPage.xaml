@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- All concept tags in the design's shape (the Android TagsPage's behaviour): search, one row
+     per tag with its article count and a ⋮ options sheet (rename, merge, delete). Tapping the
+     row opens the tag's articles. -->
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
+             x:Class="BeeMemoryBank.FullIos.Pages.TagsPage"
+             Title="All tags">
+    <Grid RowDefinitions="Auto,*" Padding="16,8,16,16" RowSpacing="10">
+        <Entry x:Name="SearchEntry" Placeholder="{loc:Translate SearchTagsPlaceholder}"
+               TextChanged="OnSearchTextChanged" AutomationId="TagsSearch" />
+        <CollectionView Grid.Row="1" x:Name="TagsList" SelectionMode="None">
+            <CollectionView.EmptyView>
+                <Label Text="{loc:Translate NothingFoundTitle}" Style="{StaticResource EmptyTitle}"
+                       HorizontalOptions="Center" Margin="0,36" />
+            </CollectionView.EmptyView>
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Border BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceLight}, Dark={StaticResource BmbSurface}}"
+                            Stroke="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}"
+                            StrokeThickness="1" StrokeShape="RoundRectangle 16"
+                            Padding="6" Margin="0,4">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Padding="0,4">
+                            <VerticalStackLayout Grid.Column="0" Spacing="2" VerticalOptions="Center">
+                                <VerticalStackLayout.GestureRecognizers>
+                                    <TapGestureRecognizer Tapped="OnTagTapped" />
+                                </VerticalStackLayout.GestureRecognizers>
+                                <Label Text="{Binding Name, StringFormat='#{0}'}" Style="{StaticResource ItemTitle}" />
+                                <Label Text="{Binding CountText}" Style="{StaticResource ItemMeta}" />
+                            </VerticalStackLayout>
+                            <Button Grid.Column="1" Text="⋮" Style="{StaticResource IconButton}"
+                                    CommandParameter="{Binding .}" Clicked="OnTagOptionsClicked" VerticalOptions="Center" />
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+    </Grid>
+</ContentPage>

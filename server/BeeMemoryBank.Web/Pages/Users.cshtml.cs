@@ -10,6 +10,21 @@ namespace BeeMemoryBank.Web.Pages;
 public class UsersModel(ApiClient api) : PageModel
 {
     public List<UserDto>? Users { get; private set; }
+    public SharedDoorsStatusDto? SharedDoors { get; private set; }
+
+    /// <summary>True on a shared node that is NOT the accounts node (superadmins here are read-only mirrors).</summary>
+    public bool IsSharedNonHome => SharedDoors is { IsThisNodeShared: true, IsThisNodeAccountsHome: false };
+
+    public string AccountsHomeLabel =>
+        !string.IsNullOrWhiteSpace(SharedDoors?.AccountsHomeName) && SharedDoors?.AccountsHomeNodeId is { } id
+            ? $"{SharedDoors.AccountsHomeName} ({id:D})"
+            : SharedDoors?.AccountsHomeName ?? SharedDoors?.AccountsHomeNodeId?.ToString("D") ?? "the accounts node";
+
+    /// <summary>How many superadmins there are: the last one cannot lose the rights (the API refuses it, and the button says so before the click).</summary>
+    public int SuperadminCount => Users?.Count(u => u.Role == "superadmin") ?? 0;
+
+    /// <summary>The signed-in person. Nobody takes their own superadmin rights away from here: another superadmin does it.</summary>
+    public string? CurrentUserId => User.FindFirst("UserId")?.Value;
     public string? SuccessMessage { get; private set; }
     public string? ErrorMessage { get; private set; }
 
@@ -18,6 +33,7 @@ public class UsersModel(ApiClient api) : PageModel
         SuccessMessage = msg;
         ErrorMessage = err;
         Users = await api.GetUsersAsync();
+        SharedDoors = await api.GetSharedDoorsStatusAsync();
         return Page();
     }
 

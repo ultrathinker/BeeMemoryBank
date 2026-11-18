@@ -1,31 +1,29 @@
 appId: com.beememorybank.mobile
 ---
 - runFlow: _go_home.yaml
-- tapOn:
-    text: "Open navigation drawer"
 - extendedWaitUntil:
     visible:
-      text: "Articles"
+      text: "Search"
     timeout: 30000
 - tapOn:
-    text: "Articles"
+    point: "37%,95%"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/ArticlesList"
     timeout: 30000
 - tapOn:
-    text: "NewArticleButton"
+    text: "New article"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/TitleEntry"
     timeout: 30000
 - scrollUntilVisible:
     element:
-      text: "Choose Folder"
+      id: "com.beememorybank.mobile:id/ChooseFolderButton"
     direction: DOWN
     timeout: 15000
 - tapOn:
-    text: "Choose Folder"
+    id: "com.beememorybank.mobile:id/ChooseFolderButton"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/FolderPickerList"

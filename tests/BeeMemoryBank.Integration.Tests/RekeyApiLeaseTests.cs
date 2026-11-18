@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// Review release-b R1-1: an Api that runs without a node (Docker, standalone) holds the vault lease for its whole life,
+/// An Api that runs without a node (Docker, standalone) holds the vault lease for its whole life,
 /// so the offline re-key refuses to run against it; once it is stopped, the lease is gone with it.
 /// </summary>
 public sealed class RekeyApiLeaseTests

@@ -245,10 +245,12 @@ public class SyncClient(
             throw new PeerIdentityMismatchException(expectedPeerNodeId, remoteIdentity.NodeId);
         }
 
-        // The node id is only what the peer says about itself; the network knows a node by its key. Same id and another key is not this node (BMB-307 fix round).
-        if (whitelistRepo is not null
-            && await whitelistRepo.GetByNodeIdAsync(expectedPeerNodeId) is { Ed25519PublicKey.Length: 32 } onRecord
-            && !PeerKey.Matches(onRecord.Ed25519PublicKey, remoteIdentity.Ed25519PublicKeyB64))
+        // The node id is only what the peer says about itself; the network knows a node by its key. Same id and another key is not this node (BMB-307).
+        var onRecord = whitelistRepo is null ? null : await whitelistRepo.GetByNodeIdAsync(expectedPeerNodeId);
+        if (onRecord is { Ed25519PublicKey.Length: 32 }
+            // A peer that re-keyed answers with its new key and the chain that leads to it (release 2.12, plan WS-D D4): this node goes on and
+            // learns the re-key from the pull (the whitelist row is moved by the node_key_rotated event, never by this answer).
+            && !PeerKey.MatchesOrFollows(expectedPeerNodeId, onRecord.Ed25519PublicKey, remoteIdentity))
             throw new PeerKeyMismatchException(expectedPeerNodeId);
 
         // Below protocol 3 a peer would accept a blind node's events and seal the DEK for it
@@ -267,7 +269,8 @@ public class SyncClient(
             throw new PeerIncompatibleException(remoteIdentity.ProtocolVersion);
         }
 
-        var token = await AuthenticateAsync(http, remoteApiBase, identity, expectedPeerNodeId, ct);
+        // The key on record lets a peer's signed "this device was revoked" refusal be told from a plain 401 (ThisDeviceRevokedException).
+        var token = await AuthenticateAsync(http, remoteApiBase, identity, expectedPeerNodeId, ct, onRecord?.Ed25519PublicKey);
 
         // The identity was read on this connection and the challenge proved who answers it (spec 5.2): what it advertises
         // is an observation of this peer, for the readiness report of the activation. A 2.5 peer advertises nothing.
@@ -338,7 +341,7 @@ public class SyncClient(
             int heldCount = 0;
             foreach (var evt in remoteEvents)
             {
-                // Our own event, come back to us (F5). A blind node that was reseeded replays the tail
+                // Our own event, come back to us. A blind node that was reseeded replays the tail
                 // it had received onto the package and re-logs it under the new database's sequences,
                 // and we pull that back. While the event is still in our own log the applier's
                 // "already applied" shortcut catches it — after a compaction it is not, so it reaches
@@ -346,7 +349,7 @@ public class SyncClient(
                 // deferred. A quarantine row is not cosmetic: the state anchor publishes nothing while
                 // one exists, so anchors stop for good.
                 //
-                // Skipped only when it is PROVEN ours (Codex round 2, security #2): the node id rides
+                // Skipped only when it is PROVEN ours: the node id rides
                 // on the wire and is not covered by the signature, so "it says our id" is worth
                 // nothing on its own. A peer that fabricates an event with our id — and a sequence
                 // past the end of what we hold — would otherwise make us walk past the real events
@@ -417,7 +420,7 @@ public class SyncClient(
                 }
             }
 
-            // Recorded on every successful pull, empty page included (F6): the row's timestamp is what
+            // Recorded on every successful pull, empty page included: the row's timestamp is what
             // "this node has caught up with this peer" is judged by — the state anchor publishes only
             // when every peer it pulls from was pulled from within StateAnchorScheduler.FreshPull —
             // and in a quiet network nothing ever moves the sequence number, so a row only written
@@ -437,6 +440,7 @@ public class SyncClient(
             // and there were no new events. Otherwise the remote never learns our position and shows
             // "Waiting for first sync — Never" forever, and compaction thinks we have no active peers.
             await ReportPositionAsync(http, remoteApiBase, token, lastApplied, ct);
+            await FetchRequestedEnvelopesAsync(http, remoteApiBase, token, expectedPeerNodeId, ct);
         }
 
         // 4. Push: relay all events to the remote node (excluding its own events)
@@ -667,8 +671,18 @@ public class SyncClient(
     // Delegates to the shared PeerAuthenticator helper — same flow, single source of truth,
     // also used by the reachability self-test (POST /api/sync/probe) endpoint.
     private Task<string> AuthenticateAsync(
-        HttpClient http, string baseUrl, NodeIdentity identity, Guid expectedServerNodeId, CancellationToken ct)
-        => PeerAuthenticator.AuthenticateAsync(authSigner, http, baseUrl, identity, expectedServerNodeId, ct, protocolPolicy?.Declared);
+        HttpClient http, string baseUrl, NodeIdentity identity, Guid expectedServerNodeId, CancellationToken ct, byte[]? expectedServerPublicKey = null)
+        => AuthenticateWithChainAsync(http, baseUrl, identity, expectedServerNodeId, ct, expectedServerPublicKey);
+
+    private async Task<string> AuthenticateWithChainAsync(
+        HttpClient http, string baseUrl, NodeIdentity identity, Guid expectedServerNodeId, CancellationToken ct, byte[]? expectedServerPublicKey = null)
+    {
+        // This node's key transition chain rides along (release 2.12, plan WS-D D4), so that a peer which has not applied its re-key yet still
+        // lets it in, and then learns the re-key from the push.
+        var chain = (await eventApplier.OwnKeyChainAsync(identity.NodeId)).Select(NodeKeyLinkDto.Of).ToList();
+        return await PeerAuthenticator.AuthenticateAsync(authSigner, http, baseUrl, identity, expectedServerNodeId, ct, protocolPolicy?.Declared, chain,
+            expectedServerPublicKey);
+    }
 
     private static async Task<List<SyncEvent>> PullEventsAsync(
         HttpClient http, string baseUrl, string token, long afterSequence, CancellationToken ct)
@@ -725,11 +739,47 @@ public class SyncClient(
     /// <para>The signature is also what covers the compacted case: an event we authored, whose row a
     /// compaction has since removed, is no longer in our log but is still ours beyond doubt.</para>
     /// </summary>
+    /// <summary>
+    /// Plan WS-D D4: a rotation this node could not open because its envelope was made for this node's previous identity key asks the node that
+    /// rotated for a fresh one. Best effort; the retried rotation opens what was fetched.
+    /// </summary>
+    private async Task FetchRequestedEnvelopesAsync(HttpClient http, string remoteApiBase, string token, Guid peer, CancellationToken ct)
+    {
+        try
+        {
+            foreach (var commit in await eventApplier.EnvelopeRequestsFromAsync(peer))
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Post, $"{remoteApiBase}/api/sync/dek-envelope/{commit:D}");
+                req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                using var resp = await http.SendAsync(req, ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    logger.LogWarning("A fresh rotation envelope for {Commit} was not given by {Peer} ({Status})", commit, peer, (int)resp.StatusCode);
+                    continue;
+                }
+                if (await resp.Content.ReadFromJsonAsync<DekRotation.DekEnvelopeAnswer>(ct) is { } answer)
+                {
+                    await eventApplier.StoreRefreshedEnvelopeAsync(commit, answer);
+                    logger.LogInformation("Fetched a fresh rotation envelope for {Commit} from {Peer}; the rotation is retried", commit, peer);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("Fetching a fresh rotation envelope from {Peer} failed ({Type})", peer, ex.GetType().Name);
+        }
+    }
+
     private async Task<bool> IsProvenOwnAsync(SyncEvent evt, NodeIdentity identity)
     {
         if (await eventLogRepo.ExistsAsync(evt.EventId)) return true;
-        return identity.Ed25519PublicKey is { Length: > 0 }
-            && Ed25519Signer.Verify(identity.Ed25519PublicKey, EventSignature.BuildPayload(evt), evt.Signature);
+        // Our current key, or a key we retired (plan WS-D D3): an own event signed before our re-key and echoed back is still ours.
+        if (evt.NodeId != identity.NodeId || identity.Ed25519PublicKey is not { Length: > 0 }
+            || !await eventApplier.IsOwnEchoAsync(evt, identity.Ed25519PublicKey))
+            return false;
+        // Signed with our key but not one we wrote: skipped all the same - it is never applied as ours - and marked.
+        await eventApplier.NoteSignedAsThisNodeAsync(evt, identity);
+        return true;
     }
 
     private async Task ReportPositionAsync(

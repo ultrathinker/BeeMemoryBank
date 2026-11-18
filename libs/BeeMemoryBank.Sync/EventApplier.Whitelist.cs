@@ -35,6 +35,9 @@ public partial class EventApplier
     private static readonly WhitelistConcerns[] FieldConcerns =
         [WhitelistConcerns.Superadmin, WhitelistConcerns.Name, WhitelistConcerns.Address, WhitelistConcerns.Tls];
 
+    private static readonly WhitelistConcerns[] UpdateableConcerns =
+        [WhitelistConcerns.Superadmin, WhitelistConcerns.Name, WhitelistConcerns.Address, WhitelistConcerns.Tls, WhitelistConcerns.Ownership];
+
     /// <param name="knownRevoke">A revoke being applied right now (not in the log yet) that the replay of the adds after it hands over.</param>
     private async Task ApplyWhitelistAddAsync(SyncEvent evt, bool repairing = false, RowVersion? knownRevoke = null)
     {
@@ -46,7 +49,11 @@ public partial class EventApplier
         // (tbl_node_identity); having a row in tbl_whitelist about ourselves
         // is confusing in the UI and corrupts sync position bookkeeping.
         var localIdentity = await nodeIdentityRepo.GetAsync();
-        if (localIdentity != null && p.NodeId == localIdentity.NodeId) return;
+        if (localIdentity != null && p.NodeId == localIdentity.NodeId)
+        {
+            await RecordSelfOwnershipIfRemoteAsync(evt, localIdentity.NodeId, p.Ownership, repairing);
+            return;
+        }
 
         var incoming = new RowVersion(evt.LamportTs, evt.NodeId);
         var now = DateTime.UtcNow;
@@ -65,9 +72,46 @@ public partial class EventApplier
                 UpdatedAt = now,
             };
             ApplyAddFields(created, p, AddressFromEvent(p.NodeId, p.ApiAddress));
-            created.SetAllVersions(incoming);
+            if (p.Ownership is not null && evt.NodeId == p.NodeId)
+            {
+                if (!repairing)
+                    logger.LogWarning("Ignoring self-ownership in whitelist_add: node {NodeId} authored its own ownership", evt.NodeId);
+                created.Ownership = OwnershipKinds.Unknown;
+                created.OwnerPersonId = null;
+                created.OwnerLabel = null;
+                created.NeedsReview = true;
+                created.SetVersionOf(WhitelistConcerns.All & ~WhitelistConcerns.Ownership, incoming);
+                SetRowVersionToNewestConcern(created);
+            }
+            else if (TryNormalizeOwnership(p.Ownership, p.OwnerPersonId, p.OwnerLabel, out var kind, out var personId, out var label))
+            {
+                created.Ownership = kind;
+                created.OwnerPersonId = personId;
+                created.OwnerLabel = label;
+                created.NeedsReview = kind == OwnershipKinds.Unknown;
+                created.SetAllVersions(incoming);
+            }
+            else
+            {
+                created.Ownership = OwnershipKinds.Unknown;
+                created.OwnerPersonId = null;
+                created.OwnerLabel = null;
+                created.NeedsReview = true;
+                created.SetVersionOf(WhitelistConcerns.All & ~WhitelistConcerns.Ownership, incoming);
+                SetRowVersionToNewestConcern(created);
+            }
+            var currentHome = await ReadAccountsHomeAsync();
+            if (currentHome is not null && p.NodeId == currentHome.NodeId && created.Ownership != OwnershipKinds.Shared)
+            {
+                created.Ownership = OwnershipKinds.Shared;
+                created.OwnerPersonId = null;
+                created.OwnerLabel = null;
+                created.NeedsReview = false;
+            }
             await whitelistRepoWrite.CreateAsync(created);
             await ReplayUpdatesAsync(p.NodeId);
+            if (superadminDoorsNotifier is not null)
+                await superadminDoorsNotifier.NotifyChangedAsync(immediate: false);
             return;
         }
 
@@ -150,6 +194,32 @@ public partial class EventApplier
             existing.SetVersionOf(concern, incoming);
             changed = true;
         }
+        if (p.Ownership is not null)
+        {
+            if (evt.NodeId == p.NodeId)
+            {
+                if (!repairing)
+                    logger.LogWarning("Ignoring self-ownership in whitelist_add: node {NodeId} authored its own ownership", evt.NodeId);
+            }
+            else if (TryNormalizeOwnership(p.Ownership, p.OwnerPersonId, p.OwnerLabel, out var kind, out var personId, out var label)
+                && ConflictResolver.IncomingWins(existing.VersionOf(WhitelistConcerns.Ownership), incoming))
+            {
+                existing.Ownership = kind;
+                existing.OwnerPersonId = personId;
+                existing.OwnerLabel = label;
+                existing.NeedsReview = kind == OwnershipKinds.Unknown;
+                existing.SetVersionOf(WhitelistConcerns.Ownership, incoming);
+                changed = true;
+            }
+        }
+        else if (!repairing
+            && !IsSettledSharedBlindRow(p.NodeId, existing)
+            && ConflictResolver.IncomingWins(existing.VersionOf(WhitelistConcerns.Ownership), incoming)
+            && !existing.NeedsReview)
+        {
+            existing.NeedsReview = true;
+            changed = true;
+        }
 
         if (!changed)
             LogWhitelistDrop(repairing, EventTypes.WhitelistAdd, p.NodeId, existing.VersionOf(WhitelistConcerns.Membership), incoming);
@@ -165,7 +235,12 @@ public partial class EventApplier
 
         // The updates that arrived before there was a row are applied now; each is judged per field as on arrival, so taking them again (an add
         // delivered once more after a crash between the row and the log) changes nothing. The repair takes the log in version order itself.
-        if (!repairing) await ReplayUpdatesAsync(p.NodeId);
+        if (!repairing)
+        {
+            await ReplayUpdatesAsync(p.NodeId);
+            if (superadminDoorsNotifier is not null)
+                await superadminDoorsNotifier.NotifyChangedAsync(immediate: false);
+        }
     }
 
     private async Task ApplyWhitelistRevokeAsync(SyncEvent evt, bool repairing = false)
@@ -189,7 +264,11 @@ public partial class EventApplier
                 logger.LogInformation("WhitelistRevoke for {NodeId} arrived before its add: kept as a revoked row at ({EventTs}, {EventNode})",
                     p.NodeId, incoming.LamportTs, incoming.SourceNodeId);
                 // The updates that came before any row write its fields now, so a re-add is judged against them field by field.
-                if (!repairing) await ReplayUpdatesAsync(p.NodeId);
+                if (!repairing)
+                {
+                    await CleanupRevokedPeerAsync(p.NodeId);
+                    await ReplayUpdatesAsync(p.NodeId);
+                }
                 return;
             }
             // A row was written in between (a local add does not wait for applies): judge the revoke against it, as below.
@@ -226,15 +305,35 @@ public partial class EventApplier
             }
             SetRowVersionToNewestConcern(existing);
             await whitelistRepoWrite.UpdateAsync(existing);
-            if (revokedNow) peerState?.PeerChanged(p.NodeId);
+            if (revokedNow) await CleanupRevokedPeerAsync(p.NodeId);
         }
 
         // Whether it won or lost, an add newer than this revoke is a re-add from now on: one that came before it may write the undated fields
         // now (this revoke is not in the log yet, so it is handed over). The repair takes the log in version order itself.
         if (!repairing && FieldConcerns.Any(existing.IsUndated)) await ReplayAddsAsync(p.NodeId, incoming, knownRevoke: incoming);
+        if (!repairing && superadminDoorsNotifier is not null) await superadminDoorsNotifier.NotifyChangedAsync(immediate: false);
     }
 
     private Task ApplyWhitelistUpdateAsync(SyncEvent evt, bool repairing = false) => ApplyUpdateFieldsAsync(evt, quiet: repairing);
+
+    private async Task CleanupRevokedPeerAsync(Guid nodeId)
+    {
+        if (peerState is not null)
+            await peerState.PeerRevokedAsync(nodeId);
+        contactLog?.Forget(nodeId);
+        reachability?.Forget(nodeId);
+        if (peerChannels is not null)
+            await peerChannels.DeleteForPeerAsync(nodeId);
+        if (relayInbox is not null)
+            await relayInbox.DeleteForPeerAsync(nodeId);
+        // The node is out: what it was flagged for (events of a retired key the rotation did not list) is no longer this node's concern.
+        await RetiredKeyAttention.ClearAsync(connFactory, nodeId);
+        if (revocationCleanups is not null)
+        {
+            foreach (var cleanup in revocationCleanups)
+                await cleanup.OnPeerRevokedAsync(nodeId);
+        }
+    }
 
     /// <summary>
     /// A <c>whitelist_update</c>, field by field: each field it names that this node takes, and is newer than the version that field has, takes
@@ -250,7 +349,11 @@ public partial class EventApplier
 
         // Never update self via a remote event.
         var localIdentity = await nodeIdentityRepo.GetAsync();
-        if (localIdentity != null && p.NodeId == localIdentity.NodeId) return false;
+        if (localIdentity != null && p.NodeId == localIdentity.NodeId)
+        {
+            await RecordSelfOwnershipIfRemoteAsync(evt, localIdentity.NodeId, p.Ownership, repairing: quiet);
+            return false;
+        }
 
         var existing = await whitelistRepo.GetByNodeIdAsync(p.NodeId, includeDeleted: true);
         if (existing == null || existing.Status is not (WhitelistStatuses.Active or WhitelistStatuses.Revoked)) return false;
@@ -260,30 +363,29 @@ public partial class EventApplier
         var carried = WhitelistEventConcerns.OfUpdate(p, evt.NodeId, address, out var refusal);
         if (!quiet)
         {
-            switch (refusal)
-            {
-                case WhitelistEventConcerns.Refusal.BlindSuperadmin:
-                    logger.LogWarning(
-                        "Ignoring whitelist_update from {Sender} raising blind node {NodeId} to superadmin: a blind node never is one",
-                        evt.NodeId, p.NodeId);
-                    break;
-                case WhitelistEventConcerns.Refusal.SelfPromotion:
-                    // A node may not promote itself. In practice the superadmin gate in ApplyAsync gets there first (a demoted peer is no longer
-                    // superadmin here, so its whitelist_update is refused outright), and no node ever has its own row to send this from. Written
-                    // down all the same: the gate asks "may this node change cluster state at all", and if it is ever relaxed (an "ordinary peers
-                    // may rename themselves" feature is the obvious way), regaining authority must not come with it. Refused whatever the row says,
-                    // so the answer does not depend on what arrived first. Demoting itself stays allowed: giving up a privilege needs no protection.
-                    logger.LogWarning(
-                        "Ignoring self-promotion: node {NodeId} sent a whitelist_update raising its own is_superadmin",
-                        evt.NodeId);
-                    break;
-            }
+            if (refusal.HasFlag(WhitelistEventConcerns.Refusal.BlindSuperadmin))
+                logger.LogWarning(
+                    "Ignoring whitelist_update from {Sender} raising blind node {NodeId} to superadmin: a blind node never is one",
+                    evt.NodeId, p.NodeId);
+            if (refusal.HasFlag(WhitelistEventConcerns.Refusal.SelfPromotion))
+                // A node may not promote itself. In practice the superadmin gate in ApplyAsync gets there first (a demoted peer is no longer
+                // superadmin here, so its whitelist_update is refused outright), and no node ever has its own row to send this from. Written
+                // down all the same: the gate asks "may this node change cluster state at all", and if it is ever relaxed (an "ordinary peers
+                // may rename themselves" feature is the obvious way), regaining authority must not come with it. Refused whatever the row says,
+                // so the answer does not depend on what arrived first. Demoting itself stays allowed: giving up a privilege needs no protection.
+                logger.LogWarning(
+                    "Ignoring self-promotion: node {NodeId} sent a whitelist_update raising its own is_superadmin",
+                    evt.NodeId);
+            if (refusal.HasFlag(WhitelistEventConcerns.Refusal.SelfOwnership))
+                logger.LogWarning(
+                    "Ignoring self-ownership: node {NodeId} sent a whitelist_update changing its own ownership",
+                    evt.NodeId);
         }
 
         // Without a version per field, two admins renaming the same peer (or moving its address) would resolve to whichever event happened to
         // arrive last, and a rename that crossed a demotion would drop it on the nodes that saw the rename first.
         var won = WhitelistConcerns.None;
-        foreach (var concern in FieldConcerns)
+        foreach (var concern in UpdateableConcerns)
             if (carried.HasFlag(concern) && ConflictResolver.IncomingWins(existing.VersionOf(concern), incoming))
                 won |= concern;
         if (won == WhitelistConcerns.None)
@@ -302,6 +404,14 @@ public partial class EventApplier
         if (won.HasFlag(WhitelistConcerns.Name)) existing.DisplayName = p.DisplayName!;
         if (won.HasFlag(WhitelistConcerns.Tls)) ApplyTlsTrust(existing, p.TlsTrust, p.TlsSpki, isAdd: false);
         if (won.HasFlag(WhitelistConcerns.Superadmin)) existing.IsSuperadmin = p.IsSuperadmin!.Value;
+        if (won.HasFlag(WhitelistConcerns.Ownership)
+            && TryNormalizeOwnership(p.Ownership, p.OwnerPersonId, p.OwnerLabel, out var ownKind, out var ownPid, out var ownLabel))
+        {
+            existing.Ownership = ownKind;
+            existing.OwnerPersonId = ownPid;
+            existing.OwnerLabel = ownLabel;
+            existing.NeedsReview = ownKind == OwnershipKinds.Unknown;
+        }
         existing.SetVersionOf(won, incoming);
         existing.UpdatedAt = DateTime.UtcNow;
         SetRowVersionToNewestConcern(existing);
@@ -311,6 +421,11 @@ public partial class EventApplier
         // A field this update dated is judged by version from now on: an add newer than this update that came first writes it now. (The repair
         // and the replays take the log in version order themselves.)
         if (dated && !quiet) await ReplayAddsAsync(p.NodeId, incoming);
+        if (!quiet)
+        {
+            if (superadminDoorsNotifier is not null)
+                await superadminDoorsNotifier.NotifyChangedAsync(immediate: false);
+        }
         return true;
     }
 
@@ -396,8 +511,23 @@ public partial class EventApplier
         WhitelistConcerns.Name => a.DisplayName == b.DisplayName,
         WhitelistConcerns.Address => a.ApiAddress == b.ApiAddress,
         WhitelistConcerns.Tls => a.TlsSpki == b.TlsSpki && a.TlsTrust == b.TlsTrust,
+        WhitelistConcerns.Ownership => a.Ownership == b.Ownership && a.OwnerPersonId == b.OwnerPersonId && a.OwnerLabel == b.OwnerLabel,
         _ => false,
     };
+
+    private static bool TryNormalizeOwnership(string? rawOwnership, Guid? rawPersonId, string? rawLabel,
+        out string kind, out Guid? personId, out string? label)
+    {
+        if (OwnershipKinds.NormalizeOrNull(rawOwnership) is null)
+        {
+            kind = OwnershipKinds.Unknown;
+            personId = null;
+            label = null;
+            return false;
+        }
+        (kind, personId, label) = OwnershipKinds.Resolve(rawOwnership, rawPersonId, rawLabel);
+        return true;
+    }
 
     private static void CopyValue(WhitelistConcerns concern, WhitelistEntry from, WhitelistEntry to) => WhitelistEventConcerns.CopyField(concern, from, to);
 
@@ -598,9 +728,98 @@ public partial class EventApplier
     }
 
     /// <summary>Whether <paramref name="fact"/> writes <paramref name="concern"/>, as the applier reads it.</summary>
+    /// <summary>
+    /// One-off late-upgrade repair (<see cref="WhitelistOwnershipRepair"/>): replays stored whitelist events' optional ownership fields
+    /// onto <c>tbl_whitelist</c> so a node that previously synced events carrying ownership before upgrading to 2.12 catches up from its own log.
+    /// </summary>
+    public async Task<int> RepairWhitelistOwnershipAsync(CancellationToken ct = default)
+    {
+        using var _ = await EventWriteGate.Instance.EnterAsync(ct);
+        using var ownerFlow = EventWriteGate.EnterOwnerFlow();
+
+        var self = (await nodeIdentityRepo.GetAsync())?.NodeId;
+        var changedCount = 0;
+        foreach (var peer in await WhitelistHistory.PeersAsync(connFactory))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (peer == self) continue;
+            var row = await whitelistRepo.GetByNodeIdAsync(peer, includeDeleted: true);
+            if (row is null || row.Status is not (WhitelistStatuses.Active or WhitelistStatuses.Revoked)) continue;
+
+            var before = (row.Ownership, row.OwnerPersonId, row.OwnerLabel, row.NeedsReview, row.VersionOf(WhitelistConcerns.Ownership));
+            foreach (var fact in await WhitelistHistory.ForPeerAsync(connFactory, peer))
+            {
+                try
+                {
+                    switch (fact.EventType)
+                    {
+                        case EventTypes.WhitelistAdd:
+                        {
+                            var add = Deserialize<WhitelistAddPayload>(fact.Payload);
+                            if (add.Ownership is not null)
+                            {
+                                if (fact.Version.SourceNodeId != add.NodeId
+                                    && TryNormalizeOwnership(add.Ownership, add.OwnerPersonId, add.OwnerLabel, out var kind, out var pid, out var label)
+                                    && ConflictResolver.IncomingWins(row.VersionOf(WhitelistConcerns.Ownership), fact.Version))
+                                {
+                                    row.Ownership = kind;
+                                    row.OwnerPersonId = pid;
+                                    row.OwnerLabel = label;
+                                    row.NeedsReview = kind == OwnershipKinds.Unknown;
+                                    row.SetVersionOf(WhitelistConcerns.Ownership, fact.Version);
+                                }
+                            }
+                            else if (!IsSettledSharedBlindRow(peer, row)
+                                && row.VersionOf(WhitelistConcerns.Ownership).LamportTs > 0
+                                && ConflictResolver.IncomingWins(row.VersionOf(WhitelistConcerns.Ownership), fact.Version))
+                            {
+                                row.NeedsReview = true;
+                            }
+                            break;
+                        }
+                        case EventTypes.WhitelistUpdate:
+                        {
+                            var upd = Deserialize<WhitelistUpdatePayload>(fact.Payload);
+                            if (upd.Ownership is not null
+                                && fact.Version.SourceNodeId != upd.NodeId
+                                && TryNormalizeOwnership(upd.Ownership, upd.OwnerPersonId, upd.OwnerLabel, out var kind, out var pid, out var label)
+                                && ConflictResolver.IncomingWins(row.VersionOf(WhitelistConcerns.Ownership), fact.Version))
+                            {
+                                row.Ownership = kind;
+                                row.OwnerPersonId = pid;
+                                row.OwnerLabel = label;
+                                row.NeedsReview = kind == OwnershipKinds.Unknown;
+                                row.SetVersionOf(WhitelistConcerns.Ownership, fact.Version);
+                            }
+                            break;
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is JsonException or FormatException or InvalidDataException)
+                {
+                    logger.LogWarning(ex, "Whitelist ownership repair: event {EventId} ({Type}) for {NodeId} skipped", fact.EventId, fact.EventType, peer);
+                }
+            }
+
+            var after = (row.Ownership, row.OwnerPersonId, row.OwnerLabel, row.NeedsReview, row.VersionOf(WhitelistConcerns.Ownership));
+            if (after != before)
+            {
+                row.UpdatedAt = DateTime.UtcNow;
+                SetRowVersionToNewestConcern(row);
+                await whitelistRepoWrite.UpdateAsync(row);
+                changedCount++;
+            }
+        }
+        return changedCount;
+    }
+
+    private static bool IsSettledSharedBlindRow(Guid nodeId, WhitelistEntry entry) =>
+        BlindNodeId.IsBlind(nodeId)
+        && string.Equals(OwnershipKinds.Normalize(entry.Ownership), OwnershipKinds.Shared, StringComparison.Ordinal);
+
     private static bool Writes(WhitelistFact fact, WhitelistConcerns concern) => fact.EventType switch
     {
-        EventTypes.WhitelistAdd => true,
+        EventTypes.WhitelistAdd => concern != WhitelistConcerns.Ownership || Deserialize<WhitelistAddPayload>(fact.Payload).Ownership is not null,
         EventTypes.WhitelistRevoke => concern == WhitelistConcerns.Membership,
         EventTypes.WhitelistUpdate => UpdateConcerns(fact).HasFlag(concern),
         _ => false,

@@ -12,7 +12,10 @@ namespace BeeMemoryBank.Rekey.Steps;
 /// <para>The invitations this node made to blind copies (<c>tbl_blind_invite</c>, release 2.7) go with the peers they would have added: they are about who may
 /// join, and a redeemed one holds the device's backup key under the old master key, which no longer opens.</para>
 /// <para>What the peers announced about themselves and this node's ways to reach them (<c>tbl_peer_endpoint</c>, <c>tbl_peer_channel</c>, migration 044) go
-/// with the peers too.</para>
+/// with the peers too, and so do the peers' retired identity keys and the identity conflicts (<c>tbl_node_key_history</c>, <c>tbl_node_key_conflict</c>,
+/// migration 049): they verify the old log of revoked peers, which is cleared. The node's OWN rows stay: its identity seed is
+/// kept, so its chain is still true, its old peers hold those rows about it, and its next identity re-key must continue their counter; a node that
+/// joins later gets them in the join archive.</para>
 /// </summary>
 public sealed class PeerRevokeStep : IRekeyStep
 {
@@ -48,7 +51,11 @@ public sealed class PeerRevokeStep : IRekeyStep
         var counts = new Dictionary<string, long> { ["tbl_whitelist"] = peers.Count, ["tbl_blind_invite"] = invitations };
         foreach (var table in PeerTables)
             if (await TableExistsAsync(db, table, tx))
-                counts[table] = await db.ExecuteAsync($"DELETE FROM {table}", transaction: tx);
+                counts[table] = await db.ExecuteAsync($"DELETE FROM {table}{OwnRowsKept(table)}", new { self = ctx.NodeId.ToString("D") }, tx);
+        // The shared-doors state keeps this node's own ownership, the last list version it issued and its attention flag; what
+        // came from the peers (the lists received, pending and applied, the digest of the peers it published to) goes with them.
+        if (await TableExistsAsync(db, "tbl_shared_doors_state", tx))
+            counts["tbl_shared_doors_state"] = await db.ExecuteAsync(SharedDoorsReset, transaction: tx);
 
         tx.Commit();
         ctx.Progress.Report(Name, 1, 1);
@@ -64,12 +71,27 @@ public sealed class PeerRevokeStep : IRekeyStep
         var left = await ctx.Main.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM tbl_blind_invite");
         if (left > 0) problems.Add(new RekeyProblem("tbl_blind_invite", "(rows)", "an invitation to a blind copy is still there"));
         foreach (var table in PeerTables)
-            if (await TableExistsAsync(ctx.Main, table, null) && await ctx.Main.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM {table}") > 0)
+            if (await TableExistsAsync(ctx.Main, table, null)
+                && await ctx.Main.ExecuteScalarAsync<long>($"SELECT COUNT(*) FROM {table}{OwnRowsKept(table)}", new { self = ctx.NodeId.ToString("D") }) > 0)
                 problems.Add(new RekeyProblem(table, "(rows)", "what a revoked peer announced, or a way to reach it, is still there"));
+        if (await TableExistsAsync(ctx.Main, "tbl_shared_doors_state", null)
+            && await ctx.Main.ExecuteScalarAsync<long>(
+                @"SELECT COUNT(*) FROM tbl_shared_doors_state
+                  WHERE latest_received_version <> 0 OR pending_apply <> 0 OR latest_payload_json IS NOT NULL OR latest_author_node_id IS NOT NULL") > 0)
+            problems.Add(new RekeyProblem("tbl_shared_doors_state", "(row)", "a doors list received from a revoked peer is still there"));
         return problems;
     }
 
-    private static readonly string[] PeerTables = ["tbl_peer_endpoint", "tbl_peer_channel"];
+    private static readonly string[] PeerTables = ["tbl_peer_endpoint", "tbl_peer_channel", "tbl_node_state", "tbl_node_key_history", "tbl_node_key_conflict"];
+
+    /// <summary>The peer-derived columns of the shared-doors state; this node's ownership, its last issued version and its attention flag stay.</summary>
+    private const string SharedDoorsReset =
+        @"UPDATE tbl_shared_doors_state SET last_published_digest = NULL, latest_received_version = 0, latest_event_id = NULL, latest_author_node_id = NULL,
+              latest_payload_json = NULL, pending_apply = 0, applied_version = 0, applied_at = NULL, primary_person_id = NULL, last_error = NULL";
+
+    /// <summary>The rows of <paramref name="table"/> that go: all of them, except the node's own key history.</summary>
+    private static string OwnRowsKept(string table) =>
+        table == "tbl_node_key_history" ? " WHERE node_id <> @self COLLATE NOCASE" : "";
 
     private static async Task<bool> TableExistsAsync(System.Data.IDbConnection db, string table, System.Data.IDbTransaction? tx) =>
         await db.ExecuteScalarAsync<long>("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = @table", new { table }, tx) > 0;

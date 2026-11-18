@@ -5,7 +5,7 @@ using BeeMemoryBank.Rekey;
 namespace BeeMemoryBank.Rekey.Tests;
 
 /// <summary>
-/// Review release-b R1-1: the vault lease. Everything that opens the vault holds D/vault.lease shared (a node and its
+/// The vault lease. Everything that opens the vault holds D/vault.lease shared (a node and its
 /// child Api, a standalone Api, a CLI command), the verb holds it exclusively, and each side refuses while the other
 /// holds it. Run on Windows and Linux: FileShare is an OS share mode on one and flock on the other.
 /// </summary>
@@ -79,7 +79,7 @@ public sealed class VaultLeaseTests : IDisposable
     }
 
     /// <summary>
-    /// Review release-b-fix #1: nothing is resolved without the lease. While someone holds it exclusively (a re-key, or
+    /// Nothing is resolved without the lease. While someone holds it exclusively (a re-key, or
     /// another start in the middle of resolving) and no re-key lock is to be seen, a start neither renames anything nor
     /// touches the journal; it waits, then is refused.
     /// </summary>

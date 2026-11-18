@@ -276,7 +276,7 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
         {
             using var cmd = conn.CreateCommand();
             cmd.CommandText =
-                "SELECT encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism " +
+                "SELECT encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, slot_type " +
                 "FROM tbl_key_slot WHERE salt IS NOT NULL AND argon_memory IS NOT NULL ORDER BY slot_id";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
@@ -290,7 +290,9 @@ public sealed class SessionSnapshotKeyOperations(SessionService? session, IExter
                 try
                 {
                     kek = KeyDerivation.DeriveKek(masterPassword, (byte[])reader["salt"], memory, iterations, parallelism);
-                    dek = MasterKeyManager.UnwrapMasterDek((byte[])reader["encrypted_master_dek"], (byte[])reader["iv"], kek);
+                    // The snapshot may predate migration 046: the door format is told by its shape (ADR 0012).
+                    dek = Doors.OpenByShape((string)reader["slot_type"], (byte[])reader["encrypted_master_dek"], (byte[])reader["iv"], kek,
+                        (byte[])reader["salt"]);
                 }
                 catch (System.Security.Cryptography.CryptographicException)
                 {

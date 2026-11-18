@@ -46,6 +46,8 @@ public static class ControlDbValidator
         ["tbl_dek_retired_link"] = ["commit_id", "author_node_id", "old_fingerprint", "new_fingerprint", "wrapped", "iv", "created_at"],
         ["tbl_state_anchor"] = ["anchor_id", "author_node_id", "dek_fingerprint", "position_vector", "digest", "hmac", "created_at", "lamport_ts"],
         ["tbl_sealed_secret"] = ["name", "dek_fingerprint", "wrapped", "iv", "updated_at", "status", "lamport_ts", "source_node_id"],
+        ["tbl_node_key_history"] = ["node_id", "counter", "public_key", "new_public_key", "valid_until_lamport", "rotation_event_id",
+            "checkpoint_lamport_ts", "own_event_ids", "old_key_proof", "new_key_proof", "created_at"],
     };
 
     /// <summary>
@@ -161,7 +163,44 @@ public static class ControlDbValidator
                 throw row.Fail("wrapped", "is not the material of an active sealed secret");
             if (!secrets.Add(name.ToLowerInvariant())) throw row.Fail("name", "repeats");
         });
+
+        // The key history (migration 049, plan WS-D): optional, a package made before 2.12 has none. Every row is a link both keys signed, as
+        // EventApplier.NodeKey.cs stores it; the verification of a node's old events rests on it.
+        if (HasTable(conn, "tbl_node_key_history"))
+        {
+            var keyLinks = new HashSet<(string, long)>();
+            Read(conn, "tbl_node_key_history", row =>
+            {
+                var nodeId = row.Id("node_id");
+                var counter = row.Integer("counter");
+                if (counter < 1) throw row.Fail("counter", "is below 1");
+                var oldKey = row.Blob("public_key", 32);
+                var newKey = row.Blob("new_public_key", 32);
+                var validUntil = row.Lamport("valid_until_lamport");
+                max = Math.Max(max, validUntil);
+                row.Id("rotation_event_id");
+                var checkpoint = row.Integer("checkpoint_lamport_ts");
+                if (checkpoint < 0 || checkpoint >= validUntil) throw row.Fail("checkpoint_lamport_ts", "is not below the rotation");
+                try { _ = BeeMemoryBank.Core.Models.EventIdSet.Unpack(row.Text("own_event_ids")); }
+                catch (FormatException) { throw row.Fail("own_event_ids", "is not a packed id list"); }
+                var oldProof = row.Blob("old_key_proof", 64);
+                var newProof = row.Blob("new_key_proof", 64);
+                row.Time("created_at");
+                if (!BeeMemoryBank.Core.Models.NodeKeyTransition.VerifyLink(Guid.Parse(nodeId),
+                        new BeeMemoryBank.Core.Models.NodeKeyLink(oldKey, newKey, counter, oldProof, newProof)))
+                    throw row.Fail("new_key_proof", "the two keys did not sign this link");
+                if (!keyLinks.Add((nodeId.ToLowerInvariant(), counter))) throw row.Fail("counter", "repeats");
+            });
+        }
         return max;
+    }
+
+    private static bool HasTable(SqliteConnection conn, string table)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = @t";
+        cmd.Parameters.AddWithValue("@t", table);
+        return (long)cmd.ExecuteScalar()! > 0;
     }
 
     private static void Read(SqliteConnection conn, string table, Action<Row> check)

@@ -17,7 +17,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-306 fix round 2 (findings N1, N2, N5): the real Api host over a data folder with a pending seal intent. A start that cannot settle the intent - the leftover will
+/// BMB-306: the real Api host over a data folder with a pending seal intent. A start that cannot settle the intent - the leftover will
 /// not go, or another process of the node may be running the operation - is refused by name by the host that stays up only to say why, and it opens, serves and wipes
 /// nothing. The next start, with nothing in the way, settles it.
 /// </summary>
@@ -170,7 +170,7 @@ public sealed class SealIntentHostTests : IDisposable
 }
 
 /// <summary>
-/// BMB-306 fix round 2 (finding N5): a restore composed without the services that mark and encrypt (the Api's own composition always has them) is refused before any
+/// BMB-306: a restore composed without the services that mark and encrypt (the Api's own composition always has them) is refused before any
 /// key is recovered or any file is written, and one that meets a pending operation does not begin.
 /// </summary>
 [Collection(BaselineRestoreCollection.Name)]

@@ -102,7 +102,17 @@ public static partial class BlindRoleServices
                 sp.GetRequiredService<IWhitelistRepository>(),
                 keyOperations(sp),
                 sp.GetService<ISyncProtocolPolicy>(),
-                sp.GetService<IVaultGate>()));
+                sp.GetService<IVaultGate>())
+            {
+                // The tombstones of removed people (release 2.12.0, plan R1): a restored database closes every account they name before the
+                // restore is reported (a full node only; a blind host registers no enforcer).
+                AfterRestoreAsync = async () =>
+                {
+                    using var scope = sp.CreateScope();
+                    if (scope.ServiceProvider.GetService<BeeMemoryBank.Core.Interfaces.IRemovedPersonEnforcer>() is { } enforcer)
+                        await enforcer.EnforceAsync();
+                },
+            });
     }
 
     /// <summary>The media folder next to the database (created now) and its options.</summary>

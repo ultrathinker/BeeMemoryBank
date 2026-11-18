@@ -119,7 +119,7 @@ public sealed class BlindPreflight(
             throw new BlindPreflightFailedException(problems, details);
 
         // Nobody answered, so nothing in the network confirmed this PC's standing — a PC alone in its
-        // network, or one whose peers are all offline. That does not stop the add (review r1-merge #3):
+        // network, or one whose peers are all offline. That does not stop the add:
         // the blind node takes this PC as its authority because it holds the pair code the operator
         // issued there, not because a peer confirmed it. The operator is told so.
         return answered == 0 ? [NoConfirmationWarning] : [];
@@ -131,7 +131,7 @@ public sealed class BlindPreflight(
     /// <summary>
     /// Whether the network verifiably sees this node as superadmin: at least one full peer answered,
     /// and every one that answered says so. Nothing local can say it — a node keeps no whitelist row
-    /// for itself — so without an answer the answer is no (review L-merge #2: a replica must not make
+    /// for itself — so without an answer the answer is no (a replica must not make
     /// an ordinary node the blind node's reseed authority).
     /// </summary>
     public async Task<bool> IsSuperadminInNetworkAsync(HttpClient http, CancellationToken ct)
@@ -144,7 +144,7 @@ public sealed class BlindPreflight(
             var answer = await AskAsync(http, self, peer, ct);
             if (!answer.Reached) continue;
             // A peer that answered at all counts — a refusal (401/403/426) or an unreadable answer is a
-            // "no", never "offline" (review L-merge round 2 #2).
+            // "no", never "offline".
             if (answer.Standing is not { CallerIsSuperadmin: true }) return false;
             answered++;
         }

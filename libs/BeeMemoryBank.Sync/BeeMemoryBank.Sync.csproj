@@ -16,7 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- PendingEmbeddingProcessor moved additively to BeeMemoryBank.Embeddings; legacy path preserved per owner no-rename rule -->
+    <!-- PendingEmbeddingProcessor moved additively to BeeMemoryBank.Embeddings; legacy path preserved per the no-rename rule -->
     <Compile Remove="PendingEmbeddingProcessor.cs" />
   </ItemGroup>
 

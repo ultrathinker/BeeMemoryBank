@@ -449,7 +449,7 @@ public sealed class BlindFormat2HostTests : IDisposable
     }
 
     /// <summary>
-    /// Review round, finding 2: a signed full package whose baseline is refused (older than the current one) takes nothing
+    /// a signed full package whose baseline is refused (older than the current one) takes nothing
     /// with it - not a peer of its whitelist, not the serving node's position - because every refusal is decided before the
     /// node's live tables are touched.
     /// </summary>
@@ -483,7 +483,7 @@ public sealed class BlindFormat2HostTests : IDisposable
     }
 
     /// <summary>
-    /// Review round, finding 2: the serving node's position moves after its deltas are stored, never before. A delta that
+    /// the serving node's position moves after its deltas are stored, never before. A delta that
     /// cannot be stored yet (its author is unknown here) fails the seed; the later ordinary pull must not start after it.
     /// </summary>
     [Fact]
@@ -508,7 +508,7 @@ public sealed class BlindFormat2HostTests : IDisposable
     }
 
     /// <summary>
-    /// Review round 2, finding 2: a signed package whose content this node cannot use is refused as a whole, before the baseline
+    /// a signed package whose content this node cannot use is refused as a whole, before the baseline
     /// is adopted, the legacy content purged, a peer taken or a position moved. Each of these passed the reader and failed
     /// (or half-applied) in the seed after the adoption.
     /// </summary>
@@ -517,12 +517,12 @@ public sealed class BlindFormat2HostTests : IDisposable
     [InlineData("a peer key that is not base64")]
     [InlineData("a control database this node cannot import")]
     [InlineData("a control database made of allow-listed views")]
-    // Review round 3: the rows of control.db are held against the appliers' rules before the adoption, too.
+    // the rows of control.db are held against the appliers' rules before the adoption, too.
     [InlineData("a control row at the maximum Lamport time")]
     [InlineData("a control row with key material stored as text")]
     [InlineData("an activation naming a key the package lacks")]
     [InlineData("a recovery box with a preset its kind may not have")]
-    // Review round 5: baseline and delta Lamport values are package input too, and must be bounded before adoption.
+    // baseline and delta Lamport values are package input too, and must be bounded before adoption.
     [InlineData("a delta past the Lamport bound")]
     [InlineData("a baseline Lamport time past the format-2 bound")]
     public async Task ASignedFullPackageWhoseContentCannotBeUsed_IsRefused_BeforeAnythingIsAdopted(string what)
@@ -639,7 +639,7 @@ public sealed class BlindFormat2HostTests : IDisposable
     }
 
     /// <summary>
-    /// Review round 3: a first seed computes its grant time (one above everything the node will hold) before the baseline is adopted.
+    /// a first seed computes its grant time (one above everything the node will hold) before the baseline is adopted.
     /// This node holds a peer row stamped at the limit of a Lamport time - it survives the purge - so no time is left to grant: the
     /// seed is refused whole and the legacy content is still there. Before, the baseline was adopted and the content purged, and only
     /// then did the grant fail.
@@ -729,7 +729,7 @@ public sealed class BlindFormat2HostTests : IDisposable
     }
 
     /// <summary>
-    /// Review round 2, finding 1: the trimmer finishes an unfinished purge although the current baseline's files can no longer
+    /// the trimmer finishes an unfinished purge although the current baseline's files can no longer
     /// be served (a damaged container, a switch that did not complete). The purge needs that a baseline was adopted, not that
     /// it is servable now; the log trim, which does need a servable baseline, trims nothing meanwhile.
     /// </summary>
@@ -774,7 +774,7 @@ public sealed class BlindFormat2HostTests : IDisposable
         (await BaselineStore.IsOpaqueAsync(blind.Services.GetRequiredService<IDbConnectionFactory>())).Should().BeFalse();
     }
 
-    /// <summary>Review round, finding 1: the trimmer's start-up and periodic run finish a purge that did not finish.</summary>
+    /// <summary>the trimmer's start-up and periodic run finish a purge that did not finish.</summary>
     [Fact]
     public async Task TheLogTrimmer_FinishesAPurgeThatDidNotFinish()
     {
@@ -796,7 +796,7 @@ public sealed class BlindFormat2HostTests : IDisposable
     }
 
     /// <summary>
-    /// Track 1's contract (spec 5.7, review round): an activated host never serves a protocol-1..3 content row to a blind peer, and
+    /// Track 1's contract (spec 5.7): an activated host never serves a protocol-1..3 content row to a blind peer, and
     /// a page is empty only when no row the peer may have is left, so a pull client paging by its cursor reaches the sealed rows
     /// behind the clear ones. On a blind host the clear rows are the legacy ones of a 2.5 node between the activation and its
     /// first adoption; the route is the one the full nodes serve (it is linked into the BlindNode host).

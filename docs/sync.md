@@ -19,6 +19,14 @@ superadmin (or to a legacy pre-user-table `password` slot), hands back the wrapp
 copy of the whitelist. There is no invite token and no approval step — the password is the whole
 gate.
 
+Since 2.12 the join also says **whose device it is** (ownership). An optional `login` names the person
+whose password is being entered, so that person's slot is tried first and the new row is attributed to
+them; `ownership` (`shared` / `personal`) rides along. Without a `login`, every slot is tried, and if
+several open (two superadmins sharing a password) or only a legacy slot opens, the person is left empty
+and the row is marked for review rather than guessed. `personal` without an owner person id resolves to
+`unknown` + review. The host's own ownership travels back in the answer (`JoinResponse.RemoteNode`). A
+node may not change its own ownership afterwards. See "Node-Local Entities" and the Devices page.
+
 **A node that joins with the master password is a superadmin** (a deliberate decision).
 `JoinEndpoints` creates the entry with `is_superadmin = 1`, and every join flow (web, CLI, phone)
 records the node it joined through the same way — one rule, `JoinAuthority`. `EventApplier` checks
@@ -31,14 +39,21 @@ never gated on it. A blind node (NodeId with the blind mark) is never a superadm
 Only a node whose `is_superadmin` bit is set on the *receiving* node's own whitelist row can:
 
 - **Revoke another peer** — `ApplyWhitelistRevokeAsync` flips the target's row to `Status = "R"` on
-  every node that receives and accepts the event. A node ignores a revoke aimed at itself, so the
+  every node that receives and accepts the event, and purges cached sync bearer tokens (`SyncTokenStore`),
+  local channel rows (`tbl_peer_channel`), contact/reachability state (`PeerContactLog`, `PeerReachability`),
+  and queued relay inbox events/reports authored by that peer (`RelayInbox`, including on sealed nodes when a
+  superadmin-signed `whitelist_revoke` arrives). A node ignores a revoke aimed at itself, so the
   revoked peer keeps its own data; it just stops being accepted anywhere else. Who is a peer, and what
   each node holds about it, no longer depends on the order the whitelist events arrive in. Each row
-  has five concerns, each with the version of the newest event that wrote it (migration 045):
+  has six concerns, each with the version of the newest event that wrote it (migrations 045 and 047):
   membership (a `whitelist_add` makes it active, a `whitelist_revoke` revoked), `is_superadmin`,
-  `display_name`, `api_address` and the TLS trust (`tls_spki` with `tls_trust`). Each concern is
-  last-writer-wins by (Lamport time, node) on its own. An add writes all five, a revoke membership only,
-  an update the fields it names (`WhitelistEventConcerns`). So a revoke is never undone by an update,
+  `display_name`, `api_address`, the TLS trust (`tls_spki` with `tls_trust`), and device ownership
+  (`ownership` + `owner_person_id` + `owner_label`). Each concern is
+  last-writer-wins by (Lamport time, node) on its own. An add writes all six (omitting `ownership` when it is
+  still `unknown`), a revoke membership only, an update the fields it names (`WhitelistEventConcerns`). Self-authored
+  ownership changes are refused by both `EventLogger` and `EventApplier`. On upgrade to 2.12.0, blind rows
+  default to `shared` without review and existing active full-node rows start as `unknown` with `needs_review = 1`
+  until reviewed or repaired from replayed events (`WhitelistOwnershipRepair`). So a revoke is never undone by an update,
   whatever the update's version: an update made by a node that had not seen the revoke yet cannot write
   membership. A re-add newer than the revoke still wins. Two updates of different fields that crossed
   (a demotion and a rename) both stand on every node; before, a node that got the newer one first
@@ -145,6 +160,13 @@ NodeA: verify signature vs whitelist[nodeId].publicKey
 NodeA → NodeB: { token: "bearer_token_base64" }  (TTL 1 hour)
 ```
 
+**A caller that re-keyed (2.12).** A node that gave itself a new identity key ([ADR 0013](adr/0013-identity-rekey.md)) signs
+with the new key and sends its key transition chain (`KeyChain`, newest 16 links) with `authenticate`. A node that has not
+applied the `node_key_rotated` event yet lets it in when the chain leads, through links both keys signed, from the key on
+record to the key that signed; nothing on the whitelist row changes until the event arrives (the caller pushes it next). A
+node in an open identity conflict is let in by the key on record only. `/api/sync/identity` returns the same chain, so a
+caller that pinned an older key of the peer follows it (`PeerKey.Follow`).
+
 **Why challenge-response instead of a simple API key?** The private key is never transmitted over the network. Even if someone intercepts the challenge and signature, they are single-use (TTL 60 seconds).
 
 **The challenge is bound to who it was fetched from (2026-09-04, breaking).** A signed response used
@@ -156,6 +178,20 @@ present the resulting signature there as if it came from the victim. The audienc
 client signs and the server verifies only the audience-bound (`V2`) challenge format — the older,
 unbound format is gone from both sides. **Every node in the mesh, including the Android app, must run
 this build or newer to keep syncing with the rest of the network.**
+
+**"This device was disconnected" (2.12).** A revoked whitelist row is refused like any other: `401`. When the caller's signature
+verifies under the revoked row's key - so only the device itself is told - the 401 carries a body
+`{ "refusal": "device_revoked", "proofB64": ... }`: the node's Ed25519 signature, with its own identity key, of
+`"BMB-DEVICE-REVOKED-V1\0" || serverNodeId || callerNodeId || challenge` (`DeviceRevokedProof`). The caller believes it only when the
+signature verifies under the key its whitelist row holds for that node and is bound to its own id and the challenge it just signed
+(`PeerAuthenticator`, given the key by `SyncClient`), so neither a relaying peer nor a man in the middle of a plain-HTTP LAN call can make
+a device believe it was disconnected; it then throws `ThisDeviceRevokedException` (a 401 `HttpRequestException`, so every caller that only
+knows "refused" keeps working). A wrong signature, an unknown node, an older caller or a node that cannot sign now (its vault is locked)
+gets the plain 401 with no body, as before. The sync loop (`SyncScheduler`, every node and the Android app's background service) says it
+once per episode and asks that peer again only every `ClosedRetry` (an hour); the contact log and the status pages show
+*"an administrator disconnected this device from the bank: what is already on it stays readable here, it no longer receives changes"*.
+The phone apps show the same sentence, in English and Russian, on their sync screens instead of a sync error; the iPhone's own loop asks
+again only every hour, a round the person starts always runs, and any session that goes through ends the state (the device was added back).
 
 ### Step 2: Pull (receiving events)
 
@@ -214,6 +250,30 @@ as that peer.
 TLS anchors. It reaches only nodes that advertise the capability `peer-endpoints-v1`: a 2.7.5 node is never served one on a pull
 and never sent one on a push (the cursor moves over it), so a locked, encrypted 2.7.5 node cannot stall on a type it does not
 know. Announcements therefore spread only through updated nodes; mDNS and typed addresses cover the LAN meanwhile.
+
+`node_state` (release 2.12.0) is a clear control event a node publishes about itself (`author == subject`, any active peer —
+including blind nodes when `dek_fp` is empty): app version, platform, runtime kind (`server`, `container`, `desktop`, `mobile`,
+`blind`), identity key fingerprint, optional DEK fingerprint (for unlocked full nodes), attention flags, and extensible metadata.
+`EventApplier` materialises the newest `(lamport_ts, event_id)` per node into `tbl_node_state` (`SnapshotTables.Replicated`);
+`CompactionService` deletes superseded `node_state` events while retaining the latest per `node_id`. `NodeStateAnnouncer`
+emits updates on change (and immediately on `VaultGate` open for locked sealed nodes). Unlike `node_endpoints`, `node_state`
+is not withheld from peers that do not advertise `node-state-v1` so older relay nodes pass it through intact.
+Its metadata carries `v1_doors` (how many v1 doors the node has) and `dek_bridge` (`1` while it keeps chain material of a rotation)
+on full nodes (`DekBridgeNodeStateContributor`); the removal of a superadmin reads them at its close. `identity_rekey` says why the node
+cannot give itself a new identity key when a removal asks (`external`: its seed is kept outside the database; or the code of its last
+refusal: `devices`, `busy`, `events`; `IdentityRekeyNodeStateContributor`). The shared-doors contributor adds the attention flag
+`shared_doors_apply_stuck` while a received list still waits after its automatic retries were spent.
+
+**The removal of a superadmin (2.12.0, ADR 0014)** adds three superadmin-only control events. `person_removed` (person id, outcome
+`deleted` | `demoted`, time; no names, no folders) is a tombstone kept for ever in `tbl_removed_person` (`SnapshotTables.Replicated`
+and `.Monotonic`: a network restore merges it, never drops it); every full node enforces it on apply, after a restore, at start and at
+the first sync after a join: the person's account is locked out, then deleted, or demoted where this node stored that demotion.
+`offboarding_state` (process id, person id, accounts and driving node, target kind, step, times, outcome) is the process as the other
+nodes see it: newest Lamport wins, accepted from the driving node (or from another node once that driver is revoked here — a
+take-over), never over a process this node drives itself; a blind node ignores both.
+`node_rekey_request` (process id, the reason `offboarding:<process id>`, the asked full nodes; ids only) is step S1 asking the shared
+full nodes for a new identity key: superadmin-only, accepted only from the node that drives that process; an asked node re-keys itself
+once for that process from the removal's background pass (never inside an apply), and a blind node only stores and relays it.
 
 The status of a peer says how it is reached: directly on this network, over the internet, it calls this node, reachable through
 another device (another peer saw it recently), not on this network, needs an update (a desktop of an older version on this
@@ -343,6 +403,45 @@ The page the header's **Sync Status** title opens (`/Network`) draws this: this 
 
 Agents, users, and folder ACL entries are node-local — they are created on the node where they belong and are **not** propagated through the sync event stream. A user created on the primary node does not exist on a replica, and vice versa. See `docs/architecture.md → Node Topology` for rationale.
 
+**The shared-node exception (2.12):** a node marked `shared` belongs to the organisation, not to one person. The
+accounts node publishes the current superadmins' doors as a replicated, versioned list (`superadmin_doors_set`), and a
+shared node holds a mirror door per listed person — so the same superadmin passwords open it, while regular users,
+roles and folder rules stay node-local as above. Password changes happen on the accounts node only. See
+[Accounts node and shared-node doors](#accounts-node-and-shared-node-doors-212-adr-0014).
+
+## Node Identity Re-key (2.12)
+
+A full node can give itself a new identity key in place: Admin > Node identity key, `POST /api/node/identity/rekey`
+(superadmin, never an agent) or `bmb node rekey --reason "..."`. The node keeps its id, data and peers; the decision record is
+[ADR 0013](adr/0013-identity-rekey.md).
+
+- **`node_key_rotated`** (control, superadmin-only, never sealed), signed by the OLD key: old and new key, a counter (one more
+  than the node's rotations so far), both keys' signatures over the transition statement, the node's checkpoint and the ids
+  of its own events above it (`own_event_ids`, at most 50 000). A receiver applies it only to an active row whose key is the
+  old key; the row gets the new key, `tbl_node_key_history` gets the retired one, and the peer's tokens and channel rows are
+  dropped. A counter gap is deferred; a second rotation of the same old key and counter with another new key is an identity
+  conflict.
+- **Retired keys** sign nothing new. `NodeEventVerifier` is the one helper every signature check goes through: in live sync a
+  retired key signs only the node's own listed events between its checkpoint and its rotation; in a signed package, up to the
+  rotation. Events of a re-keyed node signed by its retired key that the rotation does not list raise the attention flag
+  `retired_key_unacknowledged_events` in `node_state`.
+- **Events an older build stored** without knowing their type are replayed once at the first start of 2.12
+  (`LateEventReplay`, after the whitelist repairs), in log order with the re-keys and their confirms first, so the rest is
+  judged against the keys after them. An event only the package rule admits — a back-dated event signed by a key since
+  retired — is quarantined and raises `retired_key_unacknowledged_events` rather than applied; a genuine event the author
+  compacted away before its re-key can reach the same state (a narrow, acknowledgeable residual). An event 2.12 received
+  live keeps the receipt rule.
+- **`node_key_confirm`** (control, superadmin-only) settles an identity conflict: a superadmin's device names which of the two
+  rotations carries the genuine key (`POST /api/node/identity/conflicts/{nodeId}/confirm`). Until then the node's events are
+  refused (deferred).
+- **Before a re-key** every active peer must advertise the capability `identity-rekey-v1`; the page names those that do not.
+  The re-key holds the per-vault key-operation lock ("an identity re-key"): it never runs during a DEK rotation.
+- **DEK rotation envelopes** sealed to a peer's retired key: the peer asks the rotation's author for a fresh one
+  (`POST /api/sync/dek-envelope/{commitEventId}`, peer sync token) and completes the rotation with it.
+- **Pins** of other devices (blind copies, channel rows, invitations) move along the chain (newest 16 links); a device that was
+  away across more than 16 re-keys is paired or joined again. Android phone pairing records (`android-backup:<id>`) that name the
+  node are signed again with the new key and re-sealed.
+
 ## Event Types
 
 | Type | Payload | Synced? |
@@ -350,9 +449,11 @@ Agents, users, and folder ACL entries are node-local — they are created on the
 | `article_create` | title, treePath, tags (deprecated, empty), conceptTags, ciphertext, encrypted_dek, iv, dek_iv, timestamps | Yes |
 | `article_update` | same (full replacement, not diff) | Yes |
 | `article_delete` | deleted_at | Yes |
-| `whitelist_add` | nodeId, displayName, publicKeyB64, apiAddress, canGenerateEmbeddings, **isSuperadmin**, tls_spki, tls_trust | Yes |
-| `whitelist_update` | nodeId, displayName, apiAddress, canGenerateEmbeddings, isSuperadmin, tls_spki, tls_trust | Yes |
+| `whitelist_add` | nodeId, displayName, publicKeyB64, apiAddress, canGenerateEmbeddings, **isSuperadmin**, tls_spki, tls_trust, ownership (2.12: `ownership`, `owner_person_id`, `owner_label`, optional) | Yes |
+| `whitelist_update` | nodeId, displayName, apiAddress, canGenerateEmbeddings, isSuperadmin, tls_spki, tls_trust, ownership (2.12, optional) | Yes |
 | `whitelist_revoke` | nodeId | Yes |
+| `node_key_rotated` | node_id, old/new public key, counter, rotated_at, reason, old/new key proof, checkpoint_lamport_ts, own_event_ids (2.12) | Yes (control) |
+| `node_key_confirm` | node_id, rotation_event_id, counter, confirmed_public_key (2.12) | Yes (control) |
 | `comment_create` | commentId, articleId, text, createdAt | Yes |
 | `comment_delete` | commentId | Yes |
 | `folder_create` | folderId, path, name, parentPath | Yes |
@@ -367,11 +468,12 @@ Agents, users, and folder ACL entries are node-local — they are created on the
 | `hard_delete` | entityType ("article"/"folder"), entityIdentifier (articleId or folder path), occurredAt | Yes |
 | `snapshot_checkpoint` | cp_seq, events_removed, snapshot_file_name, snapshot_sha256, prev_checkpoint_sha256, produced_at | Yes |
 | `restore_network` | snapshot_hash, restore_point_ts, file_size_bytes, expires_at, source_url, filter_secrets | Yes |
-| `dek_rotation_proposed` | encrypted_new_dek, iv, new_dek_epoch, rotation_ts, expires_at, originator_node_id | Yes |
-| `dek_rotation_commit` | proposed_event_id, encrypted_new_dek, iv, new_dek_epoch, rotation_ts, originator_node_id | Yes |
+| `dek_rotation_proposed` | peer_envelopes, encrypted_new_dek + iv (nullable legacy fallback), new_dek_epoch, rotation_ts, expires_at, originator_node_id, reason (2.12, optional) | Yes |
+| `dek_rotation_commit` | proposed_event_id, peer_envelopes, encrypted_new_dek + iv (nullable), new_dek_epoch, rotation_ts, originator_node_id, reason (2.12, optional) | Yes |
 | `sealed` | the envelope `{v, k, n, b, c}` of a content event (protocol 4, after the switch) | Yes |
 | `metadata_key_set` | key_id, generation, dek_fingerprint, epoch_hint, wrapped, iv, created_at | Yes |
 | `metadata_activation` | activation_id, key_id, generation, activated_at | Yes |
+| `node_state` | author == subject; app version, platform, runtime kind, identity/DEK fingerprints, attention flags (2.12; materialised newest-per-node into `tbl_node_state`) | Yes |
 
 **Content and control.** Every type is one of two classes (`EventClasses`, a guard test fails on a type that is in
 neither): *content* — article, comment, folder, media, concept tag events and `hard_delete` — and *control* — the
@@ -598,8 +700,8 @@ to 30 seconds each.
    node's log delivers later is refused. They are not in `whitelist` because a joiner of any version
    makes an active row of every entry there; a joiner of 2.7.5 or older ignores `revokedPeers`, and a
    producer of 2.7.5 or older sends none. Each `whitelist` entry also carries `versions`: the producer's
-   version of each concern of that row (`membership`, `superadmin`, `name`, `address`, `tls`, each a
-   `lamportTs` and a `sourceNodeId`; migration 045). The joiner's row takes them
+   version of each concern of that row (`membership`, `superadmin`, `name`, `address`, `tls`, `ownership`, each a
+   `lamportTs` and a `sourceNodeId`; migrations 045 and 047). The joiner's row takes them
    (`JoinRevocations.Inherit`), so it judges every later event about that peer field by field as the
    producer does. With one version for the whole row the joiner inherited the producer's state as it
    was, a demotion dropped for a crossing rename included. Each entry also carries `lamportTs` and
@@ -744,6 +846,7 @@ Emitted immediately after `dek_rotation_proposed` (MVP: no quorum wait). Peers u
 | `new_dek_epoch` | int | Matches the PROPOSED epoch |
 | `rotation_ts` | string (ISO 8601) | Matches the PROPOSED timestamp |
 | `originator_node_id` | string | Node ID of the initiator |
+| `reason` | string, optional (2.12) | Absent, or `offboarding:<process id>` for the rotation that ends the removal of a person (also on the PROPOSED event). Travels in clear and names nobody. An older node ignores it. |
 
 **Resolving the new DEK (`DekRotationMaterial.ResolveNewDek`):** a receiving node first tries to
 open its own entry in `peer_envelopes`; only if that's absent (a pre-ADR-0006 sender) does it fall
@@ -759,6 +862,22 @@ DEK rotation uses the same peer-acceptance pattern as snapshot restore (see "Res
 
 - **Auto-accept enabled:** when the COMMIT event arrives, `EventApplier` fires `IDekRotationApplier.AutoAcceptCommitAsync()` in the background. The peer applies the full destructive re-wrap (all DEK columns, node data keys, removal of agents that carry a wrapped Master DEK, sentinel update) without human intervention. If the session is locked at the time, auto-accept is deferred and retried on the next unlock (`RetryPendingAutoAcceptsAsync`).
 - **Auto-accept disabled:** the COMMIT is recorded in `tbl_dek_rotation_state` as `Committing`. The Admin UI shows a pending banner with Apply (`POST /api/dek-rotation/peer-accept/{id}`) and Reject (`POST /api/dek-rotation/peer-reject/{id}`) buttons. A pending list is available via `GET /api/dek-rotation/peer-pending`.
+
+**Removal rotations apply by themselves (2.12).** A COMMIT whose `reason` is `offboarding:<process id>`, from a node this node sees as
+a superadmin (`tbl_whitelist.is_superadmin`), is applied whatever `auto_accept_dek_rotation` says: at once by an unlocked full node, at
+its next unlock by a locked one (the same retry sweeps, `DekRotationReasons.DecideAutoApplyAsync`), by a phone through its applier.
+Every node logs a warning and writes the audit entry `dek_rotation_removal_applied`. Without the reason, or from a node that is not a
+superadmin, the toggle decides as before. The propose API (`POST /api/dek-rotation/propose`, superadmin only) takes the reason and
+refuses any other shape.
+
+**What a rotation does to the doors (2.12).** On every node the rotation seals every v2 door and v2 auto-unlock agent to the new DEK,
+keeps the v1 password and recovery doors (the bridge), writes its own retired link (`tbl_dek_retired_link`, OLD under NEW) and publishes
+it as `retired_link_set`, and then publishes its device box again from the door it copies (newest box's door, else the sealed door of
+the superadmin who signed in last) when every peer shows `door-box-v1`. See [encryption.md](encryption.md#dek-rotation).
+
+**Key-operation lock (2.12).** A rotation (propose, accept, a peer's apply) takes the node-local key-operation lock shared with the
+identity re-key; a node refuses a rotation while an offline re-key holds `<data>.rekey.lock`. A peer whose lock is busy leaves the
+commit pending and retries it. The offline re-key refuses while a rotation is proposed, committing, or applied but not completed.
 
 **Reject:** marks the rotation as `Rejected`. The peer's DEK diverges from the network — it can no longer decrypt new events. The peer must eventually accept a rotation or be re-joined.
 
@@ -777,13 +896,21 @@ After a peer rotates its DEK but before this node has accepted, the sentinel val
 
 ### Lazy Slot Rewrap After Peer Auto-Accept
 
-When a peer auto-accepts a rotation, the destructive part on the PEER side keeps all user key slots intact (still wrapped with the old DEK) and only deletes the `tbl_agent` rows that carry a wrapped Master DEK (auto-unlock agents) and `recovery`/`os_auto_unlock` slots. The initiator-side flow is different — there, all OTHER user slots are dropped because the initiator's local users are the canonical set. On the peer, a user's slot stays around so that on the next login, lazy rewrap can migrate it transparently:
+Since 2.12 (the quiet rotation, [ADR 0012](adr/0012-sealed-doors.md#the-quiet-rotation)) a rotation — on the initiator
+as on every peer — seals every v2 door and v2 auto-unlock agent to the new DEK inside its transaction, so there is
+nothing left to rewrap for a door in the new format. What a rotation cannot re-seal is a **v1** door (only its secret
+can write it): a v1 password or recovery door whose owner has not used it since the update is kept, and reaches the
+current DEK at its next use through this walk. (A v1 auto-unlock door or agent is deleted by the rotation instead; see
+"What a rotation does to the doors" above.) When such a straggler door is used:
 
 1. The system detects the sentinel doesn't match the DEK derived from the user's password.
 2. `LazySlotRewrapService` walks `tbl_dek_rotation_state.Applied` rows chronologically.
-3. For each rotation, it unwraps the next DEK from the commit event payload using the current candidate.
+3. For each rotation, it unwraps the next DEK from the chain material (or, for a rotation applied before migration 020,
+   the commit event payload) using the current candidate.
 4. After each unwrap, `VerifySentinel(currentSentinel, candidateDek)` is called. On match, the walk stops.
-5. The user's key slot is re-wrapped with the current DEK.
+5. The user's key slot is re-written with the current DEK — since 2.12 as a sealed (v2) door through `SlotDoors`, in the
+   door-replacement order (pending boot door, the row only while it still holds the opened door, the rewrite). When that
+   was the node's last v1 door, the bridge (the chain rows) is cleared in the same transaction.
 
 This is transparent to the user — no manual action required. See `docs/encryption.md → Lazy Slot Rewrap`.
 
@@ -806,9 +933,13 @@ that it does.
 
 ### Capabilities and the protocol a node declares
 
-- Every 2.6 node sends the capability `metadata-envelope-v1` and its version at authenticate, in `/api/sync/identity`
-  and in `report-position`; the receiving node records what each peer last showed on its whitelist row (capabilities,
-  version, when). The readiness report reads those observations.
+- Every 2.6+ node sends capabilities in `/api/sync/authenticate`, `/api/sync/identity`, and `report-position`;
+  currently advertised capabilities are `metadata-envelope-v1`, `peer-endpoints-v1`, `door-box-v1` (2.12.0 sealed
+  doors and v2 device recovery boxes; a v2 box is published only once every active peer shows it), `ownership-v1`
+  (2.12.0 ownership concern and join/invite metadata), `node-state-v1` (2.12.0 `node_state` control events; not
+  withheld from older peers), `identity-rekey-v1` (2.12.0 the node identity re-key), and `shared-doors-v1` (2.12.0
+  `accounts_home_set` and `superadmin_doors_set` shared superadmin doors). The receiving node records what each peer
+  last showed on its whitelist row (capabilities, version, when). The readiness report reads those observations.
 - `ISyncProtocolPolicy` decides what a node declares and accepts: protocol 3 before the switch, 4 after. Before the
   switch any peer declaring 3 or more is accepted; after it, a peer declaring 4, or 3 with the capability (a 2.6 node
   that has not pulled the activation yet: it must be able to, or the switch would deadlock). A 2.5 node gets 426 at
@@ -1245,3 +1376,11 @@ confirmed here, and the old pairing with two codes stays.
   secrets** — a new table is stripped by default until deliberately added to the allow-list, closing
   a class of bug where a forgotten table (e.g. `tbl_remote_api_token`) shipped its contents to every
   joining peer.
+
+## Accounts node and shared-node doors (2.12, ADR 0014)
+
+Two superadmin-only control events keep shared server nodes aligned with the designated **accounts node** (`accounts_home`):
+
+- **`accounts_home_set`** (migration `050`, replicated in `tbl_accounts_home`): designates one active `shared` full node as the network's accounts authority `(lamport_ts, source_node_id, node_id)`. Accepted only when authored by the current accounts node, when no accounts node is set yet, or after the current accounts node is revoked; the target must already be an active, non-blind, whitelisted `shared` full node (only the local setter on the accounts node flips a target from `personal` to `shared` via `whitelist_update` beforehand). Accepted changes raise `accounts_home_changed` in `node_state` and write an audit row on every node (a designation made on the node itself clears the flag there; a superadmin acknowledges it elsewhere); stale versions never overwrite newer `tbl_accounts_home` rows, and network restores merge by newest `RowVersion`. A take-over or a first designation (anything but the current accounts node's own hand-over) is refused when the target's `node_state` reports no superadmin door of its own, and deferred while it has not reported (ADR 0014). A node that designates **itself** is taken as `shared` by definition, with no prior mark needed — except that a row explicitly marked `personal` is refused, and in the window after the accounts node was revoked the self-designating node must already be marked `shared` (ADR 0014, N4).
+- **`superadmin_doors_set`** (replicated as sealed mailbox envelope per shared recipient): whenever a superadmin is created, promoted, deleted, demoted, or changes password/hint on the accounts node, `SuperadminDoorsPublisher` atomically allocates the next version before building the event and checks that every active non-blind shared peer advertises `shared-doors-v1`; if any lack it, publishing is withheld and `GET /api/shared-doors/status` / Admin → Devices warns naming those blocked peers. Peers with an unusable Ed25519 public key are skipped individually without aborting valid recipients and are named in `SkippedSharedNodes`. For valid shared recipients it encrypts `{ version, issued_at, people[] }` with an X25519 ephemeral key envelope (`DekEnvelope.Build` + AES-256-GCM), binding `{version}` and the author node id via AES-GCM AAD (`bmb-superadmin-doors-v1:{version}:{authorNodeId:D}`) alongside the Ed25519-signed `SyncEvent.NodeId` (never enclosing to blind or personal nodes, and rejecting blind recipients in `list_envelopes.peers` at ingress). Non-shared nodes, blind nodes, and lists from any author other than `accounts_home` record/ignore without altering local slots.
+- **Post-unlock catch-up and node state.** If a shared node receives `superadmin_doors_set` while locked, `EventApplier` stores it in `tbl_shared_doors_state` (`pending_apply = 1`) and `SessionService.TriggerPostUnlockCatchUp` invokes `ISharedDoorsApplier.ApplyPendingAsync()` on unlock. `SharedDoorsNodeStateContributor` includes `applied_doors_version`, `local_superadmin_door_count`, and `shared_doors_error` in `node_state`.

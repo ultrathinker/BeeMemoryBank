@@ -41,33 +41,57 @@ public class SyncForegroundService : Service
 
             var token = _cts.Token;
 
+            // The start-up of the sync loop. Whatever it throws is caught here: faulted and unobserved, the loop never started
+            // while IsRunning stayed true, and the WorkManager backstop skips its cycles while that flag is set - background sync was silently dead
+            // until the next start command. A failure is logged and IsRunning cleared, so the backstop takes over.
             Task.Run(async () =>
             {
-                var services = IPlatformApplication.Current!.Services;
-                var scopeFactory = services.GetRequiredService<IServiceScopeFactory>();
-                var logger = services.GetRequiredService<ILogger<SyncScheduler>>();
-                var syncTrigger = services.GetRequiredService<ISyncTrigger>();
-                var syncNotify = services.GetRequiredService<Services.SyncNotificationService>();
+                try
+                {
+                    var services = IPlatformApplication.Current!.Services;
+                    var scopeFactory = services.GetRequiredService<IServiceScopeFactory>();
+                    var logger = services.GetRequiredService<ILogger<SyncScheduler>>();
+                    var syncTrigger = services.GetRequiredService<ISyncTrigger>();
+                    var syncNotify = services.GetRequiredService<Services.SyncNotificationService>();
 
-                using var scope = scopeFactory.CreateScope();
-                var eventLogRepo = scope.ServiceProvider.GetRequiredService<IEventLogRepository>();
-                var maxTs = await eventLogRepo.GetMaxLamportTimestampAsync();
-                var lamportClock = services.GetRequiredService<LamportClock>();
-                lamportClock.Initialize(maxTs);
+                    // The clock continues from the newest event held. On an encrypted phone the service starts at boot, before anything is unlocked,
+                    // and the database is closed: nothing is read now (that read faulted this whole task, so the phone never synced
+                    // in the background, not even after the unlock); the open steps set the clock when the unlock opens the database
+                    // (AndroidOpenWork), and the scheduler's cycles wait for an open vault themselves.
+                    try
+                    {
+                        using var scope = scopeFactory.CreateScope();
+                        var maxTs = await scope.ServiceProvider.GetRequiredService<IEventLogRepository>().GetMaxLamportTimestampAsync();
+                        services.GetRequiredService<LamportClock>().Initialize(maxTs);
+                    }
+                    catch (VaultSealedException)
+                    {
+                        global::Android.Util.Log.Debug("BeeSync", "The database is closed until the unlock; the clock is set when it opens");
+                    }
 
-                var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
-                var scheduler = new SyncScheduler(scopeFactory, logger, syncTrigger, httpClientFactory, interval: TimeSpan.FromMinutes(5));
-                syncNotify.AttachScheduler(scheduler);
+                    var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
+                    var scheduler = new SyncScheduler(scopeFactory, logger, syncTrigger, httpClientFactory, interval: TimeSpan.FromMinutes(5));
+                    syncNotify.AttachScheduler(scheduler);
 
-                // Persistent heartbeat: each cycle (success OR failure) stamps Preferences so the
-                // Status page can show when background sync last actually ran on this device.
-                Services.SyncHeartbeat.RecordServiceStart();
-                // Problem, not Error: a peer that answered 404 (a wrong address) or did not answer ends the cycle with a failure per peer, and
-                // that must read "error: no sync server at this address ...", never "ok (applied 0)" (BMB-307).
-                scheduler.SyncCycleCompleted += (_, r) =>
-                    Services.SyncHeartbeat.RecordCycle(r.Problem == null, r.TotalApplied, r.Problem, "fg");
+                    // Persistent heartbeat: each cycle (success OR failure) stamps Preferences so the
+                    // Status page can show when background sync last actually ran on this device.
+                    Services.SyncHeartbeat.RecordServiceStart();
+                    // Problem, not Error: a peer that answered 404 (a wrong address) or did not answer ends the cycle with a failure per peer, and
+                    // that must read "error: no sync server at this address ...", never "ok (applied 0)" (BMB-307).
+                    scheduler.SyncCycleCompleted += (_, r) =>
+                        Services.SyncHeartbeat.RecordCycle(r.Problem == null, r.TotalApplied, r.Problem, "fg");
 
-                await scheduler.StartAsync(token);
+                    await scheduler.StartAsync(token);
+                }
+                catch (System.OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    // A newer start command or the service's end cancelled this start: the newer one owns the flag.
+                }
+                catch (Exception ex)
+                {
+                    global::Android.Util.Log.Error("BeeSync", $"The sync loop did not start: {ex.GetType().Name}; the WorkManager backstop takes over");
+                    IsRunning = false;
+                }
             });
 
             // The look for the paired desktops on the Wi-Fi lives and dies with the sync loop above (docs/design/lan-peer-sync.md 16): a short look every

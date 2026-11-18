@@ -1,27 +1,88 @@
 <?xml version="1.0" encoding="utf-8" ?>
+<!-- The article in the design's shape: the headline, the meta bar (path chip, human date), the
+     tags in ONE line with "+N", the body in the design's tokens, the lock card of a protected
+     article, and the comments with their input row. The whole page scrolls; the body WebView is
+     sized to its content (its own scrolling is off). -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.FullIos.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.FullIos.Localization"
              x:Class="BeeMemoryBank.FullIos.Pages.NotePage"
              Title="Note">
     <ContentPage.ToolbarItems>
-        <ToolbarItem x:Name="EditItem" Text="Edit" Clicked="OnEdit" AutomationId="EditButton" />
-        <ToolbarItem Text="Move to trash" Order="Secondary" Clicked="OnDelete" />
+        <ToolbarItem x:Name="EditItem" Text="{loc:Translate Edit}" Clicked="OnEdit" AutomationId="EditButton" />
+        <!-- The more menu (move, source/rendered, password, delete) as the app's own sheet, so it
+             can be photographed and reads in the design's shape, like the tree row's sheet. -->
+        <ToolbarItem x:Name="MoreItem" Clicked="OnMore" AutomationId="NoteMoreButton" />
     </ContentPage.ToolbarItems>
-    <Grid RowDefinitions="Auto,*" Padding="16,4,16,0">
-        <VerticalStackLayout Spacing="2" Padding="4,0,4,8">
-            <Label x:Name="TitleLabel" FontSize="24" FontAttributes="Bold" AutomationId="NoteTitle" />
-            <Label x:Name="MetaLabel" Style="{StaticResource Muted}" FontSize="13" />
-        </VerticalStackLayout>
-        <WebView Grid.Row="1" x:Name="Body" BackgroundColor="Transparent" Navigating="OnNavigating" />
-        <!-- A note protected by its own passphrase: nothing of it is shown until the passphrase is given. -->
-        <Border Grid.Row="1" x:Name="LockedCard" Style="{StaticResource Card}" VerticalOptions="Start" IsVisible="False">
-            <VerticalStackLayout Spacing="10">
-                <Label Text="This note has its own passphrase." FontAttributes="Bold" />
-                <Label x:Name="HintLabel" Style="{StaticResource Muted}" IsVisible="False" />
-                <Entry x:Name="PassphraseEntry" IsPassword="True" Placeholder="Passphrase of this note" ReturnType="Go" Completed="OnOpenProtected" />
-                <Label x:Name="PassphraseError" Style="{StaticResource Error}" IsVisible="False" />
-                <Button Text="Open" Clicked="OnOpenProtected" />
+    <RefreshView x:Name="Refresher" Refreshing="OnRefreshing">
+    <ScrollView x:Name="Scroller">
+        <VerticalStackLayout Padding="16,8,16,100" Spacing="10">
+            <Label x:Name="TitleLabel" FontSize="22" Style="{StaticResource TitleLabel}" AutomationId="NoteTitle" />
+            <HorizontalStackLayout x:Name="MetaBar" Spacing="8" />
+            <controls:TagLine x:Name="ConceptTagsLayout" IsVisible="False" />
+            <WebView x:Name="Body" BackgroundColor="Transparent" Navigating="OnNavigating" Navigated="OnBodyNavigated" />
+            <!-- The source text, shown instead of the rendered body by the more menu's toggle. -->
+            <Label x:Name="RawLabel" FontFamily="Menlo" FontSize="13" LineBreakMode="WordWrap"
+                   TextColor="{AppThemeBinding Light={StaticResource BmbTextLight}, Dark={StaticResource BmbText}}"
+                   IsVisible="False" AutomationId="NoteRaw" />
+            <!-- Related articles (shared tags / close meaning): a few at a time, more / all / less. -->
+            <VerticalStackLayout x:Name="RelatedCard" Spacing="10" Margin="0,10,0,0" IsVisible="False">
+                <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" Margin="0,0,0,6" />
+                <Label x:Name="RelatedHeaderLabel" Style="{StaticResource CardTitle}" />
+                <VerticalStackLayout x:Name="RelatedList" Spacing="6" AutomationId="RelatedArticlesList" />
+                <HorizontalStackLayout Spacing="12" HorizontalOptions="Center">
+                    <Button x:Name="RelatedMoreButton" Text="{loc:Translate ShowMore}" Style="{StaticResource TextButton}"
+                            IsVisible="False" Clicked="OnRelatedMore" AutomationId="RelatedShowMoreButton" />
+                    <Button x:Name="RelatedAllButton" Text="{loc:Translate ShowAll}" Style="{StaticResource TextButton}"
+                            IsVisible="False" Clicked="OnRelatedAll" AutomationId="RelatedShowAllButton" />
+                    <Button x:Name="RelatedLessButton" Text="{loc:Translate ShowLess}" Style="{StaticResource TextButton}"
+                            IsVisible="False" Clicked="OnRelatedLess" AutomationId="RelatedShowLessButton" />
+                </HorizontalStackLayout>
             </VerticalStackLayout>
-        </Border>
-    </Grid>
+            <!-- A note protected by its own passphrase: nothing of it is shown until the passphrase is given. -->
+            <Border x:Name="LockedCard" Style="{StaticResource CardBorder}" IsVisible="False" Padding="18,22">
+                <VerticalStackLayout Spacing="14">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <Border Grid.Column="0" WidthRequest="40" HeightRequest="40" StrokeThickness="0"
+                                StrokeShape="RoundRectangle 12"
+                                BackgroundColor="{AppThemeBinding Light={StaticResource BmbAccentSoftLight}, Dark={StaticResource BmbAccentSoft}}">
+                            <Image Source="{AppThemeBinding Light=icon_row_lock_light.png, Dark=icon_row_lock_dark.png}"
+                                   WidthRequest="20" HeightRequest="20" HorizontalOptions="Center" VerticalOptions="Center" />
+                        </Border>
+                        <VerticalStackLayout Grid.Column="1" Spacing="2" VerticalOptions="Center">
+                            <Label Text="{loc:Translate ProtectedTitle}" Style="{StaticResource ItemTitle}" />
+                            <Label x:Name="HintLabel" Style="{StaticResource ItemMeta}" IsVisible="False" LineBreakMode="WordWrap" />
+                        </VerticalStackLayout>
+                    </Grid>
+                    <VerticalStackLayout Spacing="6">
+                        <Label Text="{loc:Translate ArticlePasswordLabel}" Style="{StaticResource FieldLabel}" />
+                        <controls:PasswordBox x:Name="PassphraseEntry" Placeholder="{loc:Translate EnterArticlePassword}" ReturnType="Go" Completed="OnOpenProtected" />
+                        <Label x:Name="PassphraseError" Style="{StaticResource FieldError}" IsVisible="False" />
+                    </VerticalStackLayout>
+                    <Button Text="{loc:Translate OpenArticle}" Style="{StaticResource PrimaryButton}" Clicked="OnOpenProtected" />
+                </VerticalStackLayout>
+            </Border>
+            <!-- Comments: the list, then the input row (the Android article footer). -->
+            <VerticalStackLayout x:Name="CommentsCard" Spacing="10" Margin="0,10,0,0" IsVisible="False">
+                <BoxView HeightRequest="1" Color="{AppThemeBinding Light={StaticResource BmbBorderLight}, Dark={StaticResource BmbBorder}}" Margin="0,0,0,6" />
+                <Label x:Name="CommentsHeaderLabel" Style="{StaticResource CardTitle}" />
+                <Label x:Name="NoCommentsLabel" Text="{loc:Translate NoComments}" Style="{StaticResource ItemMeta}" IsVisible="False" />
+                <VerticalStackLayout x:Name="CommentsList" Spacing="8" />
+                <!-- One line when the field and Send fit; at a large system font Send drops
+                     under the field, full width, so the placeholder is never cut. -->
+                <Grid x:Name="CommentInputGrid" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto"
+                      ColumnSpacing="8" RowSpacing="8" Margin="0,4,0,0">
+                    <Border x:Name="CommentShell" Grid.Column="0" Style="{StaticResource InputShell}">
+                        <Editor x:Name="CommentEntry" Placeholder="{loc:Translate AddCommentPlaceholder}"
+                                AutoSize="TextChanges" MinimumHeightRequest="40" BackgroundColor="Transparent"
+                                AutomationId="CommentEntry" />
+                    </Border>
+                    <Button x:Name="SendButton" Grid.Column="1" Text="{loc:Translate Send}" Style="{StaticResource PrimaryButton}"
+                            VerticalOptions="End" Clicked="OnAddComment" AutomationId="AddCommentButton" />
+                </Grid>
+            </VerticalStackLayout>
+        </VerticalStackLayout>
+    </ScrollView>
+    </RefreshView>
 </ContentPage>

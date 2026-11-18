@@ -53,7 +53,7 @@ namespace BeeMemoryBank.Core.Tests;
 /// bug this test exists to prevent. They are allow-listed anyway (this test asserts access is
 /// legitimate, not that every call site is bug-free — verifying "was the event actually published
 /// three lines up" is a dataflow question no source-line scan answers honestly) and flagged instead
-/// in the task report that added this test. A human still has to read that.
+/// in the change that added this test. A human still has to read that.
 /// </para>
 ///
 /// <para>
@@ -265,6 +265,9 @@ public class RepositoryWriteGuardrailTests
         new("server/BeeMemoryBank.Api/Endpoints/AgentEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/BrandingEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/DekRotationEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
+        new("server/BeeMemoryBank.Api/Endpoints/KeyEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
+        // The acknowledgement of a retired-key attention mark: a node-local marker, no event to log.
+        new("server/BeeMemoryBank.Api/Endpoints/NodeIdentityEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/RestrictionEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/RoleEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),
         new("server/BeeMemoryBank.Api/Endpoints/SnapshotEndpoints.cs", "IAuditLogRepository", "LogAsync", AuditLogReason),

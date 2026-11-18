@@ -12,7 +12,8 @@ public class BlindInviteRepository(DbConnectionFactory factory) : BaseRepository
           redeemer_node_id AS RedeemerNodeId, redeemer_key AS RedeemerKey, redeemer_name AS RedeemerName, redeemer_platform AS RedeemerPlatform,
           redeemer_version AS RedeemerVersion, redeemer_seen_from AS RedeemerSeenFrom, backup_key_enc AS BackupKeyEnc,
           kind AS Kind, pair_code_enc AS PairCodeEnc, confirm_deadline AS ConfirmDeadline, confirming_at AS ConfirmingAt, enroll_event_id AS EnrollEventId,
-          decided_at AS DecidedAt, decided_by AS DecidedBy";
+          decided_at AS DecidedAt, decided_by AS DecidedBy,
+          ownership AS Ownership, owner_person_id AS OwnerPersonId, owner_label AS OwnerLabel";
 
     // What counts as open: the one definition, used by the cap and by the count.
     private const string OpenWhere =
@@ -20,16 +21,20 @@ public class BlindInviteRepository(DbConnectionFactory factory) : BaseRepository
 
     public async Task<bool> TryInsertAsync(BlindInviteRecord row, DateTime now, int maxOpen)
     {
+        var ownership = OwnershipKinds.NormalizeOrNull(row.Ownership) ?? OwnershipKinds.Shared;
         using var conn = OpenConnection();
         // The count is part of the INSERT ... SELECT: SQLite takes the write lock for the whole statement, so two owners cannot both count 19 and both insert.
         return await conn.ExecuteAsync(
             $@"INSERT INTO tbl_blind_invite
-                (invite_id, secret_hash, label, source_name, address, trust, pin, created_by, created_at, expires_at, state)
-              SELECT @InviteId, @SecretHash, @Label, @SourceName, @Address, @Trust, @Pin, @CreatedBy, @CreatedAt, @ExpiresAt, @State
+                (invite_id, secret_hash, label, source_name, address, trust, pin, created_by, created_at, expires_at, state, ownership, owner_person_id, owner_label)
+              SELECT @InviteId, @SecretHash, @Label, @SourceName, @Address, @Trust, @Pin, @CreatedBy, @CreatedAt, @ExpiresAt, @State, @Ownership, @OwnerPersonId, @OwnerLabel
               WHERE (SELECT COUNT(*) FROM tbl_blind_invite WHERE {OpenWhere}) < @maxOpen",
             new
             {
                 row.InviteId, row.SecretHash, row.Label, row.SourceName, row.Address, row.Trust, row.Pin, row.CreatedBy, row.CreatedAt, row.ExpiresAt, row.State,
+                Ownership = ownership,
+                OwnerPersonId = ownership == OwnershipKinds.Personal ? row.OwnerPersonId : null,
+                OwnerLabel = ownership == OwnershipKinds.Personal ? row.OwnerLabel : null,
                 now, maxOpen
             }) == 1;
     }

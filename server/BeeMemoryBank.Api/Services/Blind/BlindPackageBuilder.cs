@@ -87,7 +87,7 @@ public sealed class BlindPackageBuilder(
 
     /// <summary>
     /// The signed whitelist events about this node still in its log — its admission, updates AND revokes,
-    /// in order (review L-merge round 3 #2: without the revokes, a revoked producer's old promotion
+    /// in order (without the revokes, a revoked producer's old promotion
     /// would be replayed alone). The receiver runs them through its ordinary applier before it has any
     /// row for this node, so what the stream cannot prove it does not grant: compaction removes a prefix
     /// of the log, so where the admission is gone the updates after it apply to nothing, and a revoke
@@ -109,7 +109,7 @@ public sealed class BlindPackageBuilder(
     }
 
     /// <summary>
-    /// Where the receiver can dial this node, and the pin it checks there (review L-merge #3): without
+    /// Where the receiver can dial this node, and the pin it checks there: without
     /// them the producer's row on a blind node seeded from its only hub is not dialable, and not
     /// pinned. A blind node knows both (the address its pair code gives, its own certificate). A full
     /// node that is reachable says so in configuration — BMB_PUBLIC_ADDRESS and BMB_PUBLIC_TLS_SPKI —

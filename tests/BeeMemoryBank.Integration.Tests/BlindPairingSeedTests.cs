@@ -42,7 +42,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
         _ = _blind.Services; // start it: identity, certificate
         _pc.RouteOutboundHttpThrough(_blind.Server.CreateHandler());
         // The PC's first seed uses the pair code, which makes it the blind node's superadmin and reseed
-        // authority (review r1-merge #3; BlindRootBootstrapTests).
+        // authority (BlindRootBootstrapTests).
         await _pc.InitializeNodeAsync("PC", Password);
         _pcClient = _pc.CreateClient();
         (await _pcClient.PostAsJsonAsync("/api/session/login", new { username = "admin", password = Password }))
@@ -162,7 +162,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage1 #3: the first seed is verified against the key the pairing secret vouched for,
+    /// The first seed is verified against the key the pairing secret vouched for,
     /// never against a key the package names itself. A package another node built and signed — its
     /// own key in its own manifest — is refused although the PC's proof is valid.
     /// </summary>
@@ -187,7 +187,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage1 #3: the MAC binds the key. Right secret, but the key sent is not the one the MAC
+    /// The MAC binds the key. Right secret, but the key sent is not the one the MAC
     /// was made over → refused before a byte is read; and a proof for some other node id, however
     /// valid, does not let the PC's package in either.
     /// </summary>
@@ -210,7 +210,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review l-root2 #1: two uploads under the same proof at once. Both pass the endpoint's proof check
+    /// Two uploads under the same proof at once. Both pass the endpoint's proof check
     /// before either has the upload gate; the first one through seeds and spends the code, and the second
     /// is refused under the gate — it neither switches the database again nor grants authority again.
     /// </summary>
@@ -229,7 +229,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review l-root2 #1, the same race made deterministic: a proof checked while the code was current
+    /// A proof checked while the code was current
     /// is presented to the seed service only after another seed spent the code.
     /// </summary>
     [Fact]
@@ -255,7 +255,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review l-root4 #1: a connection to the live database opened before a reseed and still open when
+    /// A connection to the live database opened before a reseed and still open when
     /// the package arrives. The switch waits for it instead of moving the file from under it (on Linux
     /// the connection would go on reading and writing the moved file); once it closes, the switch goes
     /// ahead, and a connection opened then reads the new database.
@@ -332,7 +332,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
             .ToList();
 
     /// <summary>
-    /// Review l-root5 #2: the other half of the switch's contract. A connection that NEVER closes
+    /// The other half of the switch's contract. A connection that NEVER closes
     /// must not be waited for indefinitely, and must not be worked around either: the seed fails
     /// closed with 400, the file is not switched, and the gate opens again so the node keeps
     /// serving. Shortening the wait is what makes this provable without a minute of wall clock.
@@ -383,7 +383,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review l-root4 #2: the seeder of a first seed becomes the blind node's superadmin, so it must be
+    /// The seeder of a first seed becomes the blind node's superadmin, so it must be
     /// a full node. Another blind node with a valid pairing proof for its own key and its own package is
     /// refused before anything is staged: nothing switched, no row for it.
     /// </summary>
@@ -416,7 +416,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
         File.Exists(Path.Combine(_blind.DataPath, "beememorybank.db.pre-seed")).Should().BeFalse("nothing was switched");
     }
 
-    /// <summary>Review L-stage1 #3: a first seed spends the code — its proof does not open a second one.</summary>
+    /// <summary>A first seed spends the code — its proof does not open a second one.</summary>
     [Fact]
     public async Task TheCode_IsSpentByTheFirstSeed()
     {
@@ -518,7 +518,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-merge #1: a part that dies half-way (a dropped connection) leaves uncounted bytes on
+    /// A part that dies half-way (a dropped connection) leaves uncounted bytes on
     /// disk. Its retry at the offset the node still reports is written there — over them, not after.
     /// </summary>
     [Fact]
@@ -692,7 +692,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage1 #4: an event whose apply is already running when the cutover starts is waited
+    /// An event whose apply is already running when the cutover starts is waited
     /// for and replayed — the tail is read only after writes are held off, so it cannot fall between
     /// the tail and the switch.
     /// </summary>
@@ -722,7 +722,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage1 #4: a tail event that cannot apply on top of the package yet (its author is not
+    /// A tail event that cannot apply on top of the package yet (its author is not
     /// in the package's whitelist) is not dropped: the node goes back to its old database, keeps the
     /// event, and refuses the seed so it can be sent again.
     /// </summary>
@@ -752,7 +752,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage1 round 3 #2: on a node that had no media directory, a seed that fails after the
+    /// On a node that had no media directory, a seed that fails after the
     /// switch (here its replay) leaves no media directory behind: the seed's goes with the seed.
     /// </summary>
     [Fact]
@@ -779,7 +779,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage1 round 2 #2: the DEK-exposure alarm is cleared by an operator, not by a reseed
+    /// The DEK-exposure alarm is cleared by an operator, not by a reseed
     /// replacing the database it was recorded in.
     /// </summary>
     [Fact]
@@ -799,7 +799,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage1 round 2 #3: a failure in the switch after the database was already moved —
+    /// A failure in the switch after the database was already moved —
     /// here the media directory cannot be put in place — puts the old database back before the node
     /// is released, instead of leaving the new one live without its media.
     /// </summary>
@@ -826,7 +826,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage1 round 2 #3: a new seed never discards an unresolved switch — its old database and
+    /// A new seed never discards an unresolved switch — its old database and
     /// media are the only way back until a start rolls it back.
     /// </summary>
     [Fact]
@@ -848,7 +848,7 @@ public class BlindPairingSeedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Codex round 2, security #7 / agy #5. A restic backup reads <c>dataPath/media</c> while the
+    /// A restic backup reads <c>dataPath/media</c> while the
     /// cutover renames that whole directory aside and moves the package's in — and later deletes the
     /// old one. On Windows the rename fails under an open handle and the seed is refused; on Linux
     /// the reader captures a half-moved tree. The cutover must therefore take the same reservation

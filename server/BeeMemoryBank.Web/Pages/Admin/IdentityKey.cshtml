@@ -1,0 +1,132 @@
+@page
+@model BeeMemoryBank.Web.Pages.Admin.IdentityKeyModel
+
+@section About {
+    <p>Every node signs what it sends with its own identity key. Here you can give this node a new identity key.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            A full backup of a node holds that node's identity key, protected by the master key. Somebody who took such a backup while they were an
+            administrator, and still knows an old password, could open it and act as this node. Changing the master key does not change the identity key.
+            <strong>Giving this node a new identity key</strong> closes that: the node keeps its name, its data and its devices, and the old key stops
+            working everywhere as soon as your other devices have synced.
+        </p>
+        <ul>
+            <li>Nobody has to do anything: your other devices learn the new key the next time they sync, and your copies on phones and blind nodes
+                follow it when they connect.</li>
+            <li>A device that stays offline across more than 16 new keys must be paired or joined again.</li>
+            <li>Every device must run version 2.12 or newer first; the page names the ones that hold it back.</li>
+        </ul>
+    </details>
+}
+
+@if (Model.Identity is { } id)
+{
+    <div class="card" style="max-width:640px;" data-node-identity="true">
+        <h3 style="margin-top:0;">This node's identity key</h3>
+        <p>Fingerprint: <code>@id.Fingerprint</code></p>
+        <p>Changed @id.Counter time(s).</p>
+        @if (id.History.Count > 0)
+        {
+            <details>
+                <summary>Earlier keys</summary>
+                <ul>
+                    @foreach (var h in id.History)
+                    {
+                        <li>Change @h.Counter: <code>@h.RetiredFingerprint</code> replaced by <code>@h.NewFingerprint</code></li>
+                    }
+                </ul>
+            </details>
+        }
+    </div>
+
+    @if (id.Conflicts.Count > 0)
+    {
+        <div class="card mt-md admin-warning" style="max-width:640px;" data-identity-conflict="true">
+            <h3 style="margin-top:0;">Identity conflict</h3>
+            @foreach (var c in id.Conflicts)
+            {
+                <p>
+                    <strong>@(c.DisplayName ?? c.NodeId.ToString())</strong> announced two different new keys (<code>@c.FirstFingerprint</code> and
+                    <code>@c.SecondFingerprint</code>). Somebody else may hold its old key, so its changes are not accepted until another administrator's
+                    device confirms which key is right. If there is no other administrator device, pair or join that device again from the node you control.
+                </p>
+                <form method="post" asp-page-handler="Confirm" data-busy="short">
+                    <input type="hidden" name="nodeId" value="@c.NodeId" />
+                    <p>Check the fingerprint on that device (Admin, Node identity key) and pick the one it shows:</p>
+                    <p><label><input type="radio" name="rotationEventId" value="@c.FirstRotationEventId" /> <code>@c.FirstFingerprint</code></label></p>
+                    <p><label><input type="radio" name="rotationEventId" value="@c.SecondRotationEventId" /> <code>@c.SecondFingerprint</code></label></p>
+                    <p><label><input type="checkbox" name="confirm" value="true" /> I checked the fingerprint on the device itself.</label></p>
+                    <sl-button type="submit" variant="warning" size="small">This key is the right one</sl-button>
+                </form>
+            }
+        </div>
+    }
+
+    @if (id.SignedAsThisNode is { } signedAsThisNode)
+    {
+        <div class="card mt-md admin-warning" style="max-width:640px;" data-signed-as-this-node="true">
+            <h3 style="margin-top:0;">Somebody signs as this node</h3>
+            <p>
+                @signedAsThisNode.Count change(s) reached this node signed with this node's own identity key that this node never wrote. Whoever made
+                them holds a copy of this node's key - most likely from a backup or a copied database. Give this node a new identity key below, and
+                ask whoever keeps your backups where the copy could have come from.
+            </p>
+            <p class="text-muted">
+                After restoring this node from an older backup, changes it wrote after that backup come back and show up here too; then there is
+                nothing to fear.
+            </p>
+            <form method="post" asp-page-handler="AcknowledgeSignedAsThisNode" data-busy="short">
+                <sl-button type="submit" variant="default" size="small">I have looked at it</sl-button>
+            </form>
+        </div>
+    }
+
+    @if (id.RetiredKeyAttention is { Count: > 0 } attention)
+    {
+        <div class="card mt-md admin-warning" style="max-width:640px;" data-retired-key-attention="true">
+            <h3 style="margin-top:0;">Changes signed by an old identity key</h3>
+            @foreach (var a in attention)
+            {
+                <p>
+                    This node took @a.Count change(s) of <strong>@(a.DisplayName ?? a.NodeId.ToString())</strong> that were signed by an identity key
+                    that device had already replaced, and that it did not list as its own. Somebody else may have held its old key. Look at that
+                    device's recent changes; if it is not yours any more, remove it from the network.
+                </p>
+                <form method="post" asp-page-handler="Acknowledge" data-busy="short">
+                    <input type="hidden" name="nodeId" value="@a.NodeId" />
+                    <sl-button type="submit" variant="default" size="small">I have looked at it</sl-button>
+                </form>
+            }
+        </div>
+    }
+
+    <div class="card mt-md" style="max-width:640px;">
+        <h3 style="margin-top:0;">Give this node a new identity key</h3>
+        @if (!id.CanRekeyHere)
+        {
+            <p>
+                This node's identity key is kept outside its database, and it cannot be replaced from here. If you think that key was copied,
+                remove this node from the network on another superadmin's device and set it up again as a new node.
+            </p>
+        }
+        else if (id.PeersHoldingBack.Count > 0)
+        {
+            <p>Not every device can follow a new identity key yet. Update or remove these first: @string.Join(", ", id.PeersHoldingBack).</p>
+        }
+        else
+        {
+            <form method="post" asp-page-handler="Rekey" data-busy="short">
+                <p><label>Why (kept in the audit log): <input type="text" name="reason" maxlength="200" style="width:100%;" /></label></p>
+                <p><label><input type="checkbox" name="confirm" value="true" /> I understand that the old identity key of this node stops working.</label></p>
+                <sl-button type="submit" variant="primary" size="small">
+                    <sl-icon slot="prefix" name="key"></sl-icon> Give this node a new identity key
+                </sl-button>
+            </form>
+        }
+    </div>
+}
+else
+{
+    <p>The node identity could not be read right now.</p>
+}

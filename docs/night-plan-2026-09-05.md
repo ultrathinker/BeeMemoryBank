@@ -1,7 +1,7 @@
 # Night plan, 2026-09-05 — closing the security-review findings
 
 Working document for the overnight run. Written down because decisions were made here that the
-code alone does not explain, and because the owner asked for the plan to live somewhere findable
+code alone does not explain, and because the plan needed to live somewhere findable
 rather than in a chat log.
 
 Source list: the review artifact (37 findings). 26 closed before this run; this document covers
@@ -11,20 +11,20 @@ what happens to the rest.
 
 ## Standing constraints for this run
 
-- **Production is not touched.** No deploy to Hetzner, no backup-restore drill. The owner decided
+- **Production is not touched.** No deploy to the production server, no backup-restore drill. It was decided
   this explicitly: about 20 people use that instance, and there is nobody awake to roll back.
   Items 2 and 3 stay open for a session with a human present.
 - Every change lands as its own commit, so any single one can be reverted on its own.
 - Agents work in isolated git worktrees; nothing merges to `master` without review here.
-- `AGENTS.md` and `CLAUDE.md` are never edited on an agent's own initiative.
+- The agent instruction files are never edited on an agent's own initiative.
 
 ---
 
-## The owner's principle, in their words
+## The sync-only principle
 
-> Нода должна иметь права не больше, чем позволено синхронизацией. Общение между нодами должно
-> идти только с помощью синхронизации. Одна нода у другой не должна вызывать какие-то открытые
-> методы API.
+> A node should have no more rights than synchronisation allows. Communication between nodes
+> should go only through synchronisation. One node should not call any open API methods of
+> another.
 
 Restated: a peer should be able to do no more than *synchronise* — write an article and propagate
 it. It should not hold authority over the cluster, and node-to-node traffic should be the sync
@@ -32,7 +32,7 @@ protocol rather than ad-hoc API calls.
 
 ### Where that principle already holds
 
-The public HTTP surface is already close to sync-only. After the wave-3 work, `PublicSurface` plus
+The public HTTP surface is already close to sync-only. After the public-surface work, `PublicSurface` plus
 `PublicSurfaceMiddleware` answer 404 without an internal key to everything except `/api/sync/*`,
 `POST /api/join`, `/health`, `GET /api/version`, and the restore file download.
 
@@ -81,7 +81,7 @@ The claim was that remote subscriptions (mounting a folder from another vault, r
 the sync-only principle because node A calls node B's HTTP API directly: `/api/auth/remote-token`,
 `/api/folders/accessible`, `/api/folders/by-path/snapshot`.
 
-Reading the code shows the feature is already built the way the owner proposed as a fix:
+Reading the code shows the feature is already built the way the proposed fix required:
 
 - `/api/auth/remote-token` requires the **username and password of a real user account on the
   target node**, verifies it with Argon2id against `tbl_user`, and issues a 90-day bearer token

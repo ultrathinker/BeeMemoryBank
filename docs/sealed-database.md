@@ -8,16 +8,18 @@ start. The design behind it is `docs/design/step-b-spec.md`; the file-level deta
 
 **A node that is set up is encrypted from its first day** (2.6.2). The Web setup, `bmb init`, a Docker start set up
 through either, `bmb join` and the restore wizard all end with an encrypted database under the master password you
-gave, with metadata encryption already on (sync protocol 4). What follows about "Encrypt this node" is for a node that
-was set up by an earlier version and is still open: **no update or start encrypts it for you.** You do it, once per
-node, on purpose. A restore never produces an open node, and a new node joins only a node that is on protocol 4.
+gave, with metadata encryption already on (sync protocol 4). A node that was set up by an earlier version and is still
+open **encrypts itself** since 2.12: right after the next unlock, once the network has metadata encryption on, the same
+migration runs in the background with no button to press (`AutoSealService`, one attempt per unlock). The manual
+"Encrypt this node" button is gone from the Database encryption page; `bmb vault seal` remains for the command line.
+What follows describes that migration, whichever way it starts. A restore never produces an open node, and a new node
+joins only a node that is on protocol 4.
 
-**A phone is not a node of that kind.** Everything above is about a server or desktop node. Setting up or joining on a
-phone (the Android app, the iPhone app) does **not** encrypt the phone's database: a fresh or joined phone is **open**
-until its owner runs "Encrypt this phone's database" (Security page on Android, Settings on iPhone; see "Phones").
-Until then the notes the phone holds, and the names of its folders, tags and peers, are in a readable database file in
-the app's private storage. The setup and join of a phone are deliberately unchanged by this guide; whether they should
-end encrypted is the owner's decision, not something an update makes for you.
+**A phone encrypts itself too, since 2.12.** The Android app and the iPhone full app run the same migration right
+after a vault is created on the phone and right after a join — no button (the old "Encrypt this phone's database" card
+and page are gone; see "Phones"). A plain copy left by an older build is **not** converted at an unlock: the phone is
+set up again. Until a phone is encrypted, the notes it holds, and the names of its folders, tags and peers, are in a
+readable database file in the app's private storage.
 
 ## What it protects, and what it does not
 
@@ -57,11 +59,13 @@ What encryption does **not** protect (the residual, so that nobody is surprised)
 
 ## Before you start: the preflight
 
-Open **Admin > Database encryption** (`/Admin/StorageProtection`; the old address `/VaultEncryption` sends you there), or run `bmb vault seal` (it calls the running node and
-asks for the master password). Once the database is encrypted the same page shows its **storage protection**:
-the status ("encrypted since ...", open or closed) and, on a server, the permanent *Start unlocked after a
-restart* switch, and offer no encryption any more. The page runs a preflight and lists what is in the way. Each blocker has a code and a
-sentence; the migration starts only when none is left.
+Open **Admin > Database encryption** (`/Admin/StorageProtection`; the old address `/VaultEncryption` sends you there).
+A plain node encrypts itself after the next unlock (2.12); the page shows that run's progress, or one calm line naming
+what is in the way, and the attempt is made again at the next unlock. `bmb vault seal` runs the same migration from the
+command line (it calls the running node and asks for the master password). Once the database is encrypted the same page
+shows its **storage protection**: the status ("encrypted since ...", open or closed) and, on a server, the permanent
+*Start unlocked after a restart* switch, and offers no encryption any more. Each blocker has a code and a sentence; the
+migration starts only when none is left.
 
 | Blocker | What to do |
 |---|---|
@@ -113,10 +117,9 @@ data folder**: an offline backup kept elsewhere is yours to look after.
 
 ## Encrypting
 
-The page and `bmb vault seal` say first, in a warning, that **going back is not possible from the node**: encrypting it
-keeps no copy of the unencrypted database. Press **Encrypt this node** and enter the master password again (or run
-`bmb vault seal --yes`; the password comes from `--password-stdin` or a prompt). The node goes into maintenance mode
-and the page follows the progress:
+**Going back is not possible from the node**: encrypting it keeps no copy of the unencrypted database. The automatic
+run starts after an unlock (the page shows its progress); `bmb vault seal --yes` starts it by hand (the password comes
+from `--password-stdin` or a prompt). Either way the node goes into maintenance mode and the page follows the progress:
 
 1. the preflight again, the sync loop off, no event write in flight, the databases folded into their main files;
 2. a journal (`seal-journal.json`) is written;
@@ -195,8 +198,9 @@ database file that is itself a link is no supported layout. The same rule is app
 There is none from the node. The migration keeps no copy of the unencrypted database (a `pre-encryption/` folder and
 a "way-back snapshot" existed in 2.6.0 and 2.6.1; 2.6.2 neither makes nor looks for one), and **a restore never
 produces an open node**: a backup, a snapshot or a blind copy that holds an unencrypted database is refused when it is
-restored, whatever it is called. If you may want an unencrypted copy of your notes, take your own backup before you
-press "Encrypt this node" and keep it outside the data folder; it stays yours, and the node will not restore it.
+restored, whatever it is called. If you may want an unencrypted copy of your notes, take your own backup before the
+node encrypts itself (at its next unlock) and keep it outside the data folder; it stays yours, and the node will not
+restore it.
 
 A folder an older version left (`pre-encryption/`, with a snapshot in it) is not read by the product; it is yours to
 keep or to remove. A journal of an interrupted migration that names such a snapshot is still read, and resolved as
@@ -221,6 +225,11 @@ Every other route answers `503 vault_sealed`. The doors that open it:
   closes again);
 - on a desktop, OS auto-unlock; on a server, "Start unlocked after a restart" (both below);
 - the update hand-off, which opens the new version after an update without a password.
+
+Since 2.12 every door is a sealed box ([ADR 0012](adr/0012-sealed-doors.md)); a door written by an earlier release keeps working
+and is sealed again the first time its secret is used. Each door names the master key it yields, and the boot store keeps the
+database-key wrapper of every master key a door names (all of them while some door's key is unknown), so a door that still
+holds an older master key always opens the closed file.
 
 A wrong password, a deactivated user, an unknown user and a wrong user name for a right password all give the same
 401 and leave the database closed. The node locks when you lock it, when the app goes to the background (phones), and
@@ -329,10 +338,10 @@ a named reason (nothing is opened, nothing is created beside it):
    instead (`docs/snapshot-restore.md`).
 
 A restore never reintroduces a plain copy: a set taken from an encrypted node holds only encrypted files. A set taken
-before the migration is a plain set; copied back into the data folder it is simply the open node it was (the node
-never encrypts itself: press "Encrypt this node"). The product's own restores (the snapshot restore, a network restore,
-the restore wizard of a new node) are different: **they refuse a plain database**, in an archive or in a file set, and
-they end in an encrypted node.
+before the migration is a plain set; copied back into the data folder it is simply the open node it was — and, since
+2.12, it encrypts itself after the next unlock like any plain node. The product's own restores (the snapshot restore, a
+network restore, the restore wizard of a new node) are different: **they refuse a plain database**, in an archive or in
+a file set, and they end in an encrypted node.
 
 ### A blind node
 
@@ -367,6 +376,22 @@ An **old program** (2.5.x or any build without the encrypted database) pointed a
 statement (SQLite error 26) and stops; no file is written or changed. A 2.5 desktop application does not see a vault in
 that folder and refuses to create one there.
 
+## Key rotation
+
+A DEK rotation on an encrypted node changes no page and not the database key: inside the rotation transaction the node adds a wrapper
+of the database key under the new master key and writes every changed door to the boot store as *pending* before the commit; after the
+commit it rewrites the boot store. Since 2.12 (the quiet rotation, [ADR 0012](adr/0012-sealed-doors.md#the-quiet-rotation)) every
+sealed (v2) door is sealed to the new key in that transaction — every superadmin's door, recovery keys, the OS and server auto-unlock,
+quick unlock and the auto-unlock agents — so every one of them opens the node after a restart, and the boot store keeps exactly one
+wrapper, under the new key, once no door names the old one. The server's *Start unlocked after a restart* stays on: its enable record
+names the old and the re-sealed door before the commit and the new one after it, so a crash at any point leaves the server armed.
+
+A v1 door (one nobody has used since the update to 2.12) cannot be sealed to the new key. A password or recovery door of that kind is
+kept: the boot store keeps a wrapper for every key it may hold (the pruning rule), so it still opens the file, and the node keeps the
+*bridge* (the rotation's chain, NEW under OLD) that takes it to the current key at its first use. When the node's last v1 door is gone,
+the chain goes with it and the old wrappers are pruned. The Master key page shows a bridge that is still there and can remove it. A v1
+auto-unlock door or agent is deleted, as before 2.12.
+
 ## Edges and pairings in a mixed mesh
 
 A full node is in one of four states: **N0** a 2.5.x binary; **N1** 2.6.0, sync format not activated, plain (on the wire
@@ -394,17 +419,17 @@ vault_sealed_range`, error 26 at start) happens before anything is written.
 
 ## Phones
 
-**A fresh or joined phone is open.** Unlike a server or a desktop node (which end setup and join encrypted), the phone's
-setup and join create a plain database, and it stays plain until the owner runs "Encrypt this phone's database" below.
-Nothing starts that for you, and the phone does not ask.
+**A fresh or joined phone is encrypted, with no button (2.12).** The Android app and the iPhone full app run the same
+migration in process right after a vault is created on the phone and right after a join (`PhoneSealing`), behind the
+please-wait pop-up with the screen kept on. A vault made on the phone switches the new sync format on first (it starts
+its own network); a phone joining an existing network never switches it on for everybody, and a network still on the
+old sync format is named as the reason. The "no other copy" question is answered for the phone: a new vault holds
+nothing yet, and a joined one is also on the computer it came from. The encrypt button, its card and its page are gone
+from both apps; the Security page (Android) and Settings (iPhone) keep their other functions.
 
-An Android or iPhone app runs the same migration in process, from the **Security page** (Android) or **Settings**
-(iPhone), in the foreground, with a progress bar that keeps the screen on. The preflight adds `mobile_foreground`
-(the app is in the foreground, battery at least 30 % or charging). A phone keeps no copy of the plain database, so
-the migration starts only if some full peer has reported a position at or above this phone's log head (the phone
-holds nothing a peer has not got), or you tick "This phone holds the only copy of these notes; encrypting cannot be
-undone" (`phone_no_copy`). Going back on a phone is to remove the vault and join again from a peer (the join gives the
-phone the notes again; it joins only a node that is on protocol 4).
+**A plain copy left by an older build is not converted.** An unlock never encrypts: such a phone is set up again (the
+notes come back from a peer by joining again, and a join is accepted only by a node that is on protocol 4). Going back
+on an encrypted phone is to remove the vault and join again from a peer.
 
 An encrypted phone locks **and closes its database** every time the app goes to the background. The master password
 unlocks it; so does the fingerprint (Android: the master password stored under a Keystore key that needs the
@@ -413,10 +438,6 @@ are never put in the Keystore or the Keychain). Android excludes the app data, t
 backups; the iPhone data folder is excluded from iCloud backup. A phone killed in the middle of the encryption resolves
 it at the next start, as a server does.
 
-The full Android app (2.6.x) **offers** "Encrypt this phone's database" on the Security page
-(`PhoneVaultLifecycle.PhoneEncryptionAvailable` is true in this build, so that the native release gate's device run - a build of
-the app, then join, encrypt, background, unlock, kill mid-encryption and restart on a real device - can be made;
-`PhoneVaultLifecycleTests` and `AndroidFullAppWiringTests` keep the switch on). That device run is still the release gate of the phone's encryption.
 Whether a phone is encrypted or not, it syncs and opens encrypted metadata the same way (see "The full Android app" in [sync.md](sync.md)).
 
 ## Linux and Docker

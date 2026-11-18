@@ -7,17 +7,21 @@
 }
 
 @section About {
-    <p>
-        These are the devices that belong to this network: the computers, servers and phones this node syncs with, and the blind nodes that keep its encrypted
-        backups. A device that is not on this list is not accepted, and a device that is revoked stops being accepted by every node that receives the revocation.
-        Each row says in one sentence how this node reaches the device: directly on this network, directly over the internet, through another device, or not at all.
-    </p>
-    <p>
-        <strong>Being away is not a fault.</strong> A laptop on a trip is &ldquo;Not on this network&rdquo; and, when another device has seen it, &ldquo;reachable through&rdquo;
-        that device; it catches up when it is back. Only a device nobody has heard from for three days, or one this node calls and gets no answer from, is marked as an
-        alarm. Open a device for its addresses, what it may do on its own, and how its certificate is trusted.
-        To mirror selected folders read-only from a different Bee Memory Bank, use <a href="/RemoteAccounts">Remote Accounts</a>.
-    </p>
+    <p>Your devices that keep in step with this one: computers, phones and blind nodes.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            These are the devices that belong to this network: the computers, servers and phones this node syncs with, and the blind nodes that keep its encrypted
+            backups. A device that is not on this list is not accepted, and a device that is revoked stops being accepted by every node that receives the revocation.
+            Each row says in one sentence how this node reaches the device: directly on this network, directly over the internet, through another device, or not at all.
+        </p>
+        <p>
+            <strong>Being away is not a fault.</strong> A laptop on a trip is &ldquo;Not on this network&rdquo; and, when another device has seen it, &ldquo;reachable through&rdquo;
+            that device; it catches up when it is back. Only a device nobody has heard from for three days, or one this node calls and gets no answer from, is marked as an
+            alarm. Open a device for its addresses, what it may do on its own, and how its certificate is trusted.
+            To mirror selected folders read-only from a different Bee Memory Bank, use <a href="/RemoteAccounts">Remote Accounts</a>.
+        </p>
+    </details>
 }
 
 @if (Model.ShowLanNotice)
@@ -25,8 +29,12 @@
     @* D9: LAN sync is on by default after the update; said once. *@
     <sl-alert id="lan-notice" variant="primary" open style="margin-bottom:16px;">
         <sl-icon slot="icon" name="info-circle"></sl-icon>
-        <strong>Direct sync with your devices on this network is on.</strong> Devices already paired with this one keep in step with it directly on a network you trust,
-        without your server. Only the sync connection is opened, never the web page. You can change it under <a href="@AdminRoutes.NetworkSettings">Network settings</a>.
+        <strong>Direct sync with your devices on this network is on.</strong>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>Devices already paired with this one keep in step with it directly on a network you trust, without your server. Only the sync connection is opened,
+               never the web page. You can change it under <a href="@AdminRoutes.NetworkSettings">Network settings</a>.</p>
+        </details>
         <form data-busy="short" method="post" asp-page-handler="DismissLanNotice" style="margin-top:8px;">
             <sl-button type="submit" size="small">Got it</sl-button>
         </form>
@@ -53,6 +61,14 @@
             {
                 <span class="text-muted">&middot; @DeviceRows.KindOf(self)@(DeviceRows.PlatformOf(self) is { } platform ? " (" + platform + ")" : "") &middot; @DeviceRows.VersionOf(self)</span>
             }
+            @if (Model.SharedDoors?.IsThisNodeShared == true)
+            {
+                <sl-badge variant="neutral" pill style="margin-left:6px;">shared</sl-badge>
+            }
+            @if (Model.SharedDoors?.IsThisNodeAccountsHome == true)
+            {
+                <sl-badge variant="primary" pill style="margin-left:4px;">accounts node</sl-badge>
+            }
         </p>
     }
     @if (lan is not null)
@@ -65,9 +81,13 @@
     else if (!Model.Lan.IsAvailable)
     {
         <p class="devices-self-line text-muted text-sm" id="this-device-network">
-            This node is not the desktop app, so it has no LAN listener of its own: which computers can reach it is decided by how it was started.
-            <a href="@AdminRoutes.NetworkSettings">Network settings</a> says what applies.
+            Devices reach this server through its web address. <a href="@AdminRoutes.NetworkSettings">Network settings</a>
         </p>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>This node is not the desktop app, so it has no LAN listener of its own: which computers can reach it is decided by how it was started.
+               Network settings says what applies.</p>
+        </details>
     }
     @if (Model.RestoredPeers.Count > 0)
     {
@@ -81,10 +101,13 @@
         <details class="devices-identity" id="node-identity">
             <summary>Identity of this node</summary>
             <p class="text-muted text-sm" style="margin:8px 0;">
-                The ID names this node in the lists of the other nodes and in the log of changes; they check every change from this node against the public key. Nothing here is
-                secret and nothing here can be changed: use it to check that a device you are pairing is the one you think it is. A node that is wiped, or restored from a snapshot as a
-                new node, gets a new identity.
+                Nothing here is secret. Use it to check that a device you are pairing is the one you think it is.
             </p>
+            <details class="admin-more">
+                <summary>More details</summary>
+                <p>The ID names this node in the lists of the other nodes and in the log of changes; they check every change from this node against the public key.
+                   Nothing here can be changed. A node that is wiped, or restored from a snapshot as a new node, gets a new identity.</p>
+            </details>
             <div class="article-meta">
                 <span><strong>ID:</strong>
                     <span class="article-id-badge" title="Click to copy" data-bmb-copy="@identity.NodeId">@identity.NodeId</span>
@@ -108,18 +131,15 @@
         <h3 class="devices-card-title"><sl-icon name="shield-check"></sl-icon> Grant superadmin to devices joined with the password</h3>
         <sl-alert variant="warning" open style="margin-bottom:12px;">
             <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
-            <strong>@Model.PasswordPeersToPromote.Count device(s) joined with the master password are not superadmins yet.</strong>
-            Their hard deletes and password changes are refused by the rest of the network, so the copies drift apart.
+            <strong>@Model.PasswordPeersToPromote.Count device(s) need full rights so that all copies stay the same.</strong>
         </sl-alert>
-        <p style="margin-bottom:12px;">
-            Whoever knows the master password is a superadmin. These devices joined before that
-            rule, so the network still treats them as ordinary peers: a hard delete or a password
-            change made on them is applied there but refused everywhere else, and the copies drift
-            apart. Granting them superadmin tells every node, one device at a time.
-        </p>
-        <p class="text-muted text-sm" style="margin-bottom:16px;">
-            If you demoted one of these devices on purpose, untick it. Blind nodes never appear here.
-        </p>
+        <details class="admin-more" style="margin-bottom:12px;">
+            <summary>More details</summary>
+            <p>These devices joined with the master password but are not superadmins yet. Whoever knows the master password is a superadmin. These devices joined
+               before that rule, so the network still treats them as ordinary peers: a hard delete or a password change made on them is applied there but refused
+               everywhere else, and the copies drift apart. Granting them superadmin tells every node, one device at a time.</p>
+            <p>If you demoted one of these devices on purpose, untick it. Blind nodes never appear here.</p>
+        </details>
         <form data-busy="short" method="post" asp-page-handler="PromotePasswordPeers">
             @foreach (var c in Model.PasswordPeersToPromote)
             {
@@ -141,15 +161,108 @@
     </div>
 }
 
+@if (Model.SharedDoors is { ShouldOfferAccountsHome: true } sd)
+{
+    <div class="card" id="accounts-home-card" style="margin-bottom:16px;">
+        <h3 class="devices-card-title"><sl-icon name="people"></sl-icon> People are managed on this node</h3>
+        <p class="text-muted text-sm" style="margin:0 0 10px;">
+            Only one full node manages user accounts and issues superadmin doors for shared backup nodes. The accounts node is <strong>shared</strong> by definition.
+        </p>
+        @if (sd.AccountsHomeChanged)
+        {
+            <sl-alert id="accounts-home-changed" variant="warning" open style="margin-bottom:10px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                The accounts node was changed from another node. If nobody you trust did that, check the audit log and the Devices list.
+                <form data-busy="short" method="post" asp-page-handler="AcknowledgeAccountsHomeChange" style="display:inline;margin-left:8px;">
+                    <sl-button type="submit" size="small">Acknowledge</sl-button>
+                </form>
+            </sl-alert>
+        }
+        @if (!string.IsNullOrWhiteSpace(sd.LastError))
+        {
+            <sl-alert id="shared-doors-apply-error" variant="danger" open style="margin-bottom:10px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                @sd.LastError
+            </sl-alert>
+        }
+        @if (sd.BlockedSharedNodes.Count > 0)
+        {
+            var blockerNames = string.Join(", ", sd.BlockedSharedNodes.Select(b => b.DisplayName));
+            <sl-alert id="shared-doors-capability-warning" variant="warning" open style="margin-bottom:10px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                Update shared node(s) before superadmin doors can be published: <strong>@blockerNames</strong>.
+            </sl-alert>
+        }
+        @if ((sd.SkippedSharedNodes?.Count ?? 0) > 0)
+        {
+            var skippedNames = string.Join(", ", sd.SkippedSharedNodes!.Select(b => b.DisplayName));
+            <sl-alert id="shared-doors-skipped-warning" variant="warning" open style="margin-bottom:10px;">
+                <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+                Skipped shared node(s) with an unusable public key during superadmin doors publish: <strong>@skippedNames</strong>.
+            </sl-alert>
+        }
+        <form data-busy="short" method="post" asp-page-handler="SetAccountsHome" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <select name="nodeId" class="form-control" style="max-width:300px;">
+                @if (Model.Identity is { } local && !BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(local.NodeId))
+                {
+                    <option value="@local.NodeId" selected="@(sd.AccountsHomeNodeId == local.NodeId)">@local.DisplayName (this node)</option>
+                }
+                @foreach (var peer in Model.Whitelist.Where(e => e.Status == "A" && !BeeMemoryBank.Core.Models.BlindNodeId.IsBlind(e.NodeId) && e.NodeId != Model.Identity?.NodeId))
+                {
+                    <option value="@peer.NodeId" selected="@(sd.AccountsHomeNodeId == peer.NodeId)">@peer.DisplayName</option>
+                }
+            </select>
+            <sl-button type="submit" size="small" variant="primary" id="btn-set-accounts-home">Save</sl-button>
+        </form>
+    </div>
+}
+
+@if (Model.ShowOwnershipReviewCard)
+{
+    <div class="card" id="ownership-review" style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
+            <h3 class="devices-card-title" style="margin:0;"><sl-icon name="person-check"></sl-icon> Confirm who owns existing devices</h3>
+            <form data-busy="short" method="post" asp-page-handler="ConfirmAllOwnership" style="display:inline;">
+                <sl-button type="submit" size="small" variant="primary" id="btn-confirm-all-ownership">Confirm all suggested</sl-button>
+            </form>
+        </div>
+        <p class="text-muted text-sm" style="margin:0 0 12px;">
+            Confirm whether each upgraded device is shared infrastructure or belongs to a specific person.
+        </p>
+        @foreach (var entry in Model.OwnershipReviewEntries)
+        {
+            var selectedChoice = BeeMemoryBank.Web.Pages.Admin.DevicesModel.OwnershipChoiceValue(entry);
+            <form data-busy="short" method="post" asp-page-handler="ConfirmOwnership" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                <input type="hidden" name="nodeId" value="@entry.NodeId" />
+                <span style="min-width:160px;"><strong>@entry.DisplayName</strong></span>
+                <select name="choice" class="form-control" style="max-width:260px;">
+                    <option value="shared" selected="@(selectedChoice == "shared")">Shared infrastructure</option>
+                    @foreach (var user in Model.Users)
+                    {
+                        var val = $"personal:{user.PersonId}";
+                        var label = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Username : user.DisplayName;
+                        <option value="@val" selected="@(selectedChoice == val)">Personal: @label</option>
+                    }
+                </select>
+                <sl-button type="submit" size="small">Confirm</sl-button>
+            </form>
+        }
+    </div>
+}
+
 @if (Model.RestoredPeers.Count > 0)
 {
     <div class="card" id="restored-peers" style="margin-bottom:16px;">
         <h3 class="devices-card-title"><sl-icon name="shield-exclamation"></sl-icon> Restored devices waiting for your confirmation</h3>
         <p class="text-muted text-sm" style="margin:0 0 8px;">
-            A restore gave this node back the devices it trusted. A device with proof (an integrity anchor signed under your master key) came back switched on. These came back
-            <strong>switched off</strong>: they cannot sign in with their key, sync or write anything here until you decide. Confirm the ones you recognise; a confirmed device does not get
-            superadmin rights back by itself (open it to promote it). For a device you do not recognise, do nothing: it stays off, and it can join again by being paired from scratch.
+            These devices came back from a restore switched off. Confirm the ones you recognise.
         </p>
+        <details class="admin-more">
+            <summary>More details</summary>
+            <p>A restore gave this node back the devices it trusted. A device with proof (an integrity anchor signed under your master key) came back switched on. These came back
+               <strong>switched off</strong>: they cannot sign in with their key, sync or write anything here until you decide. A confirmed device does not get
+               superadmin rights back by itself (open it to promote it). For a device you do not recognise, do nothing: it stays off, and it can join again by being paired from scratch.</p>
+        </details>
         @foreach (var peer in Model.RestoredPeers)
         {
             <div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap;">
@@ -188,6 +301,21 @@ else
                     <div class="device-head">
                         <a class="device-name" href="@AdminRoutes.DeviceOf(row.NodeId)">@row.Name</a>
                         <span class="device-kind text-muted text-sm">@row.Kind@(row.Platform is { } p ? " (" + p + ")" : "") &middot; @row.Version</span>
+                        @if (Model.WhitelistEntryFor(row.NodeId) is { } wl)
+                        {
+                            if (wl.Ownership == "shared" || Model.SharedDoors?.AccountsHomeNodeId == row.NodeId)
+                            {
+                                <sl-badge variant="neutral" pill>shared</sl-badge>
+                            }
+                            else if (wl.Ownership == "personal")
+                            {
+                                <sl-badge variant="primary" pill>@(string.IsNullOrWhiteSpace(wl.OwnerLabel) ? "personal" : wl.OwnerLabel)</sl-badge>
+                            }
+                            else if (wl.NeedsReview && !Model.IsSingleSuperadminBank)
+                            {
+                                <sl-badge variant="warning" pill>review owner</sl-badge>
+                            }
+                        }
                     </div>
                     <div class="device-status">@row.Status@(row.Delivery is { } delivery ? " · " + delivery : "")</div>
                     @if (row.Contact is { } contact)

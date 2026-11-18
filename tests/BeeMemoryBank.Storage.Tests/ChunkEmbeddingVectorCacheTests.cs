@@ -5,7 +5,7 @@ using Dapper;
 namespace BeeMemoryBank.Storage.Tests;
 
 /// <summary>
-/// WP-15: correctness tests for <see cref="ChunkEmbeddingVectorCache"/> — max-pooling across an
+/// Correctness tests for <see cref="ChunkEmbeddingVectorCache"/> — max-pooling across an
 /// article's chunks, invalidation, and a differential check against an independent reference
 /// cosine implementation over dequantized vectors (mirroring
 /// <see cref="EmbeddingVectorCacheTests"/>'s style for the sibling full-document cache).

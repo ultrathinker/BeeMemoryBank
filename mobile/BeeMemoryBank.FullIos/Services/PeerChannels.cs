@@ -16,6 +16,14 @@ namespace BeeMemoryBank.FullIos.Services;
 public sealed record PeerChannelItem(string Address, string Source, string Detail, bool ThisIPhoneOnly)
 {
     public string Line => Source + " · " + Detail;
+
+    // The codes and facts behind the English above, for the screens' own words (en + ru in AppResources).
+    public string SourceCode { get; init; } = "";
+    public DateTime? LastOkAt { get; init; }
+    public bool UsedFirst { get; init; }
+    public bool Dialled { get; init; }
+    public bool LanAway { get; init; }
+    public bool WrongAnswer { get; init; }
 }
 
 public enum AddAddressOutcome
@@ -47,6 +55,9 @@ public enum AddAddressOutcome
 /// <param name="Address">The canonical address, when it was saved.</param>
 public sealed record AddAddressResult(AddAddressOutcome Outcome, string Text, string? Address = null)
 {
+    /// <summary>On a save: the address answered as this peer (vs saved although nothing answers there). For the screens' own words.</summary>
+    public bool Answered { get; init; }
+
     public bool Succeeded => Outcome == AddAddressOutcome.Added;
 
     /// <summary>The person may keep the address although it did not answer (the device is off, or on another network now).</summary>
@@ -97,7 +108,15 @@ public static class PeerChannels
                 c.Url,
                 SourceText(c.Source),
                 DetailOf(c, dialled.Contains(c.Url), c.Url == first, now),
-                rows.Any(r => r.Source == ChannelSources.Manual && r.Address == c.Url)))
+                rows.Any(r => r.Source == ChannelSources.Manual && r.Address == c.Url))
+            {
+                SourceCode = c.Source,
+                LastOkAt = c.LastOkAt,
+                UsedFirst = c.Url == first,
+                Dialled = dialled.Contains(c.Url),
+                LanAway = c.IsLanLike && !c.OnCurrentNetwork,
+                WrongAnswer = !dialled.Contains(c.Url) && c.Url != first && !(c.IsLanLike && !c.OnCurrentNetwork),
+            })
             .OrderByDescending(i => i.Detail.StartsWith("used first", StringComparison.Ordinal))
             .ToList();
     }
@@ -139,7 +158,7 @@ public static class PeerChannels
 
         // The new address is tried at once.
         sp.GetService<ISyncTrigger>()?.Signal();
-        return new(AddAddressOutcome.Added, verdict is null ? "Saved. It answered as this device." : "Saved. Nothing answers there yet.", address);
+        return new(AddAddressOutcome.Added, verdict is null ? "Saved. It answered as this device." : "Saved. Nothing answers there yet.", address) { Answered = verdict is null };
     }
 
     /// <summary>Removes an address typed on this iPhone. True when there was one.</summary>
@@ -160,7 +179,7 @@ public static class PeerChannels
         {
             var identity = await SyncAddress.ReadIdentityAsync(session.Client, address, ct);
             if (identity.NodeId != peer.NodeId) return ChannelFailures.WrongPeer;
-            if (peer.Ed25519PublicKey is { Length: 32 } && !PeerKey.Matches(peer.Ed25519PublicKey, identity.Ed25519PublicKeyB64)) return ChannelFailures.WrongPeer;
+            if (peer.Ed25519PublicKey is { Length: 32 } && !PeerKey.MatchesOrFollows(peer.NodeId, peer.Ed25519PublicKey, identity)) return ChannelFailures.WrongPeer;  // a re-keyed peer: its signed chain leads from the pinned key (plan WS-D D4)
             return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)

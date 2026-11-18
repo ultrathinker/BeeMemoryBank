@@ -13,7 +13,7 @@ namespace BeeMemoryBank.Storage.Tests;
 ///   (the rebuild of a missing index from its table is covered by Squash/AdoptionTests);
 ///   - basic MATCH queries returning expected rows with bm25() ranking.
 /// Query-side wiring (ArticleRepository/FolderRepository/SearchService) is a
-/// separate WP and deliberately not exercised here.
+/// separate change and deliberately not exercised here.
 /// </summary>
 public class Fts5MetadataIndexTests
 {
@@ -147,7 +147,7 @@ public class Fts5MetadataIndexTests
             .Should().Be(0);
     }
 
-    // ---- Article: tree-path tokenization (the WP's design decision) --------
+    // ---- Article: tree-path tokenization (the design decision) --------
 
     [Fact]
     public async Task Article_TreePath_SegmentsAreSearchable()
@@ -164,7 +164,7 @@ public class Fts5MetadataIndexTests
 
         // The default unicode61 tokenizer treats '/' as a separator, so each path
         // segment is its own searchable term — no pre-splitting required. This is
-        // the decision the WP report justifies (raw path, no transform).
+        // the decision justified here (raw path, no transform).
         foreach (var segment in new[] { "work", "runbooks", "postgres" })
         {
             (await RowCountAsync(conn,
@@ -237,7 +237,7 @@ public class Fts5MetadataIndexTests
 
         // FTS5 default MATCH is exact-token: 'infrastructure' is now a distinct token
         // from 'infra'. A prefix query ('infra*') is what resolves the two, and is
-        // exactly the mechanism WP-05's stemmer will feed the index from.
+        // exactly the mechanism the stemmer will feed the index from.
         (await RowCountAsync(conn, "SELECT COUNT(*) FROM fts_folder WHERE fts_folder MATCH 'infrastructure'"))
             .Should().Be(1);
         (await RowCountAsync(conn, "SELECT COUNT(*) FROM fts_folder WHERE fts_folder MATCH 'infra*'"))

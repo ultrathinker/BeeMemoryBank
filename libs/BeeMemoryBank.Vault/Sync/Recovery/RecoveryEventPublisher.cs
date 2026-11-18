@@ -36,6 +36,10 @@ public class RecoveryEventPublisher(
             throw new InvalidOperationException(
                 $"{eventType} is superadmin-only, and this node is not known to be a superadmin in the network's view.");
 
+        // An own event is signed and logged inside the event-write gate, so an identity re-key (which quiesces it) never finds one signed by the old
+        // key between its list of the node's own events and its commit.
+        using var writeGate = await EventWriteGate.Instance.EnterAsync();
+        using var ownerFlow = EventWriteGate.EnterOwnerFlow();
         var identity = await nodeRepo.GetAsync()
             ?? throw new InvalidOperationException("Node is not initialized.");
 
@@ -64,7 +68,7 @@ public class RecoveryEventPublisher(
         // leaves a local row nobody was told about, which the next publication supersedes; the other
         // order could ship an event whose effect this node itself never recorded.
         // A recovery_box_set is logged by its apply, in the transaction that writes the rows and clears whatever it
-        // makes inactive (F7): logging it again here would be a second, separate transaction.
+        // makes inactive: logging it again here would be a second, separate transaction.
         await applier.ApplyOwnRecoveryEventAsync(evt);
         if (eventType != EventTypes.RecoveryBoxSet)
             await eventLogRepo.AppendAsync(evt);

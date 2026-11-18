@@ -36,6 +36,10 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
     {
         await _factory.InitializeNodeAsync("Owner", Password);
         (await Session.UnlockAsync(Password)).Should().BeTrue();
+        // The unlock's catch-up runs detached and seals every comment still stored as plaintext (SealLegacyPlaintextAsync: a new sealed row, the plain
+        // one deleted). Late on a busy machine it found the legacy plaintext comment planted below and sealed it between the read of the live vault
+        // and its copy: the copy held a comment the read did not ("comment:4", BMB-368). It finishes before anything is planted.
+        await Session.PostUnlockCatchUp;
         using var scope = _factory.Services.CreateScope();
         var articles = scope.ServiceProvider.GetRequiredService<ArticleService>();
         var comments = scope.ServiceProvider.GetRequiredService<CommentService>();
@@ -338,7 +342,7 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review release-b R1-9: a plaintext comment of a purged body is dropped and listed too (marked "plaintext"), and
+    /// A plaintext comment of a purged body is dropped and listed too (marked "plaintext"), and
     /// its text is nowhere in the copy afterwards.
     /// </summary>
     [Fact]
@@ -377,7 +381,7 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review release-b R1-7: a legacy media/{id}.enc that is a link (here, to a file outside the vault) is never read.
+    /// A legacy media/{id}.enc that is a link (here, to a file outside the vault) is never read.
     /// The attempt fails with the row named, instead of importing whatever the link points at.
     /// </summary>
     [Fact]
@@ -438,7 +442,7 @@ public sealed class RekeyRowResealTests : IAsyncLifetime
         (await new RowResealStep().VerifyAsync(ctx)).Should().Contain(p => p.Table == RowResealStep.Body && p.Problem.Contains("old key"));
     }
 
-    /// <summary>BMB-307 fix2 (M2): the checks of the re-keyed copy and of the old material read "no sentinel" with the one predicate: NULL and an empty BLOB are both a problem, never a value to verify.</summary>
+    /// <summary>BMB-307: the checks of the re-keyed copy and of the old material read "no sentinel" with the one predicate: NULL and an empty BLOB are both a problem, never a value to verify.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

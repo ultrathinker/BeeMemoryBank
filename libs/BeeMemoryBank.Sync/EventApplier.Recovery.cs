@@ -79,7 +79,7 @@ public partial class EventApplier
         var incoming = new RowVersion(evt.LamportTs, evt.NodeId);
 
         // One transaction for everything this event changes: the rows, the key material of every box it makes
-        // inactive, their logged events, and its own event (release-a2 review, security #1). A reader — a peer pulling
+        // inactive, their logged events, and its own event. A reader — a peer pulling
         // the log, a backup — sees either the state before or the state after; no committed state ever logs a box
         // that is not active here, and a crash leaves nothing for a later purge.
         using var conn = connFactory.CreateConnection();
@@ -137,7 +137,7 @@ public partial class EventApplier
 
         // Only the newest inactive rows stay. Everything deleted here is older than at least ten rows of the same
         // author and kind, so if its event ever comes back it is stored superseded (and trimmed again) — deleting it
-        // cannot bring it back as the active box. Its logged event goes with it (release-a2 review, spec #2).
+        // cannot bring it back as the active box. Its logged event goes with it.
         var inactive = (await conn.QueryAsync<(string BoxId, long LamportTs, string? SourceNodeId)>(
             @"SELECT box_id, lamport_ts, source_node_id FROM tbl_recovery_box
               WHERE author_node_id = @Author COLLATE NOCASE AND kind = @Kind AND status = 'R'",

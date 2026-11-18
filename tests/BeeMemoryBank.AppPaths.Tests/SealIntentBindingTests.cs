@@ -5,14 +5,14 @@ using BeeMemoryBank.TestSupport;
 namespace BeeMemoryBank.AppPaths.Tests;
 
 /// <summary>
-/// BMB-306 fix round 2 (re-review of d140d7af, findings N1, N2, N3). A marker is never permission to erase on its own:
+/// BMB-306. A marker is never permission to erase on its own:
 /// <list type="bullet">
-/// <item>N2: a stale, damaged, copied or foreign marker next to a node somebody keeps wipes NOTHING - the start is refused by name instead;</item>
-/// <item>N1: one operation at a time across processes, and a start that joins a process which holds the vault still sees a pending marker;</item>
-/// <item>N3: nothing is read, wiped or followed through a link;</item>
-/// <item>BMB-306 fix round 3 (G1): a database is the operation's because it is the FILE the operation found when it began (the volume and file index in the marker), never because
+/// <item>A stale, damaged, copied or foreign marker next to a node somebody keeps wipes NOTHING - the start is refused by name instead;</item>
+/// <item>One operation at a time across processes, and a start that joins a process which holds the vault still sees a pending marker;</item>
+/// <item>Nothing is read, wiped or followed through a link;</item>
+/// <item>BMB-306: a database is the operation's because it is the FILE the operation found when it began (the volume and file index in the marker), never because
 ///   it was written after the marker: a node copied or restored into the folder later has a newer time than any marker, and the start is refused with all of it intact.</item>
-/// <item>BMB-306 fix round 4 (H1): a link is judged by the directory entry itself, never by whether its target exists: a link to nothing (marker, id, temp, database, sidecar,
+/// <item>BMB-306: a link is judged by the directory entry itself, never by whether its target exists: a link to nothing (marker, id, temp, database, sidecar,
 ///   working folder, data folder, the two journals) is refused like any link, and nothing is read, written, created or wiped through it.</item>
 /// </list>
 /// The databases are real SQLite files with a canary in them, so a byte scan shows what was left.
@@ -112,7 +112,7 @@ public sealed class SealIntentBindingTests : IClassFixture<SealIntentTests.Corpu
     [InlineData(false)]
     public void A_completed_node_put_into_the_folder_after_a_cut_setup_survives_whatever_its_write_time_is(bool newerThanTheMarker)
     {
-        // The finding (G1): a pending marker of a cut setup is kept, and a completed open node is later put in the same folder (a volume copy, a restore). Its
+        // A pending marker of a cut setup is kept, and a completed open node is later put in the same folder (a volume copy, a restore). Its
         // databases are NEWER than the marker, which used to count as "written by the operation": the databases, the sidecars and tmp were wiped.
         var dir = NewDir();
         PlainDb(Path.Combine(dir, "beememorybank.db"), Pool.PlainMain, LongAgo);              // the empty node's databases the setup began on
@@ -240,7 +240,7 @@ public sealed class SealIntentBindingTests : IClassFixture<SealIntentTests.Corpu
     }
 
     [Theory]
-    [InlineData("version", 1)]                      // the marker of the first fix round: kind and time only
+    [InlineData("version", 1)]                      // the marker of the first version: kind and time only
     [InlineData("version", 2)]                      // the marker of the second round: no identity of the files it found, so the write time was the only proof
     [InlineData("version", 4)]
     public void A_marker_of_another_version_is_not_trusted(string field, int value)
@@ -658,7 +658,7 @@ public sealed class SealIntentBindingTests : IClassFixture<SealIntentTests.Corpu
         SealIntent.Complete(dir);
     }
 
-    // ---- fix round 4 (H1): a link whose target is gone is still a link ---------------------------------------------------------------------------
+    // ---- a link whose target is gone is still a link ---------------------------------------------------------------------------
 
     /// <summary>A symbolic link to a file that is gone: the target is made, linked to and removed (the test's own fixture). Returns where the link points.</summary>
     private string DanglingFileLink(string link)
@@ -835,7 +835,7 @@ public sealed class SealIntentBindingTests : IClassFixture<SealIntentTests.Corpu
         SealJournal.Read(dir).State.Should().Be(SealJournalState.Unreadable, "an entry is there that the swap wrote or somebody planted: it is no missing journal");
         var result = SealIntent.Resolve(dir);
 
-        result.Action.Should().Be(SealIntentAction.Refused, "the link gate names a journal that is a link before anything is decided beside it (fix round 5)");
+        result.Action.Should().Be(SealIntentAction.Refused, "the link gate names a journal that is a link before anything is decided beside it");
         result.Refusal!.Code.Should().Be(SealIntent.UnsafeCode);
         result.Refusal.Files.Should().Contain(SealJournal.FileName);
         LeftoverIntact(dir).Should().BeTrue();

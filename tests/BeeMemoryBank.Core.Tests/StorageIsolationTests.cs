@@ -7,7 +7,7 @@ using BeeMemoryBank.Storage.Sqlite;
 namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
-/// Multi-account isolation guard tests (Этап 6, §6 пункт 1). Each profile/vault is, by
+/// Multi-account isolation guard tests. Each profile/vault is, by
 /// construction, an INDEPENDENT data directory with its own SQLite database file and its own
 /// sibling state files. These tests prove that independence explicitly and freeze it as a
 /// regression boundary: enabling a feature or writing a key slot in vault A must NEVER be

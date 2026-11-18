@@ -16,7 +16,7 @@ using Microsoft.Extensions.Hosting;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The run from start to history (plan 4, package P0b), with a training detector, a training model task and a model that
+/// The run from start to history (plan 4), with a training detector, a training model task and a model that
 /// never leaves the process. In the heavy-operation collection: a run stops for HeavyOperationLock, which is process-wide.
 /// </summary>
 [Collection(HeavyOperationCollection.Name)]

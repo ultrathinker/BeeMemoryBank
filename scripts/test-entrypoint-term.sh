@@ -17,7 +17,7 @@
 # (the blind node). The image is tested as it is. To test another version of an entrypoint, build an image on top of the
 # image under test with that script (`FROM <image-ref>` and a `COPY` of the script to the same path).
 #
-# Each container runs with --cpus 2 --memory 4g, or, on the T480 node, with the runner's $BMB_DOCKER_ARGS minus --rm (the
+# Each container runs with --cpus 2 --memory 4g, or, on a low-memory node, with the runner's $BMB_DOCKER_ARGS minus --rm (the
 # cpuset, memory and the bmb.agent label stay): this script reads each exit code before it removes the container, so the
 # container must not vanish first. A round passes when the container exits by itself within STOP_LIMIT seconds with exit
 # code 0 or 143 (a clean stop of both hosts, or the TERM ending them). It fails when it is still running after that, or exits

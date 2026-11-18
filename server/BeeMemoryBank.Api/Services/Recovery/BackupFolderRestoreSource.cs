@@ -67,8 +67,13 @@ public sealed class BackupFolderRestoreSource : IRestoreSourceV2
 
         var peers = await ReadWhitelistAsync(conn, tables);
         // The signed manifest is signed by a superadmin of this network the copy knows; nobody else's signature counts.
+        // The producer's key in the copy, or a key it retired before it made this baseline (plan WS-D D4): the copy's own key history, the rows
+        // that lead to that key.
         if (peers.SingleOrDefault(p => p.NodeId == manifest.ProducerNodeId) is not { IsSuperadmin: true } producer
-            || !Ed25519Signer.Verify(Convert.FromBase64String(producer.PublicKeyB64), BaselineManifest.SignaturePayload(current.Manifest), current.Signature))
+            || !BeeMemoryBank.Sync.NodeEventVerifier.VerifyPackageSignature(manifest.ProducerNodeId, Convert.FromBase64String(producer.PublicKeyB64),
+                BeeMemoryBank.Sync.NodeEventVerifier.ChainedTo(manifest.ProducerNodeId, Convert.FromBase64String(producer.PublicKeyB64),
+                    await BeeMemoryBank.Storage.Sqlite.NodeKeyHistoryStore.ListAllAsync(conn)),
+                BaselineManifest.SignaturePayload(current.Manifest), current.Signature, signedAtLamport: null))
             throw new InvalidDataException("The baseline in the backup is not signed by a superadmin of this network; it cannot be restored from.");
 
         var self = tables.Contains("tbl_node_identity")

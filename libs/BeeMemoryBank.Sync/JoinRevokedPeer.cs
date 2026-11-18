@@ -34,11 +34,12 @@ public sealed record JoinVersion(long LamportTs, Guid? SourceNodeId, bool Undate
 /// host does, field by field. With one version for the whole row the joiner inherited whatever the host had: a demotion the host had dropped
 /// for a crossing rename stayed dropped on every node that joined through it. A host of 2.7.5 sends none, and a joiner of 2.7.5 ignores it.
 /// </summary>
-public sealed record JoinPeerVersions(JoinVersion? Membership, JoinVersion? Superadmin, JoinVersion? Name, JoinVersion? Address, JoinVersion? Tls)
+public sealed record JoinPeerVersions(JoinVersion? Membership, JoinVersion? Superadmin, JoinVersion? Name, JoinVersion? Address, JoinVersion? Tls,
+    JoinVersion? Ownership = null)
 {
     public static JoinPeerVersions From(WhitelistEntry row) => new(
         Of(row, WhitelistConcerns.Membership), Of(row, WhitelistConcerns.Superadmin), Of(row, WhitelistConcerns.Name),
-        Of(row, WhitelistConcerns.Address), Of(row, WhitelistConcerns.Tls));
+        Of(row, WhitelistConcerns.Address), Of(row, WhitelistConcerns.Tls), Of(row, WhitelistConcerns.Ownership));
 
     private static JoinVersion Of(WhitelistEntry row, WhitelistConcerns concern)
     {
@@ -54,6 +55,7 @@ public sealed record JoinPeerVersions(JoinVersion? Membership, JoinVersion? Supe
         WhitelistConcerns.Name => Name,
         WhitelistConcerns.Address => Address,
         WhitelistConcerns.Tls => Tls,
+        WhitelistConcerns.Ownership => Ownership,
         _ => null,
     };
 }

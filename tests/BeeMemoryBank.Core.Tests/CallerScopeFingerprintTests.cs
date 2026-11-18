@@ -4,7 +4,7 @@ namespace BeeMemoryBank.Core.Tests;
 
 /// <summary>
 /// Correctness tests for <see cref="ICallerScope.ReadScopeFingerprint"/> — the ACL digest that
-/// makes the WP-17 query cache ACL-safe. The cache's entire safety argument rests on these
+/// makes the query cache ACL-safe. The cache's entire safety argument rests on these
 /// properties: scopes that make identical read-visibility decisions share a fingerprint, and
 /// scopes that could see different rows never collide.
 /// </summary>

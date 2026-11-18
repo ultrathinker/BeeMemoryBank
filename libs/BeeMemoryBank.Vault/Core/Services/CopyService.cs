@@ -15,7 +15,7 @@ namespace BeeMemoryBank.Core.Services;
 /// tracked, and on exception their soft-delete is invoked under the system
 /// scope. Cleanup itself never throws — it surfaces the original error.
 ///
-/// Stopping (BMB-311 fix round 3): a copy takes the caller's token and looks at it between its writes - before the first one, before each folder, article and media
+/// Stopping (BMB-311): a copy takes the caller's token and looks at it between its writes - before the first one, before each folder, article and media
 /// record - and a stop is a failure like any other: what was created so far is rolled back, so the vault is left as it was. The rollback itself does not look at the token.
 /// </summary>
 public class CopyService(

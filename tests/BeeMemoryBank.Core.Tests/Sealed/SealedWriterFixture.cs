@@ -36,6 +36,7 @@ public abstract class SealedWriterFixture : TestFixture
     protected KeySlotRepository KeySlots { get; private set; } = null!;
     protected AgentRepository AgentRepo { get; private set; } = null!;
     protected RoleRepository Roles { get; private set; } = null!;
+    protected FolderAccessService FolderAccess { get; private set; } = null!;
 
     public override async Task InitializeAsync()
     {
@@ -59,7 +60,7 @@ public abstract class SealedWriterFixture : TestFixture
         KeySlots = new KeySlotRepository(Factory);
         Roles = new RoleRepository(Factory);
         AgentRepo = new AgentRepository(Factory);
-        var folderAccess = new FolderAccessService(new ServiceCollection()
+        var folderAccess = FolderAccess = new FolderAccessService(new ServiceCollection()
             .AddSingleton<IDbConnectionFactory>(_ => Factory)
             .AddScoped<IUserRepository>(_ => UserRepo)
             .AddScoped<IRoleRepository>(_ => Roles)
@@ -93,12 +94,12 @@ public abstract class SealedWriterFixture : TestFixture
     {
         using var c = Factory.CreateConnection();
         var list = new List<(string, long, string)>();
-        foreach (var s in await c.QueryAsync<(long Id, string Type, byte[] W, byte[] Iv, byte[]? Salt, long? Mem, long? It, long? Par)>(
-                     "SELECT slot_id, slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot"))
-            list.Add((BootDoorKinds.Slot, s.Id, BootDoorHash.OfSlot(s.Id, s.Type, s.W, s.Iv, s.Salt, (int?)s.Mem, (int?)s.It, (int?)s.Par)));
-        foreach (var a in await c.QueryAsync<(long Id, string KeyHash, long? Kdf, byte[]? Salt, byte[] W, byte[] Iv)>(
-                     "SELECT id, key_hash, kdf_version, salt, encrypted_dek, dek_iv FROM tbl_agent WHERE encrypted_dek IS NOT NULL AND dek_iv IS NOT NULL AND status = 'A'"))
-            list.Add((BootDoorKinds.Agent, a.Id, BootDoorHash.OfAgent(a.Id, a.KeyHash, (int?)a.Kdf, a.Salt, a.W, a.Iv)));
+        foreach (var s in await c.QueryAsync<(long Id, string Type, byte[] W, byte[] Iv, byte[]? Salt, long? Mem, long? It, long? Par, long Version, byte[]? Pk)>(
+                     "SELECT slot_id, slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, door_version, door_public_key FROM tbl_key_slot"))
+            list.Add((BootDoorKinds.Slot, s.Id, BootDoorHash.OfSlot(s.Id, s.Type, s.W, s.Iv, s.Salt, (int?)s.Mem, (int?)s.It, (int?)s.Par, (int)s.Version, s.Pk)));
+        foreach (var a in await c.QueryAsync<(long Id, string KeyHash, long? Kdf, byte[]? Salt, byte[] W, byte[] Iv, byte[]? Pk)>(
+                     "SELECT id, key_hash, kdf_version, salt, encrypted_dek, dek_iv, door_public_key FROM tbl_agent WHERE encrypted_dek IS NOT NULL AND dek_iv IS NOT NULL AND status = 'A'"))
+            list.Add((BootDoorKinds.Agent, a.Id, BootDoorHash.OfAgent(a.Id, a.KeyHash, (int?)a.Kdf, a.Salt, a.W, a.Iv, a.Pk)));
         return list.OrderBy(d => d.Item1).ThenBy(d => d.Item2).ToList();
     }
 

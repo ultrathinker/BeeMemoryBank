@@ -92,6 +92,15 @@ public sealed class PeerReachability
         }
     }
 
+    /// <summary>Drops what is known about a revoked or removed peer.</summary>
+    public void Forget(Guid peer)
+    {
+        _plans.TryRemove(peer, out _);
+        _direct.TryRemove(peer, out _);
+        _relayed.TryRemove(peer, out _);
+        _standingAsked.TryRemove(peer, out _);
+    }
+
     /// <summary>Drops what is known about peers that are no longer on the whitelist.</summary>
     public void Retain(IReadOnlySet<Guid> active)
     {

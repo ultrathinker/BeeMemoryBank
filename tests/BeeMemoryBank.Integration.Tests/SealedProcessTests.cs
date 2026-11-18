@@ -70,6 +70,10 @@ public sealed class SealedProcessTests(ActivatedPlainTemplate template) : IClass
             info.Environment["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}";
             info.Environment["BMB_DATA_PATH"] = _dataDir;
             info.Environment.Remove("BMB_ROLE");
+            // These tests drive the seal themselves (the explicit API, the kill points, the canary in the log): the auto-seal that an
+            // unlock starts in a product would run the migration first and kill the process at the step, or seal before the explicit call.
+            // The Testing-only gate (the same shape as BMB_SEAL_TEST_KILL_AFTER) turns it off here; a product never reads it.
+            info.Environment["BMB_AUTO_SEAL_TEST_OFF"] = "1";
             if (_killAfter is not null) info.Environment["BMB_SEAL_TEST_KILL_AFTER"] = _killAfter;
             if (_traceLogs) info.Environment["Logging__LogLevel__Default"] = "Trace";
             var key = Convert.ToHexString(Guid.NewGuid().ToByteArray());

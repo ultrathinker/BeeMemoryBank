@@ -16,7 +16,7 @@ namespace BeeMemoryBank.Integration.Tests;
 /// <summary>
 /// <c>GET /api/dream/compare</c> (plan 3.8, package C1) on a real node: run rows and sealed candidate events as the engine writes
 /// them (dream_run, dream_run_event under the chat key with <see cref="DreamAad.Event"/>) are read back as one table, with the notes
-/// named by their current titles. The rows are put in by the test, so the engine (package P0b) is not needed.
+/// named by their current titles. The rows are put in by the test, so the engine is not needed.
 /// </summary>
 public class DreamCompareEndpointTests : IAsyncLifetime
 {

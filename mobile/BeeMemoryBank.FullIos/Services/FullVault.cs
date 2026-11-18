@@ -77,6 +77,7 @@ public sealed class FullVault(IServiceProvider services)
     /// <summary>
     /// Makes a new memory bank on this phone and opens it: the node's identity, the master key wrapped under the password, the
     /// administrator account (named like the node, as on Android); then a recovery key, returned to be shown once and never kept by the app.
+    /// The key belongs to the administrator just made (2.12: a recovery key is personal).
     /// </summary>
     public async Task<string> CreateAsync(string nodeName, string password, string passwordHint)
     {
@@ -91,17 +92,23 @@ public sealed class FullVault(IServiceProvider services)
             throw new InvalidOperationException("The new memory bank did not open with its own password.");
 
         using (var scope = services.CreateScope())
-            return await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
+        {
+            var sp = scope.ServiceProvider;
+            return await PhoneOwner.IssueRecoveryKeyAsync(sp.GetRequiredService<KeyManagementService>(),
+                await PhoneOwner.ForPasswordAsync(sp, password), nodeName);
+        }
     }
 
     /// <summary>
     /// Joins an existing network and opens the copy: <paramref name="codeOrAddress"/> is a join code from a computer's "Connect a device"
     /// (the password then goes only to the computer whose key the code pins) or the https address of a server. A damaged code is refused
-    /// here, never read as an address: that would drop the pin.
+    /// here, never read as an address: that would drop the pin. The join page asks for no hint (joining reuses the
+    /// computer's password, it does not make one); a hint that is given is still held to the one policy.
     /// </summary>
-    public async Task JoinAsync(string nodeName, string codeOrAddress, string password, string passwordHint)
+    public async Task JoinAsync(string nodeName, string codeOrAddress, string password, string? passwordHint = null)
     {
-        if (PasswordHintPolicy.Validate(passwordHint, password, nodeName) is { } hintProblem) throw new ArgumentException(hintProblem);
+        if (string.IsNullOrWhiteSpace(passwordHint)) passwordHint = null;
+        else if (PasswordHintPolicy.Validate(passwordHint, password, nodeName) is { } hintProblem) throw new ArgumentException(hintProblem);
         var text = (codeOrAddress ?? "").Trim();
         if (text.Length == 0) throw new ArgumentException("Paste the join code from Connect a device on your computer, or a server's address.");
         if (string.IsNullOrEmpty(password)) throw new ArgumentException("Enter the master password of your memory bank.");
@@ -155,17 +162,77 @@ public sealed class FullVault(IServiceProvider services)
         if (Session.IsUnlocked) Session.Lock();
     }
 
-    /// <summary>Issues another recovery key (the vault must be open); the old ones keep working.</summary>
+    /// <summary>
+    /// Issues another recovery key (the vault must be open); the old ones keep working. It belongs to this phone's administrator (2.12); a phone
+    /// with several administrators is refused by the vault rather than given a guessed owner.
+    /// </summary>
     public async Task<string> NewRecoveryKeyAsync()
     {
         using var scope = services.CreateScope();
-        return await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
+        var sp = scope.ServiceProvider;
+        var name = (await sp.GetRequiredService<INodeIdentityRepository>().GetAsync())?.DisplayName;
+        return await PhoneOwner.IssueRecoveryKeyAsync(sp.GetRequiredService<KeyManagementService>(), await PhoneOwner.ForPasswordAsync(sp, null), name);
     }
 
-    /// <summary>The node's own identity (name, id), or null before there is a vault.</summary>
+    /// <summary>
+    /// The password hint the unlock page shows, or null. On a plain phone the user table is readable while locked; on an encrypted one whose
+    /// database is closed the hint is inside it, and nothing is read: null (nothing that runs before the unlock reads a closed
+    /// database).
+    /// </summary>
+    public async Task<string?> PasswordHintAsync()
+    {
+        if (IsSealedAndClosed) return null;
+        try
+        {
+            using var scope = services.CreateScope();
+            return (await scope.ServiceProvider.GetRequiredService<IUserRepository>().ListActiveAsync())
+                .FirstOrDefault(u => !string.IsNullOrWhiteSpace(u.PasswordHint))?.PasswordHint;
+        }
+        catch (VaultSealedException)
+        {
+            // Closed between the check and the read (a lock as the app left the screen): no hint, as on any closed phone.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The node's own identity (name, id), or null before there is a vault. Never throws for a closed database: on an encrypted phone whose
+    /// database is closed (every cold start, every return after a lock) the boot store's mirror gives the id, the name and the public key - what
+    /// the unlock page shows - and nothing inside the database is read (the app died on that read before the password could be
+    /// typed). The mirror has no private key: a caller that signs needs the open vault anyway.
+    /// </summary>
     public async Task<NodeIdentity?> IdentityAsync()
     {
-        using var scope = services.CreateScope();
-        return await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync();
+        if (IsSealedAndClosed) return await BootIdentityAsync();
+        try
+        {
+            using var scope = services.CreateScope();
+            return await scope.ServiceProvider.GetRequiredService<INodeIdentityRepository>().GetAsync();
+        }
+        catch (VaultSealedException)
+        {
+            return await BootIdentityAsync();
+        }
     }
+
+    private async Task<NodeIdentity?> BootIdentityAsync()
+    {
+        if (services.GetService<BeeMemoryBank.Storage.Boot.IBootMirrorStore>() is not { } mirror) return null;
+        try
+        {
+            return await mirror.GetIdentityAsync() is { } boot
+                ? new NodeIdentity { NodeId = boot.NodeId, DisplayName = boot.DisplayName, Ed25519PublicKey = boot.Ed25519PublicKey }
+                : null;
+        }
+        catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or IOException or InvalidOperationException)
+        {
+            // A boot store that cannot be read says no name: the unlock page shows its plain subtitle.
+            return null;
+        }
+    }
+
+    /// <summary>An encrypted phone whose database is closed: nothing inside it is read before a door has opened it.</summary>
+    private bool IsSealedAndClosed =>
+        services.GetService<BeeMemoryBank.Vault.Sealed.PhoneVaultLifecycle>() is { IsSealed: true } &&
+        services.GetService<IVaultGate>() is { IsUsable: false };
 }

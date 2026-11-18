@@ -38,6 +38,9 @@ public class BlindRePairSyncTests : IAsyncLifetime
     {
         _ = _blind.Services;
         _pc.RouteOutboundHttpThrough(_blind.Server.CreateHandler());
+        // The login below would publish a device box in the background, an event that lands at any step of the test and moves the counts
+        // (54 phone events seen as 55). The recovery work at login is covered by its own tests.
+        _pc.Services.GetRequiredService<BeeMemoryBank.Api.Services.Recovery.RecoveryTriggers>().PauseBackground = true;
         await _pc.InitializeNodeAsync("PC", Password);
         _pcClient = _pc.CreateClient();
         (await _pcClient.PostAsJsonAsync("/api/session/login", new { username = "admin", password = Password }))

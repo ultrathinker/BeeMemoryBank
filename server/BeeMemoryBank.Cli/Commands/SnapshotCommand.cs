@@ -179,7 +179,7 @@ public static class SnapshotCommand
             Directory.CreateDirectory(snapshotsDir);
             var snapshotPath = Path.Combine(snapshotsDir, SnapshotFileNames.Unique(dataPath, snapshotsDir, nameClock?.Invoke() ?? DateTime.UtcNow));
             // Written under a temp name, owner-only from the first byte, and given its name only when it is whole: a full volume or a cancellation leaves no
-            // half-written *.tar.gz, and the finally below removes the temp file (BMB-304 fix round).
+            // half-written *.tar.gz, and the finally below removes the temp file (BMB-304).
             tempArchive = snapshotPath + "." + Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant() + ".tmp";
             await using (var fileStream = OwnerOnlyFile.CreateNew(tempArchive))
             await using (var gzip = new GZipStream(wrapArchive?.Invoke(fileStream) ?? fileStream, CompressionLevel.Optimal))

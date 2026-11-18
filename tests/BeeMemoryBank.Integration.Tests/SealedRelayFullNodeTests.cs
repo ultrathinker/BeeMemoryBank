@@ -156,12 +156,15 @@ public class SealedRelayFullNodeTests : IAsyncLifetime
         var headBefore = (await LogAsync()).Select(l => l.Sequence).DefaultIfEmpty(0).Max();
         var newcomer = RelayPeer.New();
 
-        // Received while closed, in this order: a sealed event of the member, then the admin's revoke of that member, the admin's
-        // admission of a new node, and an event of the member again (after the revoke: the member is suspended, so it is refused at once).
+        // Received while closed: a sealed event from the admin (survives), a sealed event of the member (dropped once
+        // the revoke arrives: 2.12 revocation purges queued relay envelopes of the revoked peer), then the admin's revoke
+        // of that member, the admin's admission of a new node, and an event of the member again (suspended, refused 401).
+        var fromAdmin = SealedRelayHost.SealedEvent(_admin, originSequence: 6);
         var fromMember = SealedRelayHost.SealedEvent(_member, originSequence: 7);
         var revoke = SealedRelayHost.ControlEvent(_admin, EventTypes.WhitelistRevoke, new WhitelistRevokePayload(_member.Id), originSequence: 8);
         var add = SealedRelayHost.ControlEvent(_admin, EventTypes.WhitelistAdd,
             new WhitelistAddPayload(newcomer.Id, "Newcomer", Convert.ToBase64String(newcomer.PublicKey), null, false), originSequence: 9);
+        (await Push(adminToken, fromAdmin)).Applied.Should().Be(1);
         (await Push(memberToken, fromMember)).Applied.Should().Be(1);
         (await Push(adminToken, revoke, add)).Applied.Should().Be(2);
         (await Send(HttpMethod.Post, "/api/sync/events", memberToken, new[] { SealedRelayHost.SealedEvent(_member) })).StatusCode
@@ -193,7 +196,8 @@ public class SealedRelayFullNodeTests : IAsyncLifetime
         (result.Applied + result.Held).Should().Be(3);
 
         var log = (await LogAsync()).Where(l => l.Sequence > headBefore).ToList();
-        log.Select(l => l.EventId).Should().Equal([fromMember.EventId, revoke.EventId, add.EventId], "every event once, in the order it was received");
+        log.Select(l => l.EventId).Should().Equal([fromAdmin.EventId, revoke.EventId, add.EventId], "every un-revoked event once, in the order it was received");
+        log.Select(l => l.EventId).Should().NotContain(fromMember.EventId, "revocation dropped the member's queued relay envelope");
         log.Select(l => l.Sequence).Should().OnlyContain(s => s > served.Max(), "numbering continues above every relay sequence served");
         (await LogAsync()).Select(l => l.EventId).Should().NotContain(staleRow.EventId);
 

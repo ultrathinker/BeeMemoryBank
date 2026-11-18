@@ -45,7 +45,7 @@ public static class DownloadEndpoints
             }
         })
         // A folder or the whole vault builds a ZIP of everything under it: once at a time per folder (the whole vault is one). One article is a
-        // short export and runs without a lease (BMB-311 fix round).
+        // short export and runs without a lease (BMB-311).
         .SingleFlight("export-folder:{path}|export-all", "Preparing this download", ctx =>
             ctx.Arguments.OfType<PrepareDownloadRequest>().FirstOrDefault() switch
             {

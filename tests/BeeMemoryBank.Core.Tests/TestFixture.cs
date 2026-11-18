@@ -38,7 +38,7 @@ public abstract class TestFixture : IAsyncLifetime
     // does (or does not) force a full cache rebuild -- see the cache invalidation tests.
     protected EmbeddingVectorCache VectorCache { get; private set; } = null!;
 
-    // WP-12: the exact IndexBuilder instance SearchService.SearchIndexedContentAsync queries.
+    // The exact IndexBuilder instance SearchService.SearchIndexedContentAsync queries.
     // Exposed so tests can feed it content directly (bypassing PendingIndexProcessor, which this
     // fixture does not run) to exercise the ranked-search integration end to end.
     protected IndexBuilder IndexBuilder { get; private set; } = null!;

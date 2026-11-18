@@ -45,6 +45,26 @@ internal static class ApiStartWork
         await chatInitializer.InitializeAsync();
     }
 
+    /// <summary>
+    /// The tombstones of removed people (release 2.12.0, plan R1; open step 550, every open): after a restore or a join they are in the database before
+    /// anybody signs in, and every account they name is closed here first (after the crash sweeps, which may finish a restore). Failures are logged; the
+    /// next open (or the next tombstone) tries again.
+    /// </summary>
+    public static async Task EnforceTombstonesAsync(IServiceProvider services)
+    {
+        using var scope = services.CreateScope();
+        try
+        {
+            if (scope.ServiceProvider.GetService<BeeMemoryBank.Core.Interfaces.IRemovedPersonEnforcer>() is { } enforcer)
+                await enforcer.EnforceAsync();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("BeeMemoryBank.Api.Startup")
+                .LogError("The tombstones of removed people could not be applied at this start ({Failure}); the next start tries again.", ex.GetType().Name);
+        }
+    }
+
     /// <summary>Restore the Lamport clock from the database (open step 400, every open).</summary>
     public static async Task RestoreClockAsync(IServiceProvider services)
     {
@@ -259,6 +279,13 @@ internal sealed class LamportClockOpenStep(IServiceProvider services) : IVaultOp
 {
     public int Order => 400;
     public Task RunAsync(bool firstOpenInProcess, CancellationToken ct) => ApiStartWork.RestoreClockAsync(services);
+}
+
+/// <summary>Open step 550: the tombstones of removed people, at every open, after the crash sweeps (release 2.12.0, plan R1).</summary>
+internal sealed class TombstonesOpenStep(IServiceProvider services) : IVaultOpenStep
+{
+    public int Order => 550;
+    public Task RunAsync(bool firstOpenInProcess, CancellationToken ct) => ApiStartWork.EnforceTombstonesAsync(services);
 }
 
 /// <summary>Open step 500: the crash-recovery sweeps, at the first open of the process only.</summary>

@@ -56,10 +56,16 @@
     var issueRecoveryBtn = document.getElementById('issue-recovery-key-btn');
     if (issueRecoveryBtn) {
         issueRecoveryBtn.addEventListener('click', function () {
-            if (!confirm('Issue a new recovery key?\n\nIt will be shown once and cannot be retrieved afterwards. Existing passwords keep working.')) return;
+            if (!confirm('Issue a new recovery key?\n\nIt will belong to you, be shown once and cannot be retrieved afterwards. Existing passwords keep working.')) return;
             // A key change (BMB-311): the button is off and spins; a refusal is written next to it, in full.
+            var labelInput = document.getElementById('recovery-key-label');
+            var label = labelInput && labelInput.value ? labelInput.value.trim() : null;
             bmbBusy.run(issueRecoveryBtn, function () {
-                return bmbBusy.request('/api-proxy/keys/add-recovery', { method: 'POST', headers: { 'Accept': 'application/json' } })
+                return bmbBusy.request('/api-proxy/keys/add-recovery', {
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label: label })
+                })
                     .then(function (res) {
                         if (!(res.body && res.body.recoveryKey)) throw new Error('The node did not return a recovery key (is the vault unlocked?).');
                         document.getElementById('recovery-key-value').value = res.body.recoveryKey;
@@ -83,6 +89,8 @@
                 if (input) input.value = '';
                 var dlg = document.getElementById('recovery-key-dialog');
                 if (dlg) dlg.hide();
+                // The new key is now in the node's list: redraw the page so it appears with its owner and label.
+                window.location.reload();
             });
         }
     }

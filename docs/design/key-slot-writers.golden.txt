@@ -11,7 +11,9 @@ libs/BeeMemoryBank.Vault/Core/Services/InitializationService.cs repo-create 1
 libs/BeeMemoryBank.Vault/Core/Services/KeyManagementService.cs repo-create 1
 libs/BeeMemoryBank.Vault/Core/Services/KeyManagementService.cs slot-doors 2
 libs/BeeMemoryBank.Vault/Core/Services/UserService.cs slot-doors 1
+libs/BeeMemoryBank.Vault/Sealed/QuickUnlockDoors.cs slot-doors 1
 libs/BeeMemoryBank.Vault/Sealed/SlotDoors.cs repo-create 2
+libs/BeeMemoryBank.Vault/SharedDoors/SharedDoorsApplier.cs repo-create 2
 mobile/BeeMemoryBank.Mobile/Services/NodeSetupService.cs repo-create 1
 server/BeeMemoryBank.Api/Endpoints/InitEndpoints.cs repo-create 1
 server/BeeMemoryBank.Api/Services/Recovery/RecoveryRestoreService.cs repo-create 1

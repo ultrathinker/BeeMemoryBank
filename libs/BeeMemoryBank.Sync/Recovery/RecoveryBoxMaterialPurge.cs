@@ -4,7 +4,7 @@ using Dapper;
 namespace BeeMemoryBank.Sync.Recovery;
 
 /// <summary>
-/// A recovery box that is no longer active keeps no key material on this node (F7). A password change
+/// A recovery box that is no longer active keeps no key material on this node. A password change
 /// does not change the DEK, so a superseded or retired box still opens to the current key under the
 /// password it was made with. Kept, its bytes would let the OLD password recover the vault from this
 /// database or any copy of it made later (a blind node's backups), which is exactly what the change
@@ -41,7 +41,7 @@ public static class RecoveryBoxMaterialPurge
             transaction: tx);
 
         // The events of a box that is here and inactive; and the events whose row an older build trimmed past the
-        // ten-row limit (release-a2 review, spec #2), recognised by content: no row with that id, and an active box of
+        // ten-row limit, recognised by content: no row with that id, and an active box of
         // the same author and kind with a later timestamp, so the event's box can never be active again. An event
         // whose row is missing for any other reason (one a restore logged before applying it) is kept.
         var events = await conn.ExecuteAsync(

@@ -57,10 +57,11 @@ public sealed record PeerAddressResult(PeerAddressOutcome Outcome, string Messag
 /// <param name="Announce">True when the event is to be published even if the row already says all of this (a re-join: the known address is announced, so every node ends up with the same one). Nothing is reset or audited then.</param>
 public sealed record PeerProof(
     string? RawAddress, byte[]? ProvenKey = null, string? DisplayName = null, bool? IsSuperadmin = null,
-    string? TlsSpki = null, string? TlsTrust = null, bool PairingChanged = false, bool Announce = false);
+    string? TlsSpki = null, string? TlsTrust = null, bool PairingChanged = false, bool Announce = false,
+    string? Ownership = null, Guid? OwnerPersonId = null, string? OwnerLabel = null);
 
 /// <summary>
-/// The ONE writer of a peer's address on a running node (BMB-307 fix rounds). It has three named entry points, and every assignment of a row's <c>ApiAddress</c> on a
+/// The ONE writer of a peer's address on a running node (BMB-307). It has three named entry points, and every assignment of a row's <c>ApiAddress</c> on a
 /// live node is in one of them (<c>PeerAddressWriterArchitectureTests</c> fails for any other; the sites that build rows from an authoritative source, and the
 /// event applier, are listed there with the reason each is allowed):
 /// <list type="bullet">
@@ -155,7 +156,7 @@ public sealed class PeerAddressService(
                     if (check.Identity!.NodeId != nodeId)
                         return new(PeerAddressOutcome.WrongNode,
                             $"NodeId at the new address ({check.Identity.NodeId}) does not match the expected ({nodeId}). This is a different node!");
-                    if (!PeerKey.Matches(entry.Ed25519PublicKey, check.Identity.Ed25519PublicKeyB64))
+                    if (!PeerKey.MatchesOrFollows(nodeId, entry.Ed25519PublicKey, check.Identity))  // a re-keyed peer: its signed chain leads from the pinned key (plan WS-D D4)
                         return new(PeerAddressOutcome.WrongKey,
                             "The node at the new address has the right id but another key than the one this network knows it by. Not trusting it.");
                     break;
@@ -227,21 +228,31 @@ public sealed class PeerAddressService(
         var pairing = proof.PairingChanged || !string.Equals(entry.TlsSpki, spki, StringComparison.Ordinal) || entry.TlsTrust != trust;
         var renamed = proof.DisplayName is not null && proof.DisplayName != entry.DisplayName;
         var promoted = proof.IsSuperadmin is { } flag && flag != entry.IsSuperadmin;
-        if (!moved && !pairing && !renamed && !promoted && !proof.Announce)
+        var owned = proof.Ownership is not null && (proof.Ownership != entry.Ownership || proof.OwnerPersonId != entry.OwnerPersonId || proof.OwnerLabel != entry.OwnerLabel);
+        if (!moved && !pairing && !renamed && !promoted && !owned && !proof.Announce)
             return new(PeerAddressOutcome.Unchanged, "The row already says this.", entry);
 
         var before = entry.ApiAddress;
         // Log first: the event mints the version the row has to carry, and it names the address the row will store, not the one that came in.
-        var version = await events.LogWhitelistUpdateAsync(entry.NodeId, address, proof.DisplayName, proof.IsSuperadmin, proof.TlsSpki, proof.TlsTrust);
+        var version = await events.LogWhitelistUpdateAsync(entry.NodeId, address, proof.DisplayName, proof.IsSuperadmin, proof.TlsSpki, proof.TlsTrust,
+            proof.Ownership, proof.OwnerPersonId, proof.OwnerLabel);
         entry.ApiAddress = address;
         if (proof.DisplayName is not null) entry.DisplayName = proof.DisplayName;
         if (proof.IsSuperadmin is { } superadmin) entry.IsSuperadmin = superadmin;
+        if (proof.Ownership is not null)
+        {
+            var (ownKind, ownPid, ownLabel) = OwnershipKinds.Resolve(proof.Ownership, proof.OwnerPersonId, proof.OwnerLabel);
+            entry.Ownership = ownKind;
+            entry.OwnerPersonId = ownPid;
+            entry.OwnerLabel = ownLabel;
+            entry.NeedsReview = ownKind == OwnershipKinds.Unknown;
+        }
         entry.TlsSpki = spki;
         entry.TlsTrust = trust;
         entry.UpdatedAt = DateTime.UtcNow;
         // The fields the event names take its version, as on every node that receives it.
         entry.StampLocal(version, WhitelistEventConcerns.ForLocalUpdate(entry.NodeId, version.SourceNodeId, address, proof.DisplayName,
-            proof.IsSuperadmin, proof.TlsSpki, proof.TlsTrust));
+            proof.IsSuperadmin, proof.TlsSpki, proof.TlsTrust, proof.Ownership, proof.OwnerPersonId, proof.OwnerLabel));
         await whitelist.UpdateAsync(entry);
 
         // What the loop learned about the old address (or the old pairing) does not count for the new one, and the new one is tried at once.
@@ -273,9 +284,13 @@ public sealed class PeerAddressService(
         }
 
         entry.ApiAddress = address;
+        (entry.Ownership, entry.OwnerPersonId, entry.OwnerLabel) =
+            OwnershipKinds.Resolve(entry.Ownership, entry.OwnerPersonId, entry.OwnerLabel);
+        if (!OwnershipKinds.IsKnown(entry.Ownership))
+            entry.NeedsReview = true;
         var version = await events.LogWhitelistAddAsync(entry);
-        // An add writes every field of the row, and its membership.
-        entry.StampLocal(version, WhitelistEventConcerns.OfAdd);
+        // An add writes every field of the row it carries (Ownership only when known), and its membership.
+        entry.StampLocal(version, WhitelistEventConcerns.OfAddFor(entry));
         await (write is null ? whitelist.CreateAsync(entry) : write(entry));
 
         peerState?.PeerChanged(entry.NodeId);

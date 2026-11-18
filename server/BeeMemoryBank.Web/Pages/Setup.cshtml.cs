@@ -40,12 +40,14 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
     public string? PostedPasswordHint { get; private set; }
     public string? PostedJoinCode { get; private set; }
     public string? PostedRemoteUrl { get; private set; }
+    public bool PostedShared { get; private set; }
+    public string? PostedJoinLogin { get; private set; }
 
     /// <summary>The value a field of the <paramref name="form"/> form ("standalone" or "join") opens with: what was sent with it, else <paramref name="suggested"/>.</summary>
     public string FieldValue(string form, string? posted, string suggested = "") =>
         Mode == form && posted != null ? posted : suggested;
 
-    private void KeepPosted(string? username, string? displayName, string? passwordHint, string? joinCode = null, string? remoteUrl = null)
+    private void KeepPosted(string? username, string? displayName, string? passwordHint, string? joinCode = null, string? remoteUrl = null, bool shared = false, string? login = null)
     {
         PostedUsername = username ?? "";
         PostedDisplayName = displayName ?? "";
@@ -53,6 +55,8 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
         PostedJoinCode = joinCode ?? "";
         // With a code the join goes to the code's address (the page shows it from the code), never to what was typed.
         PostedRemoteUrl = string.IsNullOrWhiteSpace(joinCode) ? remoteUrl ?? "" : "";
+        PostedShared = shared;
+        PostedJoinLogin = login ?? "";
     }
 
     public void OnGet(string? step, string? mode)
@@ -140,13 +144,14 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
     /// </summary>
     public async Task<IActionResult> OnPostJoinAsync(
         string joinAdminUsername, string joinDisplayName, string remoteUrl, string joinPassword, string passwordHint, string? joinCode = null,
-        string? joinConfirmPassword = null)
+        string? joinConfirmPassword = null, bool joinShared = false, string? joinLogin = null)
     {
         joinAdminUsername = joinAdminUsername?.Trim() ?? "";
         joinDisplayName = joinDisplayName?.Trim() ?? "";
         remoteUrl = remoteUrl?.Trim() ?? "";
         joinCode = joinCode?.Trim() ?? "";
-        KeepPosted(joinAdminUsername, joinDisplayName, passwordHint, joinCode, remoteUrl);
+        joinLogin = joinLogin?.Trim() ?? "";
+        KeepPosted(joinAdminUsername, joinDisplayName, passwordHint, joinCode, remoteUrl, joinShared, joinLogin);
 
         if (joinCode.Length > 0)
         {
@@ -197,7 +202,7 @@ public partial class SetupModel(ApiClient api, MdnsBrowser mdnsBrowser) : PageMo
         }
 
         var (ok, error) = await api.InitJoinAsync(joinAdminUsername, joinDisplayName, remoteUrl, joinPassword, passwordHint,
-            joinCode.Length > 0 ? joinCode : null);
+            joinCode.Length > 0 ? joinCode : null, shared: joinShared, login: joinLogin.Length > 0 ? joinLogin : null);
         if (!ok)
         {
             ErrorMessage = error ?? "Join failed.";

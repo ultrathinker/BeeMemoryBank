@@ -65,7 +65,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage0 #1: a blind volume that holds anything able to put the master DEK into the
+    /// A blind volume that holds anything able to put the master DEK into the
     /// process — here a password key slot, or the update unlock handoff — is refused at start.
     /// </summary>
     [Fact]
@@ -99,7 +99,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage0 #4: a restore_network recorded as Pending whose reseed flag was never written
+    /// A restore_network recorded as Pending whose reseed flag was never written
     /// (the process died in between) is finished at the next start.
     /// </summary>
     [Fact]
@@ -126,7 +126,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage1 #4: a cutover the process died in, after the old database was moved aside and
+    /// A cutover the process died in, after the old database was moved aside and
     /// the new one moved in, is rolled back at the next start — the old database, whole, is live again.
     /// </summary>
     [Fact]
@@ -143,7 +143,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage1 round 2 #3: the process died between moving the live media directory aside and
+    /// The process died between moving the live media directory aside and
     /// moving the new one in. The start puts the old database AND the old media directory back.
     /// </summary>
     [Fact]
@@ -165,7 +165,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage1 round 3 #2: a node that had no media directory died mid-switch, after the seed's
+    /// A node that had no media directory died mid-switch, after the seed's
     /// media directory was put in place. The start restores the old database and removes the seed's
     /// media rather than leaving it live beside the old database.
     /// </summary>
@@ -187,7 +187,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage1 #4: one that died after it was complete is finished: new database live. The old one is wiped,
+    /// One that died after it was complete is finished: new database live. The old one is wiped,
     /// not kept as a .pre-seed copy: committed, it is no way back, only the vault under its old key.
     /// </summary>
     [Fact]
@@ -239,7 +239,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage0 round 2 #2: a rotation a crash left in Committing (a build that closed it in a
+    /// A rotation a crash left in Committing (a build that closed it in a
     /// background task, lost after the commit was already in the log) is closed at the next start.
     /// </summary>
     [Fact]
@@ -268,7 +268,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage0 round 2 #1: what a pre-fix build let into the log — an event authored by a
+    /// What a pre-fix build let into the log — an event authored by a
     /// blind node, a rotation carrying an envelope for this blind node — is taken out at start:
     /// quarantined, no longer served to peers, and refused if delivered again. Ordinary events stay.
     /// </summary>
@@ -322,7 +322,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage1 #2: the removed envelope is gone from the bytes on disk — main file and WAL —
+    /// The removed envelope is gone from the bytes on disk — main file and WAL —
     /// not just from queries, and the node reports that its master DEK must be treated as exposed.
     /// </summary>
     [Fact]
@@ -373,7 +373,7 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage1 round 2 #1: the process died after the repair committed the delete and before it
+    /// The process died after the repair committed the delete and before it
     /// scrubbed the file. The row is gone, its bytes are not; the marker written with the delete makes
     /// the next start scrub anyway.
     /// </summary>
@@ -416,9 +416,9 @@ public class BlindStartupTests
     }
 
     /// <summary>
-    /// Review L-stage1 round 3 #1: a scrub whose checkpoint a reader holds back (SQLITE_BUSY, reported in
+    /// A scrub whose checkpoint a reader holds back (SQLITE_BUSY, reported in
     /// the checkpoint's result rather than thrown) has not scrubbed the file: the marker stays.
-    /// Round 4 #1: once the reader is gone, the running node's own sync cycle finishes the job — no
+    /// Once the reader is gone, the running node's own sync cycle finishes the job — no
     /// restart needed.
     /// </summary>
     [Fact]

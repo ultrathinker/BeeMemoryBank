@@ -4,7 +4,7 @@ namespace BeeMemoryBank.Search.Tests;
 
 /// <summary>
 /// Explicit edge-case coverage for <see cref="DefaultStemmer"/> and the individual language
-/// stemmers: every case the WP-05 brief calls out by name (empty, whitespace, single character,
+/// stemmers: every case called out by name (empty, whitespace, single character,
 /// all-digits, mixed script, emoji/symbols, very long strings) plus null, which none of those
 /// interfaces declare non-nullable but which real callers will eventually pass anyway.
 /// </summary>

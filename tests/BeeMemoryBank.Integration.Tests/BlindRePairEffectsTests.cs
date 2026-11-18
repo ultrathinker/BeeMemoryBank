@@ -12,7 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-306/307 fix round 2 (T1, Q2): a blind node paired again from a fresh code is the same node at a renewed pairing. What the loop learned at the old pairing
+/// BMB-306/307: a blind node paired again from a fresh code is the same node at a renewed pairing. What the loop learned at the old pairing
 /// (an unreachable pause, a closed window, a failure reason, the contact log's outbound facts) is forgotten whether or not the place moved and the new pairing is
 /// tried at once; an audit line says so without the address; and the key the row is dialled by never changes through a pairing.
 /// </summary>

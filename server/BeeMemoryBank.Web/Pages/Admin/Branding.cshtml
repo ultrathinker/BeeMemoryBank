@@ -2,13 +2,17 @@
 @model BeeMemoryBank.Web.Pages.Admin.BrandingModel
 
 @section About {
-    <p>
-        The <strong>product name</strong> is the name shown in the header next to the logo and in the title of the browser tab. Leave it empty to keep the built-in name, Bee Memory Bank. Use it
-        to tell several installations apart (&ldquo;Home&rdquo;, &ldquo;Office&rdquo;) or to put your own company name on a node you share with a team.
-    </p>
-    <p>
-        This is a setting of <strong>this node only</strong>. It is never synced, so every installation can carry its own name. It changes nothing else: no data, no sign-in, no sync.
-    </p>
+    <p>The name shown at the top of the page and in the browser tab.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            The <strong>product name</strong> is the name shown in the header next to the logo and in the title of the browser tab. Leave it empty to keep the built-in name, Bee Memory Bank. Use it
+            to tell several installations apart (&ldquo;Home&rdquo;, &ldquo;Office&rdquo;) or to put your own company name on a node you share with a team.
+        </p>
+        <p>
+            This is a setting of <strong>this node only</strong>. It is never synced, so every installation can carry its own name. It changes nothing else: no data, no sign-in, no sync.
+        </p>
+    </details>
 }
 
 <div class="card mt-md" style="max-width:480px;">

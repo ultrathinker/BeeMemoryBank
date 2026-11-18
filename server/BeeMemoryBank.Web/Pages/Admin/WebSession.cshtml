@@ -2,18 +2,22 @@
 @model BeeMemoryBank.Web.Pages.Admin.WebSessionModel
 
 @section About {
-    <p>
-        When someone signs in on the <a href="/Login">Login</a> page, the browser gets a cookie (<code>bee_session</code>). This page decides how long that cookie stays valid before a
-        fresh sign-in is asked for. It has no effect on AI agents connected with a bearer token: they never use or extend this cookie.
-    </p>
-    <p>
-        With <strong>sliding</strong> on, each visit resets the countdown, so someone who is active every day is never logged out. With it off, the session ends exactly the chosen number of
-        hours after sign-in, however often the person visits. A shorter duration is safer on a shared computer; a longer one is more convenient on your own.
-    </p>
-    <p>
-        A change applies to <strong>new sign-ins only</strong>: sessions that are already open keep the expiry they were given and are not shortened or revoked. To end them at once,
-        <a href="/Admin/LockServer">lock the server</a>.
-    </p>
+    <p>How long you stay signed in in the browser.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            When someone signs in on the <a href="/Login">Login</a> page, the browser gets a cookie (<code>bee_session</code>). This page decides how long that cookie stays valid before a
+            fresh sign-in is asked for. It has no effect on AI agents connected with a bearer token: they never use or extend this cookie.
+        </p>
+        <p>
+            With <strong>sliding</strong> on, each visit resets the countdown, so someone who is active every day is never logged out. With it off, the session ends exactly the chosen number of
+            hours after sign-in, however often the person visits. A shorter duration is safer on a shared computer; a longer one is more convenient on your own.
+        </p>
+        <p>
+            A change applies to <strong>new sign-ins only</strong>: sessions that are already open keep the expiry they were given and are not shortened or revoked. To end them at once,
+            <a href="/Admin/LockServer">lock the server</a>.
+        </p>
+    </details>
 }
 
 <div class="card mt-md" style="max-width:480px;">

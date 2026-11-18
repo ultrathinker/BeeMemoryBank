@@ -107,7 +107,7 @@ public static class RekeyRunner
         var now = options.Now ?? DateTimeOffset.UtcNow;
 
         // Before anything is locked, created or read: a vault reached through a junction or link (D itself, or a
-        // directory above it) would have the re-key read, copy and rename through it (review release-b-fix #2).
+        // directory above it) would have the re-key read, copy and rename through it.
         if (NoFollow.IsOrUnderLink(d))
             return Fail(RekeyExit.FailedBeforeSwap,
                 $"{d} is, or sits under, a junction or symbolic link. Run the re-key on the vault's real path.");
@@ -133,7 +133,7 @@ public static class RekeyRunner
                 return Fail(RekeyExit.FailedBeforeSwap, "The node is running (node.lock is held): stop it first.");
             // Every process that opens the vault holds vault.lease shared: a standalone or Docker Api, a node's child
             // Api, a CLI command. Exclusive, it both refuses the run while one of them is up and keeps them from
-            // starting until the run is over (review release-b R1-1).
+            // starting until the run is over.
             using var vaultLease = VaultStartup.TryAcquireExclusive(d);
             if (vaultLease == null)
                 return Fail(RekeyExit.FailedBeforeSwap,
@@ -235,8 +235,8 @@ public static class RekeyRunner
                 options.Fault?.Invoke(FaultAfterBootStore);
             }
 
-            // The carry-over comes before the last D1 scan (review release-b R1-8): whatever it brings from D into the new
-            // vault is scanned with the rest. It never follows a link (R1-7); what it skipped is named in the report.
+            // The carry-over comes before the last D1 scan: whatever it brings from D into the new
+            // vault is scanned with the rest. It never follows a link; what it skipped is named in the report.
             var skippedLinks = new List<string>();
             var carried = RekeySwap.CarryOver(d, newDir, skippedLinks, options.Fault);
             report.Steps.Add(new RekeyStepResult(CarryOverName,
@@ -460,7 +460,8 @@ public static class RekeyRunner
             try
             {
                 byte[] dek;
-                try { dek = MasterKeyManager.UnwrapMasterDek(s.Wrapped, s.Iv, kek); }
+                // Either door format (ADR 0012), told by its shape: the database may predate migration 046.
+                try { dek = Doors.OpenByShape(s.Type, s.Wrapped, s.Iv, kek, s.Salt); }
                 catch (CryptographicException) { continue; }
                 if (!MasterKeyManager.VerifySentinel(sentinel, dek)) { CryptographicOperations.ZeroMemory(dek); continue; }
 

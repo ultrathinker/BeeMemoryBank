@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- The join screen in the iPhone JoinPage's shape: as few words as possible - the join code at
+     full width with Paste beside its label, the master password with one line under it, this phone's name, Join;
+     where the code comes from sits under "More", folded. No password hint on join: joining reuses the computer's
+     password. Above the code field there is room for a "Scan QR code" button, but no button: the scanner needs a
+     package the owner has not approved yet. The create mode (a new standalone vault on this phone) keeps its hint.
+     The work itself is unchanged (NodeSetupService). -->
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:controls="clr-namespace:BeeMemoryBank.Mobile.Controls"
+             xmlns:loc="clr-namespace:BeeMemoryBank.Mobile.Localization"
              x:Class="BeeMemoryBank.Mobile.Pages.SetupPage"
-             Title="BeeMemoryBank Setup"
-             BackgroundColor="{StaticResource BackgroundColor}"
+             Title="Connect"
              Shell.FlyoutBehavior="Disabled"
              Shell.NavBarIsVisible="False">
 
@@ -12,90 +19,110 @@
                              MaximumWidthRequest="400"
                              HorizontalOptions="Center" VerticalOptions="Center">
 
-            <Label Text="BeeMemoryBank"
-                   FontSize="28"
-                   FontAttributes="Bold"
-                   TextColor="{StaticResource PrimaryColor}"
+            <Label Text="{loc:Translate AppTitle}"
+                   Style="{StaticResource BrandTitle}"
                    HorizontalOptions="Center" />
 
-            <Label Text="Setup your node"
-                   FontSize="16"
-                   TextColor="{StaticResource SecondaryTextColor}"
-                   HorizontalOptions="Center" />
+            <Border Style="{StaticResource CardBorder}">
+                <VerticalStackLayout Spacing="14">
+                    <controls:SegmentedControl x:Name="ModeSegments" AutomationId="SetupModeSegments" />
 
-            <Entry x:Name="NameEntry"
-                   AutomationId="SetupNameEntry"
-                   Placeholder="My Node"
-                   Style="{StaticResource BaseEntry}" />
+                    <!-- Join: the owner's order. The QR button sits above the code field, in the room Q2 left for it. -->
+                    <VerticalStackLayout x:Name="JoinPanel" Spacing="14">
+                        <Button x:Name="ScanButton" AutomationId="ScanQrButton"
+                                Text="{loc:Translate JoinScanQr}" Style="{StaticResource SecondaryButton}"
+                                Clicked="OnScanClicked" />
+                        <VerticalStackLayout Spacing="4">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                <Label Grid.Column="0" Text="{loc:Translate ConnectAddrLabel}" Style="{StaticResource FieldLabel}" VerticalOptions="Center" />
+                                <Button Grid.Column="1" x:Name="PasteButton" AutomationId="PasteCodeButton"
+                                        Text="{loc:Translate JoinPaste}" Style="{StaticResource TextButton}"
+                                        Clicked="OnPasteClicked" />
+                            </Grid>
+                            <Editor x:Name="ServerUrlEntry" AutomationId="ServerUrlEntry"
+                                    Placeholder="bmb-join:?a=..."
+                                    AutoSize="TextChanges" MinimumHeightRequest="48"
+                                    IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"
+                                    BackgroundColor="{AppThemeBinding Light={StaticResource BmbSurfaceHighLight}, Dark={StaticResource BmbSurfaceHigh}}"
+                                    HorizontalOptions="Fill" />
+                        </VerticalStackLayout>
 
-            <Frame BorderColor="{StaticResource BorderColor}"
-                   BackgroundColor="{StaticResource SurfaceColor}"
-                   CornerRadius="8"
-                   Padding="16">
-                <VerticalStackLayout Spacing="8">
-                    <Label Text="Server URL or join code"
-                           FontAttributes="Bold" />
-                    <Label Text="Connect to an existing BeeMemoryBank server, or paste the join code from Connect a device on your computer. Leave empty to create a standalone offline node."
-                           FontSize="12"
-                           TextColor="{StaticResource SecondaryTextColor}"
-                           LineBreakMode="WordWrap" />
-                     <Entry x:Name="ServerUrlEntry"
-                            AutomationId="ServerUrlEntry"
-                            Placeholder="https://bmb.example.com"
-                            IsSpellCheckEnabled="False"
-                            IsTextPredictionEnabled="False"
-                            Style="{StaticResource BaseEntry}" />
+                        <VerticalStackLayout Spacing="4">
+                            <Label Text="{loc:Translate MasterPasswordLabel}" Style="{StaticResource FieldLabel}" />
+                            <controls:PasswordBox x:Name="PasswordEntry" AutomationId="SetupPasswordEntry"
+                                                  Placeholder="{loc:Translate ConnectPasswordPlaceholder}" />
+                            <Label Text="{loc:Translate JoinPasswordMeta}" Style="{StaticResource ItemMeta}" />
+                        </VerticalStackLayout>
+
+                        <VerticalStackLayout Spacing="4">
+                            <Label Text="{loc:Translate ConnectDeviceNameLabel}" Style="{StaticResource FieldLabel}" />
+                            <Entry x:Name="NameEntry" AutomationId="SetupNameEntry"
+                                   Placeholder="{loc:Translate ConnectDeviceNamePlaceholder}"
+                                   Style="{StaticResource BaseEntry}" />
+                        </VerticalStackLayout>
+
+                        <Label x:Name="ErrorLabel" Style="{StaticResource FieldError}" IsVisible="False" />
+
+                        <Button x:Name="SetupButton" AutomationId="SetupButton"
+                                Text="{loc:Translate ConnectStart}" Style="{StaticResource PrimaryButton}"
+                                Clicked="OnSetupClicked" />
+
+                        <Button x:Name="MoreButton" AutomationId="JoinMoreButton"
+                                Text="{loc:Translate JoinMore}" Style="{StaticResource TextButton}"
+                                HorizontalOptions="Center" Clicked="OnMoreClicked" />
+                        <Label x:Name="MoreLabel" AutomationId="JoinMoreText"
+                               Text="{loc:Translate ConnectAddrMeta}" Style="{StaticResource ItemMeta}"
+                               IsVisible="False" />
+                    </VerticalStackLayout>
+
+                    <!-- Create: a new standalone vault on this phone; the hint stays here. -->
+                    <VerticalStackLayout x:Name="CreatePanel" Spacing="14" IsVisible="False">
+                        <VerticalStackLayout Spacing="4">
+                            <Label Text="{loc:Translate ConnectDeviceNameLabel}" Style="{StaticResource FieldLabel}" />
+                            <Entry x:Name="CreateNameEntry" AutomationId="CreateNameEntry"
+                                   Placeholder="{loc:Translate ConnectDeviceNamePlaceholder}"
+                                   Style="{StaticResource BaseEntry}" />
+                        </VerticalStackLayout>
+
+                        <VerticalStackLayout Spacing="4">
+                            <Label Text="{loc:Translate MasterPasswordLabel}" Style="{StaticResource FieldLabel}" />
+                            <controls:PasswordBox x:Name="CreatePasswordEntry" AutomationId="CreatePasswordEntry"
+                                                  Placeholder="{loc:Translate ConnectPasswordPlaceholder}" />
+                        </VerticalStackLayout>
+
+                        <VerticalStackLayout Spacing="4">
+                            <Label Text="{loc:Translate ConnectHintLabel}" Style="{StaticResource FieldLabel}" />
+                            <Entry x:Name="PasswordHintEntry" AutomationId="SetupPasswordHintEntry"
+                                   Placeholder="{loc:Translate MasterHintPlaceholder}"
+                                   Style="{StaticResource BaseEntry}" />
+                            <Label Text="{loc:Translate ConnectHintMeta}" Style="{StaticResource ItemMeta}" />
+                        </VerticalStackLayout>
+
+                        <Label x:Name="CreateErrorLabel" Style="{StaticResource FieldError}" IsVisible="False" />
+
+                        <Button x:Name="CreateButton" AutomationId="CreateVaultButton"
+                                Text="{loc:Translate SetupCreateButton}" Style="{StaticResource PrimaryButton}"
+                                Clicked="OnCreateClicked" />
+                    </VerticalStackLayout>
                 </VerticalStackLayout>
-            </Frame>
+            </Border>
 
-            <Entry x:Name="PasswordEntry"
-                   AutomationId="SetupPasswordEntry"
-                   Placeholder="Password"
-                   IsPassword="True"
-                   Style="{StaticResource BaseEntry}" />
+            <ActivityIndicator x:Name="LoadingIndicator" IsVisible="False" IsRunning="False" />
 
-            <Label Text="Password hint (required). If you forget your password, we will show this hint on the sign-in page, because there is no e-mail recovery. Write it so that other people cannot work out your password from it. Never write the password itself. Anyone who can read this node's data folder can read the hint, so never write anything secret in it."
-                   FontSize="12"
-                   TextColor="{StaticResource SecondaryTextColor}"
-                   LineBreakMode="WordWrap" />
-            <Entry x:Name="PasswordHintEntry"
-                   AutomationId="SetupPasswordHintEntry"
-                   Placeholder="Password hint"
-                   Style="{StaticResource BaseEntry}" />
+            <Label x:Name="StatusLabel" AutomationId="SetupStatusLabel" IsVisible="False"
+                   HorizontalOptions="Center" HorizontalTextAlignment="Center" FontSize="14"
+                   TextColor="{AppThemeBinding Light={StaticResource BmbTextSecondaryLight}, Dark={StaticResource BmbTextSecondary}}" />
 
-            <Label x:Name="ErrorLabel"
-                   TextColor="{StaticResource ErrorColor}"
-                   IsVisible="False"
-                   FontSize="14" />
+            <Button x:Name="BackButton" AutomationId="SetupBackButton"
+                    Text="{loc:Translate Back}" Style="{StaticResource TextButton}"
+                    HorizontalOptions="Center" Clicked="OnBackClicked" />
 
-            <Button x:Name="SetupButton"
-                    AutomationId="SetupButton"
-                    Text="Setup &amp; Connect"
-                    Style="{StaticResource PrimaryButton}"
-                    Clicked="OnSetupClicked" />
-
-            <ActivityIndicator x:Name="LoadingIndicator"
-                               IsVisible="False"
-                               IsRunning="False"
-                               Color="{StaticResource PrimaryColor}" />
-
-            <Label x:Name="StatusLabel"
-                   AutomationId="SetupStatusLabel"
-                   IsVisible="False"
-                   HorizontalOptions="Center"
-                   HorizontalTextAlignment="Center"
-                   FontSize="14"
-                   TextColor="{StaticResource SecondaryTextColor}" />
-
-            <Button x:Name="ResetButton"
-                    AutomationId="ResetButton"
-                    Text="Reset local data"
-                    IsVisible="False"
-                    BackgroundColor="Transparent"
-                    TextColor="{StaticResource ErrorColor}"
+            <Button x:Name="ResetButton" AutomationId="ResetButton"
+                    Text="{loc:Translate ResetLocalButton}" IsVisible="False"
+                    Style="{StaticResource TextButton}"
+                    TextColor="{AppThemeBinding Light={StaticResource BmbErrorLight}, Dark={StaticResource BmbError}}"
                     Clicked="OnResetClicked" />
 
         </VerticalStackLayout>
     </ScrollView>
-
 </ContentPage>

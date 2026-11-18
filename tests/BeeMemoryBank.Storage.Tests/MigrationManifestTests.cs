@@ -37,7 +37,7 @@ public class MigrationManifestTests
                 return n + " " + Convert.ToHexString(SHA256.HashData(ms.ToArray())).ToLowerInvariant();
             })
             .ToList();
-        lines.Should().HaveCount(6, "the baseline, 041_blind_invite.sql, 042_blind_invite_server.sql, 043_password_hint.sql, 044_peer_channels.sql and 045_whitelist_concern_versions.sql");
+        lines.Should().HaveCount(11, "the baseline, 041_blind_invite.sql, 042_blind_invite_server.sql, 043_password_hint.sql, 044_peer_channels.sql, 045_whitelist_concern_versions.sql, 046_sealed_doors.sql, 047_ownership_and_node_state.sql, 049_node_key_history.sql, 050_shared_doors.sql and 051_offboarding.sql");
         var actual = string.Join("\n", lines) + "\n";
 
         var path = Path.Combine(RepoRoot(), "docs", "migrations.golden.txt");

@@ -530,7 +530,8 @@ public sealed class BlindJoinService(
         try
         {
             var identity = await SyncAddress.ReadIdentityAsync(client, invitation.Address, ct);
-            if (identity.NodeId != invitation.HubNodeId || !PeerKey.Matches(invitation.HubPublicKey, identity.Ed25519PublicKeyB64))
+            // The invitation's key, or one the hub's signed key transition chain leads to from it (a hub that re-keyed since, plan WS-D D4).
+            if (identity.NodeId != invitation.HubNodeId || !PeerKey.MatchesOrFollows(invitation.HubNodeId, invitation.HubPublicKey, identity))
                 throw new BlindJoinException(BlindJoinWords.HubMismatch(host), 502);
         }
         catch (NoSyncServerException)

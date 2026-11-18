@@ -56,7 +56,8 @@ public class OsAutoUnlockService(
     IKeySlotRepository keySlotRepo,
     SessionService session,
     string dataPath,
-    IUserSecretStore? secretStore = null)
+    IUserSecretStore? secretStore = null,
+    Microsoft.Extensions.Logging.ILogger<OsAutoUnlockService>? logger = null) : IUnlockedDoorUpgrade
 {
     private readonly IUserSecretStore _secretStore = secretStore ?? UserSecretStores.CreateDefault(dataPath);
     private readonly SemaphoreSlim _mutationLock = new(1, 1);
@@ -155,21 +156,10 @@ public class OsAutoUnlockService(
 
             // Use the secret directly as the KEK: no Argon2 (DPAPI provides the OS-level
             // protection; the secret is high-entropy random, not user-typed low-entropy text).
-            var (encryptedDek, iv) = MasterKeyManager.WrapMasterDek(masterDek, secret);
-
-            var slot = new MasterKeyStore
-            {
-                SlotType = "os_auto_unlock",
-                EncryptedMasterDek = encryptedDek,
-                IV = iv,
-                // Salt and Argon* fields left null: the slot intentionally has no KDF.
-                // SessionService.UnlockCoreAsync filters these out (Salt != null check).
-                Salt = null,
-                ArgonMemory = null,
-                ArgonIterations = null,
-                ArgonParallelism = null,
-                CreatedAt = DateTime.UtcNow
-            };
+            // Salt and Argon* fields stay null: the slot intentionally has no KDF, and
+            // SessionService.UnlockCoreAsync filters these out (Salt != null check). A sealed
+            // (v2) door, as every new door (ADR 0012).
+            var slot = Doors.NewSecretSlot(KeySlotTypes.OsAutoUnlock, secret, masterDek);
             var slotId = await SlotDoors.CreateSlotAsync(keySlotRepo, _factory, _mirror, slot, masterDek);
 
             try
@@ -216,10 +206,11 @@ public class OsAutoUnlockService(
 
         await _mutationLock.WaitAsync();
 
-        if (session.IsUnlocked) return true; // already unlocked — nothing to do
-
         try
         {
+            // Inside the try: the lock is released on this return too (it used to leak here, and the door upgrade after an unlock takes it).
+            if (session.IsUnlocked) return true; // already unlocked — nothing to do
+
             var secret = _secretStore.Read("os-auto-unlock", "default");
             if (secret is null) return false;
             try
@@ -228,7 +219,7 @@ public class OsAutoUnlockService(
 
                 var slot = await FindSlotMatchingSecretAndRepairAsync(secret);
                 if (slot is null) return false;
-                var masterDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, secret);
+                var masterDek = Doors.OpenSlot(slot, secret);
                 try
                 {
                     // Verify against the sentinel to guard against a corrupt/stale slot.
@@ -317,7 +308,7 @@ public class OsAutoUnlockService(
         {
             try
             {
-                var masterDek = MasterKeyManager.UnwrapMasterDek(slot.EncryptedMasterDek, slot.IV, secret);
+                var masterDek = Doors.OpenSlot(slot, secret);
                 Array.Clear(masterDek);
                 matchingSlot = slot;
                 break;
@@ -345,17 +336,21 @@ public class OsAutoUnlockService(
 
     // ── the sealed node, database closed (spec 4.7, 5.2 step 6) ───────────────────────────────
 
-    /// <summary>The boot door of the <c>os_auto_unlock</c> slot that the DPAPI secret opens, newest first; null when none does.</summary>
-    private async Task<(BootDoor Door, byte[] MasterDek)?> OpenDoorAsync(byte[] secret)
-    {
-        var doors = (await _sealedHost!.ListDoorsAsync())
+    /// <summary>The boot doors of the <c>os_auto_unlock</c> slot, newest first.</summary>
+    private async Task<List<BootDoor>> OsBootDoorsAsync() =>
+        (await _sealedHost!.ListDoorsAsync())
             .Where(d => d.Kind == BootDoorKinds.Slot && d.SlotType == "os_auto_unlock")
-            .OrderByDescending(d => d.DoorId);
-        foreach (var door in doors)
+            .OrderByDescending(d => d.DoorId)
+            .ToList();
+
+    private async Task<BootDoor?> FindDoorMatchingSecretAsync(byte[] secret)
+    {
+        foreach (var door in await OsBootDoorsAsync())
         {
             try
             {
-                return (door, MasterKeyManager.UnwrapMasterDek(door.EncryptedMasterDek, door.Iv, secret));
+                Array.Clear(Doors.OpenBootDoor(door, secret));
+                return door;
             }
             catch (CryptographicException)
             {
@@ -365,34 +360,64 @@ public class OsAutoUnlockService(
         return null;
     }
 
-    private async Task<BootDoor?> FindDoorMatchingSecretAsync(byte[] secret)
-    {
-        var found = await OpenDoorAsync(secret);
-        if (found is null) return null;
-        Array.Clear(found.Value.MasterDek);
-        return found.Value.Door;
-    }
-
     /// <summary>
-    /// The unlock at start on a sealed node: the secret opens the boot door, the DEK goes through <c>TryUnlockWithDekAsync</c>, which
+    /// The unlock at start on a sealed node: the secret opens a boot door, the DEK goes through <c>TryUnlockWithDekAsync</c>, which
     /// checks the sentinel and the door in the OPENED database and closes it again on any refusal (the order of the plain path is reversed
-    /// because there is nothing to read the sentinel from while the database is closed).
+    /// because there is nothing to read the sentinel from while the database is closed). Every door the secret opens is tried until one is
+    /// accepted: a crash before a rotation's commit leaves a newer pending copy holding the key that was never committed.
     /// </summary>
     private async Task<bool> TryAutoUnlockSealedAsync(byte[] secret)
     {
-        var found = await OpenDoorAsync(secret);
-        if (found is null) return false;
-        var (door, masterDek) = found.Value;
+        foreach (var door in await OsBootDoorsAsync())
+        {
+            byte[] masterDek;
+            try { masterDek = Doors.OpenBootDoor(door, secret); }
+            catch (CryptographicException) { continue; }   // a stale door: the next one
+            try
+            {
+                if (!await _sealedHost!.TryUnlockWithDekAsync(masterDek, door)) continue;
+                try { await _sealedHost.SetDekFingerprintAsync(door.DoorId, DekFingerprint.Of(masterDek)); }
+                catch { /* best effort: the next rewrite learns it from the door that was used */ }
+                return true;
+            }
+            finally
+            {
+                Array.Clear(masterDek);
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// ADR 0012: as soon as the node is open and the OS secret is readable, a v1 <c>os_auto_unlock</c> slot is sealed again as a v2 door for
+    /// the same secret (and a door whose DEK was unknown gets its fingerprint), only when it yields the session's DEK. Best effort.
+    /// </summary>
+    public async Task UpgradeAsync(CancellationToken ct = default)
+    {
+        if (!_secretStore.IsSupported || !session.IsUnlocked || SealedAndClosed) return;
+        await _mutationLock.WaitAsync(ct);
+        byte[]? secret = null;
+        byte[]? current = null;
         try
         {
-            if (!await _sealedHost!.TryUnlockWithDekAsync(masterDek, door)) return false;
-            try { await _sealedHost.SetDekFingerprintAsync(door.DoorId, DekFingerprint.Of(masterDek)); }
-            catch { /* best effort: the next rewrite learns it from the door that was used */ }
-            return true;
+            secret = _secretStore.Read("os-auto-unlock", "default");
+            if (secret is null) return;
+            var slot = await FindSlotMatchingSecretAndRepairAsync(secret);
+            if (slot is null || (!Doors.NeedsUpgrade(slot) && slot.DekFingerprint is not null)) return;
+            current = session.GetMasterDek();
+            await SlotDoors.UpgradeOpenedSlotAsync(keySlotRepo, _mirror, slot, secret, current, logger);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The kind of failure only: no key material, no message that could carry it.
+            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning((Microsoft.Extensions.Logging.ILogger?)logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+                "The OS auto-unlock door could not be upgraded ({Type}); it is tried again at the next unlock.", ex.GetType().Name);
         }
         finally
         {
-            Array.Clear(masterDek);
+            if (secret is not null) Array.Clear(secret);
+            if (current is not null) Array.Clear(current);
+            _mutationLock.Release();
         }
     }
 

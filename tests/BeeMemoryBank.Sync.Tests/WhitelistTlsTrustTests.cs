@@ -202,7 +202,7 @@ public class WhitelistTlsTrustTests : SyncTestFixture
         (row.Status, row.TlsTrust, row.TlsSpki).Should().Be(("A", BlindTrust.PublicCa, null));
     }
 
-    // ── the mode is the authority (review INT-03) ─────────────────────────────
+    // ── the mode is the authority ─────────────────────────────
 
     private static X509Certificate2 SelfSignedCertificate()
     {

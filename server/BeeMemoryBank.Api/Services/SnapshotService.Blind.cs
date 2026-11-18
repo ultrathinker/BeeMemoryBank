@@ -13,7 +13,8 @@ public sealed record VerifiedSnapshot(
     /// hashes in it, every file).</summary>
     public bool IsSignedBy(byte[] publicKey) =>
         EmbeddedSignature is { } sig
-        && Ed25519Signer.Verify(publicKey, SnapshotService.BuildSigPayloadEmbedded(ManifestBytes), sig);
+        // A seed is signed by the node that seeds it now (the helper's current-key check, plan WS-D D3).
+        && BeeMemoryBank.Sync.NodeEventVerifier.SignatureVerifies(publicKey, SnapshotService.BuildSigPayloadEmbedded(ManifestBytes), sig);
 }
 
 public partial class SnapshotService

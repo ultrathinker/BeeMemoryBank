@@ -451,7 +451,7 @@ public sealed partial class BlindLimitsFix2Tests
     }
 }
 
-/// <summary>The device's storage is the sum over every LISTED account, not over the runtimes that are up (fix round 3).</summary>
+/// <summary>The device's storage is the sum over every LISTED account, not over the runtimes that are up.</summary>
 public sealed class BlindLimitsFix3AccountTests : IDisposable
 {
     private static readonly DateTimeOffset Noon = new(2026, 10, 21, 12, 0, 0, TimeSpan.Zero);

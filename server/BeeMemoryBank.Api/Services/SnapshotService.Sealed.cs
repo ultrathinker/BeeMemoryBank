@@ -2,6 +2,8 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using BeeMemoryBank.Core.IO;
+using BeeMemoryBank.Crypto;
+using BeeMemoryBank.Storage.Boot;
 using BeeMemoryBank.Storage.Sealed;
 using BeeMemoryBank.Vault.Sealed;
 using Dapper;
@@ -31,17 +33,28 @@ public sealed class MirrorRestoreHooks(IUnlockMaterialMirror mirror) : ISealedRe
     {
         await mirror.AddDbKeyWrapperAsync(stagedMasterDek, ct);
 
-        foreach (var s in staged.Query<(long SlotId, string SlotType, byte[] Wrapped, byte[] Iv, byte[]? Salt, long? Mem, long? It, long? Par)>(
-                     "SELECT slot_id, slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot"))
+        // The staged database may predate migration 046 (no door columns): a door's format is then told by its shape (ADR 0012), and its public
+        // key, which only a v2 row has, is read when the column is there. The boot copy must say v2 for a box, or no unlock could open it.
+        var slotPk = HasColumn(staged, "tbl_key_slot", "door_public_key") ? "door_public_key" : "NULL";
+        foreach (var s in staged.Query<(long SlotId, string SlotType, byte[] Wrapped, byte[] Iv, byte[]? Salt, long? Mem, long? It, long? Par, byte[]? Pk)>(
+                     $"SELECT slot_id, slot_type, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, {slotPk} FROM tbl_key_slot"))
+        {
+            var version = DoorBox.IsWellFormed(s.Wrapped) ? Doors.V2 : Doors.V1;
             await mirror.AddPendingDoorAsync(new PendingDoor("slot", s.SlotId, s.SlotType, s.Wrapped, s.Iv, s.Salt,
-                (int?)s.Mem, (int?)s.It, (int?)s.Par, null, null, null), ct);
+                (int?)s.Mem, (int?)s.It, (int?)s.Par, null, null, null, version, version == Doors.V2 ? s.Pk : null), ct);
+        }
 
-        foreach (var a in staged.Query<(long Id, string KeyHash, byte[] Wrapped, byte[] Iv, byte[]? Salt, long KdfVersion)>(
-                     "SELECT id, key_hash, encrypted_dek, dek_iv, salt, kdf_version FROM tbl_agent WHERE encrypted_dek IS NOT NULL AND status = 'A'"))
-            await mirror.AddPendingDoorAsync(new PendingDoor("agent", a.Id, null, a.Wrapped, a.Iv, a.Salt, null, null, null, a.KeyHash, (int)a.KdfVersion, null), ct);
+        var agentPk = HasColumn(staged, "tbl_agent", "door_public_key") ? "door_public_key" : "NULL";
+        foreach (var a in staged.Query<(long Id, string KeyHash, byte[] Wrapped, byte[] Iv, byte[]? Salt, long KdfVersion, byte[]? Pk)>(
+                     $"SELECT id, key_hash, encrypted_dek, dek_iv, salt, kdf_version, {agentPk} FROM tbl_agent WHERE encrypted_dek IS NOT NULL AND status = 'A'"))
+            await mirror.AddPendingDoorAsync(new PendingDoor("agent", a.Id, null, a.Wrapped, a.Iv, a.Salt, null, null, null, a.KeyHash, (int)a.KdfVersion, null,
+                BootDoorHash.AgentDoorVersion((int)a.KdfVersion), a.Pk), ct);
     }
 
     public Task AfterSwapAsync(CancellationToken ct) => mirror.RewriteAsync(ct);
+
+    private static bool HasColumn(SqliteConnection connection, string table, string column) =>
+        connection.ExecuteScalar<long>($"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = @column", new { column }) > 0;
 }
 
 public partial class SnapshotService
@@ -156,7 +169,7 @@ public partial class SnapshotService
 
             pageKey = _connFactory.CopyPageKey()!;
             // The image is imported where it lies: a legacy image (BMBDB1 from a 2.5 node, no page reserve) is deserialized in place, so the restore holds
-            // one whole image, not the container's buffer and a native copy of it (BMB-304 fix round).
+            // one whole image, not the container's buffer and a native copy of it (BMB-304).
             try
             {
                 await PlainImageImporter.ToSealedFileAsync(image, sealing, pageKey, PlainImageImporter.DefaultMemoryCap(), ct);

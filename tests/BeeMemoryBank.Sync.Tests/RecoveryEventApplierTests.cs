@@ -184,7 +184,7 @@ public class RecoveryEventApplierTests : IAsyncLifetime
         (await ActiveBoxes()).Should().NotContain(boxes[0]);
     }
 
-    // --- an inactive box keeps no key material (F7) -----------------------------------------
+    // --- an inactive box keeps no key material -----------------------------------------
     // A box stops being active when a newer one supersedes it or a retire covers it. From then on the
     // old password must not open anything this node holds: not the row, and not the logged event that
     // carried the same bytes and would be served to every peer that pulls.
@@ -302,8 +302,8 @@ public class RecoveryEventApplierTests : IAsyncLifetime
     /// <summary>
     /// What a reader sees is a committed state: a peer pulling /api/sync/events, a backup's VACUUM INTO. At no committed
     /// state may the log hold a recovery_box_set event whose box is not active here: not while a newer box supersedes
-    /// it, not in the gap before a separate purge, and not after its row is trimmed past the retention limit
-    /// (release-a2 review: security #1, spec #2).
+    /// it, not in the gap before a separate purge, and not after its row is trimmed past the retention limit.
+    ///
     /// </summary>
     [Fact]
     public async Task NoCommittedState_EverHoldsALoggedEventOfABoxThatIsNotActive()
@@ -645,7 +645,7 @@ public class RecoveryEventApplierTests : IAsyncLifetime
     // --- control.db -------------------------------------------------------------------------
 
     /// <summary>
-    /// Parity of the package check with the appliers (review round 3): whatever these appliers write - an active strong and device
+    /// Parity of the package check with the appliers: whatever these appliers write - an active strong and device
     /// box, a box superseded or retired with its material cleared, a link, an anchor whose position vector is keyed as sent, a secret -
     /// travels in control.db and must pass <see cref="ControlDbValidator"/>, which copies their rules.
     /// </summary>

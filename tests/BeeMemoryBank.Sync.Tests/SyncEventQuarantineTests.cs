@@ -277,7 +277,7 @@ public class SyncEventQuarantineTests : IAsyncLifetime
     /// it is judged by wall-clock time elapsed since the FIRST failure, not by attempt count — see
     /// DeferredQuarantineBudget's own remarks for why. Constructing the entry directly, rather than
     /// waiting six real hours, is the only practical way to exercise "the budget eventually runs
-    /// out and the event becomes permanent" (the brief's requirement #4).
+    /// out and the event becomes permanent".
     /// </summary>
     [Fact]
     public void IsQuarantined_DeferredBudgetExhausted_BecomesQuarantined()

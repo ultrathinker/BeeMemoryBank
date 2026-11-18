@@ -8,16 +8,16 @@ using Xunit;
 namespace BeeMemoryBank.Desktop.Tests;
 
 /// <summary>
-/// Covers the pure UI-logic helpers extracted for Этап 5:
+/// Covers the pure UI-logic helpers:
 /// <list type="bullet">
 /// <item><see cref="StorageDisplayLogic.FormatShellTitle"/> — the §4.5 "show profile name only
 /// when ≥ 2 profiles" rule that drives MainWindow.Title and the tray tooltip.</item>
 /// <item><see cref="StorageInputValidator.ValidateCreate"/> / <see cref="StorageInputValidator.ValidateRename"/>
 /// — create/rename dialog input validation that runs before ProfileService is touched.</item>
 /// </list>
-/// These are the only pieces of Этап 5 that are not Avalonia-UI-bound; everything else
+/// These are the only pieces that are not Avalonia-UI-bound; everything else
 /// (tray submenu, dialogs, manage window) is untestable without a headable Avalonia host,
-/// which the brief explicitly excludes from the testing scope.
+/// which is explicitly excluded from the testing scope.
 /// </summary>
 public sealed class StorageDisplayLogicTests : IDisposable
 {

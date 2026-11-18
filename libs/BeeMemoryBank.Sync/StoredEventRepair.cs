@@ -37,6 +37,13 @@ public static class StoredEventRepair
         // log as it stands after the removal above. Its failure stops nothing else; it is tried again at the next start.
         try { await WhitelistOrderRepair.RunAsync(scopes, logger); }
         catch (Exception ex) { logger.LogError(ex, "The whitelist repair failed; it runs again at the next start"); }
+        // Replays ownership members from stored whitelist events once when upgrading to 2.12+.
+        try { await WhitelistOwnershipRepair.RunAsync(scopes, logger); }
+        catch (Exception ex) { logger.LogError(ex, "The whitelist ownership repair failed; it runs again at the next start"); }
+        // Then the events an older build stored without applying them (their type was unknown to it), in log order: after the ownership repair,
+        // since an accounts_home_set names a node the whitelist must already hold as shared.
+        try { await LateEventReplay.RunAsync(scopes, logger); }
+        catch (Exception ex) { logger.LogError(ex, "The replay of stored events failed; it runs again at the next start"); }
         return removed;
     }
 
@@ -45,7 +52,7 @@ public static class StoredEventRepair
         using var scope = scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<IDbConnectionFactory>();
 
-        // Key material of inactive recovery boxes that an older build kept (F7). It marks the scrub below
+        // Key material of inactive recovery boxes that an older build kept. It marks the scrub below
         // as owed when it removes anything.
         var purged = await Recovery.RecoveryBoxMaterialPurge.RunAsync(db);
         if (purged > 0)

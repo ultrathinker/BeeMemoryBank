@@ -146,4 +146,54 @@ public class RecoveryBoxCryptoTests
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*heavy-derivation queue*");
     }
+
+    // ---- the device box of a sealed (v2) door (ADR 0012) -----------------------------------------------------------------------------
+
+    private static (byte[] Dek, byte[] Salt, byte[] Wrapped, byte[] Iv) SealedDoorBox(string password)
+    {
+        var dek = MasterKeyManager.GenerateMasterDek();
+        var salt = KeyDerivation.GenerateSalt();
+        var kek = KeyDerivation.DeriveKek(password, salt);
+        var slot = Doors.NewPasswordSlot("user", kek, salt, CryptoConstants.DefaultArgonMemory, CryptoConstants.DefaultArgonIterations,
+            CryptoConstants.DefaultArgonParallelism, dek);
+        return (dek, salt, RecoveryBoxKdf.DoorV2Wrapped(slot.DoorPublicKey!, slot.EncryptedMasterDek), slot.IV);
+    }
+
+    [Fact]
+    public void DeviceBox_OfASealedDoor_OpensWithThePassword_AndOnlyAsADeviceBox()
+    {
+        var (dek, salt, wrapped, iv) = SealedDoorBox("door password");
+
+        wrapped.Should().HaveCount(126);
+        RecoveryBoxKdf.IsWellFormed(RecoveryBoxKdf.KindDevice, salt, wrapped, iv).Should().BeTrue();
+        RecoveryBoxKdf.IsWellFormed(RecoveryBoxKdf.KindStrong, salt, wrapped, iv).Should().BeFalse("a strong box is never a door copy");
+        RecoveryBoxKdf.IsWellFormed(salt, wrapped, iv).Should().BeFalse("the kind-less check (link material) keeps the v1 shape");
+        RecoveryBoxCrypto.Unwrap("door password", RecoveryBoxKdf.Device64, salt, wrapped, iv).Should().Equal(dek);
+        RecoveryBoxCrypto.TryUnwrap("another password", RecoveryBoxKdf.Device64, salt, wrapped, iv).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(0, 0x01)]      // the outer version byte
+    [InlineData(33, 0x03)]     // the box's own version byte
+    public void DeviceBox_OfASealedDoor_WithAnotherVersionByte_IsMalformed(int index, byte value)
+    {
+        var (_, salt, wrapped, iv) = SealedDoorBox("door password");
+        wrapped[index] = value;
+        RecoveryBoxKdf.IsWellFormed(RecoveryBoxKdf.KindDevice, salt, wrapped, iv).Should().BeFalse();
+        ((Action)(() => RecoveryBoxCrypto.Unwrap("door password", RecoveryBoxKdf.Device64, salt, wrapped, iv))).Should().Throw<System.Security.Cryptography.CryptographicException>();
+    }
+
+    [Fact]
+    public void DeviceBox_OfASealedDoor_WithAnotherPublicKeyOrAChangedBox_IsRefused()
+    {
+        var (_, salt, wrapped, iv) = SealedDoorBox("door password");
+        var otherKey = (byte[])wrapped.Clone();
+        using (var pair = DoorBox.DeriveKeyPair(new byte[32], null)) pair.PublicKey.CopyTo(otherKey, 1);
+        RecoveryBoxCrypto.TryUnwrap("door password", RecoveryBoxKdf.Device64, salt, otherKey, iv).Should().BeNull("the public key is the one the password derives");
+        var changed = (byte[])wrapped.Clone();
+        changed[^1] ^= 1;
+        RecoveryBoxCrypto.TryUnwrap("door password", RecoveryBoxKdf.Device64, salt, changed, iv).Should().BeNull();
+        var shortened = wrapped[..125];
+        RecoveryBoxKdf.IsWellFormed(RecoveryBoxKdf.KindDevice, salt, shortened, iv).Should().BeFalse();
+    }
 }

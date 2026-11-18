@@ -32,7 +32,8 @@ public partial class SnapshotService
 
         var payload = await ComputeSignaturePayloadAsync(manifestBytes, tarGzPath);
 
-        if (!Ed25519Signer.Verify(producerPublicKey, payload, signature))
+        // A join snapshot is made at the request: only the producer's current key (the helper's current-key check, plan WS-D D3).
+        if (!BeeMemoryBank.Sync.NodeEventVerifier.SignatureVerifies(producerPublicKey, payload, signature))
             throw new InvalidOperationException("Snapshot signature verification failed");
 
         var manifest = JsonDocument.Parse(manifestBytes);
@@ -109,6 +110,11 @@ public partial class SnapshotService
                         if (!SnapshotTableImport.SnapshotHasTable(conn, tx, table)) continue;
                         try
                         {
+                            if (table == "tbl_accounts_home")
+                            {
+                                MergeAccountsHomeNewest(conn, tx);
+                                continue;
+                            }
                             // By column name, not SELECT * — see SnapshotTableImport for why a
                             // snapshot from another schema version makes the positional form
                             // either fail or silently scramble encryption fields.
@@ -308,6 +314,22 @@ public partial class SnapshotService
                     foreach (var table in importTables)
                     {
                         if (!SnapshotTableImport.SnapshotHasTable(conn, tx, table)) continue;
+
+                        // A table that only grows is merged, never replaced (SnapshotTables.Monotonic): an older snapshot does not undo a
+                        // retired link written since.
+                        if (SnapshotTables.Monotonic.Contains(table))
+                        {
+                            SnapshotTableImport.CopyTable(conn, tx, table, orIgnore: true);
+                            continue;
+                        }
+
+                        // accounts_home is a monotonic-by-version singleton: merge by newest (lamport_ts, source_node_id)
+                        // so a restore never rolls back to an older (or empty) accounts node designation.
+                        if (table == "tbl_accounts_home")
+                        {
+                            MergeAccountsHomeNewest(conn, tx);
+                            continue;
+                        }
 
                         using var delCmd = conn.CreateCommand();
                         delCmd.Transaction = tx;
@@ -509,6 +531,10 @@ public partial class SnapshotService
             {
                 try { File.Delete(backupPath); } catch { /* ignore */ }
             }
+
+            // The merged tombstones (tbl_removed_person is monotonic) close the accounts they name before anybody signs in (release 2.12.0, plan R1).
+            BeeMemoryBank.Core.Services.CallerStateCache.InvalidateAll();
+            await RunAfterRestoreAsync();
         }
         finally
         {
@@ -538,7 +564,65 @@ public partial class SnapshotService
             // block on purpose — the rollback path above also leaves the database in a state the
             // cache was not built from.
             BeeMemoryBank.Core.Services.FolderAccessService.InvalidateAll();
+            BeeMemoryBank.Core.Services.CallerStateCache.InvalidateAll();   // the cached roles belong to the previous data set too
             HeavyOperationLock.Instance.Release();
         }
+    }
+
+    private static void MergeAccountsHomeNewest(SqliteConnection conn, SqliteTransaction tx)
+    {
+        string snapNodeId;
+        long snapTs;
+        string? snapSrc;
+        string? snapEvt;
+        string snapUpdatedAt;
+
+        using (var snapCmd = conn.CreateCommand())
+        {
+            snapCmd.Transaction = tx;
+            snapCmd.CommandText = "SELECT node_id, lamport_ts, source_node_id, event_id, updated_at FROM snap.tbl_accounts_home WHERE id = 1";
+            using var snapReader = snapCmd.ExecuteReader();
+            if (!snapReader.Read())
+                return;
+            snapNodeId = snapReader.GetString(0);
+            snapTs = snapReader.GetInt64(1);
+            snapSrc = snapReader.IsDBNull(2) ? null : snapReader.GetString(2);
+            snapEvt = snapReader.IsDBNull(3) ? null : snapReader.GetString(3);
+            snapUpdatedAt = snapReader.GetString(4);
+        }
+
+        using (var localCmd = conn.CreateCommand())
+        {
+            localCmd.Transaction = tx;
+            localCmd.CommandText = "SELECT lamport_ts, source_node_id FROM tbl_accounts_home WHERE id = 1";
+            using var localReader = localCmd.ExecuteReader();
+            if (localReader.Read())
+            {
+                var localTs = localReader.GetInt64(0);
+                var localSrcStr = localReader.IsDBNull(1) ? null : localReader.GetString(1);
+                var localVer = new RowVersion(localTs, Guid.TryParseExact(localSrcStr, "D", out var ls) ? ls : Guid.Empty);
+                var snapVer = new RowVersion(snapTs, Guid.TryParseExact(snapSrc, "D", out var ss) ? ss : Guid.Empty);
+                if (!BeeMemoryBank.Sync.ConflictResolver.IncomingWins(localVer, snapVer))
+                    return;
+            }
+        }
+
+        using var upsert = conn.CreateCommand();
+        upsert.Transaction = tx;
+        upsert.CommandText =
+            @"INSERT INTO tbl_accounts_home (id, node_id, lamport_ts, source_node_id, event_id, updated_at)
+              VALUES (1, @nodeId, @ts, @src, @evt, @at)
+              ON CONFLICT(id) DO UPDATE SET
+                  node_id = excluded.node_id,
+                  lamport_ts = excluded.lamport_ts,
+                  source_node_id = excluded.source_node_id,
+                  event_id = excluded.event_id,
+                  updated_at = excluded.updated_at";
+        upsert.Parameters.AddWithValue("@nodeId", snapNodeId);
+        upsert.Parameters.AddWithValue("@ts", snapTs);
+        upsert.Parameters.AddWithValue("@src", (object?)snapSrc ?? DBNull.Value);
+        upsert.Parameters.AddWithValue("@evt", (object?)snapEvt ?? DBNull.Value);
+        upsert.Parameters.AddWithValue("@at", snapUpdatedAt);
+        upsert.ExecuteNonQuery();
     }
 }

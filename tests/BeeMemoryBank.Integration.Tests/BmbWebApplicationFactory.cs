@@ -73,6 +73,9 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
     /// </summary>
     public void RouteOutboundHttpThrough(HttpMessageHandler handler) => _outboundHandler = handler;
 
+    /// <summary>Services of this one node's test (registered after the app's own, so they win). Set before the host is first built.</summary>
+    public Action<IServiceCollection>? TestServices { get; set; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
@@ -92,6 +95,7 @@ public class BmbWebApplicationFactory : WebApplicationFactory<Program>
         // This file is also compiled into projects that must not reference Infrastructure (the blind node tests), so it names no Infrastructure
         // type: the Integration project installs the hook (MacHostSafety).
         if (HostSafety is { } safety) builder.ConfigureTestServices(services => safety(services));
+        if (TestServices is { } own) builder.ConfigureTestServices(services => own(services));
 
         if (_outboundHandler is { } handler)
         {

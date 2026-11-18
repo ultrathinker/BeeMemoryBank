@@ -2,22 +2,26 @@
 @model BeeMemoryBank.Web.Pages.Admin.CompactionModel
 
 @section About {
-    <p>
-        Every operation on this node (create an article, rename a folder, add a tag, delete) is written as a numbered event into a journal, and nodes synchronise by
-        exchanging those events: if another node is at operation #500 and this one is at #1800, it pulls events 501&ndash;1800 to catch up. The journal only grows (25,000
-        events a year for an active user), and a node that joins the network would have to replay all of it.
-    </p>
-    <p>
-        <strong>Compaction</strong> cuts off the old part of the journal and replaces it with one signed snapshot of the state at that point. Nothing is lost
-        semantically: <em>current state = snapshot + the operations after it</em>. It keeps the 1,500 most recent events, so it does nothing while there are fewer.
-        It also leaves a tamper-proof marker in the journal (the compaction history below), and a snapshot file in the snapshots folder.
-    </p>
-    <p>
-        It is <strong>refused</strong> when it would cut a device off: if an active device is more than 1,500 events behind, or a trusted device has never synced.
-        Wait for that device to sync, or revoke it on <a href="/Admin/Devices">Devices</a>. A device that falls behind the cut later (offline for weeks) will need to
-        <em>wipe and rejoin</em>: it fetches the snapshot instead of catching up through the journal. Compaction runs only when you press the button, never by itself;
-        once a month, or when the log passes 5&ndash;10 thousand events, is plenty for a personal knowledge base. It cannot be undone.
-    </p>
+    <p>The history of changes your devices use to stay in step. You rarely need to touch it.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            Every operation on this node (create an article, rename a folder, add a tag, delete) is written as a numbered event into a journal, and nodes synchronise by
+            exchanging those events: if another node is at operation #500 and this one is at #1800, it pulls events 501&ndash;1800 to catch up. The journal only grows (25,000
+            events a year for an active user), and a node that joins the network would have to replay all of it.
+        </p>
+        <p>
+            <strong>Compaction</strong> cuts off the old part of the journal and replaces it with one signed snapshot of the state at that point. Nothing is lost
+            semantically: <em>current state = snapshot + the operations after it</em>. It keeps the 1,500 most recent events, so it does nothing while there are fewer.
+            It also leaves a tamper-proof marker in the journal (the compaction history below), and a snapshot file in the snapshots folder.
+        </p>
+        <p>
+            It is <strong>refused</strong> when it would cut a device off: if an active device is more than 1,500 events behind, or a trusted device has never synced.
+            Wait for that device to sync, or revoke it on <a href="/Admin/Devices">Devices</a>. A device that falls behind the cut later (offline for weeks) will need to
+            <em>wipe and rejoin</em>: it fetches the snapshot instead of catching up through the journal. Compaction runs only when you press the button, never by itself;
+            once a month, or when the log passes 5&ndash;10 thousand events, is plenty for a personal knowledge base. It cannot be undone.
+        </p>
+    </details>
 }
 
 @if (Model.CompactionPreview != null)

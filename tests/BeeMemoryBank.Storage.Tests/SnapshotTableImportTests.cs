@@ -83,7 +83,7 @@ public class SnapshotTableImportTests : IAsyncLifetime
 
     // tbl_media.uploaded_by is a node-local owner key ("u{userId}"); user ids are per-node, so
     // carrying it across would let a different person on the importing node pass the uploader
-    // check for someone else's unlinked file (Codex review).
+    // check for someone else's unlinked file.
     [Fact]
     public async Task MediaUploadedBy_IsNotCarriedAcrossBySnapshotImport()
     {

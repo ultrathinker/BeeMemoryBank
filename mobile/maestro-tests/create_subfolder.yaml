@@ -3,21 +3,19 @@ appId: com.beememorybank.mobile
 - runFlow: _go_home.yaml
 - evalScript: ${output.folderName = 'f' + Date.now()}
 - evalScript: ${output.subName = 's' + Date.now()}
-- tapOn:
-    text: "Open navigation drawer"
 - extendedWaitUntil:
     visible:
       text: "Tree"
     timeout: 3000
 - tapOn:
-    text: "Tree"
+    point: "12%,95%"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/TreeList"
     timeout: 10000
 # Create parent folder
 - tapOn:
-    text: "NewFolderButton"
+    text: "New folder"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/PopupInputEntry"
@@ -42,7 +40,7 @@ appId: com.beememorybank.mobile
     timeout: 10000
 # Create subfolder inside
 - tapOn:
-    text: "NewFolderButton"
+    text: "New folder"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/PopupInputEntry"

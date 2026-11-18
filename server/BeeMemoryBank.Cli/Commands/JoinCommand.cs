@@ -32,7 +32,9 @@ public static class JoinCommand
         TimeSpan? requestTimeout = null,
         TimeSpan? abortTimeout = null,
         string? passwordHint = null,
-        bool iSavedTheKey = false)
+        bool iSavedTheKey = false,
+        string? login = null,
+        bool shared = false)
     {
         output ??= Console.Out;
         using var flow = BeeMemoryBank.AppPaths.SealIntent.Flow.Enter();   // what a take-back may remove is what THIS command began
@@ -141,7 +143,9 @@ public static class JoinCommand
             apiAddress = (string?)null,
             // A fresh node has applied no activation: it declares 3 and says what it can read (docs/design/step-a-spec.md 5.1, 11).
             protocolVersion = SyncProtocolVersion.Current,
-            capabilities = BeeMemoryBank.Sync.Metadata.MetadataCapabilities.Advertised
+            capabilities = BeeMemoryBank.Sync.Metadata.MetadataCapabilities.Advertised,
+            login = string.IsNullOrWhiteSpace(login) ? null : login.Trim(),
+            ownership = shared ? OwnershipKinds.Shared : null
         };
 
         // The host writes this node's row as soon as it accepts the join. From there on a failure leaves that row behind unless the host
@@ -208,7 +212,8 @@ public static class JoinCommand
         byte[] masterDek = [];
         // The DEK the snapshot is opened with after activation (docs/design/step-a-spec.md 11): a copy, kept from the unwrap to the end of the import.
         byte[] snapshotDek = [];
-        byte[] localSalt, localEncryptedDek, localIv;
+        byte[] localSalt, localEncryptedDek, localIv, localDoorPublicKey;
+        string localDekFingerprint;
         DateTime now;
         NodeIdentity identity;
         try
@@ -225,6 +230,8 @@ public static class JoinCommand
                 throw new InvalidOperationException("the answer of the remote node is incomplete");
 
             await output.WriteLineAsync($"Received response from node '{joinResponse.RemoteNode.DisplayName}'");
+            if (!string.IsNullOrWhiteSpace(joinResponse.JoinedAsDisplayName))
+                await output.WriteLineAsync($"Joined as {joinResponse.JoinedAsDisplayName}");
 
             // The same gates as the Setup page's join (InitEndpoints), before anything is written here: this node starts
             // from the host's snapshot and log, so the host must speak this node's sync protocol.
@@ -292,7 +299,10 @@ public static class JoinCommand
 
             localSalt = KeyDerivation.GenerateSalt();
             var localKek = KeyDerivation.DeriveKek(password, localSalt);
-            (localEncryptedDek, localIv) = MasterKeyManager.WrapMasterDek(masterDek, localKek);
+            // This node's first door is a sealed (v2) door (ADR 0012).
+            var localDoor = Doors.Seal(KeySlotTypes.User, localKek, localSalt, masterDek);
+            Array.Clear(localKek);
+            (localEncryptedDek, localIv, localDoorPublicKey, localDekFingerprint) = (localDoor.Box, localDoor.Iv, localDoor.PublicKey, localDoor.DekFingerprint);
 
             now = DateTime.UtcNow;
 
@@ -343,6 +353,9 @@ public static class JoinCommand
                 EncryptedMasterDek = localEncryptedDek,
                 IV = localIv,
                 Salt = localSalt,
+                DoorVersion = Doors.V2,
+                DoorPublicKey = localDoorPublicKey,
+                DekFingerprint = localDekFingerprint,
                 ArgonMemory = CryptoConstants.DefaultArgonMemory,
                 ArgonIterations = CryptoConstants.DefaultArgonIterations,
                 ArgonParallelism = CryptoConstants.DefaultArgonParallelism,
@@ -397,6 +410,8 @@ public static class JoinCommand
             };
             await whitelistRepo.CreateAsync(selfEntry);
 
+            var (remoteOwnership, remoteOwnerPid, remoteOwnerLabel) =
+                OwnershipKinds.Resolve(remote.Ownership, remote.OwnerPersonId, remote.OwnerLabel);
             var remoteEntry = new WhitelistEntry
             {
                 NodeId = remote.NodeId,
@@ -410,8 +425,15 @@ public static class JoinCommand
                 // and it records this node as a superadmin for the same reason (JoinAuthority, BMB-42).
                 IsSuperadmin = JoinAuthority.ForPasswordPeer(remote.NodeId),
                 // The key the code pinned is the key this node dials it by from now on (SpkiPinRegistry).
-                TlsSpki = code?.SpkiPin
+                TlsSpki = code?.SpkiPin,
+                Ownership = remoteOwnership,
+                OwnerPersonId = remoteOwnerPid,
+                OwnerLabel = remoteOwnerLabel,
+                NeedsReview = !OwnershipKinds.IsKnown(remoteOwnership),
             };
+            if (OwnershipKinds.IsKnown(remoteOwnership)
+                && remote.OwnershipVersion is { LamportTs: > 0 and < SnapshotJoin.MaxAcceptedLamport } ownVer)
+                remoteEntry.SetVersionOf(WhitelistConcerns.Ownership, RowVersion.Of(ownVer.LamportTs, ownVer.SourceNodeId));
             await whitelistRepo.CreateAsync(remoteEntry);
 
             // Inherit other peers from the remote's whitelist (for transitive trust in
@@ -432,6 +454,8 @@ public static class JoinCommand
                     }
                     try
                     {
+                        var (entryOwnership, entryOwnerPid, entryOwnerLabel) =
+                            OwnershipKinds.Resolve(entry.Ownership, entry.OwnerPersonId, entry.OwnerLabel);
                         var inherited = new WhitelistEntry
                         {
                             NodeId = entry.NodeId,
@@ -445,7 +469,11 @@ public static class JoinCommand
                             // their whitelist/hard-delete/restore events are refused on this node only.
                             IsSuperadmin = JoinAuthority.ForInheritedPeer(entry.NodeId, entry.IsSuperadmin),
                             TlsTrust = tlsTrust,
-                            TlsSpki = tlsSpki
+                            TlsSpki = tlsSpki,
+                            Ownership = entryOwnership,
+                            OwnerPersonId = entryOwnerPid,
+                            OwnerLabel = entryOwnerLabel,
+                            NeedsReview = !OwnershipKinds.IsKnown(entryOwnership),
                         };
                         // The host's version of each field (none from a 2.7.5 host): later events are judged here as they are there.
                         JoinRevocations.Inherit(inherited, entry.Versions);
@@ -500,6 +528,13 @@ public static class JoinCommand
                 remote.NodeId, cpSeq, lamportTs, syncPositionRepo, clock, nodeRepo, dbFactory,
                 loggerFactory.CreateLogger("BeeMemoryBank.Cli.Join"));
 
+            if (shared)
+            {
+                var accountsHome = scope.ServiceProvider.GetService<BeeMemoryBank.Vault.SharedDoors.AccountsHomeService>();
+                if (accountsHome is not null)
+                    await accountsHome.RecordSelfOwnershipAtJoinAsync(OwnershipKinds.Shared);
+            }
+
             using var countConn = dbFactory.CreateConnection();
             using var count = countConn.CreateCommand();
             count.CommandText = "SELECT COUNT(*) FROM tbl_article WHERE status = 'A'";
@@ -540,7 +575,9 @@ public static class JoinCommand
             var session = scope.ServiceProvider.GetRequiredService<SessionService>();
             if (await session.UnlockAsync(password))
             {
-                recoveryKey = await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync();
+                // The key belongs to the local superadmin this join created (release 2.12: a recovery key is personal).
+                var localAdmin = await userRepo.GetByUsernameAsync(displayName);
+                recoveryKey = await scope.ServiceProvider.GetRequiredService<KeyManagementService>().AddRecoveryKeyAsync(localAdmin?.Id);
                 session.Lock();
             }
         }
@@ -659,7 +696,8 @@ public static class JoinCommand
         JoinRemoteNodeDto RemoteNode,
         JoinKeySlotDto KeySlot,
         List<JoinWhitelistEntryDto>? Whitelist,
-        List<JoinRevokedPeer>? RevokedPeers = null);
+        List<JoinRevokedPeer>? RevokedPeers = null,
+        string? JoinedAsDisplayName = null);
 
     private record JoinWhitelistEntryDto(
         Guid NodeId,
@@ -669,10 +707,14 @@ public static class JoinCommand
         bool IsSuperadmin = false,
         string? TlsTrust = null,
         string? TlsSpki = null,
-        JoinPeerVersions? Versions = null);
+        JoinPeerVersions? Versions = null,
+        string? Ownership = null,
+        Guid? OwnerPersonId = null,
+        string? OwnerLabel = null);
 
     // ProtocolVersion: a host too old to send one is below every version this node can sync with (0).
-    private record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0);
+    private record JoinRemoteNodeDto(Guid NodeId, string DisplayName, string Ed25519PublicKeyB64, int ProtocolVersion = 0,
+        string? Ownership = null, Guid? OwnerPersonId = null, string? OwnerLabel = null, JoinVersion? OwnershipVersion = null);
 
     private record JoinKeySlotDto(
         string EncryptedMasterDekB64,

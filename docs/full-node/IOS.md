@@ -2,8 +2,9 @@
 
 `mobile/BeeMemoryBank.FullIos`, "Bee Memory Bank" for iPhone: the whole memory bank on the phone, opened with the master password,
 read, searched and edited there, and synced with the owner's computers and servers. The same product as the Android app
-(`mobile/BeeMemoryBank.Mobile`), on the same libraries. **In development, not distributed yet:** it builds and passes its end-to-end
-check on the iOS simulator; it has not run on a real iPhone, and there is no TestFlight or App Store build.
+(`mobile/BeeMemoryBank.Mobile`), on the same libraries. **Source-only, not distributed yet:** it builds and passes its end-to-end
+check on the iOS simulator and has been checked on a real iPhone (QR join, Face ID, the encrypted database after a join, sync with a
+computer); there is no TestFlight or App Store build yet.
 
 The iPhone *blind* copy is a different app ([docs/blind-node/IOS.md](../blind-node/IOS.md)): it holds only ciphertext and never sees the
 master password. The two never share code that touches keys: the blind app's boundary tests keep the vault out of it, and this app's
@@ -13,7 +14,7 @@ golden list keeps the blind libraries out of this one.
 
 * **A node that calls, never one that is called.** iOS suspends an app soon after it leaves the screen and gives it no way to keep a
   socket open, so the phone cannot be a hub. It is a sync client: it calls each of its peers (`SyncClient`, the same push, pull and blob
-  exchange as every node, sync protocol 3 unchanged) while the app is open and the vault unlocked - at once, after every change, every
+  exchange and the same sync protocol as every node) while the app is open and the vault unlocked - at once, after every change, every
   minute - and once more in the seconds iOS grants when the app leaves the screen. Peers never call it (its row has no address), so
   changes made elsewhere arrive the next time the phone is opened.
 * **In process, no server.** The libraries the Android app uses (Core, Crypto, Search, Storage, Sync, Vault) run inside the app. No
@@ -22,8 +23,8 @@ golden list keeps the blind libraries out of this one.
   decrypting them in batches (the existing `SearchService` paths). The model (118 MB) and ONNX Runtime (~25 MB more in the executable)
   would triple the download and cost minutes of battery to index a vault; ONNX Runtime does ship an iOS build, so an optional download
   later is possible.
-* **No photo upload yet** (no `BeeMemoryBank.Media`), no tag pages, no comments page. Notes with pictures show the text; the pictures stay
-  on the other nodes' pages.
+* **Photo upload, tags and comments are there** (the parity with the web and the Android app): a picture is added from the photo library
+  through `MediaService`, tags have their own pages, and a note's comments are listed, added and deleted through `CommentService`.
 
 ## Setting it up
 
@@ -62,22 +63,27 @@ this iPhone only). The phone is still never called: it announces nothing and has
 | Master password | nowhere | used for the Argon2id derivation and forgotten |
 | Master key (DEK) | memory, only while unlocked | the vault's key slot (Argon2id of the password), as on every node; wiped on lock |
 | Node identity key | the database, wrapped under the master key | as on every full node (`NodeIdentityVault`) |
-| Face ID unlock key | Keychain `com.beememorybank.mobile.quick-unlock` / `unlock-key-v1` | `BiometryCurrentSet` + `WhenPasscodeSetThisDeviceOnly`, not synchronisable: iOS releases it only after Face ID / Touch ID, drops it when faces or fingers change or the passcode is removed, never backs it up |
-| Master key wrapped under that key | Keychain, same service, `unlock-slot-v1` | `WhenUnlockedThisDeviceOnly`, not synchronisable; the key-slot format of `MasterKeyManager` |
+| Face ID secret (2.12) | Keychain `com.beememorybank.mobile.quick-unlock` / `door-secret-v2`: the 32-byte secret of the vault's `quick_unlock` door, nothing else | `BiometryCurrentSet` + `WhenPasscodeSetThisDeviceOnly`, not synchronisable: iOS releases it only after Face ID / Touch ID, drops it when faces or fingers change or the passcode is removed, never backs it up |
+| Master key for Face ID | the vault's `quick_unlock` door (a key slot, door v2, `docs/encryption.md`), sealed to a key only the secret derives; its copy in the boot store opens a closed encrypted phone | as every door; a key rotation re-seals it |
+| Before 2.12 only | Keychain, same service: `unlock-key-v1` (the unlock key, behind the biometry) and `unlock-slot-v1` (the master key wrapped under it) | read once more, at the next Face ID unlock, which turns them into a door and removes them only after the new secret is stored (a Keychain that refuses it leaves the old way in working; the next unlock tries again) |
 | Notes, titles, folders, events | `Library/Application Support/BeeMemoryBank` in the app's container | content: the vault's encryption; the files: iOS file protection "until first user authentication"; excluded from iCloud and computer backups |
 
-* **Face ID / Touch ID** is offered after the first unlock and can be switched in Settings. It works like the desktop's OS auto-unlock: a
-  random 256-bit key wraps the master key the way a password-derived key does in a key slot. A key that unwraps to anything but this
-  vault's master key (checked against the vault's sentinel) is never installed: Face ID unlock turns itself off and the password is
-  asked for (this happens after a master-key rotation on another node).
-* **Encrypting the database (2.6.0).** A phone can encrypt its database like any other node (`docs/sealed-database.md`, "Phones"): the
-  database key and the page keys exist only while the database is open and are never given to the Keychain. On an encrypted phone Face ID
-  unlock opens the database through the same door as a password: the Keychain key unwraps the master key, the master key unwraps the
-  database key inside the app, and the vault's sentinel is checked after the open (a key that no longer opens it turns Face ID unlock
-  off). The database closes whenever the app leaves the screen. The start sequence is `PhoneVaultLifecycle` (`libs/BeeMemoryBank.Vault/Sealed`),
-  which the tests in `tests/BeeMemoryBank.FullIos.Tests/PhoneVaultLifecycleTests.cs` drive on any OS with a fake Keychain. "Encrypt this
-  iPhone's database" (Settings) stays hidden until the native release gate of the step-b spec (12.4) has been run on a Mac and a device or
-  simulator; until then the app starts exactly as before.
+* **Face ID / Touch ID** is offered after the first unlock and can be switched in Settings. Since 2.12 it is a door of the vault, like the
+  desktop's OS auto-unlock: turning it on makes a `quick_unlock` key slot (`QuickUnlockDoors`, one per phone) whose box holds the master key
+  sealed to a key only a random 32-byte secret derives, and the Keychain keeps only that secret; turning it off removes the door and the
+  secret. A key rotation re-seals the door like every other, so Face ID keeps working after a rotation without a question. A secret that
+  opens no door, or a key that is not this vault's (checked against the sentinel), is never installed: Face ID unlock turns itself off and
+  the password is asked for. A phone set up before 2.12 kept the master key wrapped under the Keychain key instead; its next Face ID unlock
+  still opens with it and turns it into a door at once. If a rotation came first, that old item no longer opens: the password is asked once,
+  and the app offers Face ID again.
+* **Encrypting the database (2.6.0; automatic since 2.12).** A phone encrypts its database like any other node
+  (`docs/sealed-database.md`, "Phones"): the database key and the page keys exist only while the database is open and are never given to
+  the Keychain. Since 2.12 this happens **with no button**, right after a vault is created on the phone and right after a join
+  (`PhoneSealing`); the old "Encrypt this iPhone's database" page is gone. On an encrypted phone Face ID unlock opens the database through
+  the same door as a password: the door's secret (in the Keychain) opens the `quick_unlock` door, the master key unwraps the database key
+  inside the app, and the vault's sentinel is checked after the open (a key that no longer opens it turns Face ID unlock off). The database
+  closes whenever the app leaves the screen. The start sequence is `PhoneVaultLifecycle` (`libs/BeeMemoryBank.Vault/Sealed`), which the
+  tests in `tests/BeeMemoryBank.FullIos.Tests/PhoneVaultLifecycleTests.cs` drive on any OS with a fake Keychain.
 * **Locking.** The vault locks when the app leaves the screen - immediately by default; "after 1 minute" and "after 5 minutes" are
   choices, judged when the app comes back, because Argon2id costs seconds on a phone - and after 5 minutes on the screen without a touch
   or a keystroke (2 and 15 are choices). Locking throws away every page that showed a note. While the app is not active (app switcher,
@@ -87,23 +93,21 @@ this iPhone only). The phone is still never called: it announces nothing and has
   (ADR-0005); the file protection keeps them unreadable while the phone is off or not yet unlocked since it started. "Complete" protection
   was not chosen: SQLite keeps its files open across the moment the phone locks during the last sync round.
 
-## Encrypting the phone's database (2.6.0)
+## Encrypting the phone's database (2.6.0; automatic since 2.12)
 
-The phone is a full node, so it can seal its own database like every node. Updating the app to 2.6.0 changes nothing
-by itself — the vault stays as it is until you start it — and Settings then offers an **Encrypt Database** page that
-runs the same migration as a computer's "Encrypt this node": a progress page keeps the screen on and the app in the
-foreground until it is done, and a phone killed midway is resolved at the next start. Two of the preflight checks are
-a phone's own:
+The phone is a full node, so it seals its own database like every node. Since 2.12 this happens **with no button**: the same
+migration a computer runs (`PhoneSealing`) runs in process right after a vault is created on the phone and right after a join,
+behind the please-wait pop-up with the screen kept on; a phone killed midway is resolved at the next start. The old
+**Encrypt Database** page and its Settings card are gone. A vault made on the phone switches the new sync format on first (it
+starts its own network); a phone joining an existing network never switches it on for everybody, and a network still on the old
+sync format is named as the reason. The "no other copy" question is answered for the phone — a new vault holds nothing yet, and a
+joined one is also on the computer it came from — so no tick-box is asked.
 
-* the app must be in the **foreground**, with the battery at 30 % or on charge;
-* a phone makes no snapshot of itself, so the migration starts only if some peer already holds everything this phone
-  has (a full peer's sync position at or above this phone's head) — or you tick **"This phone holds the only copy of
-  these notes; encrypting cannot be undone"**.
+**A plain copy left by an older build is not converted.** An unlock never encrypts: such a phone is set up again (the notes come
+back from a peer by joining again).
 
-Until the release gate on real devices has passed, the page stays hidden and the release notes do not offer it.
-
-After the encryption, nothing changes in the hand. Face ID / Touch ID quick unlock still opens the sealed vault (the
-Keychain key remains one of its doors, and a key that no longer opens turns quick unlock off as before), and locking
+After the encryption, nothing changes in the hand. Face ID / Touch ID quick unlock still opens the sealed vault (its door has a copy in the
+boot store, which opens the closed database; a secret that no longer opens turns quick unlock off as before), and locking
 the app closes the database as it always did. A closed phone's app container holds the ciphertext and the small
 plaintext boot store — no names, no notes — still excluded from iCloud and computer backups. There is no snapshot
 to go back to on a phone: removing the vault and joining again from a peer gives the phone the notes again (a new node joins only

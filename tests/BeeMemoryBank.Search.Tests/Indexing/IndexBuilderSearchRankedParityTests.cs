@@ -18,7 +18,7 @@ namespace BeeMemoryBank.Search.Tests.Indexing;
 /// tombstones together via a churn phase -- then compares the two implementations across a battery
 /// of representative queries (single selective term, single broad term, multi-term AND, mixed, and
 /// non-existent terms) at several <c>topK</c> values. A handful of explicit hand-built scenarios
-/// pin down the individual representative query shapes named in the brief on their own.
+/// pin down the individual representative query shapes on their own.
 /// </para>
 /// </summary>
 public class IndexBuilderSearchRankedParityTests
@@ -209,7 +209,7 @@ public class IndexBuilderSearchRankedParityTests
     [Fact]
     public void SearchRanked_MatchesReference_ForRepresentativeQueryShapes()
     {
-        // One hand-built corpus, then the four representative query shapes the brief names, each
+        // One hand-built corpus, then the four representative query shapes, each
         // asserted identical to the reference.
         var builder = new IndexBuilder(hotBufferSealThreshold: 3, mergeSegmentCountThreshold: 2, mergeTombstoneFractionThreshold: 0.5);
 

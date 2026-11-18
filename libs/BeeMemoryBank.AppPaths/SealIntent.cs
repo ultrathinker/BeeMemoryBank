@@ -54,7 +54,7 @@ public sealed class SealIntentException(string code, string message) : InvalidOp
 /// the folder held of the reserved names when the operation began. The password is never on disk, so a start cannot finish the encryption by itself; it can only decide that nothing
 /// readable is left.
 /// <para>
-/// <b>A marker is never permission to erase on its own (BMB-306 fix round 2).</b> What is wiped must be proven to belong to the operation that wrote the marker;
+/// <b>A marker is never permission to erase on its own (BMB-306).</b> What is wiped must be proven to belong to the operation that wrote the marker;
 /// in every other case the start is refused and NOTHING is touched, so that a stale, damaged or copied marker next to a node somebody keeps cannot cost them the node:
 /// </para>
 /// <list type="bullet">

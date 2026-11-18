@@ -6,7 +6,7 @@ namespace BeeMemoryBank.Cli.Commands;
 
 public static class DekRotateCommand
 {
-    private static HttpClient CreateClient(TimeSpan? timeout = null)
+    internal static HttpClient CreateClient(TimeSpan? timeout = null)
     {
         var url = Environment.GetEnvironmentVariable("BMB_API_URL") ?? "http://localhost:5300";
         var key = Environment.GetEnvironmentVariable("BMB_INTERNAL_KEY");

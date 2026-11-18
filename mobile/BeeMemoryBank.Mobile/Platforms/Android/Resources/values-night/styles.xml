@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The system bars wear the app background of the DARK appearance (BmbBackground). This is the
+         night-mode counterpart of values/styles.xml; see the note there for why overriding
+         Maui.MainTheme covers the modal dialog windows as well as the activity. AppCompat night mode
+         (set by MAUI's UserAppTheme) selects this file in the dark appearance. -->
+    <style name="Maui.MainTheme" parent="Maui.MainTheme.Base">
+        <item name="android:statusBarColor">#0E1015</item>
+        <item name="android:navigationBarColor">#0E1015</item>
+        <!-- A dark bar wants light icons. -->
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

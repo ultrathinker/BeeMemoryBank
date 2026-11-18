@@ -249,7 +249,7 @@ public sealed class RekeySealedVerbTests : IAsyncLifetime, IClassFixture<RekeySe
                          "SELECT encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM door"))
             {
                 byte[] dek;
-                try { dek = MasterKeyManager.UnwrapMasterDek(s.W, s.Iv, KeyDerivation.DeriveKek(password, s.Salt, (int)s.Mem, (int)s.It, (int)s.Par)); }
+                try { dek = BeeMemoryBank.Crypto.Doors.OpenByShape("user", s.W, s.Iv, KeyDerivation.DeriveKek(password, s.Salt, (int)s.Mem, (int)s.It, (int)s.Par), s.Salt); }
                 catch (CryptographicException) { continue; }
                 if (UnwrapDbk(bootPath, dek) is { } dbk) return (dek, dbk);
             }

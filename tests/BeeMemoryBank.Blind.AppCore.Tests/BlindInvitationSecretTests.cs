@@ -211,7 +211,7 @@ public sealed class BlindInvitationSecretTests
         }
     }
 
-    // ---- the formatters of an invitation do not carry the secret (review MAJOR-2) ------------------------------------------------------------
+    // ---- the formatters of an invitation do not carry the secret ------------------------------------------------------------
 
     [Fact]
     public async Task NothingTheHostFormats_NotTheInvitation_ThePreview_TheResults_TheTarget_NorAnException_CarriesTheSecret()

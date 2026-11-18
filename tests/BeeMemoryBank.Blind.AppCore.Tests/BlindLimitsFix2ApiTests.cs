@@ -8,7 +8,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Fix round 2, the parts that look at the new surface itself: what an admission sets aside and gives back, the peak footprint of a long job, the repair of a usage file that cannot be
+/// The parts that look at the new surface itself: what an admission sets aside and gives back, the peak footprint of a long job, the repair of a usage file that cannot be
 /// trusted, the stored-size meter's unknown state and its walk, and the words and buttons the screens get from them. (The outcomes these serve are in <see cref="BlindLimitsFix2Tests"/>.)
 /// </summary>
 public sealed partial class BlindLimitsFix2Tests

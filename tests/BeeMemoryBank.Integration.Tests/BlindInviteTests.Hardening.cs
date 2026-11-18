@@ -18,7 +18,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The fix round after the attacker-first review of the invitations (release 2.7): the confirmation as a state machine that survives a crash, the process-wide
+/// The hardening after the attacker-first review of the invitations (release 2.7): the confirmation as a state machine that survives a crash, the process-wide
 /// ceiling of the public routes, the capability that must not be cached, the equal cost of a refusal, the idempotent confirmation, the bounded peer name and the
 /// atomic cap of open invitations. Same hub and helpers as the rest of <see cref="BlindInviteTests"/>.
 /// </summary>

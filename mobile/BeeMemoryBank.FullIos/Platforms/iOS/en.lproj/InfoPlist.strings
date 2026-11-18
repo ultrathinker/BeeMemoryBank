@@ -1,0 +1,4 @@
+/* The photo-library permission text (image upload), English. */
+"NSPhotoLibraryUsageDescription" = "Bee Memory Bank reads a picture you choose so it can be encrypted and stored inside your note. Nothing is uploaded anywhere else.";
+/* The camera permission text (Scan QR code on the join page). */
+"NSCameraUsageDescription" = "Bee Memory Bank uses the camera only to read the QR code your computer shows when you connect this iPhone. No pictures are saved.";

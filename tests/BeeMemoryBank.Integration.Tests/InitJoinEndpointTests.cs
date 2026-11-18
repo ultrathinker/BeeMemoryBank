@@ -15,7 +15,11 @@ namespace BeeMemoryBank.Integration.Tests;
 /// InitEndpoints.cs's own inline challenge/authenticate handshake — which is the exact code path
 /// that kept signing the removed BMB-CHALLENGE-V1 domain tag and 401'd against any upgraded node
 /// (see commit 3c43dfc5). This test exists so breaking that handshake fails the suite.
+/// <para>The join it drives calls the host's /api/join without the internal key, as a real joining node does, so it spends the process-wide
+/// 5-per-5-minutes budget of that path that every such caller in the test process shares: it runs in the collection that keeps those callers apart,
+/// from a clean budget (other classes had spent it: a 429 in CI run 44238143253).</para>
 /// </summary>
+[Collection(ProcessWideRateLimiterCollection.Name)]
 public class InitJoinEndpointTests : IAsyncLifetime
 {
     private const string MasterPassword = "initJoinPassword123";
@@ -26,6 +30,7 @@ public class InitJoinEndpointTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        BeeMemoryBank.Api.Middleware.RateLimitMiddleware.ResetForTests();
         _nodeA = new BmbWebApplicationFactory();
         await _nodeA.InitializeNodeAsync("NodeA", MasterPassword);
         _clientA = _nodeA.CreateClient();
@@ -99,7 +104,7 @@ public class InitJoinEndpointTests : IAsyncLifetime
                 .Should().BeTrue("a joined node has never shown its administrator a recovery key");
         }
 
-        // Review revsrv F10: the archive the join downloaded was made in the joiner's data folder (owner-only), and is gone.
+        // The archive the join downloaded was made in the joiner's data folder (owner-only), and is gone.
         var staging = BeeMemoryBank.Core.IO.SnapshotStaging.DirIn(nodeB.DataPath);
         Directory.Exists(staging).Should().BeTrue("the downloaded archive is staged in the data folder, not in the OS temp folder");
         Directory.GetFileSystemEntries(staging).Should().BeEmpty("the archive and the extracted database are removed once the join is done");

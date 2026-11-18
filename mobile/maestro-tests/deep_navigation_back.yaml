@@ -1,14 +1,12 @@
 appId: com.beememorybank.mobile
 ---
 - runFlow: _go_home.yaml
-- tapOn:
-    text: "Open navigation drawer"
 - extendedWaitUntil:
     visible:
       text: "Tree"
     timeout: 30000
 - tapOn:
-    text: "Tree"
+    point: "12%,95%"
 - extendedWaitUntil:
     visible:
       id: "com.beememorybank.mobile:id/TreeList"

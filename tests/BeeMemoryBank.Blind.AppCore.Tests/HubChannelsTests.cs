@@ -5,6 +5,7 @@ using BeeMemoryBank.BlindMobile.Services.Blind;
 using BeeMemoryBank.Core.Interfaces;
 using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services.BlindPhone;
+using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Sync;
 using BeeMemoryBank.Sync.Blind;
 using BeeMemoryBank.Sync.Channels;
@@ -36,9 +37,9 @@ public sealed class HubChannelsTests : IDisposable
 
     /// <summary>A copy paired with the hub through the real call-code route, its database seeded as a first load leaves it, on the networks <paramref name="networks"/> (home by default).</summary>
     private async Task<Copy> PairedAsync(FakeLanBrowser? browser = null, ILocalNetworks? networks = null, TimeProvider? time = null, string address = HubNetwork.Pairing,
-        IBlindAccountLeaveHook? leave = null)
+        IBlindAccountLeaveHook? leave = null, TimeSpan? leaveTimeout = null)
     {
-        var host = _rig.Host(lanBrowser: browser, handler: _ => () => new ForwardTo(_net), time: time, leave: leave,
+        var host = _rig.Host(lanBrowser: browser, handler: _ => () => new ForwardTo(_net), time: time, leave: leave, leaveTimeout: leaveTimeout,
             overrides: (services, _) => services.AddSingleton(networks ?? FixedNetworks.Home()));
         await host.StartAsync();
         var id = (await host.AddAsync("Home hub")).AccountId!;
@@ -61,6 +62,29 @@ public sealed class HubChannelsTests : IDisposable
     [
         "GET /api/sync/identity", "POST /api/sync/challenge", "POST /api/sync/authenticate", "GET /api/sync/events", "POST /api/sync/report-position",
     ];
+
+    // ---- the hub re-keyed (release 2.12, plan WS-D D4) -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task AHubThatRekeyed_MovesTheCopysPinAfterTheRoundThatAppliedItsRotation_WithNoRequestOfItsOwn()
+    {
+        _net.Answer(HubNetwork.PairingAuthority, HubNetwork.Mode.Hub);
+        var copy = await PairedAsync();
+        await using var _ = copy.Host;
+        (await copy.App.RequestSyncAsync()).Should().Be("Synced.");
+        copy.State.CallCode!.PublicKey.Should().Equal(_net.PublicKey);
+
+        var (newKey, newSeed) = Ed25519Signer.GenerateKeyPair();
+        _net.AddRotation(newSeed);
+        var before = _net.Calls.Count;
+
+        (await copy.App.RequestSyncAsync()).Should().Be("Synced.");
+
+        copy.State.CallCode!.PublicKey.Should().Equal(newKey, "the packages the hub signs now are checked by its new key");
+        copy.State.PairedCallCode!.PublicKey.Should().Equal(_net.PublicKey, "the code as paired is kept for its MAC");
+        _net.Calls.Skip(before).Select(c => $"{c.Method} {c.Path}").Should().NotContain("GET /api/sync/identity",
+            "the pin moves by the rotation the copy applied, not by asking");
+    }
 
     // ---- the hub moved ---------------------------------------------------------------------------------------------------------
 
@@ -337,7 +361,11 @@ public sealed class HubChannelsTests : IDisposable
     {
         _net.Answer(HubNetwork.PairingAuthority, HubNetwork.Mode.Dead);
         _net.Answer("192.168.1.60:5311", HubNetwork.Mode.Hub);
-        var copy = await PairedAsync(leave: BlindSourceLeaveHook.Instance);
+        // The goodbye gets the time a real one gets (10 s), not the rig's 300 ms: before it can ask the hub's new address it plans the channels and looks
+        // for the hub on the network, and the dialer starts each further LAN address 250 ms (PeerDialer.Stagger) after the one before - on a busy runner
+        // the 300 ms ran out first and nothing reached .60 (CI run 44238143253, shard 1). The fake network never hangs: a long limit costs nothing when the
+        // goodbye goes through.
+        var copy = await PairedAsync(leave: BlindSourceLeaveHook.Instance, leaveTimeout: TimeSpan.FromSeconds(30));
         await using var _ = copy.Host;
         await StoreAnnouncementAsync(copy, "https://192.168.1.60:5311");
 

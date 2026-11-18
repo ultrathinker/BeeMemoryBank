@@ -112,7 +112,7 @@ public class BlindRoleTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage0 #1: an agent carrying a wrapped DEK (here slipped in after start) must not
+    /// An agent carrying a wrapped DEK (here slipped in after start) must not
     /// unlock a blind node's session by presenting its key — the agent middleware is not there.
     /// </summary>
     [Fact]
@@ -191,7 +191,7 @@ public class BlindRoleTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage0 #5: a rotation from a peer whose row keeps the default auto-accept (off)
+    /// A rotation from a peer whose row keeps the default auto-accept (off)
     /// still leaves Committing on a blind node — there is no admin there to accept it.
     /// </summary>
     [Fact]
@@ -223,7 +223,7 @@ public class BlindRoleTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Review L-stage0 #9: a rotation that seals the new DEK for this blind node (an older or
+    /// A rotation that seals the new DEK for this blind node (an older or
     /// hand-configured node could build one) is refused, and never stored — the key file here opens it.
     /// </summary>
     [Theory]
@@ -305,7 +305,12 @@ public class BlindRoleTests : IAsyncLifetime
             [(MigrationRunner.BaselineVersion, MigrationRunner.BaselineResourceName), (41, "BeeMemoryBank.Storage.Migrations.041_blind_invite.sql"),
                 (42, "BeeMemoryBank.Storage.Migrations.042_blind_invite_server.sql"),
                 (43, "BeeMemoryBank.Storage.Migrations.043_password_hint.sql"), (44, "BeeMemoryBank.Storage.Migrations.044_peer_channels.sql"),
-                (45, "BeeMemoryBank.Storage.Migrations.045_whitelist_concern_versions.sql")],
+                (45, "BeeMemoryBank.Storage.Migrations.045_whitelist_concern_versions.sql"),
+                (46, "BeeMemoryBank.Storage.Migrations.046_sealed_doors.sql"),
+                (47, "BeeMemoryBank.Storage.Migrations.047_ownership_and_node_state.sql"),
+                (49, "BeeMemoryBank.Storage.Migrations.049_node_key_history.sql"),
+                (50, "BeeMemoryBank.Storage.Migrations.050_shared_doors.sql"),
+                (51, "BeeMemoryBank.Storage.Migrations.051_offboarding.sql")],
             "the 39 old rows became the baseline's one, and the migrations after it ran");
         (await check.ExecuteScalarAsync<long>(
             "SELECT COUNT(*) FROM pragma_table_info('tbl_whitelist') WHERE name = 'last_protocol_version'")).Should().Be(1);

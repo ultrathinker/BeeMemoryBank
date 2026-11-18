@@ -6,7 +6,7 @@ namespace BeeMemoryBank.Desktop.Services;
 /// <summary>
 /// Pure (no Avalonia, no IO) helpers for the storage-UX shell. Extracted so the
 /// "≥ 2 profiles" title/tooltip rule from §4.5 and the create-dialog name validation can be
-/// unit-tested without spinning up a <c>Window</c> — exactly the carve-out the brief makes
+/// unit-tested without spinning up a <c>Window</c> — exactly the carve-out
 /// for "logic (not UI) → separate testable function/class".
 /// </summary>
 public static class StorageDisplayLogic
@@ -79,8 +79,8 @@ public sealed record StorageNameValidation
 /// <summary>
 /// Pure validation for the create-storage dialog. Mirrors the few checks
 /// <see cref="ProfileService.AddProfile"/> would itself raise on, but gives them back as
-/// friendly localized messages for inline display in the dialog (the brief: "не отдельным
-/// MessageBox"). Does NOT touch the filesystem or the registry — duplicate-dataPath
+/// friendly localized messages for inline display in the dialog (not a separate
+/// MessageBox). Does NOT touch the filesystem or the registry — duplicate-dataPath
 /// detection stays in <see cref="ProfileService"/> (which holds the lock and knows the
 /// on-disk truth), so a race between two create dialogs can still surface as an exception
 /// from <c>AddProfile</c> that the dialog must handle separately. The one exception is

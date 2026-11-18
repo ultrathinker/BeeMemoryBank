@@ -10,8 +10,9 @@ namespace BeeMemoryBank.Cli.Commands;
 /// `restore-code` call the endpoints owned by the pairing (BMB-52) and recovery (BMB-53) work;
 /// until those merge the Api answers 404 and this command says so.
 /// </summary>
-public static class BlindCommand
+public static partial class BlindCommand
 {
+    static partial void AddFullNodeCommands(Command blind, Option<string> dataOption);
     public static void AddTo(RootCommand root, Option<string> dataOption)
     {
         var blind = new Command("blind", "Blind node management (local node's Api)");
@@ -102,6 +103,7 @@ public static class BlindCommand
         blind.AddCommand(wipe);
 
         BlindJoinCommand.AddTo(blind, dataOption);
+        AddFullNodeCommands(blind, dataOption);
 
         root.AddCommand(blind);
     }

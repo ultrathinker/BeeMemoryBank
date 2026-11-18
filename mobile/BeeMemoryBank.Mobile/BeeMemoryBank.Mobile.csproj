@@ -26,6 +26,10 @@
   <ItemGroup>
     <MauiIcon Include="Resources\AppIcon\appicon.svg" Color="#FFFFFF" ForegroundScale="0.62" />
     <MauiImage Include="Resources\Images\*.svg" />
+    <!-- The mock-up's type faces (SIL OFL, licences next to the files). Plus Jakarta Sans is the
+         display face of the Latin brand name only: it carries no Cyrillic, so every localized
+         title uses Noto Sans, the face the mock-up's own font stack falls back to. -->
+    <MauiFont Include="Resources\Fonts\*.ttf" />
     <!-- The ONNX model (~87 MB) is gitignored and fetched at build time (see CI / docs).
          Keep this asset conditional so a clean clone without the model still builds;
          the app falls back to downloading it at runtime when it is absent. -->
@@ -33,8 +37,24 @@
   </ItemGroup>
 
   <ItemGroup Condition="$(TargetFramework.Contains('-android'))">
+    <!-- In-app QR scanning of the join code (BMB-389, one new package): Google Play services' code scanner,
+         its own screen, so the app needs and asks for no CAMERA permission. The version lives in Directory.Packages.props (116.x). -->
+    <PackageReference Include="Xamarin.GooglePlayServices.Code.Scanner" />
+    <!-- Play services Base/Basement need AndroidX Fragment 1.9 (and Tracing 2.0 through it). Fragment 1.9 carries the Kotlin
+         extensions itself, so the older fragment-ktx / tracing-ktx bindings MAUI brings define the same classes twice and the
+         dexer stops (Type androidx.fragment.app.FragmentKt is defined multiple times). Their 1.9 / 2.0 releases are the empty
+         successors: the same override the blind app uses with the scanner on (see its csproj). -->
+    <PackageReference Include="Xamarin.AndroidX.Tracing.Tracing.Ktx" VersionOverride="2.0.0" />
     <AndroidResource Include="Platforms\Android\Resources\xml\network_security_config.xml" LogicalName="res\xml\network_security_config.xml" />
     <AndroidResource Include="Platforms\Android\Resources\xml\data_extraction_rules.xml" LogicalName="res\xml\data_extraction_rules.xml" />
+    <!-- The system bars follow the appearance on every window, modal dialogs included: these override
+         Maui.MainTheme's bar colours per night mode (see the files for why the modal windows need it). -->
+    <AndroidResource Include="Platforms\Android\Resources\values\styles.xml" LogicalName="res\values\styles.xml" />
+    <AndroidResource Include="Platforms\Android\Resources\values-night\styles.xml" LogicalName="res\values-night\styles.xml" />
+    <!-- API 35+ edge-to-edge: the Shell app bar background shows through the transparent status bar;
+         override it with the appearance background token (see the files). -->
+    <AndroidResource Include="Platforms\Android\Resources\values-v35\styles.xml" LogicalName="res\values-v35\styles.xml" />
+    <AndroidResource Include="Platforms\Android\Resources\values-night-v35\styles.xml" LogicalName="res\values-night-v35\styles.xml" />
   </ItemGroup>
 
   <ItemGroup>
@@ -52,7 +72,7 @@
     <!-- The AndroidX bindings MAUI pulls at an older train than Work.Runtime needs: same versions as Directory.Packages.props, so NU1608 is gone. -->
     <PackageReference Include="Xamarin.AndroidX.Activity.Ktx" />
     <PackageReference Include="Xamarin.AndroidX.Collection.Ktx" />
-    <PackageReference Include="Xamarin.AndroidX.Fragment.Ktx" />
+    <PackageReference Include="Xamarin.AndroidX.Fragment.Ktx" VersionOverride="1.9.0" />
     <PackageReference Include="Xamarin.AndroidX.Lifecycle.Process" />
     <PackageReference Include="Xamarin.AndroidX.Lifecycle.Runtime.Ktx" />
     <PackageReference Include="Xamarin.AndroidX.Lifecycle.Runtime.Ktx.Android" />
@@ -81,6 +101,16 @@
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Storage\BeeMemoryBank.Storage.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Sync\BeeMemoryBank.Sync.csproj" />
     <ProjectReference Include="..\..\libs\BeeMemoryBank.Vault\BeeMemoryBank.Vault.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The auto-lock policy is the iPhone's, shared verbatim (platform-free): when the open vault
+         closes by itself, after leaving the screen longer than the grace and after the idle timeout. -->
+    <Compile Include="..\BeeMemoryBank.FullIos\Services\AutoLockPolicy.cs" Link="Shared\AutoLockPolicy.cs" />
+    <!-- Whose a recovery key is (2.12: personal), decided the same way on both phones. -->
+    <Compile Include="..\BeeMemoryBank.FullIos\Services\PhoneOwner.cs" Link="Shared\PhoneOwner.cs" />
+    <!-- Which slots the Debug slot card may offer to delete: tested in FullIos.Tests. -->
+    <Compile Include="..\BeeMemoryBank.FullIos\Services\DevSlot.cs" Link="Shared\DevSlot.cs" />
   </ItemGroup>
 
 </Project>

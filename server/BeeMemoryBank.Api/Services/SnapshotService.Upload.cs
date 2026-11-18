@@ -105,7 +105,10 @@ public partial class SnapshotService
                         {
                             try
                             {
-                                if (!Ed25519Signer.Verify(trustedEntry.Ed25519PublicKey, BuildSigPayloadEmbedded(preManifestBytes!), preSigBytes))
+                                // The peer's current key, or a key it retired before it made this snapshot (plan WS-D D3, package rule, with
+                                // this node's key history).
+                                if (!await BeeMemoryBank.Sync.NodeEventVerifier.VerifyPackageSignatureAsync(_connFactory, trustedEntry.NodeId,
+                                        trustedEntry.Ed25519PublicKey, BuildSigPayloadEmbedded(preManifestBytes!), preSigBytes, signedAtLamport: null))
                                 {
                                     // The archive *claims* to be from a peer we trust AND ships
                                     // a signature, but it doesn't verify against that peer's

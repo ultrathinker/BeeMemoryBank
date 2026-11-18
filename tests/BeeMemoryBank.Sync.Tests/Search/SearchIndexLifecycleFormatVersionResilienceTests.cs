@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace BeeMemoryBank.Sync.Tests.Search;
 
 /// <summary>
-/// WP-13 Task 1: the system-level half of the "format-version-from-the-future" investigation (the
+/// The system-level half of the "format-version-from-the-future" investigation (the
 /// low-level half lives in BeeMemoryBank.Search.Tests.Segment.SegmentReaderFormatVersionTests and
 /// BeeMemoryBank.Storage.Tests.Search.EncryptedSegmentFormatVersionTests).
 ///
@@ -32,19 +32,19 @@ namespace BeeMemoryBank.Sync.Tests.Search;
 /// </para>
 ///
 /// <para>
-/// <b>Finding (real gap, fixed during WP-13 review/integration):</b> Storing a segment whose
+/// <b>Finding (real gap, fixed during review/integration):</b> Storing a segment whose
 /// plaintext bytes have a future <see cref="SegmentLayout.FormatVersion"/> (simulating "a newer
 /// node version wrote this segment, an older version is now warm-starting from it") decrypts
 /// successfully -- <see cref="EncryptedSegmentStore.LoadAsync"/> has no way to know the plaintext
-/// payload's own internal format changed, since that is a layer entirely below it. WP-13 itself
+/// payload's own internal format changed, since that is a layer entirely below it. The review itself
 /// found that <see cref="SearchIndexLifecycleService.EnsureWarmStartedAsync"/> then constructed a
 /// <c>new SegmentReader(bytes)</c> directly over that payload with no try/catch around it -- unlike
 /// every one of the five documented <see cref="SegmentRebuildReason"/> signals, which it catches
 /// and turns into a graceful <see cref="SearchIndexLifecycleService.TriggerFullRebuildAsync"/> call.
-/// This was outside wp-13.md's enumerated list of files that WP was allowed to modify
+/// This was outside the enumerated list of files this work was allowed to modify
 /// (<c>SegmentReader.cs</c>, <c>EncryptedSegmentFormat.cs</c>, <c>EncryptedSegmentStore.cs</c>
-/// only), so WP-13 reported it instead of fixing it. It was then fixed directly in
-/// <see cref="SearchIndexLifecycleService.EnsureWarmStartedAsync"/> as part of merging this WP:
+/// only), so the review reported it instead of fixing it. It was then fixed directly in
+/// <see cref="SearchIndexLifecycleService.EnsureWarmStartedAsync"/> as part of merging this work:
 /// the <c>new SegmentReader(bytes)</c> call is now wrapped in a try/catch for
 /// <see cref="NotSupportedException"/> (and defensively <see cref="ArgumentException"/>, which the
 /// same constructor throws for a too-short/bad-magic buffer) that calls
@@ -54,7 +54,7 @@ namespace BeeMemoryBank.Sync.Tests.Search;
 ///
 /// <para>
 /// This test now pins the FIXED behavior (graceful full rebuild, matching every other
-/// <see cref="SegmentRebuildReason"/> path) rather than the crash WP-13 originally found.
+/// <see cref="SegmentRebuildReason"/> path) rather than the crash originally found.
 /// </para>
 /// </summary>
 public class SearchIndexLifecycleFormatVersionResilienceTests : IAsyncLifetime
@@ -141,7 +141,7 @@ public class SearchIndexLifecycleFormatVersionResilienceTests : IAsyncLifetime
         // FIXED: like every other documented SegmentRebuildReason (missing/corrupted/wrong
         // container version/stale epoch), a future inner format version is now caught and resolved
         // to a graceful full rebuild instead of propagating a raw NotSupportedException. See this
-        // class's doc comment for the original finding and the fix applied during WP-13's merge.
+        // class's doc comment for the original finding and the fix applied during the merge.
         await warmStart.Should().NotThrowAsync(
             "SearchIndexLifecycleService.EnsureWarmStartedAsync now catches SegmentReader's rejection of a future inner format version and triggers a full rebuild, matching every other SegmentRebuildReason path");
 

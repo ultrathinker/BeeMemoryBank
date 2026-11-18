@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-311 fix round 3 (G6): the long writes that run behind a single-flight lease - a copy of an article or a folder, a restore from the trash, a password change, an
+/// BMB-311: the long writes that run behind a single-flight lease - a copy of an article or a folder, a restore from the trash, a password change, an
 /// admin's password reset - could not stop when the client went away: their services took no token, so the lease was held while work nobody waited for ran on, and
 /// nothing said it had been abandoned. Each route now hands its service a token linked to the request and to the application's stopping, and each service looks at it only
 /// where stopping is safe (before its first write; between the units of a copy, which rolls back; never in the middle of a key-slot rewrite). The routes are called here

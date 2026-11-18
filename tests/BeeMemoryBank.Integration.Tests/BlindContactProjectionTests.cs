@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// BMB-313 fix2 (Q3): the contact of a blind peer is ONE projection (<c>PeerContactView</c>), and three places show it: <c>GET /api/blind/status</c> (<c>peers[]</c>), the
+/// BMB-313: the contact of a blind peer is ONE projection (<c>PeerContactView</c>), and three places show it: <c>GET /api/blind/status</c> (<c>peers[]</c>), the
 /// Blind nodes page (<c>BlindNodeManager.ListAsync</c>) and the alarm (<c>not_answering</c>). For the same facts in the contact log they must say the same state, direction,
 /// timestamps and reason: a field mapped differently in one of them fails here, not on somebody's screen.
 /// </summary>

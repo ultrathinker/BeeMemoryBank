@@ -11,7 +11,7 @@ using BeeMemoryBank.Crypto;
 namespace BeeMemoryBank.Blind.AppCore.Tests;
 
 /// <summary>
-/// Fix round 1, BLOCKER-1 and MINOR-2. The hub's signature <c>g</c> is REQUIRED on the device: an invitation without it, or with any signed field changed, is refused by the preview and by
+/// The hub's signature <c>g</c> is REQUIRED on the device: an invitation without it, or with any signed field changed, is refused by the preview and by
 /// the add before anything is sent (and the codec's own mutation tests are in Core.Tests). And what an account keeps of the invitation is untrusted input when it is read back: every rule of
 /// the text form holds again, and the signature verifies again, so a value edited in the state store is never called.
 /// </summary>

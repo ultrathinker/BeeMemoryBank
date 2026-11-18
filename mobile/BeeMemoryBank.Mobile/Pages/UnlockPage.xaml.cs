@@ -1,5 +1,7 @@
 using BeeMemoryBank.Busy;
 using BeeMemoryBank.Core.Services;
+using BeeMemoryBank.Mobile.Controls;
+using BeeMemoryBank.Mobile.Localization;
 using BeeMemoryBank.Mobile.Services;
 
 namespace BeeMemoryBank.Mobile.Pages;
@@ -16,6 +18,10 @@ public partial class UnlockPage : ContentPage
         _session = session;
         _biometric = biometric;
         _router = router;
+        // Centre the card when it fits, scroll when it does not: the Grid's minimum height follows the
+        // ScrollView's height (display only). The card is VerticalOptions=Center inside that Grid, so
+        // portrait centres it and landscape grows the Grid to the card and scrolls.
+        UnlockScroll.SizeChanged += (_, _) => UnlockRoot.MinimumHeightRequest = UnlockScroll.Height;
     }
 
     protected override void OnAppearing()
@@ -67,26 +73,21 @@ public partial class UnlockPage : ContentPage
                 _biometric.Clear();
                 FingerprintButton.IsVisible = false;
                 OrLabel.IsVisible = false;
-                ErrorLabel.Text = "Fingerprint data outdated. Please enter password.";
+                ErrorLabel.Text = AppStrings.Get("UnlockFingerprintOutdated");
                 ErrorLabel.IsVisible = true;
             }
         }, new BusyOptions { ResultLabel = ErrorLabel, AlsoDisable = [UnlockButton] });
     }
 
     // ── Password unlock ───────────────────────────────────────────────────────
-
-    private void OnTogglePasswordClicked(object? sender, EventArgs e)
-    {
-        PasswordEntry.IsPassword = !PasswordEntry.IsPassword;
-        TogglePasswordButton.Text = PasswordEntry.IsPassword ? "Show" : "Hide";
-    }
+    // The show/hide eye is the PasswordBox control's own (the mock-up's input-shell).
 
     private async void OnUnlockClicked(object? sender, EventArgs e)
     {
         var password = PasswordEntry.Text ?? "";
         if (string.IsNullOrEmpty(password))
         {
-            ErrorLabel.Text = "Enter your password.";
+            ErrorLabel.Text = AppStrings.Get("UnlockEmpty");
             ErrorLabel.IsVisible = true;
             return;
         }
@@ -104,7 +105,7 @@ public partial class UnlockPage : ContentPage
                 var ok = await Task.Run(() => _session.UnlockAsync(password));
                 if (!ok)
                 {
-                    ErrorLabel.Text = "Wrong password.";
+                    ErrorLabel.Text = AppStrings.Get("UnlockWrong");
                     ErrorLabel.IsVisible = true;
                     PasswordEntry.Text = "";
                     return;
@@ -128,17 +129,15 @@ public partial class UnlockPage : ContentPage
         var available = await _biometric.IsAvailableAsync();
         if (!available || _biometric.HasStoredPassword()) return;
 
-        var yes = await DisplayAlert(
-            "Enable Fingerprint",
-            "Use fingerprint to unlock next time instead of typing your password?",
-            "Enable", "Skip");
+        var yes = await AppDialog.ConfirmAsync(this, AppStrings.Get("EnableFingerprintTitle"),
+            AppStrings.Get("EnableFingerprintDesc"), AppStrings.Get("EnableFingerprintYes"), AppStrings.Get("EnableFingerprintSkip"));
 
         if (!yes) return;
 
         var stored = await _biometric.StorePasswordAsync(password);
         if (!stored)
         {
-            await DisplayAlert("Fingerprint", "Could not save fingerprint. You can try again later.", "OK");
+            await AppDialog.AlertAsync(this, AppStrings.Get("EnableFingerprintTitle"), AppStrings.Get("FingerprintStoreFailed"));
         }
     }
 }

@@ -36,6 +36,7 @@ public class ProviderRequestErrorTests : IAsyncLifetime
         // process, and the classes that chat as user 1 already use much of that budget.
         _client.DefaultRequestHeaders.Add("X-User-Id", "2101");
         await _factory.InitializeNodeAsync(password: Password);
+        await ForwardedUsers.EnsureAsync(_factory.Services, 2101);
         (await _factory.Services.GetRequiredService<SessionService>().UnlockAsync(Password)).Should().BeTrue();
     }
 

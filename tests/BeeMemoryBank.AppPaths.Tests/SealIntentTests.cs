@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 namespace BeeMemoryBank.AppPaths.Tests;
 
 /// <summary>
-/// BMB-306 fix round, finding B/C: a setup, join or restore writes in the open before the node is encrypted, and the process can die in between. The
+/// BMB-306: a setup, join or restore writes in the open before the node is encrypted, and the process can die in between. The
 /// seal intent is a marker written BEFORE the first such write; a start (VaultStartup.Enter) that finds it still there never lets the plain start serve
 /// what was written: an encrypted pair only loses the marker, anything else is wiped, and a file that will not go refuses the start by name.
 /// The directories are real SQLite files with a canary in them, so a byte scan shows what a wipe left.
@@ -184,7 +184,7 @@ public sealed class SealIntentTests : IClassFixture<SealIntentTests.Corpus>
     [Fact]
     public void A_marker_nobody_can_read_is_no_permission_to_wipe_anything()
     {
-        // BMB-306 fix round 2 (finding N2): a damaged marker used to count as pending and cost the folder its databases. It refuses the start instead, and touches nothing.
+        // BMB-306: a damaged marker used to count as pending and cost the folder its databases. It refuses the start instead, and touches nothing.
         var dir = CutSetup();
         File.WriteAllText(SealIntent.PathFor(dir), "\u0001 not json");
 

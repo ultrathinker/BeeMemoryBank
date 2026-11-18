@@ -102,7 +102,7 @@ public class SessionUnlockAuthorizationTests : IAsyncLifetime
             var adminKek = KeyDerivation.DeriveKek(
                 AdminPassword, adminSlot.Salt!,
                 adminSlot.ArgonMemory!.Value, adminSlot.ArgonIterations!.Value, adminSlot.ArgonParallelism!.Value);
-            var masterDek = MasterKeyManager.UnwrapMasterDek(adminSlot.EncryptedMasterDek, adminSlot.IV, adminKek);
+            var masterDek = BeeMemoryBank.Crypto.Doors.OpenSlot(adminSlot, adminKek);
 
             var bobSalt = KeyDerivation.GenerateSalt();
             var bobKek = KeyDerivation.DeriveKek(bobPassword, bobSalt);
@@ -171,7 +171,7 @@ public class SessionUnlockAuthorizationTests : IAsyncLifetime
             var adminKek = KeyDerivation.DeriveKek(
                 AdminPassword, adminSlot.Salt!,
                 adminSlot.ArgonMemory!.Value, adminSlot.ArgonIterations!.Value, adminSlot.ArgonParallelism!.Value);
-            var masterDek = MasterKeyManager.UnwrapMasterDek(adminSlot.EncryptedMasterDek, adminSlot.IV, adminKek);
+            var masterDek = BeeMemoryBank.Crypto.Doors.OpenSlot(adminSlot, adminKek);
 
             var bobSalt = KeyDerivation.GenerateSalt();
             var bobKek = KeyDerivation.DeriveKek(bobPassword, bobSalt);

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using BeeMemoryBank.Core.Interfaces;
+using BeeMemoryBank.Core.Models;
 using BeeMemoryBank.Core.Services;
 using BeeMemoryBank.Crypto;
 using BeeMemoryBank.Vault.Metadata;
@@ -69,8 +70,26 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
         var salt = KeyDerivation.GenerateSalt();
         var kek = KeyDerivation.DeriveKek(password, salt,
             CryptoConstants.DefaultArgonMemory, CryptoConstants.DefaultArgonIterations, CryptoConstants.DefaultArgonParallelism);
+        // The owner's new door is a sealed (v2) door (ADR 0012) when the copy has the door columns of migration 046; a database from before
+        // it keeps the v1 wrap of every earlier release (the next start migrates it, and the owner's first sign-in seals it again).
+        var hasDoorColumns = await db.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM pragma_table_info('tbl_key_slot') WHERE name = 'door_public_key'") > 0;
+        var ownerType = await db.ExecuteScalarAsync<string?>("SELECT slot_type FROM tbl_key_slot WHERE slot_id = @ownerSlot", new { ownerSlot })
+            ?? KeySlotTypes.User;
         byte[] ownerWrapped, ownerIv;
-        try { (ownerWrapped, ownerIv) = MasterKeyManager.WrapMasterDek(dc, kek); }
+        byte[]? ownerDoorPublicKey = null;
+        try
+        {
+            if (hasDoorColumns && ownerType != KeySlotTypes.Password)
+            {
+                var door = Doors.Seal(ownerType, kek, salt, dc);
+                (ownerWrapped, ownerIv, ownerDoorPublicKey) = (door.Box, door.Iv, door.PublicKey);
+            }
+            else
+            {
+                (ownerWrapped, ownerIv) = MasterKeyManager.WrapMasterDek(dc, kek);
+            }
+        }
         finally { CryptographicOperations.ZeroMemory(kek); }
 
         using var tx = db.BeginTransaction();
@@ -98,14 +117,18 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
         }
 
         // The owner's slot, then every other one.
+        var doorColumns = hasDoorColumns
+            ? ", door_version = @version, door_public_key = @ownerDoorPublicKey, dek_fp = @fp"
+            : "";
         if (await db.ExecuteAsync(
-                @"UPDATE tbl_key_slot SET encrypted_master_dek = @ownerWrapped, iv = @ownerIv, salt = @salt,
-                         argon_memory = @mem, argon_iterations = @it, argon_parallelism = @par
+                $@"UPDATE tbl_key_slot SET encrypted_master_dek = @ownerWrapped, iv = @ownerIv, salt = @salt,
+                         argon_memory = @mem, argon_iterations = @it, argon_parallelism = @par{doorColumns}
                   WHERE slot_id = @ownerSlot",
                 new
                 {
                     ownerWrapped, ownerIv, salt, ownerSlot, mem = CryptoConstants.DefaultArgonMemory,
-                    it = CryptoConstants.DefaultArgonIterations, par = CryptoConstants.DefaultArgonParallelism
+                    it = CryptoConstants.DefaultArgonIterations, par = CryptoConstants.DefaultArgonParallelism,
+                    version = ownerDoorPublicKey is null ? 1 : 2, ownerDoorPublicKey, fp = DekFingerprint.Of(dc),
                 }, tx) != 1)
             throw new InvalidOperationException($"The owner's key slot {ownerSlot} is not in the copy.");
 
@@ -126,7 +149,7 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
         }
         counts["tbl_user"] = others.Count;
 
-        // Every remote API token, the owner's included (batch review L-1): a bmbrt_ token is a bearer credential another
+        // Every remote API token, the owner's included: a bmbrt_ token is a bearer credential another
         // node holds, and only the owner's password may open the new vault. Each node that read the vault with one is
         // given a new token by the owner; the report lists them.
         foreach (var t in await db.QueryAsync<(string Id, string? User, string? Label)>(
@@ -174,7 +197,7 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
 
         tx.Commit();
 
-        // A fresh Web-to-Api key in the new vault (batch review L-2). A Docker or dev node reads D/.internal-key and
+        // A fresh Web-to-Api key in the new vault. A Docker or dev node reads D/.internal-key and
         // trusts forwarded identity headers behind it; the old vault's key must not open the new one. The swap does not
         // carry the old file over.
         WriteInternalKey(Path.Combine(ctx.WorkDir, InternalKeyFile));
@@ -216,8 +239,8 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
             }
         }
 
-        var slots = (await db.QueryAsync<(long SlotId, byte[] W, byte[] Iv, byte[]? Salt, long? Mem, long? It, long? Par)>(
-            "SELECT slot_id, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism FROM tbl_key_slot")).ToList();
+        var slots = (await db.QueryAsync<(long SlotId, byte[] W, byte[] Iv, byte[]? Salt, long? Mem, long? It, long? Par, string Type)>(
+            "SELECT slot_id, encrypted_master_dek, iv, salt, argon_memory, argon_iterations, argon_parallelism, slot_type FROM tbl_key_slot")).ToList();
         if (slots.Count != 1 || slots[0].SlotId != _ownerSlot)
             problems.Add(new("tbl_key_slot", "*", $"{slots.Count} slot(s) left; only the owner's slot {_ownerSlot} may remain"));
         foreach (var s in slots.Where(s => s.SlotId == _ownerSlot))
@@ -230,7 +253,7 @@ public sealed class KeyMaterialStep : IRekeyStep, IRekeyOwnerCredentialConsumer
             var kek = KeyDerivation.DeriveKek(_ownerPassword, s.Salt, (int)s.Mem, (int)s.It, (int)s.Par);
             try
             {
-                var opened = MasterKeyManager.UnwrapMasterDek(s.W, s.Iv, kek);
+                var opened = Doors.OpenByShape(s.Type, s.W, s.Iv, kek, s.Salt);
                 if (!CryptographicOperations.FixedTimeEquals(opened, dc))
                     problems.Add(new("tbl_key_slot", s.SlotId.ToString(), "the owner's password opens the slot to another key"));
                 CryptographicOperations.ZeroMemory(opened);

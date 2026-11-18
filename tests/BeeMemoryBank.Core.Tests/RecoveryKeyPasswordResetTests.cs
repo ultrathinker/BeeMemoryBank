@@ -40,7 +40,7 @@ public class RecoveryKeyPasswordResetTests : TestFixture
             .AddScoped<Core.Interfaces.IFolderRepository>(_ => new FolderRepository(Factory, ScopeHolder))
             .AddScoped(_ => ScopeHolder)
             .BuildServiceProvider());
-        Users = new UserService(UserRepo, KeySlots, Session, roles, folderAccess);
+        Users = new UserService(UserRepo, KeySlots, Session, roles, folderAccess, factory: Factory);
 
         _recoveryKey = await KeyManagement.AddRecoveryKeyAsync();
     }
@@ -106,7 +106,8 @@ public class RecoveryKeyPasswordResetTests : TestFixture
     public async Task OtherSuperadmins_AndOtherRecoveryKeys_AreUntouched()
     {
         var carol = await Users.CreateUserAsync("carol", "Carol", "CarolPass1", UserRoles.Superadmin);
-        var secondKey = await KeyManagement.AddRecoveryKeyAsync();
+        var adminId = (await UserRepo.GetByUsernameAsync("admin"))!.Id;
+        var secondKey = await KeyManagement.AddRecoveryKeyAsync(adminId);   // another key OF ADMIN's, not carol's
         var carolStamp = (await UserRepo.GetByIdAsync(carol.Id))!.SecurityStamp;
         var before = await SlotSnapshotAsync();
         var adminSlotId = (await UserRepo.GetByUsernameAsync("admin"))!.KeySlotId!.Value;
@@ -195,9 +196,11 @@ public class RecoveryKeyPasswordResetTests : TestFixture
         var bob = await Users.CreateUserAsync("bob", "Bob", "BobPass1", UserRoles.User);
         await Users.UpdateUserAsync(bob.Id, "Bob", UserRoles.Superadmin);
         (await UserRepo.GetByUsernameAsync("bob"))!.KeySlotId.Should().BeNull("promotion defers the slot");
+        // A recovery key is personal (2.12): the key that resets bob must be bob's own, not admin's.
+        var bobKey = await KeyManagement.AddRecoveryKeyAsync(bob.Id);
         Session.Lock();
 
-        (await Users.ResetPasswordWithRecoveryKeyAsync("bob", _recoveryKey, "BobNewPass1")).Succeeded.Should().BeTrue();
+        (await Users.ResetPasswordWithRecoveryKeyAsync("bob", bobKey, "BobNewPass1")).Succeeded.Should().BeTrue();
 
         (await UserRepo.GetByUsernameAsync("bob"))!.KeySlotId.Should().NotBeNull();
         (await Session.UnlockAsync("BobNewPass1")).Should().BeTrue("the reset gave the promoted superadmin a slot under the new password");

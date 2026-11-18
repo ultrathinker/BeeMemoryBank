@@ -173,6 +173,13 @@ public static class BusyAction
     /// </summary>
     public static Func<Exception, string>? Describer { get; set; }
 
+    /// <summary>
+    /// The one place an app may replace the dialog that shows a failure when there is no result label for it: called with the page that is shown, the headline and the whole text.
+    /// An app that sets none gets the platform's own alert, exactly as before. The Android app sets it to its own styled dialog, so a failure is said in the app's look instead of
+    /// the grey system alert. The same headline and the same text, at the same moment - only the dialog's skin changes.
+    /// </summary>
+    public static Func<Page, string, string, Task>? FailureDialog { get; set; }
+
     private static bool IsSpinnerText(string? text) => !string.IsNullOrEmpty(text) && Spinner.Contains(text[0]);
 
     private static IDispatcherTimer? StartSpinner(BindableObject? target, Face face, string? original)
@@ -188,7 +195,7 @@ public static class BusyAction
     }
 
     /// <summary>
-    /// Touches a control of a page that may be gone (BMB-311 fix round): a disposed or detached control throws, and an end of work that throws leaves the key
+    /// Touches a control of a page that may be gone (BMB-311): a disposed or detached control throws, and an end of work that throws leaves the key
     /// taken and the next tap refused. What cannot be touched is not there to be restored.
     /// </summary>
     private static void Guarded(Action touch)
@@ -222,7 +229,9 @@ public static class BusyAction
         // nobody, a failure is said in a dialog of the page that is shown now.
         if (ok) return;
         var page = CurrentPage();
-        if (page != null) await page.DisplayAlertAsync(options.FailureTitle, text, "OK");
+        if (page == null) return;
+        if (FailureDialog is { } show) await show(page, options.FailureTitle, text);
+        else await page.DisplayAlertAsync(options.FailureTitle, text, "OK");
     }
 
     private static Page? CurrentPage() => Shell.Current?.CurrentPage ?? Application.Current?.Windows.FirstOrDefault()?.Page;

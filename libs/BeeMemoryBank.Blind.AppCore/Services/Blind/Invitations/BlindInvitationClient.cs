@@ -88,8 +88,9 @@ public sealed class BlindInvitationClient(
         {
             using var client = Client(target);
             var identity = await SyncAddress.ReadIdentityAsync(client, target.Address, ct).ConfigureAwait(false);
-            // The node id alone is a claim; the key the hub states about itself must be the one the invitation names, in constant time.
-            return identity.NodeId == target.HubNodeId && PeerKey.Matches(target.HubPublicKey, identity.Ed25519PublicKeyB64)
+            // The node id alone is a claim; the key the hub states about itself must be the one the invitation names, in constant time - or one the
+            // hub's signed key transition chain leads to from it (a hub that re-keyed after it made the invitation, release 2.12 plan WS-D D4).
+            return identity.NodeId == target.HubNodeId && PeerKey.MatchesOrFollows(target.HubNodeId, target.HubPublicKey, identity)
                 ? new(BlindInvitationOutcome.Ok)
                 : new(BlindInvitationOutcome.HubMismatch);
         }

@@ -26,13 +26,14 @@ public sealed class FileIdentityTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true, false, false, true)]
-    [InlineData(false, true, false, true)]
-    [InlineData(false, false, true, true)]   // .NET says IsLinux() == false on Android; its libc has the same stat
-    [InlineData(false, false, false, false)]
-    public void The_stat_route_is_taken_on_linux_macos_and_android(bool isLinux, bool isMacOs, bool isAndroid, bool expected)
+    [InlineData(true, false, false, false, true)]
+    [InlineData(false, true, false, false, true)]
+    [InlineData(false, false, true, false, true)]   // .NET says IsLinux() == false on Android; its libc has the same stat
+    [InlineData(false, false, false, true, true)]   // the iPhone: Darwin like macOS; without it its own database read as a plain copy (15.11)
+    [InlineData(false, false, false, false, false)]
+    public void The_stat_route_is_taken_on_linux_macos_android_and_the_iphone(bool isLinux, bool isMacOs, bool isAndroid, bool isApplePhone, bool expected)
     {
-        FileIdentity.UsesUnixStat(isLinux, isMacOs, isAndroid).Should().Be(expected);
+        FileIdentity.UsesUnixStat(isLinux, isMacOs, isAndroid, isApplePhone).Should().Be(expected);
     }
 
     [Fact]

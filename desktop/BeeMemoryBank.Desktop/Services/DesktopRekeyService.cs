@@ -86,7 +86,7 @@ public sealed class DesktopRekeyService
             return new DesktopRekeyResult { Outcome = RekeyOutcome.NotRun, Message = "The command-line tool (bmb) was not found next to the app." };
 
         // A node this app only attached to (a service, the command line) keeps running through StopAsync, and the
-        // verb would then refuse on its node.lock: say so now, with nothing stopped (review release-b R2-3).
+        // verb would then refuse on its node.lock: say so now, with nothing stopped.
         if (nodeIsRunning && _node.IsAttachedToExternalNode)
             return new DesktopRekeyResult
             {

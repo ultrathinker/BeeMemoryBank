@@ -74,6 +74,11 @@ if (!isBlind)
     // that reads the vault. A plain node, a blind host and an open sealed node pass through.
     app.UseMiddleware<BeeMemoryBank.Api.Middleware.SealedVaultMiddleware>();
 
+    // Who the caller is: a person the Web layer names in X-User-Id is whatever tbl_user says they are right now (role, active flag), never what a
+    // header says. After the closed-database gate, because it reads tbl_user; after the agent auth, whose identity it leaves alone; before the
+    // caller scope, which builds the folder rules from the identity.
+    app.UseMiddleware<BeeMemoryBank.Api.Middleware.CallerIdentityMiddleware>();
+
     // Ambient caller scope — resolves folder ACL once per request, repos filter reads automatically. The ACL is read from the database, so
     // a request the closed gate lets through (the allow-list, /mcp) keeps the deny-all default instead.
     app.UseWhen(
@@ -147,6 +152,8 @@ app.MapAgentEndpoints();
 app.MapFavoriteEndpoints();
 app.MapBrandingEndpoints();
 app.MapUserEndpoints();
+app.MapAccountsHomeEndpoints();
+app.MapOffboardingEndpoints();   // the removal of a superadmin (release 2.12.0)
 app.MapJoinEndpoints();
 app.MapInitEndpoints();
 app.MapSyncEndpoints();
@@ -159,6 +166,7 @@ app.MapBlindLeaveEndpoint();
 app.MapBlindPhonePairingEndpoints();
 app.MapSnapshotEndpoints();
     app.MapDekRotationEndpoints();
+    app.MapNodeIdentityEndpoints();
     app.MapUpdateEndpoints();
 app.MapActivityEndpoints();
 app.MapCommentEndpoints();

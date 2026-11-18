@@ -6,7 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The "View all rules" dialog of the Dream page (Dream UX round 2, package A): GET /api/dream/rulebook describes every built-in
+/// The "View all rules" dialog of the Dream page: GET /api/dream/rulebook describes every built-in
 /// rule and every model task the node really runs, every kind of advice is described somewhere, the page has a label for each,
 /// and the numbers in the words are the code's, not a copy.
 /// </summary>

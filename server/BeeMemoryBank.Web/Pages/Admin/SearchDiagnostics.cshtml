@@ -2,22 +2,26 @@
 @using System.Text.Json
 @model BeeMemoryBank.Web.Pages.Admin.SearchDiagnosticsModel
 
-@* Search diagnostics (WP-18) - latency / volume / index health.
+@* Search diagnostics - latency / volume / index health.
    Numbers only: timings, request counts, coarse result-count buckets, and the already-public
    IndexBuilder / SearchIndexRuntimeState diagnostics. No query text or content is ever shown. *@
 @section About {
-    <p>
-        This page shows how the search of this node is doing, and holds the switch for <strong>semantic search</strong>. It has two parts. <strong>Latency and volume</strong>: for each kind of
-        search, how many requests were made and how long they took (p50 is the typical one, p95 the slow end), and how many results they returned, counted over a rolling window in memory (it
-        starts again when the node restarts). <strong>The encrypted search index</strong>: how many segments it has sealed, how many documents wait in its hot buffer, and whether it was warm-started
-        from disk. Only counts and timings are shown here: no query text, title or article content is ever recorded or shown.
-    </p>
-    <p>
-        <strong>Generate embeddings on this node</strong> decides whether this node computes its own semantic embeddings, which meaning-based and hybrid search need. Embeddings never sync between
-        nodes: each node that wants semantic search has to generate its own. Turning it off saves CPU, but semantic and hybrid search then silently fall back to exact matching on this node.
-        <strong>Backfill pending now</strong> drains the pending embeddings and index entries at once, instead of waiting for the normal schedule (one batch every 5 minutes). Use it right after
-        switching the toggle on or after a large import; pressing it again is harmless when nothing is pending.
-    </p>
+    <p>How fast and healthy search is, and the switch for search by meaning.</p>
+    <details class="admin-more">
+        <summary>More details</summary>
+        <p>
+            This page shows how the search of this node is doing, and holds the switch for <strong>semantic search</strong>. It has two parts. <strong>Latency and volume</strong>: for each kind of
+            search, how many requests were made and how long they took (p50 is the typical one, p95 the slow end), and how many results they returned, counted over a rolling window in memory (it
+            starts again when the node restarts). <strong>The encrypted search index</strong>: how many segments it has sealed, how many documents wait in its hot buffer, and whether it was warm-started
+            from disk. Only counts and timings are shown here: no query text, title or article content is ever recorded or shown.
+        </p>
+        <p>
+            <strong>Generate embeddings on this node</strong> decides whether this node computes its own semantic embeddings, which meaning-based and hybrid search need. Embeddings never sync between
+            nodes: each node that wants semantic search has to generate its own. Turning it off saves CPU, but semantic and hybrid search then silently fall back to exact matching on this node.
+            <strong>Backfill pending now</strong> drains the pending embeddings and index entries at once, instead of waiting for the normal schedule (one batch every 5 minutes). Use it right after
+            switching the toggle on or after a large import; pressing it again is harmless when nothing is pending.
+        </p>
+    </details>
 }
 
 <div class="card" style="padding:12px 16px;margin-bottom:20px;max-width:920px;">

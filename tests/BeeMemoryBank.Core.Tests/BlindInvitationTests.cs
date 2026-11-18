@@ -109,7 +109,7 @@ public class BlindInvitationTests
         publicCa.SourceName.Should().Be("Zoë Müller");
     }
 
-    // ── the signature is required (review BLOCKER-1) ───────────────────────
+    // ── the signature is required ───────────────────────
 
     [Fact]
     public void AnInvitationWithoutASignature_IsRefused_AndSoIsOneWithAnEmptyOrTruncatedOne()
@@ -187,7 +187,7 @@ public class BlindInvitationTests
             .Should().Throw<ArgumentException>();
     }
 
-    // ── the text of an invitation does not carry its secret (review MAJOR-2) ─
+    // ── the text of an invitation does not carry its secret ─
 
     [Fact]
     public void ToString_Interpolation_AndConcatenation_NeverCarryTheSecret()

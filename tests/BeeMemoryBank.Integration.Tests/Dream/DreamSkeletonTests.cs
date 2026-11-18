@@ -24,10 +24,13 @@ using ProxyRouteTable = WebApp::BeeMemoryBank.Web.Services.ProxyRouteTable;
 namespace BeeMemoryBank.Integration.Tests;
 
 /// <summary>
-/// The skeleton of Dream (package P0a): the six tables in chat.db with their re-key fates, the node reset, every route of plan 3.8 behind the
+/// The skeleton of Dream: the six tables in chat.db with their re-key fates, the node reset, every route of plan 3.8 behind the
 /// superadmin and non-agent gates with 409 locked on changes while locked, the services every package fills, and the Web side (proxy entry, Admin
 /// catalog row).
+/// <para>In the heavy-operation collection: the status answers "busy" while <c>HeavyOperationLock.Instance</c> is held, and that lock is process-wide -
+/// a restore of another class running beside this one made <c>available</c> false (CI run 44238143253).</para>
 /// </summary>
+[Collection(HeavyOperationCollection.Name)]
 public class DreamSkeletonTests : IAsyncLifetime
 {
     private readonly BmbWebApplicationFactory _factory = new();
@@ -157,7 +160,7 @@ public class DreamSkeletonTests : IAsyncLifetime
         "GET /api/dream/advice", "GET /api/dream/advice/{id:guid}", "GET /api/dream/advice/{id:guid}/prompt",
         "POST /api/dream/advice/{id:guid}/apply", "POST /api/dream/advice/{id:guid}/dismiss", "POST /api/dream/advice/{id:guid}/status",
         "GET /api/dream/rules", "DELETE /api/dream/rules/{id:guid}", "GET /api/dream/compare",
-        // The descriptions of the "View all rules" dialog (Dream UX round 2, package A).
+        // The descriptions of the "View all rules" dialog.
         "GET /api/dream/rulebook",
     ];
 
@@ -187,7 +190,7 @@ public class DreamSkeletonTests : IAsyncLifetime
         response.StatusCode.Should().Be(HttpStatusCode.OK, text);
         text.Should().NotBeEmpty($"headers: {response.Headers} {response.Content.Headers}");
         var body = JsonSerializer.Deserialize<JsonElement>(text);
-        body.GetProperty("available").GetBoolean().Should().BeTrue();
+        body.GetProperty("available").GetBoolean().Should().BeTrue(text);
         body.GetProperty("activeRun").ValueKind.Should().Be(JsonValueKind.Null);
         body.GetProperty("settings").GetProperty("maxAdviceScheduled").GetInt32().Should().Be(10);
         body.GetProperty("openAdvice").GetProperty("total").GetInt32().Should().Be(0);

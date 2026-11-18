@@ -44,13 +44,15 @@ public sealed class VaultEncryptionPageTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_admin_area_has_a_database_encryption_page_that_holds_Encrypt_this_node_itself()
+    public async Task The_admin_area_has_a_database_encryption_page_that_says_the_plain_database_encrypts_itself()
     {
         (await GetAsync("/Admin")).Should().Contain("href=\"/Admin/StorageProtection\"", "the index lists it");
         var html = await GetAsync("/Admin/StorageProtection");
 
         html.Should().Contain("Database encryption");
-        html.Should().Contain("Encrypt this node").And.Contain("a plain file", "this node's database is not encrypted yet");
+        html.Should().Contain("a plain file", "this node's database is not encrypted yet");
+        html.Should().Contain("encrypts itself", "the plain database encrypts itself after the unlock, with no button");
+        html.Should().NotContain("Encrypt this node").And.NotContain("seal-form", "the button and its form are gone");
         html.Should().NotContain("href=\"/VaultEncryption\"", "there is no second page behind a button");
     }
 

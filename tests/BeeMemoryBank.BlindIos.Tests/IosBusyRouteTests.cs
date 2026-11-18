@@ -7,7 +7,7 @@ using BeeMemoryBank.Busy;
 namespace BeeMemoryBank.BlindIos.Tests;
 
 /// <summary>
-/// Fix round 3, item 2 (final review, shared MAJOR-1): every failure a page of the iPhone head shows goes through the shared busy helper's <see cref="BusyAction.Describer"/>, which the app sets to its
+/// Every failure a page of the iPhone head shows goes through the shared busy helper's <see cref="BusyAction.Describer"/>, which the app sets to its
 /// closed failure text before anything else. The REAL helper (<c>BusyAction.cs</c>, compiled into this project as the app links it) is driven with hostile exceptions; the pages' source is held to
 /// "a page does not format an exception". The helper keeps its in-flight set in a static and the Describer is a static too, so these tests share one class and run one after the other.
 /// </summary>

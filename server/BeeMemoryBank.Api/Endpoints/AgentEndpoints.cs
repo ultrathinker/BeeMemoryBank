@@ -36,14 +36,15 @@ public static class AgentEndpoints
         group.MapGet("/", async (HttpContext ctx, IAgentRepository repo, IUserRepository userRepo, bool all = false) =>
         {
 
-            var callerIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
-            var callerRole = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (!int.TryParse(callerIdStr, out var callerId) || callerId <= 0)
+            // Who the caller is and whether they are a superadmin come from the node's own lookup of the signed-in user
+            // (CallerIdentityMiddleware), never from the forwarded role header.
+            var caller = CallerIdentity.Extract(ctx);
+            if (caller.UserId is not { } callerId || callerId <= 0)
                 return Results.Json(new ErrorResponse("User identification failed"), statusCode: 403);
 
             var agents = await repo.ListActiveAsync();
 
-            if (!all || callerRole != UserRoles.Superadmin)
+            if (!all || !caller.IsSuperadmin)
             {
                 agents = agents.Where(a => a.OwnerUserId == callerId).ToList();
             }
@@ -112,7 +113,6 @@ public static class AgentEndpoints
                 OwnerUserId = ownerUserId
             };
 
-            string? dekFingerprint = null;
             if (owner.Role == UserRoles.Superadmin)
             {
                 // Get Master DEK from session (already unlocked)
@@ -122,12 +122,8 @@ public static class AgentEndpoints
 
                 try
                 {
-                    var (ciphertext, iv, salt) = AgentKeyHelper.EncryptDekV1(apiKey, masterDek);
-                    agent.EncryptedDek = ciphertext;
-                    agent.DekIV = iv;
-                    agent.Salt = salt;
-                    agent.KdfVersion = 1;
-                    dekFingerprint = DekFingerprint.Of(masterDek);
+                    // A sealed (v2) door, as every new door (ADR 0012).
+                    AgentDoors.SealInto(agent, apiKey, masterDek);
                 }
                 finally
                 {
@@ -141,8 +137,7 @@ public static class AgentEndpoints
             // so that the key can wake the node while it is closed. The mirror does nothing on a plain node.
             if (mirror != null && agent.CanAutoUnlock)
             {
-                await mirror.AddPendingDoorAsync(new PendingDoor(BootDoorKinds.Agent, agent.Id, null, agent.EncryptedDek!, agent.DekIV!, agent.Salt,
-                    null, null, null, agent.KeyHash, agent.KdfVersion, dekFingerprint));
+                await mirror.AddPendingDoorAsync(AgentDoors.PendingFor(agent));
                 await SlotDoors.RewriteAsync(mirror);
             }
 
@@ -172,12 +167,11 @@ public static class AgentEndpoints
             var agent = await repo.GetByIdAsync(id);
             if (agent == null) return Results.NotFound();
 
-            var callerIdStr = ctx.Request.Headers["X-User-Id"].FirstOrDefault();
-            var callerRole = ctx.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (!int.TryParse(callerIdStr, out var callerId) || callerId <= 0)
+            var caller = CallerIdentity.Extract(ctx);
+            if (caller.UserId is not { } callerId || callerId <= 0)
                 return Results.Json(new ErrorResponse("User identification failed"), statusCode: 403);
 
-            if (callerRole != UserRoles.Superadmin && agent.OwnerUserId != callerId)
+            if (!caller.IsSuperadmin && agent.OwnerUserId != callerId)
             {
                 return Results.Json(new ErrorResponse("Forbidden: You do not own this agent"), statusCode: 403);
             }

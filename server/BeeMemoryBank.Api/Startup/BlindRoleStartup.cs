@@ -100,8 +100,8 @@ public static class BlindRoleStartup
 
     /// <summary>
     /// The three files that hold a secret in clear - the identity seed, the TLS key, the backup credentials - made
-    /// owner-only where an older build left them with the folder's permissions (on Windows, its inherited ACL: review
-    /// release-a #7). Repaired in place and logged, never refused: a node must not stop starting because of how an
+    /// owner-only where an older build left them with the folder's permissions (on Windows, its inherited ACL
+    ///). Repaired in place and logged, never refused: a node must not stop starting because of how an
     /// earlier build created its files. A repair that fails is a warning, and the node starts anyway.
     /// </summary>
     internal static void RepairSecretPermissions(string dataPath, string seedPath, ILogger logger)
